@@ -1,12 +1,17 @@
-# ods - NHS ODS Semantic Compiler
+# ods - NHS Organisation Data CLI
 
-A high-performance CLI tool written in Rust for parsing highly normalized, fragmented NHS Organisation Data Service (ODS) TRUD XML schemas (`HSCOrgRefData` v2.0.0) and compiling them into denormalized, flat, downstream open formats.
+A Rust CLI for querying an converting the otherwise challenging NHS Organisation Data Service (ODS) TRUD XML.
+
+- Quicky query NHS org info out of the box using the hosted parquet db files.
+- Convert the ODS XML into more accessible formats: ndjson, parquet, markdown open knowledge format.
+
+All locally on your machine. A sister project to `sct` the SNOMED multitool.
 
 ## Getting Started
 
 ### Prerequisites
 
-*   Rust toolchain (Cargo, rustc 2021 edition)
+*  Rust
 
 ### Building
 
@@ -48,12 +53,40 @@ Converts the compiled NDJSON intermediate file into three relational, sorted Par
 ods parquet --input <ndjson_file> --output <parquet_output_dir>
 ```
 
-### okf
+### markdown (alias: md)
 
-Exports compiled Parquet files directly into a single, high-performance compressed Open Knowledge Format (OKF) `wiki.zip` archive containing Markdown files. It parallelizes the page rendering using Rayon, performs fast in-memory joins on roles/relationships/successors, and streams them buffered to a single file.
+Exports compiled Parquet files directly into a single, high-performance Open Knowledge Format (OKF) `wiki.zip` archive containing Markdown files. It parallelizes the page rendering using Rayon, performs fast in-memory joins on roles/relationships/successors, and streams them buffered to a single file.
 
 ```bash
-ods okf --input <parquet_dir> --output <zip_output_file>
+ods markdown --input <parquet_dir> --output <zip_output_file>
+# Or using the alias:
+ods md --input <parquet_dir> --output <zip_output_file>
+```
+
+### find
+
+Searches for organisations or sites in the exported Parquet tables by name, ODS code, or postcode. Supports table, CSV, or NDJSON output formats.
+
+```bash
+ods find "Royal Free" --format table
+ods find --role "General Practice" "SW9" --format csv
+```
+
+### cite
+
+Prints an academic citation and provenance block with deterministic SHA256 file hashes for reproducible health data research.
+
+```bash
+ods cite --input <parquet_dir>
+```
+
+### diff
+
+Compares two TRUD ODS releases (accepting `.ndjson`, `.xml`, or `.zip` archives indiscriminately) and generates domain-aware diff reports.
+
+```bash
+ods diff --old <baseline_release> --new <target_release> --format summary
+ods diff --old <baseline_release> --new <target_release> --format json --role "General Practice"
 ```
 
 ## Querying with DuckDB

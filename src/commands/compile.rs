@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use quick_xml::events::{Event, BytesStart};
 use quick_xml::reader::Reader;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -14,8 +15,8 @@ pub struct Args {
     #[arg(long, short)]
     pub input: PathBuf,
 
-    /// Output directory for compiled NDJSON
-    #[arg(long, short)]
+    /// Output NDJSON file path
+    #[arg(long, short, default_value = "./ods.ndjson")]
     pub output: PathBuf,
 }
 
@@ -137,7 +138,7 @@ pub struct ParsedOrg {
 /// Fully-resolved organisation record: all `ParsedOrg` fields plus the
 /// denormalized hierarchy lookups and flattened dates produced by
 /// `resolve_hierarchies`. This is the canonical NDJSON / Parquet shape.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct OdsRecord {
     pub ods_code: String,
     pub name: String,
@@ -156,8 +157,7 @@ pub struct OdsRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assigning_authority_name: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub org_record_class: Option<String>,
+    pub record_class: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_change_date: Option<String>,
@@ -182,24 +182,35 @@ pub struct OdsRecord {
 
     // --- resolved / denormalized fields (populated by resolve_hierarchies) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcn_name: Option<String>,
+    pub commissioner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commissioner_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pcn: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pcn_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_name: Option<String>,
+    pub trust: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icb_name: Option<String>,
+    pub icb: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icb_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_date: Option<String>,
 }
 
-fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
+pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
     if input_path.is_file() {
         return Ok(input_path.to_path_buf());
     }
@@ -214,12 +225,23 @@ fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    // 1. Fail early: check output directory and file
+    if let Some(parent) = args.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating directory for output: {}", parent.display()))?;
+        }
+    }
+    let output_file = File::create(&args.output)
+        .with_context(|| format!("cannot create or write to output file: {}", args.output.display()))?;
+
+    // 2. Find and parse XML input
     let xml_path = find_xml_file(&args.input)?;
     eprintln!("Found XML file: {}", xml_path.display());
 
     eprintln!("Compiling ODS database (single pass)...");
     let start_compile = std::time::Instant::now();
-    let (concept_map, records) = parse_single_pass(&xml_path)?;
+    let (provenance, concept_map, records) = parse_single_pass(&xml_path)?;
     eprintln!(
         "Parsing complete. Found {} concept mappings and {} organisations. Took {:?}",
         concept_map.len(),
@@ -234,12 +256,15 @@ pub fn run(args: Args) -> Result<()> {
     eprintln!("Hierarchy resolution complete. Took {:?}", start_resolve.elapsed());
 
     // Write to NDJSON
-    std::fs::create_dir_all(&args.output)?;
-    let ndjson_path = args.output.join("ods.ndjson");
-    eprintln!("Writing compiled NDJSON to {}...", ndjson_path.display());
+    eprintln!("Writing compiled NDJSON to {}...", args.output.display());
     let start_write = std::time::Instant::now();
-    let output_file = File::create(&ndjson_path)?;
     let mut writer = BufWriter::new(output_file);
+
+    // Line 1: Dataset & Build Provenance Header
+    let prov_json = serde_json::to_string(&provenance)?;
+    writer.write_all(prov_json.as_bytes())?;
+    writer.write_all(b"\n")?;
+
     for record in resolved_records.values() {
         let serialized = serde_json::to_string(record)?;
         writer.write_all(serialized.as_bytes())?;
@@ -251,109 +276,268 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// Resolves cross-record hierarchy (PCN / Trust / ICB), flattens dates, and
+fn resolve_commissioner(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let Some(rec) = parsed.get(&current) else {
+            return None;
+        };
+        // Check if this entity itself is an ICB
+        let is_icb = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_ICB && r.status.eq_ignore_ascii_case("active"));
+        if is_icb {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        // Follow REL_COMMISSIONED_BY
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        // Fallback: If no direct commissioning relationship exists, check if this is a Sub ICB Location (RO319)
+        // and follow its regional geography link (RE5) to the parent ICB.
+        if next.is_none() {
+            let is_sub_icb = rec.roles.iter().any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
+            if is_sub_icb {
+                for rel in &rec.relationships {
+                    if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
+                        next = Some(rel.target.ods_code.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_parent(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let Some(rec) = parsed.get(&current) else {
+            return None;
+        };
+        // Check if this entity itself is an NHS Trust
+        let is_trust = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active"));
+        if is_trust {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        // Follow REL_MANAGED_BY
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else if let Some(ref parent) = rec.parent_organisation {
+            current = parent.ods_code.clone();
+        } else {
+            if current != code {
+                return Some((rec.ods_code.clone(), rec.name.clone()));
+            } else {
+                return None;
+            }
+        }
+    }
+    None
+}
+
+fn resolve_pcn(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let rec = parsed.get(code)?;
+    if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
+        return Some((rec.ods_code.clone(), rec.name.clone()));
+    }
+    for rel in &rec.relationships {
+        if rel.status.eq_ignore_ascii_case("active") {
+            if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                if target_rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
+                    return Some((target_rec.ods_code.clone(), target_rec.name.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_trust(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let rec = parsed.get(&current)?;
+        if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active")) {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else if let Some(ref parent) = rec.parent_organisation {
+            current = parent.ods_code.clone();
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_icb(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let rec = parsed.get(&current)?;
+        let is_icb = rec.roles.iter().any(|r| (r.id == crate::ods_codes::ROLE_ICB || r.id == "RO98" || r.id == "RO319") && r.status.eq_ignore_ascii_case("active"));
+        if is_icb {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        if let Some((comm_code, comm_name)) = resolve_commissioner(&current, parsed) {
+            if comm_code != current {
+                current = comm_code;
+            } else {
+                return Some((comm_code, comm_name));
+            }
+        } else if let Some(ref parent) = rec.parent_organisation {
+            if parent.ods_code != current {
+                current = parent.ods_code.clone();
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_region(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let rec = parsed.get(code)?;
+    if let Some(ref reg_code) = rec.region_code {
+        let reg_name = parsed.get(reg_code).map(|r| r.name.clone()).unwrap_or_else(|| reg_code.clone());
+        return Some((reg_code.clone(), reg_name));
+    }
+    for rel in &rec.relationships {
+        if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
+            let target_name = parsed.get(&rel.target.ods_code).map(|r| r.name.clone()).unwrap_or_else(|| rel.target.ods_code.clone());
+            return Some((rel.target.ods_code.clone(), target_name));
+        }
+    }
+    None
+}
+
+/// Resolves cross-record hierarchy (commissioner / parent / pcn / trust / icb / region), flattens dates, and
 /// resolves human-readable names for relationship targets.
-///
-/// Takes ownership of the `ParsedOrg` map (so all String / Vec fields are
-/// *moved*, not cloned, into the returned `OdsRecord` map).
 pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String, OdsRecord> {
     // Collected per-org resolved properties before consuming `parsed`.
     struct HierarchyProps {
+        commissioner: Option<String>,
+        commissioner_code: Option<String>,
+        parent: Option<String>,
+        parent_code: Option<String>,
+        pcn: Option<String>,
         pcn_code: Option<String>,
-        pcn_name: Option<String>,
+        trust: Option<String>,
         trust_code: Option<String>,
-        trust_name: Option<String>,
+        icb: Option<String>,
         icb_code: Option<String>,
-        icb_name: Option<String>,
+        region: Option<String>,
+        region_code: Option<String>,
         start_date: Option<String>,
         end_date: Option<String>,
     }
 
-    let mut resolved_props: HashMap<String, HierarchyProps> = HashMap::with_capacity(parsed.len());
-
-    for code in parsed.keys() {
-        let mut pcn_code = None;
-        let mut pcn_name = None;
-        let mut trust_code = None;
-        let mut trust_name = None;
-        let mut icb_code = None;
-        let mut icb_name = None;
-
-        let mut visited = std::collections::HashSet::new();
-        let mut current_code = code.clone();
-
-        while !current_code.is_empty() && visited.insert(current_code.clone()) {
-            let Some(rec) = parsed.get(&current_code) else {
-                break;
+    let mut resolved_props: HashMap<String, HierarchyProps> = parsed
+        .par_iter()
+        .map(|(code, rec)| {
+            let comm = resolve_commissioner(code, &parsed);
+            let (commissioner_code, commissioner) = match comm {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
             };
 
-            let mut next_code = None;
-            for rel in &rec.relationships {
-                if rel.status != "Active" {
-                    continue;
-                }
-                let target_code = &rel.target.ods_code;
-                if let Some(target_rec) = parsed.get(target_code) {
-                    let primary_role_code = target_rec.roles.iter()
-                        .find(|r| r.primary_role)
-                        .map(|r| r.id.as_str())
-                        .unwrap_or("");
+            let par = resolve_parent(code, &parsed);
+            let (parent_code, parent) = match par {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
 
-                    if primary_role_code == crate::ods_codes::ROLE_PCN {
-                        pcn_code = Some(target_code.clone());
-                        pcn_name = Some(target_rec.name.clone());
-                    } else if primary_role_code == crate::ods_codes::ROLE_NHS_TRUST {
-                        trust_code = Some(target_code.clone());
-                        trust_name = Some(target_rec.name.clone());
-                    } else if primary_role_code == crate::ods_codes::ROLE_ICB {
-                        icb_code = Some(target_code.clone());
-                        icb_name = Some(target_rec.name.clone());
-                    }
+            let pcn_res = resolve_pcn(code, &parsed);
+            let (pcn_code, pcn) = match pcn_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
 
-                    if rel.id == crate::ods_codes::REL_COMMISSIONED_BY || rel.id == crate::ods_codes::REL_MANAGED_BY {
-                        next_code = Some(target_code.clone());
-                    }
-                }
-            }
+            let trust_res = resolve_trust(code, &parsed);
+            let (trust_code, trust) = match trust_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
 
-            if let Some(nc) = next_code {
-                current_code = nc;
-            } else if let Some(ref parent) = rec.parent_organisation {
-                current_code = parent.ods_code.clone();
-            } else {
-                break;
-            }
-        }
+            let icb_res = resolve_icb(code, &parsed);
+            let (icb_code, icb) = match icb_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
 
-        // Resolve start/end dates (prefer Legal, fallback to Operational)
-        let rec = &parsed[code];
-        let start_date = rec.dates.iter()
-            .find(|d| d.date_type == "Legal")
-            .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
-            .and_then(|d| d.start.clone());
+            let reg_res = resolve_region(code, &parsed);
+            let (region_code, region) = match reg_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
 
-        let end_date = rec.dates.iter()
-            .find(|d| d.date_type == "Legal")
-            .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
-            .and_then(|d| d.end.clone());
+            // Resolve start/end dates (prefer Legal, fallback to Operational)
+            let start_date = rec.dates.iter()
+                .find(|d| d.date_type == "Legal")
+                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
+                .and_then(|d| d.start.clone());
 
-        resolved_props.insert(
-            code.clone(),
-            HierarchyProps { pcn_code, pcn_name, trust_code, trust_name, icb_code, icb_name, start_date, end_date },
-        );
-    }
+            let end_date = rec.dates.iter()
+                .find(|d| d.date_type == "Legal")
+                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
+                .and_then(|d| d.end.clone());
+
+            (
+                code.clone(),
+                HierarchyProps {
+                    commissioner,
+                    commissioner_code,
+                    parent,
+                    parent_code,
+                    pcn,
+                    pcn_code,
+                    trust,
+                    trust_code,
+                    icb,
+                    icb_code,
+                    region,
+                    region_code,
+                    start_date,
+                    end_date,
+                },
+            )
+        })
+        .collect();
 
     // Build name map before consuming `parsed`.
     let name_map: HashMap<String, String> =
         parsed.iter().map(|(k, v)| (k.clone(), v.name.clone())).collect();
 
-    // Pre-allocate with the same capacity so the backing array is reused
-    // rather than grown/rehashed during the conversion pass.
     let mut records: HashMap<String, OdsRecord> = HashMap::with_capacity(parsed.len());
 
-    // Convert ParsedOrg → OdsRecord in a single pass, *moving* all heap
-    // allocations out of `parsed` (no extra String clones for the body fields).
-    // Name resolution and hierarchy props are applied in the same pass.
     for (code, mut org) in parsed {
         let props = resolved_props
             .remove(&code)
@@ -372,17 +556,45 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String
             succ.target.name = name_map.get(&succ.target.ods_code).cloned();
         }
 
+        let record_class = match org.org_record_class.as_deref() {
+            Some("RC1") => "org".to_string(),
+            Some("RC2") => "site".to_string(),
+            _ => "org".to_string(),
+        };
+
+        // Normalize roles and relationships inside org to lowercase
+        for r in &mut org.roles {
+            r.status = r.status.to_lowercase();
+            if let Some(ref mut d) = r.display_name {
+                *d = d.to_lowercase();
+            }
+        }
+        for rel in &mut org.relationships {
+            rel.status = rel.status.to_lowercase();
+            if let Some(ref mut d) = rel.display_name {
+                *d = d.to_lowercase();
+            }
+            if let Some(ref mut prd) = rel.target.primary_role_display_name {
+                *prd = prd.to_lowercase();
+            }
+        }
+        for succ in &mut org.successors {
+            succ.succ_type = succ.succ_type.to_lowercase();
+            if let Some(ref mut prd) = succ.target.primary_role_display_name {
+                *prd = prd.to_lowercase();
+            }
+        }
+
         records.insert(code, OdsRecord {
-            // Move all body fields — zero extra heap allocation.
             ods_code: org.ods_code,
             name: org.name,
-            status: org.status,
-            role: org.role,
+            status: org.status.to_lowercase(),
+            role: org.role.to_lowercase(),
             parent_organisation: org.parent_organisation,
-            region_code: org.region_code,
+            region_code: props.region_code.clone(),
             root: org.root,
             assigning_authority_name: org.assigning_authority_name,
-            org_record_class: org.org_record_class,
+            record_class,
             last_change_date: org.last_change_date,
             dates: org.dates,
             geo_loc: org.geo_loc,
@@ -391,12 +603,17 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String
             relationships: org.relationships,
             successors: org.successors,
             // Resolved hierarchy fields.
-            pcn_name: props.pcn_name,
+            commissioner: props.commissioner,
+            commissioner_code: props.commissioner_code,
+            parent: props.parent,
+            parent_code: props.parent_code,
+            pcn: props.pcn,
             pcn_code: props.pcn_code,
-            trust_name: props.trust_name,
+            trust: props.trust,
             trust_code: props.trust_code,
-            icb_name: props.icb_name,
+            icb: props.icb,
             icb_code: props.icb_code,
+            region: props.region,
             start_date: props.start_date,
             end_date: props.end_date,
         });
@@ -427,9 +644,18 @@ fn parse_concept_attrs<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>, 
     Ok(())
 }
 
-fn parse_single_pass(
+fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) -> Option<String> {
+    for attr in e.attributes().flatten() {
+        if attr.key.as_ref() == b"value" {
+            return attr.decode_and_unescape_value(reader).ok().map(|s| s.into_owned());
+        }
+    }
+    None
+}
+
+pub fn parse_single_pass(
     xml_path: &Path,
-) -> Result<(HashMap<String, String>, HashMap<String, ParsedOrg>)> {
+) -> Result<(crate::provenance::OdsProvenance, HashMap<String, String>, HashMap<String, ParsedOrg>)> {
     let file = File::open(xml_path)?;
     let buf_reader = BufReader::with_capacity(128 * 1024, file);
     let mut reader = Reader::from_reader(buf_reader);
@@ -439,6 +665,13 @@ fn parse_single_pass(
     let mut parsed: HashMap<String, ParsedOrg> = HashMap::new();
     let mut parser_state = ParserState::new();
     let mut buf = Vec::new();
+
+    let mut pub_date = None;
+    let mut pub_seq = None;
+    let mut pub_type = None;
+    let mut pub_source = None;
+    let mut xml_version = None;
+    let mut xml_creation = None;
  
     loop {
         match reader.read_event_into(&mut buf)? {
@@ -456,6 +689,18 @@ fn parse_single_pass(
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
+                } else if name_ref == b"PublicationDate" {
+                    pub_date = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSeqNum" {
+                    pub_seq = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationType" {
+                    pub_type = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSource" {
+                    pub_source = get_manifest_attr(e, &reader);
+                } else if name_ref == b"Version" {
+                    xml_version = get_manifest_attr(e, &reader);
+                } else if name_ref == b"FileCreationDateTime" {
+                    xml_creation = get_manifest_attr(e, &reader);
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, true, &reader, &concept_map)?;
                 }
@@ -476,7 +721,17 @@ fn parse_single_pass(
         buf.clear();
     }
 
-    Ok((concept_map, parsed))
+    let provenance = crate::provenance::OdsProvenance::new(
+        pub_date,
+        pub_seq,
+        pub_type,
+        pub_source,
+        xml_version,
+        xml_creation,
+        Some(xml_path),
+    );
+
+    Ok((provenance, concept_map, parsed))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -958,7 +1213,8 @@ impl ParserState {
             }
             TextTarget::PostCode => {
                 if let Some(ref mut loc) = self.org.location {
-                    loc.postcode = Some(text);
+                    let parts: Vec<&str> = text.split_whitespace().collect();
+                    loc.postcode = Some(parts.join(" "));
                 }
             }
             TextTarget::Country => {
@@ -1055,7 +1311,7 @@ mod tests {
           <AddrLn1>HIGHLAND ROAD</AddrLn1>
           <Town>SOUTHSEA</Town>
           <County>HAMPSHIRE</County>
-          <PostCode>PO4 9HU</PostCode>
+          <PostCode>  PO4   9HU  </PostCode>
           <Country>ENGLAND</Country>
           <UPRN>1775039729</UPRN>
         </Location>
@@ -1112,30 +1368,44 @@ mod tests {
         let ndjson_path = temp_dir.path().join("ods.ndjson");
 
         // Run parse_single_pass
-        let (concept_map, _) = parse_single_pass(&xml_path).unwrap();
+        let (_, concept_map, _) = parse_single_pass(&xml_path).unwrap();
         assert_eq!(concept_map.get("RO197").unwrap(), "NHS Trust");
         assert_eq!(concept_map.get("RE4").unwrap(), "is commissioned by");
 
         // Run full compiler (Pass 1 + Pass 2 + Hierarchy Resolution + Date Flattening)
         run(Args {
             input: xml_path.clone(),
-            output: temp_dir.path().to_path_buf(),
+            output: ndjson_path.clone(),
         }).unwrap();
 
-        // Read output. There should be two JSON lines.
         let content = std::fs::read_to_string(&ndjson_path).unwrap();
-        let records: Vec<OdsRecord> = content.trim().split('\n')
-            .map(|l| serde_json::from_str(l).unwrap())
+        let records: Vec<OdsRecord> = content
+            .trim()
+            .split('\n')
+            .filter_map(|l| {
+                if crate::provenance::try_parse_provenance_line(l).is_some() {
+                    None
+                } else {
+                    Some(serde_json::from_str(l).unwrap())
+                }
+            })
             .collect();
         assert_eq!(records.len(), 2);
 
+        // Verify ICB (15N)
+        let icb = records.iter().find(|r| r.ods_code == "15N").unwrap().clone();
+        assert_eq!(icb.record_class, "org");
+        assert_eq!(icb.commissioner_code.as_deref(), Some("15N"));
+        assert_eq!(icb.commissioner.as_deref(), Some("NHS SOUTH EAST LONDON ICB"));
+
+        // Verify Site (5QCAH)
         let record = records.iter().find(|r| r.ods_code == "5QCAH").unwrap().clone();
 
         assert_eq!(record.ods_code, "5QCAH");
         assert_eq!(record.name, "EASTNEY HEALTH CENTRE");
-        assert_eq!(record.status, "Inactive");
-        assert_eq!(record.role, "NHS Trust");
-        assert_eq!(record.org_record_class.unwrap(), "RC2");
+        assert_eq!(record.status, "inactive");
+        assert_eq!(record.role, "nhs trust");
+        assert_eq!(record.record_class, "site");
         assert_eq!(record.last_change_date.unwrap(), "2023-04-28");
         assert_eq!(record.root.unwrap(), "2.16.840.1.113883.2.1.3.2.4.18.48");
         assert_eq!(record.assigning_authority_name.unwrap(), "HSCIC");
@@ -1150,7 +1420,7 @@ mod tests {
         assert_eq!(record.start_date.as_deref(), Some("2006-10-01"));
         assert_eq!(record.end_date.as_deref(), Some("2013-03-31"));
 
-        // Verify location
+        // Verify location & postcode normalisation
         let loc = record.geo_loc.unwrap();
         assert_eq!(loc.address_lines, vec!["HIGHLAND ROAD"]);
         assert_eq!(loc.town.as_deref(), Some("SOUTHSEA"));
@@ -1167,7 +1437,7 @@ mod tests {
         assert_eq!(record.contacts[1].value, "http://example.com");
 
         // Verify resolved parent hierarchies
-        assert_eq!(record.icb_name.as_deref(), Some("NHS SOUTH EAST LONDON ICB"));
-        assert_eq!(record.icb_code.as_deref(), Some("15N"));
+        assert_eq!(record.commissioner.as_deref(), Some("NHS SOUTH EAST LONDON ICB"));
+        assert_eq!(record.commissioner_code.as_deref(), Some("15N"));
     }
 }

@@ -12,15 +12,22 @@ This document outlines the milestones and roadmap for transitioning the `ods` CL
     *   Saves disk space and speeds up OKF generation.
     *   Proves that Parquet contains all the necessary data to reconstruct the entire ODS universe.
 
-### Milestone 2: Define a Local Cache Directory
-*   **Goal**: Establish a standard cache directory (e.g. `~/.cache/ods/` or platform-specific equivalent) where the CLI can search for compiled Parquet files.
+### Milestone 2: Integrate Apache DataFusion & Explainable SQL Query Transpiler
+*   **Goal**: Replace manual imperative Rust record batch scanners in `ods find` with an embedded Apache DataFusion query engine.
 *   **Benefits**:
-    *   Removes the need for users to specify `--input` and `--output` paths on every command.
+    *   Adds `--explain` / `--sql` flag to `ods find` to display canonical, DuckDB-compatible SQL queries before execution.
+    *   Establishes standard ANSI SQL querying over `orgs.parquet`, `roles.parquet`, `rels.parquet`, and `successors.parquet`.
+    *   Powers the new `ods sql` subcommand for ad-hoc user query execution.
 
-### Milestone 3: Implement Auto-Bootstrap Fetcher
-*   **Goal**: When a user runs a query or generates OKF Wiki without a local cache, the CLI automatically downloads the compressed Parquet files (~30MB) from the latest public GitHub Releases in under 2 seconds.
+### Milestone 3: Zero-Wait Remote Parquet Resolution & Versioned Local Cache
+*   **Goal**: Enable OOTB querying against hosted remote Parquet files over HTTP Range Requests (`object_store`), backed by an immutable, versioned local cache (`~/.cache/ods/releases/<release_tag>/`).
 *   **Benefits**:
-    *   Eliminates the requirement for idle curious users to register on TRUD and download the 1.5GB XML.
+    *   Fresh CLI installs query remote Parquet datasets instantly OOTB (< 300ms) without downloading 30MB upfront files.
+    *   Decouples software CLI updates (`brew install ods`) from monthly TRUD dataset releases.
+    *   Guarantees 100% reproducible scientific citations by pinning active dataset release versions and notifying users of newer releases via non-intrusive `stderr` notices.
 
-### Milestone 4: Add `ods query` and TUI Search
-*   **Goal**: Implement local querying against the cached Parquet files using a fast column scanner or an embedded engine, followed by a text-based user interface (TUI) for interactive browsing.
+### Milestone 4: Add `ods cache` Management & Interactive TUI
+*   **Goal**: Provide explicit local cache management commands (`ods cache status`, `ods cache update`) and an interactive terminal user interface (TUI) for browsing ODS hierarchies.
+*   **Benefits**:
+    *   Gives users explicit control over dataset upgrades.
+    *   Enables fast, offline exploration of NHS ODS entities directly in the terminal.

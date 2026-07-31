@@ -1,4 +1,4 @@
-//! Integration tests for the full ODS pipeline: compile → parquet → okf.
+//! Integration tests for the full ODS pipeline: compile → parquet → md.
 //!
 //! These tests replace `verify_compilation.sh` with idiomatic Rust:
 //! - `tempfile::TempDir` guarantees cleanup even on test panic
@@ -6,7 +6,7 @@
 //! - The zip archive is inspected in-process without extracting to disk
 //! - `CARGO_MANIFEST_DIR` resolves the fixture path regardless of `cwd`
 
-use ods::commands::{compile, okf, parquet};
+use ods::commands::{compile, md, parquet, find, cite};
 use std::io::Read;
 use std::path::Path;
 use tempfile::TempDir;
@@ -31,7 +31,7 @@ fn compile_produces_ndjson_with_correct_records() {
 
     compile::run(compile::Args {
         input: Path::new(FIXTURE_XML).to_path_buf(),
-        output: tmp.path().to_path_buf(),
+        output: tmp.path().join("ods.ndjson"),
     })
     .expect("compile::run should succeed");
 
@@ -42,16 +42,19 @@ fn compile_produces_ndjson_with_correct_records() {
     let lines: Vec<&str> = content.trim().lines().collect();
     assert_eq!(
         lines.len(),
-        2,
-        "expected 2 organisations in NDJSON, got {}",
+        3,
+        "expected 3 lines in NDJSON (1 provenance + 2 records), got {}",
         lines.len()
     );
 
     let records: Vec<compile::OdsRecord> = lines
         .iter()
-        .map(|l| {
-            serde_json::from_str(l)
-                .unwrap_or_else(|e| panic!("line is not valid OdsRecord JSON: {e}\n  -> {l}"))
+        .filter_map(|l| {
+            if ods::provenance::try_parse_provenance_line(l).is_some() {
+                None
+            } else {
+                Some(serde_json::from_str(l).unwrap_or_else(|e| panic!("line is not valid OdsRecord JSON: {e}\n  -> {l}")))
+            }
         })
         .collect();
 
@@ -61,10 +64,10 @@ fn compile_produces_ndjson_with_correct_records() {
         .find(|r| r.ods_code == "RAE")
         .expect("RAE record must be present");
     assert_eq!(
-        rae.role, "NHS Trust",
+        rae.role, "nhs trust",
         "RAE role should be resolved from the CodeSystem concept map"
     );
-    assert_eq!(rae.status, "Active");
+    assert_eq!(rae.status, "active");
 
     // --- Y01234: GP Practice ---
     let gp = records
@@ -72,10 +75,10 @@ fn compile_produces_ndjson_with_correct_records() {
         .find(|r| r.ods_code == "Y01234")
         .expect("Y01234 record must be present");
     assert_eq!(
-        gp.role, "General Practice",
+        gp.role, "general practice",
         "Y01234 role should be resolved from the CodeSystem concept map"
     );
-    assert_eq!(gp.status, "Active");
+    assert_eq!(gp.status, "active");
 
     // Parent organisation resolved via RE4 relationship cross-lookup
     let parent = gp
@@ -114,19 +117,19 @@ fn compile_produces_ndjson_with_correct_records() {
 }
 
 // ---------------------------------------------------------------------------
-// Stages 2 + 3 — parquet and okf (chained on top of compile)
+// Stages 2 + 3 — parquet and md (chained on top of compile)
 // ---------------------------------------------------------------------------
 
-/// Runs the full three-stage pipeline and asserts on the OKF zip contents.
+/// Runs the full three-stage pipeline and asserts on the md zip contents.
 /// The zip is inspected in-process -- no `unzip` subprocess, no leftover files.
 #[test]
-fn full_pipeline_parquet_and_okf() {
+fn full_pipeline_parquet_and_md() {
     let tmp = TempDir::new().unwrap();
 
     // Stage 1: compile
     compile::run(compile::Args {
         input: Path::new(FIXTURE_XML).to_path_buf(),
-        output: tmp.path().to_path_buf(),
+        output: tmp.path().join("ods.ndjson"),
     })
     .expect("compile::run should succeed");
 
@@ -153,14 +156,14 @@ fn full_pipeline_parquet_and_okf() {
         "rels.parquet not created"
     );
 
-    // Stage 3: okf
+    // Stage 3: md
     let zip_path = tmp.path().join("wiki.zip");
 
-    okf::run(okf::Args {
-        input: parquet_dir,
+    md::run(md::Args {
+        input: parquet_dir.clone(),
         output: zip_path.clone(),
     })
-    .expect("okf::run should succeed");
+    .expect("md::run should succeed");
 
     assert!(zip_path.exists(), "wiki.zip was not created");
 
@@ -177,7 +180,7 @@ fn full_pipeline_parquet_and_okf() {
     entry.read_to_string(&mut md).unwrap();
 
     // YAML frontmatter fields
-    assert!(md.contains("type: General Practice"),  "missing 'type' frontmatter\n---\n{md}");
+    assert!(md.contains("type: general practice"),  "missing 'type' frontmatter\n---\n{md}");
     assert!(md.contains("title: Mock GP Practice"),  "missing 'title' frontmatter\n---\n{md}");
     assert!(md.contains("postcode: SO15 5SY"),        "missing 'postcode' frontmatter\n---\n{md}");
     assert!(md.contains(r#"uprn: "100062506311""#),   "missing 'uprn' frontmatter\n---\n{md}");
@@ -188,9 +191,42 @@ fn full_pipeline_parquet_and_okf() {
         "missing 'resource' frontmatter\n---\n{md}"
     );
 
-    // Parent organisation link in the Markdown body
     assert!(
-        md.contains("[Alder Hey Children's NHS Foundation Trust](/organisations/nhs_trust/RAE.md)"),
-        "parent org link missing or malformed\n---\n{md}"
+        md.contains("Parent Org: ALDER HEY CHILDREN'S NHS FOUNDATION TRUST (RAE)"),
+        "parent org relationship missing or malformed\n---\n{md}"
     );
+
+    // Stage 4: find (TDD)
+    let mut find_out = Vec::new();
+    find::run_with_writer(
+        find::Args {
+            query: "Mock".to_string(),
+            role: None,
+            all: false,
+            verbose: false,
+            sort: find::SortBy::Code,
+            format: find::OutputFormat::Json,
+            input: parquet_dir.clone(),
+        },
+        &mut find_out,
+        &parquet_dir,
+    )
+    .expect("find::run should succeed");
+
+    let find_str = String::from_utf8(find_out).unwrap();
+    assert!(find_str.contains("Mock GP Practice"), "find should locate Mock GP");
+
+    // Stage 5: cite (TDD)
+    let mut cite_out = Vec::new();
+    cite::run_with_writer(
+        cite::Args {
+            input: parquet_dir,
+        },
+        &mut cite_out,
+    )
+    .expect("cite::run should succeed");
+
+    let cite_str = String::from_utf8(cite_out).unwrap();
+    assert!(cite_str.contains("Academic Citation & Verification Block"), "cite block missing");
+    assert!(cite_str.contains("orgs.parquet:"), "cite block missing orgs.parquet hash");
 }

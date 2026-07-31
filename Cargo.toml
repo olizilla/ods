@@ -2,13 +2,13 @@
 name = "ods"
 version = "0.1.0"
 edition = "2021"
-description = "NHS ODS Semantic Compiler"
+description = "NHS ODS Data Tool"
 
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
 arrow = { version = "53", default-features = false }
 parquet = { version = "53", features = ["arrow"] }
@@ -16,6 +16,7 @@ walkdir = "2.4"
 zip = "1.0"
 rayon = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 criterion = "0.5"
