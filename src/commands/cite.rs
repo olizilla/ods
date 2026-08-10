@@ -1,19 +1,22 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Input directory containing the Parquet files
-    #[arg(long, short, default_value = ".")]
-    pub input: PathBuf,
+    /// Input directory containing the Parquet files (defaults to active workspace if omitted)
+    #[arg(long, short)]
+    pub input: Option<PathBuf>,
 }
 
 pub fn run(args: Args) -> Result<()> {
-    run_with_writer(args, &mut std::io::stdout())
+    let input_dir = crate::workspace::discover_parquet_dir(args.input.as_deref())?;
+    let args_with_dir = Args {
+        input: Some(input_dir),
+    };
+    run_with_writer(args_with_dir, &mut std::io::stdout())
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()> {
@@ -25,10 +28,15 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "successors.parquet",
     ];
 
+    let input_dir = match args.input {
+        Some(ref dir) => dir.clone(),
+        None => crate::workspace::discover_parquet_dir(None)?,
+    };
+
     // 1. Fail early: check if at least one expected Parquet file exists
     let mut any_exist = false;
     for f in &files {
-        if args.input.join(f).exists() {
+        if input_dir.join(f).exists() {
             any_exist = true;
             break;
         }
@@ -36,21 +44,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     if !any_exist {
         anyhow::bail!(
             "No Parquet files found in the directory '{}'. Did you run `ods parquet` first?",
-            args.input.display()
+            input_dir.display()
         );
     }
 
-    let mut edition = "TRUD ODS Full".to_string();
-    let mut pub_date = "unknown".to_string();
-    let mut pub_seq = "unknown".to_string();
-    let mut pub_source = "HSCIC".to_string();
-    let mut xml_version = "2-0-0".to_string();
-    let mut compiler_version = "unknown".to_string();
-    let mut created_at = "unknown".to_string();
+    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir);
 
-    // 2. Find the first Parquet file in the directory to extract key-value metadata from
+    let mut pub_source = prov.as_ref().and_then(|p| p.publication_source.clone()).unwrap_or_else(|| "HSCIC".to_string());
+    let mut pub_date = prov.as_ref().and_then(|p| p.trud_release_date.clone()).unwrap_or_else(|| "unknown".to_string());
+    let mut pub_seq = prov.as_ref().and_then(|p| p.publication_seq_num.clone()).unwrap_or_else(|| "unknown".to_string());
+    let mut pub_type = prov.as_ref().and_then(|p| p.publication_type.clone()).unwrap_or_else(|| "Full".to_string());
+    let mut archive_sha256 = prov.as_ref().and_then(|p| p.trud_release_sha256.clone()).unwrap_or_else(|| "<not verified>".to_string());
+    let mut compiler_version = prov.as_ref().map(|p| p.ods_cmd_version.clone()).unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    let mut created_at = prov.as_ref().and_then(|p| p.created_at.clone().or_else(|| p.fetched_at.clone())).unwrap_or_else(|| "unknown".to_string());
+
+    // Fall back to key-value metadata in Parquet file headers if missing from provenance
     for f in &files {
-        let path = args.input.join(f);
+        let path = input_dir.join(f);
         if path.exists() {
             if let Ok(file) = File::open(&path) {
                 if let Ok(reader) = SerializedFileReader::new(file) {
@@ -58,14 +68,18 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                     if let Some(kv) = file_metadata.key_value_metadata() {
                         for item in kv {
                             match item.key.as_str() {
-                                "ods.publication_date" => {
-                                    if let Some(ref val) = item.value {
-                                        pub_date = val.clone();
+                                "ods.trud_release_date" | "ods.publication_date" => {
+                                    if pub_date == "unknown" {
+                                        if let Some(ref val) = item.value {
+                                            pub_date = val.clone();
+                                        }
                                     }
                                 }
                                 "ods.publication_seq_num" => {
-                                    if let Some(ref val) = item.value {
-                                        pub_seq = val.clone();
+                                    if pub_seq == "unknown" {
+                                        if let Some(ref val) = item.value {
+                                            pub_seq = val.clone();
+                                        }
                                     }
                                 }
                                 "ods.publication_source" => {
@@ -75,27 +89,26 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                 }
                                 "ods.publication_type" => {
                                     if let Some(ref val) = item.value {
-                                        edition = format!("TRUD ODS {}", val);
+                                        pub_type = val.clone();
                                     }
                                 }
-                                "ods.edition_label" => {
-                                    if let Some(ref val) = item.value {
-                                        edition = val.clone();
+                                "ods.trud_release_sha256" => {
+                                    if archive_sha256 == "<not verified>" {
+                                        if let Some(ref val) = item.value {
+                                            archive_sha256 = val.clone();
+                                        }
                                     }
                                 }
-                                "ods.xml_version" => {
-                                    if let Some(ref val) = item.value {
-                                        xml_version = val.clone();
-                                    }
-                                }
-                                "ods.compiler_version" => {
+                                "ods.ods_cmd_version" | "ods.compiler_version" => {
                                     if let Some(ref val) = item.value {
                                         compiler_version = val.clone();
                                     }
                                 }
                                 "ods.created_at" => {
-                                    if let Some(ref val) = item.value {
-                                        created_at = val.clone();
+                                    if created_at == "unknown" {
+                                        if let Some(ref val) = item.value {
+                                            created_at = val.clone();
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -108,48 +121,73 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         }
     }
 
-    let edition_label = if pub_date != "unknown" && !edition.contains(&pub_date) {
-        format!("{} {}", edition, pub_date)
-    } else {
-        edition
-    };
-
-    // 3. Output academic citation block
-    writeln!(writer, "=== Academic Citation & Verification Block ===")?;
-    writeln!(writer, "NHS ODS Data Tool (ods) Version: {}", compiler_version)?;
-    writeln!(writer, "Edition Label:                 {}", edition_label)?;
-    writeln!(writer, "Publication Date:              {}", pub_date)?;
-    writeln!(writer, "Publication Sequence Num:      {}", pub_seq)?;
-    writeln!(writer, "Publication Source:            {}", pub_source)?;
-    writeln!(writer, "XML Schema Version:            {}", xml_version)?;
-    writeln!(writer, "Created At (UTC):              {}", created_at)?;
-    writeln!(writer, "\nRecommended APA Citation:")?;
-    
     let year = pub_date.split('-').next().unwrap_or("2026");
+
+    writeln!(writer, "Source")?;
     writeln!(
         writer,
-        "{}. ({}). Digital Organisation Reference Data (Publication Date: {}, Seq #{}, XML v{}). Retrieved from NHS TRUD ODS Data Service.",
-        pub_source,
-        year,
-        pub_date,
-        pub_seq,
-        xml_version
+        "  NHS Digital Organisation Data Service (ODS), published by {} via NHS TRUD.",
+        pub_source
     )?;
-    writeln!(writer, "\nSHA256 Signatures for Provenance Verification:")?;
+    writeln!(writer, "  Publication date:   {}", pub_date)?;
+    if pub_seq != "unknown" {
+        writeln!(writer, "  Publication seq:    #{}", pub_seq)?;
+    } else {
+        writeln!(writer, "  Publication seq:    {}", pub_seq)?;
+    }
+    writeln!(writer, "  Publication type:   {}", pub_type)?;
+    writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
+    writeln!(writer)?;
 
-    // 4. Compute SHA256 hashes of all generated files
+    writeln!(writer, "Derived Sources")?;
+    writeln!(
+        writer,
+        "  {:19} github.com/olizilla/ods v{}",
+        "Created by:",
+        compiler_version
+    )?;
+    writeln!(writer, "  Format:             Apache Parquet")?;
     for f in &files {
-        let path = args.input.join(f);
+        let path = input_dir.join(f);
         if path.exists() {
-            let mut file = File::open(&path).with_context(|| format!("reading {}", path.display()))?;
-            let mut hasher = Sha256::new();
-            std::io::copy(&mut file, &mut hasher)?;
-            let hash = format!("{:x}", hasher.finalize());
-            writeln!(writer, "  {}: {}", f, hash)?;
+            if let Ok(hash) = crate::provenance::compute_file_sha256(&path) {
+                writeln!(writer, "  {:19} {}", format!("{}:", f), hash.to_ascii_uppercase())?;
+            } else {
+                writeln!(writer, "  {:19} <error computing hash>", format!("{}:", f))?;
+            }
         } else {
-            writeln!(writer, "  {}: <not generated>", f)?;
+            writeln!(writer, "  {:19} <not generated>", format!("{}:", f))?;
         }
     }
+    writeln!(writer)?;
+
+    writeln!(writer, "How to Cite")?;
+    writeln!(writer, "  When citing the source data:")?;
+    if pub_seq != "unknown" {
+        writeln!(
+            writer,
+            "    {}. ({}). NHS Organisation Data Service — {} Publication\n    ({}, Seq #{}). NHS TRUD. https://isd.digital.nhs.uk/trud",
+            pub_source, year, pub_type, pub_date, pub_seq
+        )?;
+    } else {
+        writeln!(
+            writer,
+            "    {}. ({}). NHS Organisation Data Service — {} Publication\n    ({}). NHS TRUD. https://isd.digital.nhs.uk/trud",
+            pub_source, year, pub_type, pub_date
+        )?;
+    }
+    writeln!(writer)?;
+    writeln!(writer, "  When citing the derived sources:")?;
+    writeln!(
+        writer,
+        "    Evans, O. ({}). ods: NHS Organisation Data in Open Formats\n    (v{}) [Software]. https://github.com/olizilla/ods",
+        year, compiler_version
+    )?;
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "  These Parquet files are deterministic projections of the official\n  TRUD ODS XML. You can verify this by running `ods trud audit` or\n  by rebuilding from source with `ods trud pull && ods make`."
+    )?;
 
     Ok(())
 }

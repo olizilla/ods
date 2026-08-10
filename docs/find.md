@@ -99,3 +99,4 @@ When invoked with `--verbose` (or when a single entity is matched in table forma
 To guarantee schema parity across formats, `src/commands/find.rs` includes two dynamic tests:
 - `test_find_json_schema_matches_parquet_schema`: Verifies key sequence parity with `orgs.parquet`.
 - `test_find_csv_schema_matches_json_schema`: Verifies that CSV headers match JSON keys line-for-line.
+

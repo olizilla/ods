@@ -48,3 +48,60 @@ This document defines the Arrow/Parquet schema, field definitions, and denormali
 | `operational_start` | DATE | Yes | Operational Start Date (`YYYY-MM-DD`) |
 | `operational_end` | DATE | Yes | Operational End Date (`YYYY-MM-DD`, NULL if active) |
 | `last_change_date` | DATE | Yes | Last Record Modification Date by NHS Digital (`YYYY-MM-DD`) |
+
+---
+
+## 3. `rels.parquet` Schema Specification (11 Columns)
+
+`rels.parquet` models the directed relationship graph between NHS entities (e.g. commissioning, operating, location, and payee links).
+
+| Field Name | Parquet Data Type | Nullable | Description & Example |
+| :--- | :--- | :--- | :--- |
+| `source_code` | VARCHAR | Yes | Subject / Source Entity ODS Code (e.g. `"A82608"`) |
+| `source` | VARCHAR | Yes | Subject / Source Entity Name |
+| `rel_type_code` | VARCHAR | Yes | Relationship Type Code (e.g. `"RE4"`, `"RE6"`, `"RE5"`) |
+| `rel_type` | VARCHAR | Yes | Relationship Type Description (e.g. `"is commissioned by"`, `"is operated by"`, `"is located in the geography of"`) |
+| `target_code` | VARCHAR | Yes | Target Entity ODS Code (e.g. `"QMJ"`) |
+| `target` | VARCHAR | Yes | Target Entity Name (e.g. `"NHS NORTH CENTRAL LONDON INTEGRATED CARE BOARD"`) |
+| `status` | VARCHAR | Yes | Relationship Status (`"active"` or `"inactive"`) |
+| `legal_start` | DATE | Yes | Relationship Legal Start Date |
+| `legal_end` | DATE | Yes | Relationship Legal End Date |
+| `operational_start` | DATE | Yes | Relationship Operational Start Date |
+| `operational_end` | DATE | Yes | Relationship Operational End Date |
+
+### Primary Relationship Types in TRUD Data:
+- **`RE4` (`is commissioned by`)**: 148,000+ links connecting GP Practices, PCNs, Pharmacies, and Dentists to their Commissioning ICB / Sub-ICB.
+- **`RE6` (`is operated by`)**: 202,000+ links connecting Hospital Sites, Clinics, and Care Units to their Operating NHS Trust or Provider.
+- **`RE5` (`is located in the geography of`)**: 292,000+ links connecting entities to Government Office Regions, Local Authorities, or Local Health Districts.
+
+---
+
+## 4. `roles.parquet` Schema Specification (9 Columns)
+
+`roles.parquet` contains all primary and secondary role assignments for every organisation in the dataset.
+
+| Field Name | Parquet Data Type | Nullable | Description & Example |
+| :--- | :--- | :--- | :--- |
+| `ods_code` | VARCHAR | Yes | Entity ODS Code (e.g. `"QMJ"`) |
+| `role_code` | VARCHAR | Yes | Role ODS Code Identifier (e.g. `"RO318"`, `"RO261"`) |
+| `role` | VARCHAR | Yes | Role Display Name (e.g. `"integrated care board"`, `"strategic partnership"`) |
+| `is_primary` | BOOLEAN | Yes | `true` if primary role, `false` if secondary role |
+| `status` | VARCHAR | Yes | Role Status (`"active"` or `"inactive"`) |
+| `legal_start` | DATE | Yes | Role Legal Start Date |
+| `legal_end` | DATE | Yes | Role Legal End Date |
+| `operational_start` | DATE | Yes | Role Operational Start Date |
+| `operational_end` | DATE | Yes | Role Operational End Date |
+
+---
+
+## 5. `successors.parquet` Schema Specification (5 Columns)
+
+`successors.parquet` contains the structural succession graph for re-organized, merged, or split NHS bodies.
+
+| Field Name | Parquet Data Type | Nullable | Description & Example |
+| :--- | :--- | :--- | :--- |
+| `ods_code` | VARCHAR | Yes | Original / Predecessor Entity ODS Code |
+| `name` | VARCHAR | Yes | Original / Predecessor Entity Name |
+| `successor_code` | VARCHAR | Yes | Successor Entity ODS Code |
+| `successor` | VARCHAR | Yes | Successor Entity Name |
+| `succession_chain` | VARCHAR | Yes | Complete formatted lineage chain string (e.g. `"01K -> 93C -> QMJ"`) |

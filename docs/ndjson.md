@@ -2,21 +2,6 @@
 
 This document details the schema of the Newline Delimited JSON (NDJSON) intermediate file (`ods.ndjson`) produced by the `ods compile` command. It explains the source mapping of each field and differentiates between structures inherited from the source NHS XML schema and architectural design choices made for our own convenience.
 
----
-
-## Why NDJSON? (Design Rationale)
-
-Although the ultimate end-user format is Apache Parquet (for SQL querying in DuckDB and Pandas), `ods` retains `ods.ndjson` as the canonical intermediate database for several key reasons:
-
-1. **Lossless Document Fidelity**:
-   The NHS ODS XML contains deeply nested, hierarchical, and multi-valued properties (e.g., historic role timelines, relationship graphs, address lines, and contact lists). NDJSON allows us to compile the raw XML into a single, unified document record without losing structure or forcing early flattening.
-2. **Auditability & Diffability**:
-   Because NDJSON is plain text (one line per record), it is easily searchable with standard Unix tools (`grep`, `jq`, `wc`) and natively diffable. System tools or Git can compare monthly ODS data drops line-by-line to see exactly which organisations were added, retired, or updated. Parquet is compressed binary and cannot be easily diffed.
-3. **Decoupled Architecture**:
-   Writing the compiled data to a lossless NDJSON file allows us to decouple the complex XML parsing and parent graph resolution logic from downstream exporters. If we change the Parquet schema or add a new exporter (e.g. SQLite or an OKF Wiki format), we can regenerate the output from the NDJSON file in seconds, without re-reading the 1.5GB XML.
-
----
-
 ## Sample NDJSON Record
 
 Here is a typical compiled organisation record from `ods.ndjson`:

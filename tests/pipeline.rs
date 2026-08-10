@@ -6,7 +6,7 @@
 //! - The zip archive is inspected in-process without extracting to disk
 //! - `CARGO_MANIFEST_DIR` resolves the fixture path regardless of `cwd`
 
-use ods::commands::{compile, md, parquet, find, cite};
+use ods::commands::{ndjson, md, parquet, find, cite};
 use std::io::Read;
 use std::path::Path;
 use tempfile::TempDir;
@@ -29,9 +29,9 @@ const FIXTURE_XML: &str = concat!(
 fn compile_produces_ndjson_with_correct_records() {
     let tmp = TempDir::new().unwrap();
 
-    compile::run(compile::Args {
+    ndjson::run(ndjson::Args {
         input: Path::new(FIXTURE_XML).to_path_buf(),
-        output: tmp.path().join("ods.ndjson"),
+        output: Some(tmp.path().join("ods.ndjson")),
     })
     .expect("compile::run should succeed");
 
@@ -47,7 +47,7 @@ fn compile_produces_ndjson_with_correct_records() {
         lines.len()
     );
 
-    let records: Vec<compile::OdsRecord> = lines
+    let records: Vec<ndjson::OdsRecord> = lines
         .iter()
         .filter_map(|l| {
             if ods::provenance::try_parse_provenance_line(l).is_some() {
@@ -127,9 +127,9 @@ fn full_pipeline_parquet_and_md() {
     let tmp = TempDir::new().unwrap();
 
     // Stage 1: compile
-    compile::run(compile::Args {
+    ndjson::run(ndjson::Args {
         input: Path::new(FIXTURE_XML).to_path_buf(),
-        output: tmp.path().join("ods.ndjson"),
+        output: Some(tmp.path().join("ods.ndjson")),
     })
     .expect("compile::run should succeed");
 
@@ -200,11 +200,9 @@ fn full_pipeline_parquet_and_md() {
     let mut find_out = Vec::new();
     find::run_with_writer(
         find::Args {
-            query: "Mock".to_string(),
+            query: Some("Mock".to_string()),
             role: None,
             all: false,
-            verbose: false,
-            sort: find::SortBy::Code,
             format: find::OutputFormat::Json,
             input: parquet_dir.clone(),
         },
@@ -216,17 +214,18 @@ fn full_pipeline_parquet_and_md() {
     let find_str = String::from_utf8(find_out).unwrap();
     assert!(find_str.contains("Mock GP Practice"), "find should locate Mock GP");
 
-    // Stage 5: cite (TDD)
+    // Stage 5: cite
     let mut cite_out = Vec::new();
     cite::run_with_writer(
         cite::Args {
-            input: parquet_dir,
+            input: Some(parquet_dir),
         },
         &mut cite_out,
     )
     .expect("cite::run should succeed");
 
     let cite_str = String::from_utf8(cite_out).unwrap();
-    assert!(cite_str.contains("Academic Citation & Verification Block"), "cite block missing");
+    assert!(cite_str.contains("How to Cite"), "cite block missing How to Cite section");
     assert!(cite_str.contains("orgs.parquet:"), "cite block missing orgs.parquet hash");
 }
+

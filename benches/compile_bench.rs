@@ -109,3 +109,4 @@ fn bench_hierarchy_resolution(c: &mut Criterion) {
 
 criterion_group!(benches, bench_hierarchy_resolution);
 criterion_main!(benches);
+

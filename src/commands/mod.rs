@@ -1,6 +1,11 @@
-pub mod compile;
-pub mod parquet;
-pub mod md;
-pub mod find;
+pub mod audit;
 pub mod cite;
 pub mod diff;
+pub mod fetch;
+pub mod find;
+pub mod make;
+pub mod md;
+pub mod ndjson;
+pub mod parquet;
+pub mod pull;
+pub mod trud;

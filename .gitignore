@@ -1,6 +1,7 @@
+.env
 .local
-dist
 .DS_Store
 
 # Added by cargo
 /target
+

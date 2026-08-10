@@ -1,0 +1,1295 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+use quick_xml::events::{Event, BytesStart};
+use quick_xml::reader::Reader;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
+
+#[derive(Parser, Debug)]
+pub struct Args {
+    /// Input directory or XML file containing HSCOrgRefData
+    #[arg(long, short)]
+    pub input: PathBuf,
+
+    /// Output NDJSON file path (defaults to active workspace release if omitted)
+    #[arg(long, short)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OdsDate {
+    #[serde(rename = "type")]
+    pub date_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Location {
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub address_lines: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub town: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub county: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postcode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uprn: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OdsRole {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub unique_role_id: String,
+    pub primary_role: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dates: Vec<OdsDate>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OdsRelationshipTarget {
+    pub ods_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigning_authority_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_role_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_role_display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_role_unique_role_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OdsRelationship {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub unique_rel_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dates: Vec<OdsDate>,
+    pub target: OdsRelationshipTarget,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OdsSuccessor {
+    pub unique_succ_id: String,
+    #[serde(rename = "type")]
+    pub succ_type: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dates: Vec<OdsDate>,
+    pub target: OdsRelationshipTarget,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OdsContact {
+    #[serde(rename = "type")]
+    pub contact_type: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ParentOrganisation {
+    pub ods_code: String,
+    pub name: String,
+}
+
+/// Raw organisation data as parsed directly from the TRUD XML.
+#[derive(Debug, Clone)]
+pub struct ParsedOrg {
+    pub ods_code: String,
+    pub name: String,
+    pub status: String,
+    pub role: String,
+    pub parent_organisation: Option<ParentOrganisation>,
+    pub region_code: Option<String>,
+    pub root: Option<String>,
+    pub assigning_authority_name: Option<String>,
+    pub org_record_class: Option<String>,
+    pub last_change_date: Option<String>,
+    pub dates: Vec<OdsDate>,
+    pub geo_loc: Option<Location>,
+    pub contacts: Vec<OdsContact>,
+    pub roles: Vec<OdsRole>,
+    pub relationships: Vec<OdsRelationship>,
+    pub successors: Vec<OdsSuccessor>,
+}
+
+/// Fully-resolved organisation record.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct OdsRecord {
+    pub ods_code: String,
+    pub name: String,
+    pub status: String,
+    pub role: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_organisation: Option<ParentOrganisation>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_code: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigning_authority_name: Option<String>,
+
+    pub record_class: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_change_date: Option<String>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dates: Vec<OdsDate>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geo_loc: Option<Location>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub contacts: Vec<OdsContact>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub roles: Vec<OdsRole>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub relationships: Vec<OdsRelationship>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub successors: Vec<OdsSuccessor>,
+
+    // --- resolved / denormalized fields ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commissioner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commissioner_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pcn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pcn_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icb_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+}
+
+pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    let mut inner_zip_names = Vec::new();
+    let mut direct_xml_names = Vec::new();
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        if name.ends_with(".zip") {
+            inner_zip_names.push(name);
+        } else if name.ends_with(".xml") {
+            direct_xml_names.push(name);
+        }
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!("ods_zip_{}_{}", std::process::id(), rand_suffix()));
+    std::fs::create_dir_all(&temp_dir)?;
+
+    if !inner_zip_names.is_empty() {
+        let selected_inner = inner_zip_names
+            .iter()
+            .find(|n| n.to_lowercase().contains("full"))
+            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")))
+            .unwrap_or(&inner_zip_names[0])
+            .clone();
+
+        let mut inner_file = archive.by_name(&selected_inner)?;
+        let inner_zip_path = temp_dir.join(&selected_inner);
+        let mut out = File::create(&inner_zip_path)?;
+        std::io::copy(&mut inner_file, &mut out)?;
+
+        return extract_xml_from_zip(&inner_zip_path);
+    }
+
+    if !direct_xml_names.is_empty() {
+        let selected_xml = direct_xml_names
+            .iter()
+            .find(|n| n.to_lowercase().contains("full"))
+            .or_else(|| direct_xml_names.iter().find(|n| !n.to_lowercase().contains("archive")))
+            .unwrap_or(&direct_xml_names[0])
+            .clone();
+
+        let mut xml_file = archive.by_name(&selected_xml)?;
+        let file_name = Path::new(&selected_xml).file_name().unwrap();
+        let extracted_xml_path = temp_dir.join(file_name);
+        let mut out = File::create(&extracted_xml_path)?;
+        std::io::copy(&mut xml_file, &mut out)?;
+
+        return Ok(extracted_xml_path);
+    }
+
+    anyhow::bail!("No XML or ZIP files found inside archive {}", zip_path.display())
+}
+
+fn rand_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
+    if input_path.is_file() {
+        if input_path.extension().map_or(false, |ext| ext == "zip") {
+            return extract_xml_from_zip(input_path);
+        }
+        return Ok(input_path.to_path_buf());
+    }
+    for entry in walkdir::WalkDir::new(input_path) {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if path.extension().is_some_and(|ext| ext == "zip") {
+                if let Ok(xml) = extract_xml_from_zip(path) {
+                    return Ok(xml);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "xml") {
+                return Ok(path.to_path_buf());
+            }
+        }
+    }
+    anyhow::bail!("No XML file found in {}", input_path.display())
+}
+
+pub fn run(args: Args) -> Result<()> {
+    // Parse input XML first to get provenance & date
+    let xml_path = find_xml_file(&args.input)?;
+    eprintln!("Found XML file: {}", xml_path.display());
+
+    eprintln!("Compiling ODS database into NDJSON stream (single pass)...");
+    let start_compile = std::time::Instant::now();
+    let (provenance, concept_map, records) = parse_single_pass(&xml_path)?;
+    eprintln!(
+        "Parsing complete. Found {} concept mappings and {} organisations. Took {:?}",
+        concept_map.len(),
+        records.len(),
+        start_compile.elapsed()
+    );
+
+    let pub_date = provenance.trud_release_date.as_deref().unwrap_or("unknown");
+
+    // Resolve output path
+    let output_path = match args.output {
+        Some(out) => out,
+        None => {
+            if let Some(workspace_root) = crate::workspace::find_workspace_root() {
+                let release_dir = crate::workspace::prepare_release_dir(&workspace_root, pub_date)?;
+                release_dir.join("ndjson").join("ods.ndjson")
+            } else {
+                PathBuf::from("./ods.ndjson")
+            }
+        }
+    };
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating directory for output: {}", parent.display()))?;
+        }
+    }
+    let output_file = File::create(&output_path)
+        .with_context(|| format!("cannot create or write to output file: {}", output_path.display()))?;
+
+    // Hierarchy and Date Resolution Pass
+    eprintln!("Resolving parent hierarchies and dates...");
+    let start_resolve = std::time::Instant::now();
+    let resolved_records = resolve_hierarchies(records);
+    eprintln!("Hierarchy resolution complete. Took {:?}", start_resolve.elapsed());
+
+    // Write to NDJSON
+    eprintln!("Writing compiled NDJSON to {}...", output_path.display());
+    let start_write = std::time::Instant::now();
+    let mut writer = BufWriter::new(output_file);
+
+    // Line 1: Dataset & Build Provenance Header
+    let prov_json = serde_json::to_string(&provenance)?;
+    writer.write_all(prov_json.as_bytes())?;
+    writer.write_all(b"\n")?;
+
+    for record in resolved_records.values() {
+        let serialized = serde_json::to_string(record)?;
+        writer.write_all(serialized.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    eprintln!("NDJSON compiled successfully. Took {:?}", start_write.elapsed());
+
+    Ok(())
+}
+
+fn resolve_commissioner(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let Some(rec) = parsed.get(&current) else {
+            return None;
+        };
+        let is_icb = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_ICB && r.status.eq_ignore_ascii_case("active"));
+        if is_icb {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        if next.is_none() {
+            let is_sub_icb = rec.roles.iter().any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
+            if is_sub_icb {
+                for rel in &rec.relationships {
+                    if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
+                        next = Some(rel.target.ods_code.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_parent(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let Some(rec) = parsed.get(&current) else {
+            return None;
+        };
+        let is_trust = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active"));
+        if is_trust {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else if let Some(ref parent) = rec.parent_organisation {
+            current = parent.ods_code.clone();
+        } else {
+            if current != code {
+                return Some((rec.ods_code.clone(), rec.name.clone()));
+            } else {
+                return None;
+            }
+        }
+    }
+    None
+}
+
+fn resolve_pcn(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let rec = parsed.get(code)?;
+    if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
+        return Some((rec.ods_code.clone(), rec.name.clone()));
+    }
+    for rel in &rec.relationships {
+        if rel.status.eq_ignore_ascii_case("active") {
+            if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                if target_rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
+                    return Some((target_rec.ods_code.clone(), target_rec.name.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_trust(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let rec = parsed.get(&current)?;
+        if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active")) {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        let mut next = None;
+        for rel in &rec.relationships {
+            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                next = Some(rel.target.ods_code.clone());
+                break;
+            }
+        }
+        if let Some(n) = next {
+            current = n;
+        } else if let Some(ref parent) = rec.parent_organisation {
+            current = parent.ods_code.clone();
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_icb(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let mut current = code.to_string();
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current.clone()) {
+        let rec = parsed.get(&current)?;
+        let is_icb = rec.roles.iter().any(|r| (r.id == crate::ods_codes::ROLE_ICB || r.id == "RO98" || r.id == "RO319") && r.status.eq_ignore_ascii_case("active"));
+        if is_icb {
+            return Some((rec.ods_code.clone(), rec.name.clone()));
+        }
+        if let Some((comm_code, comm_name)) = resolve_commissioner(&current, parsed) {
+            if comm_code != current {
+                current = comm_code;
+            } else {
+                return Some((comm_code, comm_name));
+            }
+        } else if let Some(ref parent) = rec.parent_organisation {
+            if parent.ods_code != current {
+                current = parent.ods_code.clone();
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn resolve_region(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
+    let rec = parsed.get(code)?;
+    if let Some(ref reg_code) = rec.region_code {
+        let reg_name = parsed.get(reg_code).map(|r| r.name.clone()).unwrap_or_else(|| reg_code.clone());
+        return Some((reg_code.clone(), reg_name));
+    }
+    for rel in &rec.relationships {
+        if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
+            let target_name = parsed.get(&rel.target.ods_code).map(|r| r.name.clone()).unwrap_or_else(|| rel.target.ods_code.clone());
+            return Some((rel.target.ods_code.clone(), target_name));
+        }
+    }
+    None
+}
+
+pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String, OdsRecord> {
+    struct HierarchyProps {
+        commissioner: Option<String>,
+        commissioner_code: Option<String>,
+        parent: Option<String>,
+        parent_code: Option<String>,
+        pcn: Option<String>,
+        pcn_code: Option<String>,
+        trust: Option<String>,
+        trust_code: Option<String>,
+        icb: Option<String>,
+        icb_code: Option<String>,
+        region: Option<String>,
+        region_code: Option<String>,
+        start_date: Option<String>,
+        end_date: Option<String>,
+    }
+
+    let mut resolved_props: HashMap<String, HierarchyProps> = parsed
+        .par_iter()
+        .map(|(code, rec)| {
+            let comm = resolve_commissioner(code, &parsed);
+            let (commissioner_code, commissioner) = match comm {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let par = resolve_parent(code, &parsed);
+            let (parent_code, parent) = match par {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let pcn_res = resolve_pcn(code, &parsed);
+            let (pcn_code, pcn) = match pcn_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let trust_res = resolve_trust(code, &parsed);
+            let (trust_code, trust) = match trust_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let icb_res = resolve_icb(code, &parsed);
+            let (icb_code, icb) = match icb_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let reg_res = resolve_region(code, &parsed);
+            let (region_code, region) = match reg_res {
+                Some((c, n)) => (Some(c), Some(n)),
+                None => (None, None),
+            };
+
+            let start_date = rec.dates.iter()
+                .find(|d| d.date_type == "Legal")
+                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
+                .and_then(|d| d.start.clone());
+
+            let end_date = rec.dates.iter()
+                .find(|d| d.date_type == "Legal")
+                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
+                .and_then(|d| d.end.clone());
+
+            (
+                code.clone(),
+                HierarchyProps {
+                    commissioner,
+                    commissioner_code,
+                    parent,
+                    parent_code,
+                    pcn,
+                    pcn_code,
+                    trust,
+                    trust_code,
+                    icb,
+                    icb_code,
+                    region,
+                    region_code,
+                    start_date,
+                    end_date,
+                },
+            )
+        })
+        .collect();
+
+    let name_map: HashMap<String, String> =
+        parsed.iter().map(|(k, v)| (k.clone(), v.name.clone())).collect();
+
+    let mut records: HashMap<String, OdsRecord> = HashMap::with_capacity(parsed.len());
+
+    for (code, mut org) in parsed {
+        let props = resolved_props
+            .remove(&code)
+            .expect("every parsed code must have resolved props");
+
+        if let Some(ref mut parent) = org.parent_organisation {
+            if let Some(name) = name_map.get(&parent.ods_code) {
+                parent.name = name.clone();
+            }
+        }
+        for rel in &mut org.relationships {
+            rel.target.name = name_map.get(&rel.target.ods_code).cloned();
+        }
+        for succ in &mut org.successors {
+            succ.target.name = name_map.get(&succ.target.ods_code).cloned();
+        }
+
+        let record_class = match org.org_record_class.as_deref() {
+            Some("RC1") => "org".to_string(),
+            Some("RC2") => "site".to_string(),
+            _ => "org".to_string(),
+        };
+
+        for r in &mut org.roles {
+            r.status = r.status.to_lowercase();
+            if let Some(ref mut d) = r.display_name {
+                *d = d.to_lowercase();
+            }
+        }
+        for rel in &mut org.relationships {
+            rel.status = rel.status.to_lowercase();
+            if let Some(ref mut d) = rel.display_name {
+                *d = d.to_lowercase();
+            }
+            if let Some(ref mut prd) = rel.target.primary_role_display_name {
+                *prd = prd.to_lowercase();
+            }
+        }
+        for succ in &mut org.successors {
+            succ.succ_type = succ.succ_type.to_lowercase();
+            if let Some(ref mut prd) = succ.target.primary_role_display_name {
+                *prd = prd.to_lowercase();
+            }
+        }
+
+        records.insert(code, OdsRecord {
+            ods_code: org.ods_code,
+            name: org.name,
+            status: org.status.to_lowercase(),
+            role: org.role.to_lowercase(),
+            parent_organisation: org.parent_organisation,
+            region_code: props.region_code.clone(),
+            root: org.root,
+            assigning_authority_name: org.assigning_authority_name,
+            record_class,
+            last_change_date: org.last_change_date,
+            dates: org.dates,
+            geo_loc: org.geo_loc,
+            contacts: org.contacts,
+            roles: org.roles,
+            relationships: org.relationships,
+            successors: org.successors,
+            commissioner: props.commissioner,
+            commissioner_code: props.commissioner_code,
+            parent: props.parent,
+            parent_code: props.parent_code,
+            pcn: props.pcn,
+            pcn_code: props.pcn_code,
+            trust: props.trust,
+            trust_code: props.trust_code,
+            icb: props.icb,
+            icb_code: props.icb_code,
+            region: props.region,
+            start_date: props.start_date,
+            end_date: props.end_date,
+        });
+    }
+
+    records
+}
+
+fn parse_concept_attrs<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>, concept_map: &mut HashMap<String, String>) -> Result<()> {
+    let mut attr_id = None;
+    let mut attr_code = None;
+    let mut display_name = None;
+    for attr in e.attributes() {
+        let attr = attr?;
+        let key = attr.key.as_ref();
+        if key == b"id" {
+            attr_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+        } else if key == b"code" {
+            attr_code = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+        } else if key == b"displayName" {
+            display_name = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+        }
+    }
+    if let Some(v) = display_name {
+        if let Some(id) = attr_id {
+            concept_map.insert(id, v.clone());
+        }
+        if let Some(code) = attr_code {
+            concept_map.insert(code, v);
+        }
+    }
+    Ok(())
+}
+
+fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) -> Option<String> {
+    for attr in e.attributes().flatten() {
+        if attr.key.as_ref() == b"value" {
+            return attr.decode_and_unescape_value(reader).ok().map(|s| s.into_owned());
+        }
+    }
+    None
+}
+
+pub fn parse_single_pass(
+    xml_path: &Path,
+) -> Result<(crate::provenance::OdsProvenance, HashMap<String, String>, HashMap<String, ParsedOrg>)> {
+    let file = File::open(xml_path)?;
+    let buf_reader = BufReader::with_capacity(128 * 1024, file);
+    let mut reader = Reader::from_reader(buf_reader);
+    reader.trim_text(true);
+ 
+    let mut concept_map = HashMap::new();
+    let mut parsed: HashMap<String, ParsedOrg> = HashMap::new();
+    let mut parser_state = ParserState::new();
+    let mut buf = Vec::new();
+
+    let mut pub_date = None;
+    let mut pub_seq = None;
+    let mut pub_type = None;
+    let mut pub_source = None;
+    let mut _xml_version = None;
+    let mut _xml_creation = None;
+ 
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(ref e) => {
+                let name = e.local_name();
+                let name_ref = name.as_ref();
+                if name_ref == b"concept" || name_ref == b"Concept" {
+                    parse_concept_attrs(e, &reader, &mut concept_map)?;
+                } else {
+                    parser_state.handle_start_or_empty(name_ref, e, false, &reader, &concept_map)?;
+                }
+            }
+            Event::Empty(ref e) => {
+                let name = e.local_name();
+                let name_ref = name.as_ref();
+                if name_ref == b"concept" || name_ref == b"Concept" {
+                    parse_concept_attrs(e, &reader, &mut concept_map)?;
+                } else if name_ref == b"PublicationDate" {
+                    pub_date = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSeqNum" {
+                    pub_seq = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationType" {
+                    pub_type = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSource" {
+                    pub_source = get_manifest_attr(e, &reader);
+                } else if name_ref == b"Version" {
+                    _xml_version = get_manifest_attr(e, &reader);
+                } else if name_ref == b"FileCreationDateTime" {
+                    _xml_creation = get_manifest_attr(e, &reader);
+                } else {
+                    parser_state.handle_start_or_empty(name_ref, e, true, &reader, &concept_map)?;
+                }
+            }
+            Event::End(ref e) => {
+                let name = e.local_name();
+                parser_state.handle_end(name.as_ref(), &mut parsed)?;
+            }
+            Event::Text(ref e) => {
+                if parser_state.current_text_target != TextTarget::None {
+                    let text = e.unescape()?.into_owned();
+                    parser_state.handle_text(text)?;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let provenance = crate::provenance::OdsProvenance::new(
+        pub_date,
+        pub_seq,
+        pub_type,
+        pub_source,
+        Some(xml_path),
+    );
+
+    Ok((provenance, concept_map, parsed))
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TextTarget {
+    None,
+    OrgName,
+    AddrLine,
+    Town,
+    County,
+    PostCode,
+    Country,
+    Uprn,
+    SuccType,
+}
+
+#[derive(Default)]
+struct OrgState {
+    code: Option<String>,
+    name: Option<String>,
+    status: Option<String>,
+    root: Option<String>,
+    assigning_authority_name: Option<String>,
+    record_class: Option<String>,
+    last_change_date: Option<String>,
+    dates: Vec<OdsDate>,
+    location: Option<Location>,
+    contacts: Vec<OdsContact>,
+    roles: Vec<OdsRole>,
+    relationships: Vec<OdsRelationship>,
+    successors: Vec<OdsSuccessor>,
+    role: Option<OdsRole>,
+    rel: Option<OdsRelationship>,
+    succ: Option<OdsSuccessor>,
+    date: Option<OdsDate>,
+    target: Option<OdsRelationshipTarget>,
+}
+
+struct ParserState {
+    in_organisation: bool,
+    in_rel: bool,
+    in_succ: bool,
+    in_geoloc: bool,
+    in_location: bool,
+    current_text_target: TextTarget,
+    org: OrgState,
+}
+
+impl ParserState {
+    fn new() -> Self {
+        Self {
+            in_organisation: false,
+            in_rel: false,
+            in_succ: false,
+            in_geoloc: false,
+            in_location: false,
+            current_text_target: TextTarget::None,
+            org: OrgState::default(),
+        }
+    }
+
+    fn reset_org(&mut self) {
+        self.in_organisation = true;
+        self.in_rel = false;
+        self.in_succ = false;
+        self.in_geoloc = false;
+        self.in_location = false;
+        self.current_text_target = TextTarget::None;
+        self.org = OrgState::default();
+    }
+
+    fn handle_start_or_empty<B: std::io::BufRead>(
+        &mut self,
+        name_ref: &[u8],
+        e: &BytesStart,
+        is_empty: bool,
+        reader: &Reader<B>,
+        concept_map: &HashMap<String, String>,
+    ) -> Result<()> {
+        match name_ref {
+            b"Organisation" => {
+                self.reset_org();
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"orgRecordClass" {
+                        self.org.record_class = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+            }
+            b"Name" if self.in_organisation => {
+                self.current_text_target = TextTarget::OrgName;
+            }
+            b"Date" if self.in_organisation => {
+                let mut date_type = None;
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    if attr.key.as_ref() == b"type" {
+                        date_type = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+                if let Some(t) = date_type {
+                    self.org.date = Some(OdsDate {
+                        date_type: t,
+                        start: None,
+                        end: None,
+                    });
+                }
+            }
+            b"GeoLoc" if self.in_organisation => {
+                self.in_geoloc = true;
+            }
+            b"Location" if self.in_geoloc => {
+                self.in_location = true;
+                if self.org.location.is_none() {
+                    self.org.location = Some(Location::default());
+                }
+            }
+            b"AddrLn1" | b"AddrLn2" | b"AddrLn3" if self.in_location => {
+                self.current_text_target = TextTarget::AddrLine;
+            }
+            b"Town" if self.in_location => {
+                self.current_text_target = TextTarget::Town;
+            }
+            b"County" if self.in_location => {
+                self.current_text_target = TextTarget::County;
+            }
+            b"PostCode" if self.in_location => {
+                self.current_text_target = TextTarget::PostCode;
+            }
+            b"Country" if self.in_location => {
+                self.current_text_target = TextTarget::Country;
+            }
+            b"UPRN" if self.in_location => {
+                self.current_text_target = TextTarget::Uprn;
+            }
+            b"Contact" if self.in_organisation => {
+                let mut c_type = None;
+                let mut c_val = None;
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"type" {
+                        c_type = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"value" {
+                        c_val = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+                if let (Some(t), Some(v)) = (c_type, c_val) {
+                    self.org.contacts.push(OdsContact {
+                        contact_type: t,
+                        value: v,
+                    });
+                }
+            }
+            b"Role" if self.in_organisation => {
+                let mut role_id = None;
+                let mut unique_role_id = None;
+                let mut primary_role = false;
+                let mut status = "active".to_string();
+
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"id" {
+                        role_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"uniqueRoleID" {
+                        unique_role_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"primaryRole" {
+                        let val = attr.decode_and_unescape_value(reader)?;
+                        primary_role = val.eq_ignore_ascii_case("true");
+                    } else if key == b"status" {
+                        status = attr.decode_and_unescape_value(reader)?.into_owned();
+                    }
+                }
+
+                if let Some(rid) = role_id {
+                    let urid = unique_role_id.unwrap_or_default();
+                    let display_name = concept_map.get(&rid).cloned();
+                    let role_code = rid.clone();
+                    let new_role = OdsRole {
+                        id: rid,
+                        code: Some(role_code),
+                        display_name,
+                        unique_role_id: urid,
+                        primary_role,
+                        status,
+                        dates: Vec::new(),
+                    };
+                    self.org.role = Some(new_role);
+                }
+            }
+            b"Relationship" | b"Rel" if self.in_organisation => {
+                self.in_rel = true;
+                let mut rel_id = None;
+                let mut unique_rel_id = None;
+                let mut status = "active".to_string();
+
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"id" {
+                        rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"uniqueRelID" {
+                        unique_rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"status" {
+                        status = attr.decode_and_unescape_value(reader)?.into_owned();
+                    }
+                }
+
+                if let Some(rid) = rel_id {
+                    let urid = unique_rel_id.unwrap_or_default();
+                    let display_name = concept_map.get(&rid).cloned();
+                    self.org.rel = Some(OdsRelationship {
+                        id: rid,
+                        display_name,
+                        unique_rel_id: urid,
+                        status,
+                        dates: Vec::new(),
+                        target: OdsRelationshipTarget::default(),
+                    });
+                }
+            }
+            b"Successor" | b"Succ" if self.in_organisation => {
+                self.in_succ = true;
+                let mut unique_succ_id = None;
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    if attr.key.as_ref() == b"uniqueSuccID" {
+                        unique_succ_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+                if let Some(usid) = unique_succ_id {
+                    self.org.succ = Some(OdsSuccessor {
+                        unique_succ_id: usid,
+                        succ_type: String::new(),
+                        dates: Vec::new(),
+                        target: OdsRelationshipTarget::default(),
+                    });
+                }
+            }
+            b"Type" if self.in_succ => {
+                self.current_text_target = TextTarget::SuccType;
+            }
+            b"Target" if self.in_rel || self.in_succ => {
+                let mut target = OdsRelationshipTarget::default();
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"root" {
+                        target.root = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"assigningAuthorityName" {
+                        target.assigning_authority_name = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+                self.org.target = Some(target);
+            }
+            b"OrgId" if self.org.target.is_some() => {
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"extension" {
+                        if let Some(ref mut t) = self.org.target {
+                            t.ods_code = attr.decode_and_unescape_value(reader)?.into_owned();
+                        }
+                    } else if key == b"root" {
+                        if let Some(ref mut t) = self.org.target {
+                            t.root = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                        }
+                    } else if key == b"assigningAuthorityName" {
+                        if let Some(ref mut t) = self.org.target {
+                            t.assigning_authority_name = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                        }
+                    }
+                }
+            }
+            b"PrimaryRole" if self.org.target.is_some() => {
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"id" {
+                        let id = attr.decode_and_unescape_value(reader)?.into_owned();
+                        if let Some(ref mut t) = self.org.target {
+                            t.primary_role_display_name = concept_map.get(&id).cloned();
+                            t.primary_role_id = Some(id);
+                        }
+                    } else if key == b"uniqueRoleID" {
+                        if let Some(ref mut t) = self.org.target {
+                            t.primary_role_unique_role_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                        }
+                    }
+                }
+            }
+            b"OrgId" if self.in_organisation && !self.in_rel && !self.in_succ => {
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    let key = attr.key.as_ref();
+                    if key == b"extension" {
+                        self.org.code = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"root" {
+                        self.org.root = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"assigningAuthorityName" {
+                        self.org.assigning_authority_name = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+            }
+            b"Status" if self.in_organisation => {
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    if attr.key.as_ref() == b"value" {
+                        self.org.status = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+            }
+            b"LastChangeDate" if self.in_organisation => {
+                for attr in e.attributes() {
+                    let attr = attr?;
+                    if attr.key.as_ref() == b"value" {
+                        self.org.last_change_date = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if is_empty {
+            self.handle_end(name_ref, &mut HashMap::new())?;
+        }
+        Ok(())
+    }
+
+    fn handle_text(&mut self, text: String) -> Result<()> {
+        match self.current_text_target {
+            TextTarget::OrgName => self.org.name = Some(text),
+            TextTarget::AddrLine => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.address_lines.push(text);
+                }
+            }
+            TextTarget::Town => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.town = Some(text);
+                }
+            }
+            TextTarget::County => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.county = Some(text);
+                }
+            }
+            TextTarget::PostCode => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.postcode = Some(text);
+                }
+            }
+            TextTarget::Country => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.country = Some(text);
+                }
+            }
+            TextTarget::Uprn => {
+                if let Some(ref mut loc) = self.org.location {
+                    loc.uprn = Some(text);
+                }
+            }
+            TextTarget::SuccType => {
+                if let Some(ref mut succ) = self.org.succ {
+                    succ.succ_type = text;
+                }
+            }
+            TextTarget::None => {}
+        }
+        self.current_text_target = TextTarget::None;
+        Ok(())
+    }
+
+    fn handle_end(&mut self, name_ref: &[u8], parsed: &mut HashMap<String, ParsedOrg>) -> Result<()> {
+        match name_ref {
+            b"Organisation" => {
+                if let (Some(code), Some(name), Some(status)) = (
+                    self.org.code.take(),
+                    self.org.name.take(),
+                    self.org.status.take(),
+                ) {
+                    let primary_role_display = self
+                        .org
+                        .roles
+                        .iter()
+                        .find(|r| r.primary_role && r.status.eq_ignore_ascii_case("active"))
+                        .and_then(|r| r.display_name.clone())
+                        .or_else(|| {
+                            self.org
+                                .roles
+                                .iter()
+                                .find(|r| r.primary_role)
+                                .and_then(|r| r.display_name.clone())
+                        })
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    let parent_org = self.org.relationships.iter().find_map(|rel| {
+                        if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
+                            Some(ParentOrganisation {
+                                ods_code: rel.target.ods_code.clone(),
+                                name: rel.target.name.clone().unwrap_or_default(),
+                            })
+                        } else {
+                            None
+                        }
+                    });
+
+                    let region_code = self.org.relationships.iter().find_map(|rel| {
+                        if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
+                            Some(rel.target.ods_code.clone())
+                        } else {
+                            None
+                        }
+                    });
+
+                    let parsed_org = ParsedOrg {
+                        ods_code: code.clone(),
+                        name,
+                        status,
+                        role: primary_role_display,
+                        parent_organisation: parent_org,
+                        region_code,
+                        root: self.org.root.take(),
+                        assigning_authority_name: self.org.assigning_authority_name.take(),
+                        org_record_class: self.org.record_class.take(),
+                        last_change_date: self.org.last_change_date.take(),
+                        dates: std::mem::take(&mut self.org.dates),
+                        geo_loc: self.org.location.take(),
+                        contacts: std::mem::take(&mut self.org.contacts),
+                        roles: std::mem::take(&mut self.org.roles),
+                        relationships: std::mem::take(&mut self.org.relationships),
+                        successors: std::mem::take(&mut self.org.successors),
+                    };
+
+                    parsed.insert(code, parsed_org);
+                }
+                self.in_organisation = false;
+            }
+            b"GeoLoc" => self.in_geoloc = false,
+            b"Location" => self.in_location = false,
+            b"Date" => {
+                if let Some(date) = self.org.date.take() {
+                    if let Some(ref mut role) = self.org.role {
+                        role.dates.push(date.clone());
+                    } else if let Some(ref mut rel) = self.org.rel {
+                        rel.dates.push(date.clone());
+                    } else if let Some(ref mut succ) = self.org.succ {
+                        succ.dates.push(date.clone());
+                    } else {
+                        self.org.dates.push(date);
+                    }
+                }
+            }
+            b"Role" => {
+                if let Some(role) = self.org.role.take() {
+                    self.org.roles.push(role);
+                }
+            }
+            b"Relationship" | b"Rel" => {
+                if let Some(mut rel) = self.org.rel.take() {
+                    if let Some(target) = self.org.target.take() {
+                        rel.target = target;
+                    }
+                    self.org.relationships.push(rel);
+                }
+                self.in_rel = false;
+            }
+            b"Successor" | b"Succ" => {
+                if let Some(mut succ) = self.org.succ.take() {
+                    if let Some(target) = self.org.target.take() {
+                        succ.target = target;
+                    }
+                    self.org.successors.push(succ);
+                }
+                self.in_succ = false;
+            }
+            b"Target" => {
+                if let Some(target) = self.org.target.take() {
+                    if let Some(ref mut rel) = self.org.rel {
+                        rel.target = target;
+                    } else if let Some(ref mut succ) = self.org.succ {
+                        succ.target = target;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}

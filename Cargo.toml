@@ -6,7 +6,7 @@ description = "NHS ODS Data Tool"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
@@ -17,11 +17,13 @@ zip = "1.0"
 rayon = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+ureq = { version = "2.9", features = ["json"] }
+ratatui = "0.29"
+crossterm = "0.28"
 
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3.9"
-zip = "1.0"
 
 [[bench]]
 name = "compile_bench"

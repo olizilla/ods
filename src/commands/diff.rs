@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use arrow::array::Array;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -6,18 +7,16 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use super::compile::{OdsRecord, parse_single_pass, resolve_hierarchies, find_xml_file};
+use super::ndjson::{OdsRecord, parse_single_pass, resolve_hierarchies, find_xml_file};
 use crate::provenance::OdsProvenance;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Baseline NDJSON, TRUD XML file, or TRUD zip archive
-    #[arg(long, short)]
-    pub old: PathBuf,
+    /// Baseline NDJSON, TRUD XML file, or release date tag (defaults to previous release in workspace)
+    pub old: Option<PathBuf>,
 
-    /// Target NDJSON, TRUD XML file, or TRUD zip archive
-    #[arg(long, short)]
-    pub new: PathBuf,
+    /// Target NDJSON, TRUD XML file, or release date tag (defaults to current release in workspace)
+    pub new: Option<PathBuf>,
 
     /// Output format: summary (default TUI), json, patch, csv, markdown
     #[arg(long, short, default_value = "summary")]
@@ -59,11 +58,26 @@ pub struct EntityDiff {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    eprintln!("Loading baseline dataset from {}...", args.old.display());
-    let (old_prov, old_records) = load_dataset(&args.old)?;
+    let (old_path, new_path) = match (&args.old, &args.new) {
+        (Some(o), Some(n)) => (o.clone(), n.clone()),
+        _ => {
+            let workspace_root = crate::workspace::find_workspace_root()
+                .context("No ODS workspace found. Provide positional `[OLD] [NEW]` paths or populate `./ods_data/`.")?;
+            let releases = crate::workspace::list_releases(&workspace_root)?;
+            if releases.len() < 2 {
+                anyhow::bail!("At least 2 release snapshots are required in `./ods_data/releases/` to auto-diff. Found {}.", releases.len());
+            }
+            let new_p = args.new.clone().unwrap_or_else(|| releases[0].path.clone());
+            let old_p = args.old.clone().unwrap_or_else(|| releases[1].path.clone());
+            (old_p, new_p)
+        }
+    };
 
-    eprintln!("Loading target dataset from {}...", args.new.display());
-    let (new_prov, new_records) = load_dataset(&args.new)?;
+    eprintln!("Loading baseline dataset from {}...", old_path.display());
+    let (old_prov, old_records) = load_dataset(&old_path)?;
+
+    eprintln!("Loading target dataset from {}...", new_path.display());
+    let (new_prov, new_records) = load_dataset(&new_path)?;
 
     eprintln!(
         "Loaded {} baseline records and {} target records.",
@@ -105,7 +119,9 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
 
     if path.is_file() {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if ext.eq_ignore_ascii_case("ndjson") || ext.eq_ignore_ascii_case("json") {
+        if ext.eq_ignore_ascii_case("parquet") {
+            return load_parquet(path);
+        } else if ext.eq_ignore_ascii_case("ndjson") || ext.eq_ignore_ascii_case("json") {
             return load_ndjson(path);
         } else if ext.eq_ignore_ascii_case("zip") {
             return load_zip(path);
@@ -114,8 +130,19 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
         }
     }
 
-    // Directory lookup: try finding NDJSON or XML inside directory
+    // Directory lookup: try finding Parquet, NDJSON or XML inside directory
     if path.is_dir() {
+        let orgs_parquet = if path.join("orgs.parquet").exists() {
+            Some(path.join("orgs.parquet"))
+        } else if path.join("orgs_all.parquet").exists() {
+            Some(path.join("orgs_all.parquet"))
+        } else {
+            None
+        };
+        if let Some(pfile) = orgs_parquet {
+            return load_parquet(&pfile);
+        }
+
         let ndjson_file = path.join("ods.ndjson");
         if ndjson_file.exists() {
             return load_ndjson(&ndjson_file);
@@ -124,6 +151,99 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
     }
 
     anyhow::bail!("Could not determine file format for {}", path.display())
+}
+
+fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let file = File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    let mut records = HashMap::new();
+    for batch in reader {
+        let batch = batch?;
+        let schema = batch.schema();
+        let num_rows = batch.num_rows();
+
+        let ods_code_arr = batch.column(schema.index_of("ods_code")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("ods_code StringArray")?;
+        let name_arr = batch.column(schema.index_of("name")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("name StringArray")?;
+        let status_arr = batch.column(schema.index_of("status")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("status StringArray")?;
+        let role_arr = batch.column(schema.index_of("role")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("role StringArray")?;
+        let record_class_idx = schema.index_of("record_class").ok();
+        let parent_idx = schema.index_of("parent").ok();
+        let parent_code_idx = schema.index_of("parent_code").ok();
+        let pcn_idx = schema.index_of("pcn").ok();
+        let pcn_code_idx = schema.index_of("pcn_code").ok();
+        let trust_idx = schema.index_of("trust").ok();
+        let trust_code_idx = schema.index_of("trust_code").ok();
+        let icb_idx = schema.index_of("icb").ok();
+        let icb_code_idx = schema.index_of("icb_code").ok();
+
+        for i in 0..num_rows {
+            let ods_code = ods_code_arr.value(i).to_string();
+            let name = name_arr.value(i).to_string();
+            let status = status_arr.value(i).to_string();
+            let role = role_arr.value(i).to_string();
+            let record_class = record_class_idx.map(|idx| batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(i).to_string()).unwrap_or_else(|| "org".to_string());
+
+            let parent = parent_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let parent_code = parent_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let pcn = pcn_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let pcn_code = pcn_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let trust = trust_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let trust_code = trust_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let icb = icb_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+            let icb_code = icb_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            });
+
+            let record = OdsRecord {
+                ods_code: ods_code.clone(),
+                name,
+                status,
+                role,
+                record_class,
+                parent,
+                parent_code,
+                pcn,
+                pcn_code,
+                trust,
+                trust_code,
+                icb,
+                icb_code,
+                ..Default::default()
+            };
+            records.insert(ods_code, record);
+        }
+    }
+
+    Ok((None, records))
 }
 
 fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
@@ -425,13 +545,13 @@ fn render_summary_tui(
     let yellow = |s: &str| format!("\x1b[1;33m{}\x1b[0m", s);
 
     let old_label = old_prov
-        .and_then(|p| p.publication_date.as_deref())
-        .map(|d| format!("{} ({})", d, total_old))
+        .and_then(|p| p.trud_release_date.as_deref())
+        .map(|d| format!("{} ({} recs)", d, total_old))
         .unwrap_or_else(|| format!("{} records", total_old));
 
     let new_label = new_prov
-        .and_then(|p| p.publication_date.as_deref())
-        .map(|d| format!("{} ({})", d, total_new))
+        .and_then(|p| p.trud_release_date.as_deref())
+        .map(|d| format!("{} ({} recs)", d, total_new))
         .unwrap_or_else(|| format!("{} records", total_new));
 
     let subtitle = format!("Baseline: {}  ➔  Target: {}", old_label, new_label);
@@ -662,12 +782,12 @@ fn render_markdown(
     let mod_pct = if total_old > 0 { (modified.len() as f64 / total_old as f64) * 100.0 } else { 0.0 };
 
     let old_label = old_prov
-        .and_then(|p| p.publication_date.as_deref())
+        .and_then(|p| p.trud_release_date.as_deref())
         .map(|d| format!("{} ({} recs)", d, total_old))
         .unwrap_or_else(|| format!("{} records", total_old));
 
     let new_label = new_prov
-        .and_then(|p| p.publication_date.as_deref())
+        .and_then(|p| p.trud_release_date.as_deref())
         .map(|d| format!("{} ({} recs)", d, total_new))
         .unwrap_or_else(|| format!("{} records", total_new));
 
@@ -746,8 +866,8 @@ mod tests {
         new_map.insert("A103".to_string(), sample_record("A103", "New Practice", "active", "General Practice"));
 
         let args = Args {
-            old: PathBuf::from("old"),
-            new: PathBuf::from("new"),
+            old: Some(PathBuf::from("old")),
+            new: Some(PathBuf::from("new")),
             format: "summary".to_string(),
             role: None,
             verbose: false,
@@ -782,8 +902,8 @@ mod tests {
         new_map.insert("A102".to_string(), sample_record("A102", "GP Practice", "inactive", "General Practice"));
 
         let args = Args {
-            old: PathBuf::from("old"),
-            new: PathBuf::from("new"),
+            old: Some(PathBuf::from("old")),
+            new: Some(PathBuf::from("new")),
             format: "summary".to_string(),
             role: Some("General Practice".to_string()),
             verbose: false,
