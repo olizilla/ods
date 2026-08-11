@@ -286,8 +286,8 @@ fn clean_icb_name(raw: &str) -> String {
         return String::new();
     }
     let s = raw.split(" - ").next().unwrap_or(raw).trim();
-    if s.ends_with(" ICB") {
-        format!("{} INTEGRATED CARE BOARD", &s[..s.len() - 4])
+    if let Some(stripped) = s.strip_suffix(" ICB") {
+        format!("{} INTEGRATED CARE BOARD", stripped)
     } else {
         s.to_string()
     }
@@ -368,8 +368,8 @@ fn build_region_summaries(records: &[OrgItem]) -> Vec<RegionSummary> {
         }
     }
 
-    map.into_iter()
-        .map(|(_, acc)| RegionSummary {
+    map.into_values()
+        .map(|acc| RegionSummary {
             region_code: acc.code,
             region_name: acc.name,
             country: acc.country,
@@ -439,8 +439,8 @@ fn build_icb_summaries(records: &[OrgItem]) -> Vec<IcbSummary> {
         }
     }
 
-    map.into_iter()
-        .map(|(_, acc)| IcbSummary {
+    map.into_values()
+        .map(|acc| IcbSummary {
             icb_code: acc.icb_code,
             icb_name: acc.icb_name,
             region_code: acc.region_code,

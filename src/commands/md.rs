@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use arrow::array::{Array, BooleanArray, StringArray};
+use arrow::array::{Array, BooleanArray, StringArray, Date32Array};
 use clap::Parser;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rayon::prelude::*;
@@ -28,6 +28,22 @@ fn col_opt_str(batch: &arrow::record_batch::RecordBatch, idx: usize, row_idx: us
     let arr = col_str(batch, idx, col_name);
     if arr.is_valid(row_idx) {
         Some(arr.value(row_idx).to_string())
+    } else {
+        None
+    }
+}
+
+fn col_date_str(batch: &arrow::record_batch::RecordBatch, idx: usize, row_idx: usize) -> Option<String> {
+    let arr = batch.column(idx)
+        .as_any()
+        .downcast_ref::<Date32Array>()?;
+    if arr.is_valid(row_idx) {
+        let days = arr.value(row_idx);
+        chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?
+            .checked_add_signed(chrono::Duration::days(days as i64))?
+            .format("%Y-%m-%d")
+            .to_string()
+            .into()
     } else {
         None
     }
@@ -260,11 +276,11 @@ pub fn run(args: Args) -> Result<()> {
                 icb_code: icb_code_idx.and_then(|idx| col_opt_str(&batch, idx, i, "icb_code")),
                 region: region_idx.and_then(|idx| col_opt_str(&batch, idx, i, "region")),
                 region_code: region_code_idx.and_then(|idx| col_opt_str(&batch, idx, i, "region_code")),
-                operational_start: op_start_idx.and_then(|idx| col_opt_str(&batch, idx, i, "operational_start")),
-                operational_end: op_end_idx.and_then(|idx| col_opt_str(&batch, idx, i, "operational_end")),
-                legal_start: leg_start_idx.and_then(|idx| col_opt_str(&batch, idx, i, "legal_start")),
-                legal_end: leg_end_idx.and_then(|idx| col_opt_str(&batch, idx, i, "legal_end")),
-                last_change_date: last_change_idx.and_then(|idx| col_opt_str(&batch, idx, i, "last_change_date")),
+                operational_start: col_date_str(&batch, op_start_idx.unwrap_or(usize::MAX), i),
+                operational_end: col_date_str(&batch, op_end_idx.unwrap_or(usize::MAX), i),
+                legal_start: col_date_str(&batch, leg_start_idx.unwrap_or(usize::MAX), i),
+                legal_end: col_date_str(&batch, leg_end_idx.unwrap_or(usize::MAX), i),
+                last_change_date: col_date_str(&batch, last_change_idx.unwrap_or(usize::MAX), i),
             });
         }
     }
@@ -379,4 +395,3 @@ fn role_to_folder(role: &str) -> String {
     role.to_lowercase()
         .replace([' ', '/', '-'], "_")
 }
-

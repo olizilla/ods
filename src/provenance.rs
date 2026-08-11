@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -42,27 +42,8 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_url: Option<String>,
 
-    // --- 2. Inner XML Manifest Metadata ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_seq_num: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_type: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_source: Option<String>,
-
-    // --- 3. Tool Build Info & Artifact Hashes ---
-    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
-    pub output_path: Option<String>,
-
+    // --- 2. Tool Build Info & Artifact Hashes ---
     pub ods_cmd_version: String,
-
-    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
-    pub fetched_at: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
-    pub created_at: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub derived_artifacts: Option<std::collections::BTreeMap<String, String>>,
@@ -70,38 +51,150 @@ pub struct OdsProvenance {
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
 
-impl OdsProvenance {
-    pub fn load_from_dir(dir: &Path) -> Option<Self> {
-        let prov_file = dir.join(PROVENANCE_FILENAME);
-        if prov_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&prov_file) {
-                if let Ok(prov) = serde_json::from_str::<Self>(&content) {
-                    return Some(prov);
-                }
-            }
+impl Default for OdsProvenance {
+    fn default() -> Self {
+        Self {
+            type_tag: NDJSON_TYPE_TAG.to_string(),
+            trud_release_name: None,
+            trud_release_date: None,
+            trud_release_file: None,
+            trud_release_filesize_bytes: None,
+            trud_release_sha256: None,
+            trud_release_sha256_verified: None,
+            trud_release_url: None,
+            ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
+            derived_artifacts: None,
         }
-        if let Some(parent) = dir.parent() {
-            let parent_prov = parent.join(PROVENANCE_FILENAME);
-            if parent_prov.exists() {
-                if let Ok(content) = std::fs::read_to_string(&parent_prov) {
-                    if let Ok(prov) = serde_json::from_str::<Self>(&content) {
-                        return Some(prov);
+    }
+}
+
+impl OdsProvenance {
+    pub fn to_parquet_metadata(&self) -> std::collections::BTreeMap<String, String> {
+        let mut meta = std::collections::BTreeMap::new();
+        if let Some(ref d) = self.trud_release_date {
+            meta.insert("ods.trud_release_date".to_string(), d.clone());
+        }
+        if let Some(ref n) = self.trud_release_name {
+            meta.insert("ods.trud_release_name".to_string(), n.clone());
+        }
+        if let Some(ref f) = self.trud_release_file {
+            meta.insert("ods.trud_release_file".to_string(), f.clone());
+        }
+        if let Some(ref s) = self.trud_release_sha256 {
+            meta.insert("ods.trud_release_sha256".to_string(), s.clone());
+        }
+        if let Some(ref u) = self.trud_release_url {
+            meta.insert("ods.trud_release_url".to_string(), u.clone());
+        }
+        meta.insert("ods.cmd_version".to_string(), self.ods_cmd_version.clone());
+        meta
+    }
+
+    pub fn load_from_dir(dir: &Path) -> Option<Self> {
+        let mut curr = if dir.is_file() {
+            dir.parent().map(|p| p.to_path_buf())
+        } else {
+            Some(dir.to_path_buf())
+        };
+
+        for _ in 0..4 {
+            if let Some(ref path) = curr {
+                let prov_file = path.join(PROVENANCE_FILENAME);
+                if prov_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&prov_file) {
+                        if let Ok(mut prov) = serde_json::from_str::<Self>(&content) {
+                            if prov.trud_release_date.is_none() || prov.trud_release_file.is_none() {
+                                if let Some(zip_prov) = Self::try_extract_trud_zip_provenance(path) {
+                                    if prov.trud_release_date.is_none() { prov.trud_release_date = zip_prov.trud_release_date; }
+                                    if prov.trud_release_file.is_none() { prov.trud_release_file = zip_prov.trud_release_file; }
+                                    if prov.trud_release_name.is_none() { prov.trud_release_name = zip_prov.trud_release_name; }
+                                    if prov.trud_release_sha256.is_none() { prov.trud_release_sha256 = zip_prov.trud_release_sha256; }
+                                    if prov.trud_release_url.is_none() { prov.trud_release_url = zip_prov.trud_release_url; }
+                                }
+                            }
+                            return Some(prov);
+                        }
                     }
                 }
+                curr = path.parent().map(|p| p.to_path_buf());
+            } else {
+                break;
             }
         }
         None
     }
 
+    pub fn try_extract_trud_zip_provenance(input_path: &Path) -> Option<Self> {
+        let find_zip = |dir: &Path| -> Option<std::path::PathBuf> {
+            if dir.is_file() && dir.extension().map_or(false, |ext| ext == "zip") {
+                return Some(dir.to_path_buf());
+            }
+            if dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file() && p.extension().map_or(false, |ext| ext == "zip") {
+                            return Some(p);
+                        }
+                    }
+                }
+                let trud_sub = dir.join("trud");
+                if trud_sub.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&trud_sub) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_file() && p.extension().map_or(false, |ext| ext == "zip") {
+                                return Some(p);
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let zip_path = find_zip(input_path)?;
+        let file_name = zip_path.file_name()?.to_string_lossy().to_string();
+
+        let mut prov = Self::new(None, Some(&zip_path));
+        prov.trud_release_file = Some(file_name.clone());
+
+        // Extract date YYYYMMDD (e.g. 20260731) from filename
+        for chunk in file_name.split('_') {
+            let digits: String = chunk.chars().filter(|c: &char| c.is_ascii_digit()).collect();
+            if digits.len() >= 8 && (digits.starts_with("202") || digits.starts_with("203")) {
+                let yyyy = &digits[0..4];
+                let mm = &digits[4..6];
+                let dd = &digits[6..8];
+                prov.trud_release_date = Some(format!("{}-{}-{}", yyyy, mm, dd));
+                break;
+            }
+        }
+
+        // Extract version like 7.0.0 from filename
+        for chunk in file_name.split('_') {
+            if chunk.contains('.') && chunk.chars().any(|c: char| c.is_ascii_digit()) {
+                prov.trud_release_name = Some(format!("Release {}", chunk));
+                break;
+            }
+        }
+
+        if let Ok(meta) = std::fs::metadata(&zip_path) {
+            prov.trud_release_filesize_bytes = Some(meta.len());
+        }
+        if let Ok(hash) = compute_file_sha256(&zip_path) {
+            prov.trud_release_sha256 = Some(hash);
+            prov.trud_release_sha256_verified = Some(true);
+        }
+
+        Some(prov)
+    }
+
     pub fn new(
         publication_date: Option<String>,
-        publication_seq_num: Option<String>,
-        publication_type: Option<String>,
-        publication_source: Option<String>,
         source_path: Option<&Path>,
     ) -> Self {
         let source_file = source_path.and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
-        let output_path = source_path.map(|p| p.to_string_lossy().to_string());
         Self {
             type_tag: NDJSON_TYPE_TAG.to_string(),
             trud_release_name: None,
@@ -111,13 +204,7 @@ impl OdsProvenance {
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
             trud_release_url: None,
-            publication_seq_num,
-            publication_type,
-            publication_source,
-            output_path,
             ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
-            fetched_at: None,
-            created_at: Some(Utc::now().to_rfc3339()),
             derived_artifacts: None,
         }
     }
@@ -169,17 +256,22 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
     }
 
     let prov_path = output_dir.join(PROVENANCE_FILENAME);
-    if prov_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&prov_path) {
-            if let Ok(mut prov) = serde_json::from_str::<OdsProvenance>(&content) {
-                prov.derived_artifacts = Some(hashes);
-                prov.created_at = Some(Utc::now().to_rfc3339());
-                if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
-                    let _ = std::fs::write(&prov_path, updated_json);
-                    let prov_hash = compute_file_sha256(&prov_path)?;
-                    sha_lines.push(format!("{}  {}", prov_hash.to_lowercase(), PROVENANCE_FILENAME));
-                }
-            }
+    let mut prov = OdsProvenance::load_from_dir(output_dir)
+        .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(output_dir))
+        .unwrap_or_default();
+
+    if prov.type_tag.is_empty() {
+        prov.type_tag = NDJSON_TYPE_TAG.to_string();
+    }
+    if prov.ods_cmd_version.is_empty() {
+        prov.ods_cmd_version = env!("CARGO_PKG_VERSION").to_string();
+    }
+
+    prov.derived_artifacts = Some(hashes);
+    if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
+        let _ = std::fs::write(&prov_path, updated_json);
+        if let Ok(prov_hash) = compute_file_sha256(&prov_path) {
+            sha_lines.push(format!("{}  {}", prov_hash.to_lowercase(), PROVENANCE_FILENAME));
         }
     }
 
@@ -201,9 +293,6 @@ mod tests {
     fn test_provenance_serde() {
         let prov = OdsProvenance::new(
             Some("2026-07-31".to_string()),
-            Some("4574".to_string()),
-            Some("Full".to_string()),
-            Some("HSCIC".to_string()),
             Some(Path::new("HSCOrgRefData.xml")),
         );
 

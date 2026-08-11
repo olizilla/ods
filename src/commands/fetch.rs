@@ -211,13 +211,7 @@ fn write_provenance_json(release_dir: &std::path::Path, release: &TrudReleaseIte
         trud_release_sha256_verified: Some(true),
         trud_release_file: Some(release.archive_file_name.clone()),
         trud_release_filesize_bytes: Some(release.archive_file_size),
-        publication_seq_num: None,
-        publication_type: Some("Full".to_string()),
-        publication_source: Some("HSCIC".to_string()),
         ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
-        output_path: Some(format!("./trud/{}", release.archive_file_name)),
-        fetched_at: Some(chrono::Utc::now().to_rfc3339()),
-        created_at: None,
         derived_artifacts: None,
     };
 

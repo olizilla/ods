@@ -271,24 +271,47 @@ fn rand_suffix() -> u128 {
 
 pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
     if input_path.is_file() {
-        if input_path.extension().map_or(false, |ext| ext == "zip") {
+        if input_path.extension().is_some_and(|ext| ext == "zip") {
             return extract_xml_from_zip(input_path);
         }
         return Ok(input_path.to_path_buf());
     }
+
+    let mut candidates = Vec::new();
     for entry in walkdir::WalkDir::new(input_path) {
         let entry = entry?;
         let path = entry.path();
         if path.is_file() {
-            if path.extension().is_some_and(|ext| ext == "zip") {
-                if let Ok(xml) = extract_xml_from_zip(path) {
-                    return Ok(xml);
-                }
-            } else if path.extension().is_some_and(|ext| ext == "xml") {
-                return Ok(path.to_path_buf());
+            if path.extension().is_some_and(|ext| ext == "zip") || path.extension().is_some_and(|ext| ext == "xml") {
+                candidates.push(path.to_path_buf());
             }
         }
     }
+
+    // Prioritize top-level TRUD zip, then fullfile.zip, avoiding archive.zip
+    candidates.sort_by_key(|p| {
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        if name.starts_with("hscorgrefdataxml_data") {
+            0
+        } else if name == "fullfile.zip" || name.contains("full") {
+            1
+        } else if name == "archive.zip" || name.contains("archive") {
+            3
+        } else {
+            2
+        }
+    });
+
+    for path in &candidates {
+        if path.extension().is_some_and(|ext| ext == "zip") {
+            if let Ok(xml) = extract_xml_from_zip(path) {
+                return Ok(xml);
+            }
+        } else if path.extension().is_some_and(|ext| ext == "xml") {
+            return Ok(path.clone());
+        }
+    }
+
     anyhow::bail!("No XML file found in {}", input_path.display())
 }
 
@@ -515,7 +538,7 @@ fn resolve_region(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(St
     None
 }
 
-pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String, OdsRecord> {
+pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collections::BTreeMap<String, OdsRecord> {
     struct HierarchyProps {
         commissioner: Option<String>,
         commissioner_code: Option<String>,
@@ -607,7 +630,7 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> HashMap<String
     let name_map: HashMap<String, String> =
         parsed.iter().map(|(k, v)| (k.clone(), v.name.clone())).collect();
 
-    let mut records: HashMap<String, OdsRecord> = HashMap::with_capacity(parsed.len());
+    let mut records: std::collections::BTreeMap<String, OdsRecord> = std::collections::BTreeMap::new();
 
     for (code, mut org) in parsed {
         let props = resolved_props
@@ -739,9 +762,9 @@ pub fn parse_single_pass(
     let mut buf = Vec::new();
 
     let mut pub_date = None;
-    let mut pub_seq = None;
-    let mut pub_type = None;
-    let mut pub_source = None;
+    let mut _pub_seq = None;
+    let mut _pub_type = None;
+    let mut _pub_source = None;
     let mut _xml_version = None;
     let mut _xml_creation = None;
  
@@ -764,11 +787,11 @@ pub fn parse_single_pass(
                 } else if name_ref == b"PublicationDate" {
                     pub_date = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationSeqNum" {
-                    pub_seq = get_manifest_attr(e, &reader);
+                    _pub_seq = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationType" {
-                    pub_type = get_manifest_attr(e, &reader);
+                    _pub_type = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationSource" {
-                    pub_source = get_manifest_attr(e, &reader);
+                    _pub_source = get_manifest_attr(e, &reader);
                 } else if name_ref == b"Version" {
                     _xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"FileCreationDateTime" {
@@ -795,9 +818,6 @@ pub fn parse_single_pass(
 
     let provenance = crate::provenance::OdsProvenance::new(
         pub_date,
-        pub_seq,
-        pub_type,
-        pub_source,
         Some(xml_path),
     );
 
@@ -967,7 +987,7 @@ impl ParserState {
                     let key = attr.key.as_ref();
                     if key == b"id" {
                         role_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
-                    } else if key == b"uniqueRoleID" {
+                    } else if key.eq_ignore_ascii_case(b"uniqueroleid") {
                         unique_role_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
                     } else if key == b"primaryRole" {
                         let val = attr.decode_and_unescape_value(reader)?;
@@ -1004,7 +1024,7 @@ impl ParserState {
                     let key = attr.key.as_ref();
                     if key == b"id" {
                         rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
-                    } else if key == b"uniqueRelID" {
+                    } else if key.eq_ignore_ascii_case(b"uniquerelid") {
                         unique_rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
                     } else if key == b"status" {
                         status = attr.decode_and_unescape_value(reader)?.into_owned();
@@ -1029,18 +1049,18 @@ impl ParserState {
                 let mut unique_succ_id = None;
                 for attr in e.attributes() {
                     let attr = attr?;
-                    if attr.key.as_ref() == b"uniqueSuccID" {
+                    let key = attr.key.as_ref();
+                    if key.eq_ignore_ascii_case(b"uniquesuccid") {
                         unique_succ_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
                     }
                 }
-                if let Some(usid) = unique_succ_id {
-                    self.org.succ = Some(OdsSuccessor {
-                        unique_succ_id: usid,
-                        succ_type: String::new(),
-                        dates: Vec::new(),
-                        target: OdsRelationshipTarget::default(),
-                    });
-                }
+                let usid = unique_succ_id.unwrap_or_default();
+                self.org.succ = Some(OdsSuccessor {
+                    unique_succ_id: usid,
+                    succ_type: String::new(),
+                    dates: Vec::new(),
+                    target: OdsRelationshipTarget::default(),
+                });
             }
             b"Type" if self.in_succ => {
                 self.current_text_target = TextTarget::SuccType;
@@ -1107,7 +1127,7 @@ impl ParserState {
                     }
                 }
             }
-            b"Status" if self.in_organisation => {
+            b"Status" if self.in_organisation && !self.in_rel && !self.in_succ && self.org.role.is_none() => {
                 for attr in e.attributes() {
                     let attr = attr?;
                     if attr.key.as_ref() == b"value" {

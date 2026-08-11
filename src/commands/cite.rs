@@ -50,13 +50,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 
     let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir);
 
-    let mut pub_source = prov.as_ref().and_then(|p| p.publication_source.clone()).unwrap_or_else(|| "HSCIC".to_string());
     let mut pub_date = prov.as_ref().and_then(|p| p.trud_release_date.clone()).unwrap_or_else(|| "unknown".to_string());
-    let mut pub_seq = prov.as_ref().and_then(|p| p.publication_seq_num.clone()).unwrap_or_else(|| "unknown".to_string());
-    let mut pub_type = prov.as_ref().and_then(|p| p.publication_type.clone()).unwrap_or_else(|| "Full".to_string());
+    let mut release_name = prov.as_ref().and_then(|p| p.trud_release_name.clone()).unwrap_or_else(|| "Release".to_string());
+    let mut release_file = prov.as_ref().and_then(|p| p.trud_release_file.clone()).unwrap_or_else(|| "hscorgrefdataxml".to_string());
     let mut archive_sha256 = prov.as_ref().and_then(|p| p.trud_release_sha256.clone()).unwrap_or_else(|| "<not verified>".to_string());
     let mut compiler_version = prov.as_ref().map(|p| p.ods_cmd_version.clone()).unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-    let mut created_at = prov.as_ref().and_then(|p| p.created_at.clone().or_else(|| p.fetched_at.clone())).unwrap_or_else(|| "unknown".to_string());
 
     // Fall back to key-value metadata in Parquet file headers if missing from provenance
     for f in &files {
@@ -75,21 +73,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                         }
                                     }
                                 }
-                                "ods.publication_seq_num" => {
-                                    if pub_seq == "unknown" {
-                                        if let Some(ref val) = item.value {
-                                            pub_seq = val.clone();
-                                        }
+                                "ods.trud_release_name" => {
+                                    if let Some(ref val) = item.value {
+                                        release_name = val.clone();
                                     }
                                 }
-                                "ods.publication_source" => {
+                                "ods.trud_release_file" => {
                                     if let Some(ref val) = item.value {
-                                        pub_source = val.clone();
-                                    }
-                                }
-                                "ods.publication_type" => {
-                                    if let Some(ref val) = item.value {
-                                        pub_type = val.clone();
+                                        release_file = val.clone();
                                     }
                                 }
                                 "ods.trud_release_sha256" => {
@@ -99,16 +90,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                         }
                                     }
                                 }
-                                "ods.ods_cmd_version" | "ods.compiler_version" => {
+                                "ods.cmd_version" | "ods.ods_cmd_version" | "ods.compiler_version" => {
                                     if let Some(ref val) = item.value {
                                         compiler_version = val.clone();
-                                    }
-                                }
-                                "ods.created_at" => {
-                                    if created_at == "unknown" {
-                                        if let Some(ref val) = item.value {
-                                            created_at = val.clone();
-                                        }
                                     }
                                 }
                                 _ => {}
@@ -126,16 +110,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     writeln!(writer, "Source")?;
     writeln!(
         writer,
-        "  NHS Digital Organisation Data Service (ODS), published by {} via NHS TRUD.",
-        pub_source
+        "  NHS Digital Organisation Data Service (ODS), published via NHS TRUD."
     )?;
-    writeln!(writer, "  Publication date:   {}", pub_date)?;
-    if pub_seq != "unknown" {
-        writeln!(writer, "  Publication seq:    #{}", pub_seq)?;
-    } else {
-        writeln!(writer, "  Publication seq:    {}", pub_seq)?;
-    }
-    writeln!(writer, "  Publication type:   {}", pub_type)?;
+    writeln!(writer, "  Release name:       {}", release_name)?;
+    writeln!(writer, "  Release date:       {}", pub_date)?;
+    writeln!(writer, "  Release file:       {}", release_file)?;
     writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
     writeln!(writer)?;
 
@@ -163,19 +142,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 
     writeln!(writer, "How to Cite")?;
     writeln!(writer, "  When citing the source data:")?;
-    if pub_seq != "unknown" {
-        writeln!(
-            writer,
-            "    {}. ({}). NHS Organisation Data Service — {} Publication\n    ({}, Seq #{}). NHS TRUD. https://isd.digital.nhs.uk/trud",
-            pub_source, year, pub_type, pub_date, pub_seq
-        )?;
-    } else {
-        writeln!(
-            writer,
-            "    {}. ({}). NHS Organisation Data Service — {} Publication\n    ({}). NHS TRUD. https://isd.digital.nhs.uk/trud",
-            pub_source, year, pub_type, pub_date
-        )?;
-    }
+    writeln!(
+        writer,
+        "    NHS Digital. ({}). NHS Organisation Data Service — {}\n    ({}). NHS TRUD. https://isd.digital.nhs.uk/trud",
+        year, release_name, pub_date
+    )?;
     writeln!(writer)?;
     writeln!(writer, "  When citing the derived sources:")?;
     writeln!(

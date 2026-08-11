@@ -62,6 +62,8 @@ fn test_workspace_full_lifecycle() {
             query: Some("Mock".to_string()),
             role: None,
             all: false,
+            verbose: false,
+            sort: find::SortBy::Code,
             format: find::OutputFormat::Json,
             input: discovered_parquet.clone(),
         },

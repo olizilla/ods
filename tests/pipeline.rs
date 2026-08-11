@@ -148,12 +148,20 @@ fn full_pipeline_parquet_and_md() {
         "orgs.parquet not created"
     );
     assert!(
+        parquet_dir.join("orgs_all.parquet").exists(),
+        "orgs_all.parquet not created"
+    );
+    assert!(
         parquet_dir.join("roles.parquet").exists(),
         "roles.parquet not created"
     );
     assert!(
         parquet_dir.join("rels.parquet").exists(),
         "rels.parquet not created"
+    );
+    assert!(
+        parquet_dir.join("successors.parquet").exists(),
+        "successors.parquet not created"
     );
 
     // Stage 3: md
@@ -203,6 +211,8 @@ fn full_pipeline_parquet_and_md() {
             query: Some("Mock".to_string()),
             role: None,
             all: false,
+            verbose: false,
+            sort: find::SortBy::Code,
             format: find::OutputFormat::Json,
             input: parquet_dir.clone(),
         },

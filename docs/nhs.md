@@ -26,7 +26,7 @@ In England, health service delivery is structured under the Health and Care Act 
 ### Archetype 1: Primary Care Architecture (GP Surgeries, PCNs & ICBs) — *~13,000 Practices*
 ```text
 NHS England Region (RO209 — e.g. Y56 London Region)
-  └── Statutory Integrated Care Board (RO318 / RO261 — e.g. QMJ NHS North Central London ICB)
+  └── Integrated Care Board (RO318 / RO261 — e.g. QMJ NHS North Central London ICB)
         ├── Primary Care Network (RO313 — e.g. U59980 Western Dales PCN) [RE8 partner link]
         │     └── Main GP Practice (RO177 prescribing cost centre — e.g. Hampstead Group Practice)
         │           └── Branch Surgery (RO178 site) [RE6 operated by link]

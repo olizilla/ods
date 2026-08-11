@@ -161,9 +161,6 @@ fn download_prebuilt_parquet(release_dir: &Path, date: &str) -> Result<()> {
 
     let prov = OdsProvenance::new(
         Some(date.to_string()),
-        Some("4574".to_string()),
-        Some("Full".to_string()),
-        Some("HSCIC".to_string()),
         Some(Path::new("HSCOrgRefData.xml")),
     );
     let prov_json = serde_json::to_string_pretty(&prov)?;

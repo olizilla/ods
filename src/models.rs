@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Strongly-typed organisation status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum OrgStatus {
+    #[default]
     Active,
     Inactive,
 }
@@ -35,11 +36,7 @@ impl fmt::Display for OrgStatus {
     }
 }
 
-impl Default for OrgStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
