@@ -201,9 +201,13 @@ pub struct OdsRecord {
     pub region: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_date: Option<String>,
+    pub legal_start: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_date: Option<String>,
+    pub legal_end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operational_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operational_end: Option<String>,
 }
 
 pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
@@ -230,9 +234,17 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
         let selected_inner = inner_zip_names
             .iter()
             .find(|n| n.to_lowercase().contains("full"))
-            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")))
-            .unwrap_or(&inner_zip_names[0])
-            .clone();
+            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")));
+
+        let selected_inner = match selected_inner {
+            Some(name) => name.clone(),
+            None => {
+                anyhow::bail!(
+                    "No full dataset ZIP found inside archive {}. Package contains only historical 'archive.zip'.",
+                    zip_path.display()
+                );
+            }
+        };
 
         let mut inner_file = archive.by_name(&selected_inner)?;
         let inner_zip_path = temp_dir.join(&selected_inner);
@@ -246,9 +258,17 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
         let selected_xml = direct_xml_names
             .iter()
             .find(|n| n.to_lowercase().contains("full"))
-            .or_else(|| direct_xml_names.iter().find(|n| !n.to_lowercase().contains("archive")))
-            .unwrap_or(&direct_xml_names[0])
-            .clone();
+            .or_else(|| direct_xml_names.iter().find(|n| !n.to_lowercase().contains("archive")));
+
+        let selected_xml = match selected_xml {
+            Some(name) => name.clone(),
+            None => {
+                anyhow::bail!(
+                    "No full dataset XML found inside archive {}. Package contains only historical archive XML.",
+                    zip_path.display()
+                );
+            }
+        };
 
         let mut xml_file = archive.by_name(&selected_xml)?;
         let file_name = Path::new(&selected_xml).file_name().unwrap();
@@ -288,15 +308,19 @@ pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
         }
     }
 
-    // Prioritize top-level TRUD zip, then fullfile.zip, avoiding archive.zip
+    // Exclude candidates that are strictly archive.zip
+    candidates.retain(|p| {
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        name != "archive.zip" && !name.contains("archive")
+    });
+
+    // Prioritize top-level TRUD zip, then fullfile.zip
     candidates.sort_by_key(|p| {
         let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
         if name.starts_with("hscorgrefdataxml_data") {
             0
         } else if name == "fullfile.zip" || name.contains("full") {
             1
-        } else if name == "archive.zip" || name.contains("archive") {
-            3
         } else {
             2
         }
@@ -526,12 +550,12 @@ fn resolve_icb(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(Strin
 fn resolve_region(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
     let rec = parsed.get(code)?;
     if let Some(ref reg_code) = rec.region_code {
-        let reg_name = parsed.get(reg_code).map(|r| r.name.clone()).unwrap_or_else(|| reg_code.clone());
+        let reg_name = parsed.get(reg_code).map(|r| r.name.clone())?;
         return Some((reg_code.clone(), reg_name));
     }
     for rel in &rec.relationships {
         if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
-            let target_name = parsed.get(&rel.target.ods_code).map(|r| r.name.clone()).unwrap_or_else(|| rel.target.ods_code.clone());
+            let target_name = parsed.get(&rel.target.ods_code).map(|r| r.name.clone())?;
             return Some((rel.target.ods_code.clone(), target_name));
         }
     }
@@ -552,8 +576,10 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
         icb_code: Option<String>,
         region: Option<String>,
         region_code: Option<String>,
-        start_date: Option<String>,
-        end_date: Option<String>,
+        legal_start: Option<String>,
+        legal_end: Option<String>,
+        operational_start: Option<String>,
+        operational_end: Option<String>,
     }
 
     let mut resolved_props: HashMap<String, HierarchyProps> = parsed
@@ -595,14 +621,17 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
                 None => (None, None),
             };
 
-            let start_date = rec.dates.iter()
+            let legal_start = rec.dates.iter()
                 .find(|d| d.date_type == "Legal")
-                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
                 .and_then(|d| d.start.clone());
-
-            let end_date = rec.dates.iter()
+            let legal_end = rec.dates.iter()
                 .find(|d| d.date_type == "Legal")
-                .or_else(|| rec.dates.iter().find(|d| d.date_type == "Operational"))
+                .and_then(|d| d.end.clone());
+            let operational_start = rec.dates.iter()
+                .find(|d| d.date_type == "Operational")
+                .and_then(|d| d.start.clone());
+            let operational_end = rec.dates.iter()
+                .find(|d| d.date_type == "Operational")
                 .and_then(|d| d.end.clone());
 
             (
@@ -620,8 +649,10 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
                     icb_code,
                     region,
                     region_code,
-                    start_date,
-                    end_date,
+                    legal_start,
+                    legal_end,
+                    operational_start,
+                    operational_end,
                 },
             )
         })
@@ -705,8 +736,10 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
             icb: props.icb,
             icb_code: props.icb_code,
             region: props.region,
-            start_date: props.start_date,
-            end_date: props.end_date,
+            legal_start: props.legal_start,
+            legal_end: props.legal_end,
+            operational_start: props.operational_start,
+            operational_end: props.operational_end,
         });
     }
 
@@ -762,11 +795,11 @@ pub fn parse_single_pass(
     let mut buf = Vec::new();
 
     let mut pub_date = None;
-    let mut _pub_seq = None;
+    let mut pub_seq = None;
+    let mut xml_creation = None;
     let mut _pub_type = None;
     let mut _pub_source = None;
     let mut _xml_version = None;
-    let mut _xml_creation = None;
  
     loop {
         match reader.read_event_into(&mut buf)? {
@@ -787,7 +820,7 @@ pub fn parse_single_pass(
                 } else if name_ref == b"PublicationDate" {
                     pub_date = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationSeqNum" {
-                    _pub_seq = get_manifest_attr(e, &reader);
+                    pub_seq = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationType" {
                     _pub_type = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationSource" {
@@ -795,7 +828,7 @@ pub fn parse_single_pass(
                 } else if name_ref == b"Version" {
                     _xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"FileCreationDateTime" {
-                    _xml_creation = get_manifest_attr(e, &reader);
+                    xml_creation = get_manifest_attr(e, &reader);
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, true, &reader, &concept_map)?;
                 }
@@ -816,10 +849,13 @@ pub fn parse_single_pass(
         buf.clear();
     }
 
-    let provenance = crate::provenance::OdsProvenance::new(
+    let mut provenance = crate::provenance::OdsProvenance::new(
         pub_date,
         Some(xml_path),
     );
+    provenance.xml_manifest_created = xml_creation;
+    provenance.xml_manifest_seq_num = pub_seq;
+    provenance.xml_manifest_record_count = Some(parsed.len());
 
     Ok((provenance, concept_map, parsed))
 }

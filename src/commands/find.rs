@@ -786,7 +786,10 @@ mod tests {
                 ],
                 commissioner: Some("NHS LONDON ICB".to_string()),
                 commissioner_code: Some("00A".to_string()),
-                start_date: Some("2020-01-01".to_string()),
+                operational_start: Some("2020-01-01".to_string()),
+                legal_start: None,
+                legal_end: None,
+                operational_end: None,
                 ..Default::default()
             },
             crate::commands::ndjson::OdsRecord {

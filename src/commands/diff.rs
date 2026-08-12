@@ -850,8 +850,10 @@ mod tests {
             icb: None,
             icb_code: None,
             region: None,
-            start_date: None,
-            end_date: None,
+            legal_start: None,
+            legal_end: None,
+            operational_start: None,
+            operational_end: None,
         }
     }
 

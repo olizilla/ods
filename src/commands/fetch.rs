@@ -195,30 +195,12 @@ fn mark_bad_sha_file(path: &PathBuf) -> PathBuf {
     bad_path
 }
 
-fn write_provenance_json(release_dir: &std::path::Path, release: &TrudReleaseItem, _sha256: &str, force: bool) -> Result<()> {
+fn write_provenance_json(release_dir: &std::path::Path, release: &TrudReleaseItem, sha256: &str, force: bool) -> Result<()> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
     if prov_path.exists() && !force {
         return Ok(());
     }
-
-    println!("Writing provenance metadata...");
-    let prov = OdsProvenance {
-        type_tag: crate::provenance::NDJSON_TYPE_TAG.to_string(),
-        trud_release_name: release.name.clone(),
-        trud_release_date: Some(release.release_date.clone()),
-        trud_release_url: Some(release.download_url.clone()),
-        trud_release_sha256: Some(release.archive_file_sha256.clone()),
-        trud_release_sha256_verified: Some(true),
-        trud_release_file: Some(release.archive_file_name.clone()),
-        trud_release_filesize_bytes: Some(release.archive_file_size),
-        ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
-        derived_artifacts: None,
-    };
-
-    let json = serde_json::to_string_pretty(&prov)?;
-    std::fs::write(&prov_path, json).context("Failed to write _provenance.json")?;
-    println!("✓ Saved to {}", prov_path.display());
-    Ok(())
+    write_provenance_json_with_verification(release_dir, release, sha256, true)
 }
 
 fn ensure_active_release_link(workspace_root: &std::path::Path, release_date: &str) -> Result<()> {
@@ -304,10 +286,35 @@ fn download_archive(url: &str, dest_path: &PathBuf, api_key: &str, verbose: bool
     Ok(())
 }
 
-fn run_local_archive(_args: &Args, local_path: &std::path::Path) -> Result<()> {
-    let (zip_file, response_json) = if local_path.is_dir() {
+pub fn parse_trud_filename(filename: &str) -> Result<(String, Option<String>)> {
+    let clean = filename.trim();
+    let name_without_ext = clean.strip_suffix(".zip").unwrap_or(clean);
+
+    let parts: Vec<&str> = name_without_ext.split('_').collect();
+    if parts.len() >= 4 && parts[0] == "hscorgrefdataxml" && parts[1] == "data" {
+        let version = parts[2];
+        let timestamp = parts[3];
+
+        let release_name = format!("Release {}", version);
+
+        if timestamp.len() >= 8 {
+            let year = &timestamp[0..4];
+            let month = &timestamp[4..6];
+            let day = &timestamp[6..8];
+            let date_str = format!("{}-{}-{}", year, month, day);
+            return Ok((date_str, Some(release_name)));
+        }
+    }
+
+    anyhow::bail!(
+        "Unrecognized TRUD ZIP filename format '{}'. Expected format: hscorgrefdataxml_data_<VERSION>_<YYYYMMDD...>.zip",
+        filename
+    )
+}
+
+fn run_local_archive(args: &Args, local_path: &std::path::Path) -> Result<()> {
+    let zip_file = if local_path.is_dir() {
         let mut zip = None;
-        let mut json = None;
         for entry in walkdir::WalkDir::new(local_path) {
             let entry = entry?;
             let path = entry.path();
@@ -315,15 +322,13 @@ fn run_local_archive(_args: &Args, local_path: &std::path::Path) -> Result<()> {
                 let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 if name.ends_with(".zip") {
                     zip = Some(path.to_path_buf());
-                } else if name == "response.json" || name.ends_with(".json") {
-                    json = Some(path.to_path_buf());
+                    break;
                 }
             }
         }
-        let z = zip.context(format!("No .zip file found in local archive dir {}", local_path.display()))?;
-        (z, json)
+        zip.context(format!("No .zip file found in local archive dir {}", local_path.display()))?
     } else {
-        (local_path.to_path_buf(), None)
+        local_path.to_path_buf()
     };
 
     println!("* Using local offline archive: {}", zip_file.display());
@@ -331,26 +336,16 @@ fn run_local_archive(_args: &Args, local_path: &std::path::Path) -> Result<()> {
     println!("Verifying archive SHA-256...");
     println!("✓ SHA-256 OK ({})", local_sha256);
 
-    let file_name = zip_file.file_name().and_then(|s| s.to_str()).unwrap_or("archive.zip").to_string();
+    let file_name = zip_file.file_name()
+        .and_then(|s| s.to_str())
+        .context("Invalid archive filename UTF-8")?
+        .to_string();
     let file_size = std::fs::metadata(&zip_file)?.len();
 
-    let (release_date, trud_name) = if let Some(json_path) = response_json {
-        let content = std::fs::read_to_string(json_path)?;
-        if let Ok(resp) = serde_json::from_str::<TrudApiResponse>(&content) {
-            if let Some(first) = resp.releases.into_iter().next() {
-                (first.release_date, first.name)
-            } else {
-                ("2026-07-31".to_string(), Some("Release 7.0.0".to_string()))
-            }
-        } else {
-            ("2026-07-31".to_string(), Some("Release 7.0.0".to_string()))
-        }
-    } else {
-        ("2026-07-31".to_string(), Some("Release 7.0.0".to_string()))
-    };
+    let (release_date, trud_name) = parse_trud_filename(&file_name)?;
 
     let release_item = TrudReleaseItem {
-        id: "341".to_string(),
+        id: TRUD_ODS_ITEM_ID.to_string(),
         name: trud_name,
         release_date: release_date.clone(),
         archive_file_name: file_name.clone(),
@@ -359,10 +354,20 @@ fn run_local_archive(_args: &Args, local_path: &std::path::Path) -> Result<()> {
         download_url: format!("file://{}", zip_file.display()),
     };
 
-    let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
-    let release_dir = prepare_release_dir(&workspace_root, &release_date)?;
-    let trud_dir = release_dir.join("trud");
-    std::fs::create_dir_all(&trud_dir)?;
+    let (dest_dir, trud_dir, is_workspace) = match &args.output {
+        Some(out) => {
+            let trud = out.join("trud");
+            std::fs::create_dir_all(&trud)?;
+            (out.clone(), trud, false)
+        }
+        None => {
+            let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+            let release_dir = prepare_release_dir(&workspace_root, &release_date)?;
+            let trud = release_dir.join("trud");
+            std::fs::create_dir_all(&trud)?;
+            (release_dir, trud, true)
+        }
+    };
 
     let dest_path = trud_dir.join(&file_name);
     if dest_path != zip_file {
@@ -370,9 +375,54 @@ fn run_local_archive(_args: &Args, local_path: &std::path::Path) -> Result<()> {
     }
 
     println!("✓ Saved to {}", trud_dir.display());
-    write_provenance_json(&release_dir, &release_item, &local_sha256, true)?;
-    ensure_active_release_link(&workspace_root, &release_date)?;
+    write_provenance_json_with_verification(&dest_dir, &release_item, &local_sha256, false)?;
+    if is_workspace {
+        let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+        ensure_active_release_link(&workspace_root, &release_date)?;
+    }
     println!("Done!");
+    Ok(())
+}
+
+fn write_provenance_json_with_verification(
+    release_dir: &std::path::Path,
+    release: &TrudReleaseItem,
+    _sha256: &str,
+    verified: bool,
+) -> Result<()> {
+    let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
+
+    println!("Writing provenance metadata...");
+    let trud_dir = release_dir.join("trud");
+    let (xml_created, xml_seq, xml_count) = if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(&trud_dir) {
+        if let Ok((parsed_prov, _, parsed_map)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
+            (parsed_prov.xml_manifest_created, parsed_prov.xml_manifest_seq_num, Some(parsed_map.len()))
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
+
+    let prov = OdsProvenance {
+        type_tag: crate::provenance::NDJSON_TYPE_TAG.to_string(),
+        trud_release_name: release.name.clone(),
+        trud_release_date: Some(release.release_date.clone()),
+        trud_release_url: Some(release.download_url.clone()),
+        trud_release_sha256: Some(release.archive_file_sha256.clone()),
+        trud_release_sha256_verified: Some(verified),
+        trud_release_file: Some(release.archive_file_name.clone()),
+        trud_release_filesize_bytes: Some(release.archive_file_size),
+        xml_manifest_created: xml_created,
+        xml_manifest_seq_num: xml_seq,
+        xml_manifest_record_count: xml_count,
+        ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
+        derived_artifacts: None,
+    };
+
+    let json = serde_json::to_string_pretty(&prov)?;
+    std::fs::write(&prov_path, json).context("Failed to write _provenance.json")?;
+    println!("✓ Saved to {}", prov_path.display());
     Ok(())
 }
 

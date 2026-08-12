@@ -42,7 +42,17 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_url: Option<String>,
 
-    // --- 2. Tool Build Info & Artifact Hashes ---
+    // --- 2. Inner XML Manifest Metadata ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xml_manifest_created: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xml_manifest_seq_num: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xml_manifest_record_count: Option<usize>,
+
+    // --- 3. Tool Build Info & Artifact Hashes ---
     pub ods_cmd_version: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,6 +72,9 @@ impl Default for OdsProvenance {
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
             trud_release_url: None,
+            xml_manifest_created: None,
+            xml_manifest_seq_num: None,
+            xml_manifest_record_count: None,
             ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
             derived_artifacts: None,
         }
@@ -204,9 +217,30 @@ impl OdsProvenance {
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
             trud_release_url: None,
+            xml_manifest_created: None,
+            xml_manifest_seq_num: None,
+            xml_manifest_record_count: None,
             ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
             derived_artifacts: None,
         }
+    }
+    pub fn validate_baseline(&self) -> Result<()> {
+        if self.trud_release_name.as_deref().unwrap_or("").is_empty() {
+            anyhow::bail!("Missing trud_release_name in _provenance.json");
+        }
+        if self.trud_release_date.as_deref().unwrap_or("").is_empty() {
+            anyhow::bail!("Missing trud_release_date in _provenance.json");
+        }
+        if self.trud_release_file.as_deref().unwrap_or("").is_empty() {
+            anyhow::bail!("Missing trud_release_file in _provenance.json");
+        }
+        if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
+            anyhow::bail!("Missing trud_release_sha256 in _provenance.json");
+        }
+        if self.trud_release_sha256_verified != Some(true) {
+            anyhow::bail!("trud_release_sha256_verified must be true in _provenance.json");
+        }
+        Ok(())
     }
 }
 
@@ -256,9 +290,16 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
     }
 
     let prov_path = output_dir.join(PROVENANCE_FILENAME);
-    let mut prov = OdsProvenance::load_from_dir(output_dir)
-        .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(output_dir))
-        .unwrap_or_default();
+    let mut prov = if prov_path.exists() {
+        let content = std::fs::read_to_string(&prov_path)?;
+        serde_json::from_str::<OdsProvenance>(&content)?
+    } else if let Some(loaded) = OdsProvenance::load_from_dir(output_dir) {
+        loaded
+    } else if let Some(extracted) = OdsProvenance::try_extract_trud_zip_provenance(output_dir) {
+        extracted
+    } else {
+        OdsProvenance::default()
+    };
 
     if prov.type_tag.is_empty() {
         prov.type_tag = NDJSON_TYPE_TAG.to_string();

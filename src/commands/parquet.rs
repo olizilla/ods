@@ -78,6 +78,17 @@ pub fn run(args: Args) -> Result<()> {
     } else {
         let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
             .or_else(|| crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(&args.input));
+
+        if args.input.is_dir() {
+            if let Some(ref prov) = parent_prov {
+                if let Err(e) = prov.validate_baseline() {
+                    anyhow::bail!("Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?", args.input.display(), e);
+                }
+            } else {
+                anyhow::bail!("Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?", args.input.display());
+            }
+        }
+
         let xml_path = crate::commands::ndjson::find_xml_file(&args.input)?;
         let (mut prov, _concept_map, parsed) = crate::commands::ndjson::parse_single_pass(&xml_path)?;
         if let Some(parent) = parent_prov {
@@ -930,8 +941,10 @@ mod tests {
             commissioner_code: None,
             parent: None,
             parent_code: None,
-            start_date: None,
-            end_date: None,
+            legal_start: None,
+            legal_end: None,
+            operational_start: None,
+            operational_end: None,
             ..Default::default()
         };
 

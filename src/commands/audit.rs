@@ -15,8 +15,8 @@ use crate::workspace::{self, count_records_in_parquet};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Path to TRUD XML file or TRUD ZIP archive
-    pub input: PathBuf,
+    /// Path to TRUD XML file or TRUD ZIP archive (defaults to ./ods_data/current/trud if omitted)
+    pub input: Option<PathBuf>,
 
     /// Workspace directory (defaults to ./ods_data if omitted)
     #[arg(long, short)]
@@ -77,12 +77,28 @@ struct RawXmlInvariants {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    if !args.input.exists() {
-        anyhow::bail!("Input file does not exist: {}", args.input.display());
+    let input_path = match args.input {
+        Some(ref p) => p.clone(),
+        None => {
+            if let Some(root) = crate::workspace::find_workspace_root() {
+                let trud_dir = root.join("current").join("trud");
+                if trud_dir.exists() {
+                    trud_dir
+                } else {
+                    root.join("current")
+                }
+            } else {
+                PathBuf::from(".")
+            }
+        }
+    };
+
+    if !input_path.exists() {
+        anyhow::bail!("Input file does not exist: {}", input_path.display());
     }
 
     // 1. Locate XML source file (from direct XML or extracted ZIP)
-    let xml_path = crate::commands::ndjson::find_xml_file(&args.input)?;
+    let xml_path = crate::commands::ndjson::find_xml_file(&input_path)?;
 
     // 2. Discover workspace root and active release directory
     let discovered_dir = workspace::discover_parquet_dir(args.workspace.as_deref())
@@ -110,7 +126,7 @@ pub fn run(args: Args) -> Result<()> {
     } else {
         active_release_path.join("provenance.json")
     };
-    let _workspace_prov: Option<OdsProvenance> = if prov_file.exists() {
+    let workspace_prov: Option<OdsProvenance> = if prov_file.exists() {
         let content = std::fs::read_to_string(&prov_file)?;
         serde_json::from_str(&content).ok()
     } else {
@@ -120,25 +136,142 @@ pub fn run(args: Args) -> Result<()> {
     let mut discrepancies = Vec::new();
 
     // ------------------------------------------------------------------------
-    // SECTION 1: Release Provenance Alignment
+    // SECTION 1: File integrity
     // ------------------------------------------------------------------------
-    let (input_prov, _, _) = crate::commands::ndjson::parse_single_pass(&xml_path)?;
-    let input_date = input_prov.trud_release_date.unwrap_or_else(|| workspace_date.clone());
+    let input_prov = OdsProvenance::load_from_dir(&input_path)
+        .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
+        .unwrap_or_else(|| {
+            crate::commands::ndjson::parse_single_pass(&xml_path).map(|(p, _, _)| p).unwrap_or_default()
+        });
 
-    let matched_release = input_date == workspace_date;
+    let input_sha256 = input_prov.trud_release_sha256.clone();
+    let workspace_sha256 = workspace_prov.as_ref().and_then(|p| p.trud_release_sha256.clone());
+
+    let input_date = input_prov.trud_release_date.clone()
+        .unwrap_or_else(|| workspace_date.clone());
+
+    let matched_release = match (&input_sha256, &workspace_sha256) {
+        (Some(i_sha), Some(w_sha)) => i_sha.eq_ignore_ascii_case(w_sha),
+        _ => {
+            let ws_date = workspace_prov.as_ref().and_then(|p| p.trud_release_date.clone())
+                .unwrap_or_else(|| workspace_date.clone());
+            input_date == ws_date
+        }
+    };
+
     if !matched_release {
-        discrepancies.push(format!(
-            "Release mismatch: Input TRUD date ({input_date}) != workspace active release ({workspace_date})"
-        ));
+        if let (Some(ref i_sha), Some(ref w_sha)) = (&input_sha256, &workspace_sha256) {
+            discrepancies.push(format!(
+                "Release mismatch: Input SHA-256 ({i_sha}) != workspace active release ({w_sha})"
+            ));
+        } else {
+            discrepancies.push(format!(
+                "Release mismatch: Input date ({input_date}) != workspace active release ({workspace_date})"
+            ));
+        }
+    }
+
+    let is_verified_archive = input_prov.trud_release_sha256_verified.unwrap_or(false)
+        || workspace_prov.as_ref().and_then(|p| p.trud_release_sha256_verified).unwrap_or(false);
+
+    if !is_verified_archive {
+        discrepancies.push("Unverified local archive provenance: SHA-256 has not been verified against TRUD API".to_string());
+    }
+
+    // Verify SHA256SUMS and Parquet files integrity
+    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "roles.parquet", "rels.parquet", "successors.parquet"];
+    let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
+        parquet_dir.join("SHA256SUMS")
+    } else {
+        active_release_path.join("SHA256SUMS")
+    };
+    let mut sums_matched_count = 0;
+    let mut prov_derived_matched_count = 0;
+
+    let recorded_sums: HashMap<String, String> = if sums_file.exists() {
+        let content = std::fs::read_to_string(&sums_file).unwrap_or_default();
+        content.lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() == 2 {
+                    Some((parts[1].to_string(), parts[0].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        discrepancies.push("Missing SHA256SUMS file in active release directory".to_string());
+        HashMap::new()
+    };
+
+    for filename in &parquet_files {
+        let p_path = parquet_dir.join(filename);
+        if p_path.exists() {
+            if let Ok(computed_sha) = crate::provenance::compute_file_sha256(&p_path) {
+                if let Some(expected_sum) = recorded_sums.get(*filename) {
+                    if computed_sha.eq_ignore_ascii_case(expected_sum) {
+                        sums_matched_count += 1;
+                    } else {
+                        discrepancies.push(format!(
+                            "SHA256SUMS checksum mismatch for {filename}: Computed {computed_sha} != SHA256SUMS {expected_sum}"
+                        ));
+                    }
+                } else {
+                    discrepancies.push(format!("Missing SHA256SUMS entry for {filename}"));
+                }
+
+                if let Some(ref w_prov) = workspace_prov {
+                    if let Some(ref derived) = w_prov.derived_artifacts {
+                        if let Some(expected_prov_sha) = derived.get(*filename) {
+                            if computed_sha.eq_ignore_ascii_case(expected_prov_sha) {
+                                prov_derived_matched_count += 1;
+                            } else {
+                                discrepancies.push(format!(
+                                    "_provenance.json derived_artifacts mismatch for {filename}: Computed {computed_sha} != provenance {expected_prov_sha}"
+                                ));
+                            }
+                        } else {
+                            discrepancies.push(format!("Missing _provenance.json derived_artifacts entry for {filename}"));
+                        }
+                    } else {
+                        discrepancies.push("Missing derived_artifacts map in _provenance.json".to_string());
+                    }
+                }
+            } else {
+                discrepancies.push(format!("Failed to compute live SHA-256 for Parquet file {filename}"));
+            }
+        } else {
+            discrepancies.push(format!("Parquet file missing: {filename}"));
+        }
     }
 
     if !args.json {
-        println!("  1. Release Provenance Alignment:");
-        if matched_release {
-            println!("     ✓ Data Provenance match: {:<14} # Input archive matches active release data", input_date);
+        println!("  1. File integrity:");
+        if matched_release && is_verified_archive {
+            if let Some(ref sha) = input_sha256 {
+                println!("     ✓ SHA-256 Match: {:<20} # Verified against TRUD API", sha);
+            } else {
+                println!("     ✓ Data Provenance match: {:<14} # Verified against TRUD API", input_date);
+            }
+        } else if !is_verified_archive {
+            println!("     ✖ Archive SHA-256: Unverified local archive provenance");
         } else {
             println!("     ✖ Data Provenance mismatch: Input {} vs Workspace {}", input_date, workspace_date);
         }
+
+        if sums_matched_count == parquet_files.len() {
+            println!("     ✓ SHA256SUMS Verification: 5/5 Parquet files match recorded checksums");
+        } else {
+            println!("     ✖ SHA256SUMS Verification: {}/5 Parquet files match recorded checksums", sums_matched_count);
+        }
+
+        if prov_derived_matched_count == parquet_files.len() {
+            println!("     ✓ Provenance Artifact Chain: 5/5 Parquet files match _provenance.json derived_artifacts");
+        } else {
+            println!("     ✖ Provenance Artifact Chain: {}/5 Parquet files match _provenance.json derived_artifacts", prov_derived_matched_count);
+        }
+
         println!();
         println!("  2. Completeness & Record Parity Checks:");
     }
@@ -199,8 +332,8 @@ pub fn run(args: Args) -> Result<()> {
     // ------------------------------------------------------------------------
     // SECTION 3: Schema & Referential Integrity Constraints
     // ------------------------------------------------------------------------
-    let (duplicate_codes, orphan_rels, orphan_succs) =
-        audit_referential_integrity(&orgs_all_parquet, &rels_parquet, &succs_parquet, &mut discrepancies)?;
+    let (duplicate_codes, orphan_roles, orphan_rels, orphan_succs) =
+        audit_referential_integrity(&orgs_all_parquet, &roles_parquet, &rels_parquet, &succs_parquet, &mut discrepancies)?;
 
     let sample_parity_passed = audit_sample_parity(&orgs_all_parquet, &raw_xml_invariants.sample_orgs, &mut discrepancies)?;
 
@@ -209,6 +342,12 @@ pub fn run(args: Args) -> Result<()> {
             println!("     ✓ Duplicate ODS Codes: 0");
         } else {
             println!("     ✖ Duplicate ODS Codes: {}", duplicate_codes);
+        }
+
+        if orphan_roles == 0 {
+            println!("     ✓ Orphan Roles: 0");
+        } else {
+            println!("     ✖ Orphan Roles: {}", orphan_roles);
         }
 
         if orphan_rels == 0 {
@@ -452,12 +591,13 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
 
 fn audit_referential_integrity(
     orgs_all_parquet: &Path,
+    roles_parquet: &Path,
     rels_parquet: &Path,
     succs_parquet: &Path,
     discrepancies: &mut Vec<String>,
-) -> Result<(usize, usize, usize)> {
+) -> Result<(usize, usize, usize, usize)> {
     if !orgs_all_parquet.exists() {
-        return Ok((0, 0, 0));
+        return Ok((0, 0, 0, 0));
     }
 
     // 1. Check Primary Key Uniqueness on orgs_all.parquet
@@ -485,6 +625,35 @@ fn audit_referential_integrity(
             "PK Uniqueness Error: Found {} duplicate ods_code entries in orgs_all.parquet",
             duplicate_codes
         ));
+    }
+
+    let mut orphan_roles = 0;
+    // 2. Foreign Key Check: roles.parquet ods_code -> orgs_all.parquet
+    if roles_parquet.exists() {
+        let rfile = File::open(roles_parquet)?;
+        let rbuilder = ParquetRecordBatchReaderBuilder::try_new(rfile)?;
+        let rreader = rbuilder.build()?;
+
+        for batch in rreader {
+            let batch = batch?;
+            let schema = batch.schema();
+            if let Ok(idx) = schema.index_of("ods_code") {
+                let code_arr = batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
+                for i in 0..batch.num_rows() {
+                    let code = code_arr.value(i);
+                    if !code.is_empty() && !valid_codes.contains(code) {
+                        orphan_roles += 1;
+                    }
+                }
+            }
+        }
+
+        if orphan_roles > 0 {
+            discrepancies.push(format!(
+                "Referential Integrity Violation: Found {} orphan ods_code links in roles.parquet",
+                orphan_roles
+            ));
+        }
     }
 
     let mut orphan_rels = 0;
@@ -545,7 +714,7 @@ fn audit_referential_integrity(
         }
     }
 
-    Ok((duplicate_codes, orphan_rels, orphan_succs))
+    Ok((duplicate_codes, orphan_roles, orphan_rels, orphan_succs))
 }
 
 fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f64, usize, usize, f64)> {
@@ -646,6 +815,7 @@ fn audit_sample_parity(
         return Ok(true);
     }
 
+    let initial_count = discrepancies.len();
     let file = File::open(orgs_all_parquet)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
@@ -678,7 +848,7 @@ fn audit_sample_parity(
         }
     }
 
-    Ok(discrepancies.is_empty())
+    Ok(discrepancies.len() == initial_count)
 }
 
 

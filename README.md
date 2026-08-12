@@ -5,7 +5,7 @@ A Rust CLI to make NHS Organisation Data Service (ODS) records easy to query and
 ## Key Features
 
 - **Easy to query out of the box**: `ods find` gives you fast, local-first search across all NHS orgs and sites. Parent, PCN, ICB, Trust, and Successor relationships are all pre-calculated.
-- **Open formats**: Derived Parquet tables can be queried remotely using `duckdb`, Python Pandas, or Polars without installing `ods` at all.
+- **Open formats**: Derived Parquet tables can be queried remotely using `duckdb`, or Python without installing `ods` at all.
 - **Reproducible projections**: Built directly from official NHS TRUD XML data with full provenance tracking and SHA-256 hash checks. You can build byte-for-byte identical projections yourself anytime with `ods make`.
 
 A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide a stable, academically citable and easier to interpret source for NHS Org structure info.
@@ -141,3 +141,18 @@ Run tests:
 ```bash
 cargo test
 ```
+
+## Contributing
+
+This project priotises:
+
+1. Correctness & Provenance
+  - we must not introduce data errors, the trud xml is complicated enough
+  - we must track sha256 hashes from NHS TRUD API to derived sources so researchers can cite the derived data.
+2. User experience
+  - the NHS org data xml is hard to work with. We're publishing more a more user-friendly alternative - remotely queryable parquet files, and readable [Open Knowldege Format] compliant markdown.
+
+Considerate PRs welcome!
+
+[Open Knowldege Format]: https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/
+
