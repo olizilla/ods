@@ -151,6 +151,7 @@ This project priotises:
   - we must track sha256 hashes from NHS TRUD API to derived sources so researchers can cite the derived data.
 2. User experience
   - the NHS org data xml is hard to work with. We're publishing more a more user-friendly alternative - remotely queryable parquet files, and readable [Open Knowldege Format] compliant markdown.
+  - speed affects user experience. The tool should be fast, and work offline.
 
 Considerate PRs welcome!
 

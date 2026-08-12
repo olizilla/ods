@@ -310,6 +310,14 @@ pub fn run(args: Args) -> Result<()> {
         ));
     }
 
+    let rels_match = raw_xml_invariants.rels_count == rels_parquet_cnt;
+    if !rels_match {
+        discrepancies.push(format!(
+            "Relationship Parity Error: XML relationships ({}) != rels.parquet ({})",
+            raw_xml_invariants.rels_count, rels_parquet_cnt
+        ));
+    }
+
     if !args.json {
         if entities_match {
             println!("     ✓ Entities: {:<27} # XML orgs count matches orgs_all.parquet", raw_xml_invariants.total_orgs);
@@ -323,8 +331,14 @@ pub fn run(args: Args) -> Result<()> {
             println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, roles_parquet_cnt);
         }
 
+        if rels_match {
+            println!("     ✓ Relationships: {:<22} # XML rels count matches rels.parquet", raw_xml_invariants.rels_count);
+        } else {
+            println!("     ✖ Relationships mismatch: XML {} vs Parquet {}", raw_xml_invariants.rels_count, rels_parquet_cnt);
+        }
+
+        println!("     ✓ Successors: {:<25} # {} raw XML links resolved to {} graph paths", succs_parquet_cnt, raw_xml_invariants.succs_count, succs_parquet_cnt);
         println!("     ✓ Active: {:<29} # Active orgs in orgs.parquet", active_orgs_parquet);
-        println!("     ✓ Successors: {:<25} # Successor relationships extracted", succs_parquet_cnt);
         println!();
         println!("  3. Schema & Referential Integrity Constraints:");
     }

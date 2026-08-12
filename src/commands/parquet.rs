@@ -651,23 +651,6 @@ pub fn export_rels(output_dir: &Path, records: &[OdsRecord], provenance: Option<
                 operational_end: o_end,
             });
         }
-        for succ in &r.successors {
-            let (l_start, l_end, o_start, o_end) = extract_dates(&succ.dates);
-
-            rows.push(RelRow {
-                rel_type: succ.succ_type.clone(),
-                status: "active".to_string(),
-                target: succ.target.name.clone(),
-                source: r.name.clone(),
-                target_code: succ.target.ods_code.clone(),
-                source_code: r.ods_code.clone(),
-                rel_type_code: "SUCCESSOR".to_string(),
-                legal_start: l_start,
-                legal_end: l_end,
-                operational_start: o_start,
-                operational_end: o_end,
-            });
-        }
     }
 
     // Sort: source_code ASC, target_code ASC, rel_type_code ASC
