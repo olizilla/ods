@@ -2,6 +2,7 @@
 .local
 .DS_Store
 
+/ods_data
+
 # Added by cargo
 /target
-
