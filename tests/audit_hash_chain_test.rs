@@ -32,12 +32,14 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
     let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
 
-    let outer_file = File::create(&outer_zip_path).unwrap();
-    let mut outer_zip = zip::ZipWriter::new(outer_file);
-    let options = zip::write::SimpleFileOptions::default();
-    outer_zip.start_file("fullfile.zip", options).unwrap();
-    outer_zip.write_all(&inner_zip_bytes).unwrap();
-    outer_zip.finish().unwrap();
+    {
+        let outer_file = File::create(&outer_zip_path).unwrap();
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default();
+        outer_zip.start_file("fullfile.zip", options).unwrap();
+        outer_zip.write_all(&inner_zip_bytes).unwrap();
+        outer_zip.finish().unwrap();
+    }
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 

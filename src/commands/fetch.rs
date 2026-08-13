@@ -430,6 +430,7 @@ fn write_provenance_json_with_verification(
         tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
         tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
         tool_zstd_level: Some(3),
+        dataset_doi: None,
         derived_artifacts: None,
     };
 

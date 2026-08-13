@@ -79,6 +79,9 @@ pub struct OdsProvenance {
     pub tool_zstd_level: Option<i32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataset_doi: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub derived_artifacts: Option<std::collections::BTreeMap<String, String>>,
 }
 
@@ -105,6 +108,7 @@ impl Default for OdsProvenance {
             tool_parquet_version: None,
             tool_arrow_version: None,
             tool_zstd_level: None,
+            dataset_doi: None,
             derived_artifacts: None,
         }
     }
@@ -149,6 +153,9 @@ impl OdsProvenance {
         }
         if let Some(v) = self.tool_zstd_level {
             meta.insert("ods.tool_zstd_level".to_string(), v.to_string());
+        }
+        if let Some(ref doi) = self.dataset_doi {
+            meta.insert("ods.dataset_doi".to_string(), doi.clone());
         }
         meta
     }
@@ -277,6 +284,7 @@ impl OdsProvenance {
             tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
             tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
             tool_zstd_level: Some(3),
+            dataset_doi: None,
             derived_artifacts: None,
         }
     }

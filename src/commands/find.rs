@@ -213,7 +213,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let path = parquet_dir.join(file_name);
     if !path.exists() {
-        anyhow::bail!("Parquet file not found at: {}. Please run `ods parquet` first.", path.display());
+        anyhow::bail!(
+            "✖ No dataset found in ods_data/current\n  Run `ods pull` to download the latest pre-built NHS ODS dataset release."
+        );
     }
 
     let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;

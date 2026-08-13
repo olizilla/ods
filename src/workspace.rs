@@ -75,8 +75,8 @@ pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "No ODS Parquet dataset found.\n\
-         Please provide a dataset directory via `--input <path>`, run `ods parquet <xml>` to compile a dataset, or populate `./ods_data/`."
+        "No dataset found in ods_data/current\n\
+         Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
     ))
 }
 

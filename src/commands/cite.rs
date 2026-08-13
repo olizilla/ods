@@ -80,6 +80,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         .unwrap_or_else(|| "<not verified>".to_string());
     let mut tool_version = prov.as_ref().map(|p| p.tool_version.clone())
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    let mut dataset_doi = prov.as_ref().and_then(|p| p.dataset_doi.clone());
 
     // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
     for f in &files {
@@ -132,6 +133,13 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                         tool_version = val.clone();
                                     }
                                 }
+                                "ods.dataset_doi" => {
+                                    if dataset_doi.is_none() {
+                                        if let Some(ref val) = item.value {
+                                            dataset_doi = Some(val.clone());
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -174,6 +182,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             if publication_date.len() >= 7 {
                 writeln!(writer, "  month = {{{}}},", &publication_date[5..7])?;
             }
+            if let Some(ref doi) = dataset_doi {
+                writeln!(writer, "  doi = {{{}}},", doi)?;
+            }
             writeln!(writer, "  howpublished = {{NHS TRUD}},")?;
             writeln!(
                 writer,
@@ -199,30 +210,43 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 (2026, 7, 28)
             };
 
-            let csl = json!([
-                {
-                    "type": "dataset",
-                    "id": format!("nhs-ods-{}-{}", publication_date, publication_seq_num),
-                    "title": format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num),
-                    "author": [
-                        { "literal": "NHS England" }
-                    ],
-                    "issued": {
-                        "date-parts": [[y, m, d]]
-                    },
-                    "publisher": "NHS TRUD",
-                    "URL": "https://isd.digital.nhs.uk/trud",
-                    "note": format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
-                }
-            ]);
+            let mut item_obj = json!({
+                "type": "dataset",
+                "id": format!("nhs-ods-{}-{}", publication_date, publication_seq_num),
+                "title": format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num),
+                "author": [
+                    { "literal": "NHS England" }
+                ],
+                "issued": {
+                    "date-parts": [[y, m, d]]
+                },
+                "publisher": "NHS TRUD",
+                "URL": "https://isd.digital.nhs.uk/trud",
+                "note": format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
+            });
+
+            if let Some(ref doi) = dataset_doi {
+                item_obj["DOI"] = json!(doi);
+            }
+
+            let csl = json!([item_obj]);
             writeln!(writer, "{}", serde_json::to_string_pretty(&csl)?)?;
         }
         "apa" => {
-            writeln!(
-                writer,
-                "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
-                year, type_title_part, publication_date, publication_seq_num
-            )?;
+            if let Some(ref doi) = dataset_doi {
+                let doi_url = if doi.starts_with("http") { doi.clone() } else { format!("https://doi.org/{}", doi) };
+                writeln!(
+                    writer,
+                    "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. {}",
+                    year, type_title_part, publication_date, publication_seq_num, doi_url
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
+                    year, type_title_part, publication_date, publication_seq_num
+                )?;
+            }
         }
         _ => {
             // Default text format
@@ -236,6 +260,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "  Publication type:   {}", publication_type)?;
             writeln!(writer, "  Release file:       {}", release_file)?;
             writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
+            if let Some(ref doi) = dataset_doi {
+                writeln!(writer, "  Dataset DOI:        {}", doi)?;
+            }
             writeln!(writer)?;
 
             writeln!(writer, "Derived Sources")?;
