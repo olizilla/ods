@@ -71,7 +71,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     let mut publication_seq_num = prov.as_ref().and_then(|p| p.publication_seq_num.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let mut publication_type = prov.as_ref().and_then(|p| p.publication_type.clone())
-        .unwrap_or_else(|| "Full".to_string());
+        .unwrap_or_else(|| "unknown".to_string());
     let mut _release_name = prov.as_ref().and_then(|p| p.trud_release_name.clone())
         .unwrap_or_else(|| "Release".to_string());
     let mut release_file = prov.as_ref().and_then(|p| p.trud_release_file.clone())
@@ -106,8 +106,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                     }
                                 }
                                 "ods.publication_type" => {
-                                    if let Some(ref val) = item.value {
-                                        publication_type = val.clone();
+                                    if publication_type == "unknown" {
+                                        if let Some(ref val) = item.value {
+                                            publication_type = val.clone();
+                                        }
                                     }
                                 }
                                 "ods.trud_release_name" => {
@@ -121,10 +123,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                     }
                                 }
                                 "ods.trud_release_sha256" => {
-                                    if archive_sha256 == "<not verified>" {
-                                        if let Some(ref val) = item.value {
-                                            archive_sha256 = val.clone();
-                                        }
+                                    if let Some(ref val) = item.value {
+                                        archive_sha256 = val.clone();
                                     }
                                 }
                                 "ods.tool_version" => {
@@ -138,43 +138,72 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                     }
                 }
             }
-            break;
         }
     }
 
-    let year = publication_date.split('-').next().unwrap_or("2026");
-    let month = publication_date.split('-').nth(1).unwrap_or("07");
-    let day = publication_date.split('-').nth(2).unwrap_or("28");
-
-    let orgs_parquet_hash = if input_dir.join("orgs.parquet").exists() {
-        crate::provenance::compute_file_sha256(&input_dir.join("orgs.parquet")).unwrap_or_else(|_| "unknown".to_string())
+    let year = if publication_date.len() >= 4 {
+        &publication_date[0..4]
     } else {
-        "unknown".to_string()
+        "unknown"
+    };
+
+    let orgs_parquet_hash = crate::provenance::compute_file_sha256(&input_dir.join("orgs.parquet"))
+        .unwrap_or_else(|_| "<hash error>".to_string());
+
+    let type_title_part = if publication_type == "unknown" {
+        "".to_string()
+    } else {
+        format!(": {} publication", publication_type)
     };
 
     match args.format.to_lowercase().as_str() {
         "bibtex" => {
-            let key = format!("nhs_england_ods_{}_{}", publication_date.replace('-', "_"), publication_seq_num);
-            writeln!(writer, "@misc{{{key},")?;
+            let cite_key = format!(
+                "nhs_england_ods_{}_{}",
+                publication_date.replace('-', "_"),
+                publication_seq_num
+            );
+            writeln!(writer, "@misc{{{},", cite_key)?;
             writeln!(writer, "  author = {{NHS England}},")?;
-            writeln!(writer, "  title = {{Organisation Data Service: {} publication ({}, Seq {})}},", publication_type, publication_date, publication_seq_num)?;
-            writeln!(writer, "  year = {{{year}}},")?;
-            writeln!(writer, "  month = {{{month}}},")?;
+            writeln!(
+                writer,
+                "  title = {{Organisation Data Service{} ({}, Seq {})}},",
+                type_title_part, publication_date, publication_seq_num
+            )?;
+            writeln!(writer, "  year = {{{}}},", year)?;
+            if publication_date.len() >= 7 {
+                writeln!(writer, "  month = {{{}}},", &publication_date[5..7])?;
+            }
             writeln!(writer, "  howpublished = {{NHS TRUD}},")?;
-            writeln!(writer, "  url = {{https://isd.digital.nhs.uk/trud}},")?;
-            writeln!(writer, "  note = {{orgs.parquet SHA-256: {}; compiled by ods v{}}}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)?;
+            writeln!(
+                writer,
+                "  url = {{https://isd.digital.nhs.uk/trud}},"
+            )?;
+            writeln!(
+                writer,
+                "  note = {{orgs.parquet SHA-256: {}; compiled by ods v{}}}",
+                orgs_parquet_hash.to_ascii_uppercase(),
+                tool_version
+            )?;
             writeln!(writer, "}}")?;
         }
         "csljson" | "csl-json" | "json" => {
-            let y: i32 = year.parse().unwrap_or(2026);
-            let m: i32 = month.parse().unwrap_or(7);
-            let d: i32 = day.parse().unwrap_or(28);
+            let (y, m, d) = if publication_date.len() == 10 {
+                let parts: Vec<&str> = publication_date.split('-').collect();
+                (
+                    parts[0].parse().unwrap_or(2026),
+                    parts[1].parse().unwrap_or(7),
+                    parts[2].parse().unwrap_or(28),
+                )
+            } else {
+                (2026, 7, 28)
+            };
 
             let csl = json!([
                 {
                     "type": "dataset",
                     "id": format!("nhs-ods-{}-{}", publication_date, publication_seq_num),
-                    "title": format!("Organisation Data Service: {} publication ({}, Seq {})", publication_type, publication_date, publication_seq_num),
+                    "title": format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num),
                     "author": [
                         { "literal": "NHS England" }
                     ],
@@ -191,8 +220,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "apa" => {
             writeln!(
                 writer,
-                "NHS England. ({}) Organisation Data Service: {} publication ({}, Seq {}) [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
-                year, publication_type, publication_date, publication_seq_num
+                "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
+                year, type_title_part, publication_date, publication_seq_num
             )?;
         }
         _ => {
@@ -235,8 +264,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "  When citing the source data:")?;
             writeln!(
                 writer,
-                "    NHS England. ({}). Organisation Data Service: {} publication\n    ({}, Seq {}). NHS TRUD. https://isd.digital.nhs.uk/trud",
-                year, publication_type, publication_date, publication_seq_num
+                "    NHS England. ({}). Organisation Data Service{}\n    ({}, Seq {}). NHS TRUD. https://isd.digital.nhs.uk/trud",
+                year, type_title_part, publication_date, publication_seq_num
             )?;
             writeln!(writer)?;
             writeln!(writer, "  When citing the derived sources:")?;

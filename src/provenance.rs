@@ -70,6 +70,15 @@ pub struct OdsProvenance {
     pub tool_version: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_parquet_version: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_arrow_version: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_zstd_level: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub derived_artifacts: Option<std::collections::BTreeMap<String, String>>,
 }
 
@@ -93,6 +102,9 @@ impl Default for OdsProvenance {
             publication_schema_version: None,
             publication_record_count: None,
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            tool_parquet_version: None,
+            tool_arrow_version: None,
+            tool_zstd_level: None,
             derived_artifacts: None,
         }
     }
@@ -129,6 +141,15 @@ impl OdsProvenance {
             meta.insert("ods.publication_source".to_string(), s.clone());
         }
         meta.insert("ods.tool_version".to_string(), self.tool_version.clone());
+        if let Some(ref v) = self.tool_parquet_version {
+            meta.insert("ods.tool_parquet_version".to_string(), v.clone());
+        }
+        if let Some(ref v) = self.tool_arrow_version {
+            meta.insert("ods.tool_arrow_version".to_string(), v.clone());
+        }
+        if let Some(v) = self.tool_zstd_level {
+            meta.insert("ods.tool_zstd_level".to_string(), v.to_string());
+        }
         meta
     }
 
@@ -253,6 +274,9 @@ impl OdsProvenance {
             publication_schema_version: None,
             publication_record_count: None,
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
+            tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
+            tool_zstd_level: Some(3),
             derived_artifacts: None,
         }
     }
@@ -398,6 +422,15 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
     if prov.tool_version.is_empty() {
         prov.tool_version = env!("CARGO_PKG_VERSION").to_string();
     }
+    if prov.tool_parquet_version.is_none() {
+        prov.tool_parquet_version = Some(env!("ODS_TOOL_PARQUET_VERSION").to_string());
+    }
+    if prov.tool_arrow_version.is_none() {
+        prov.tool_arrow_version = Some(env!("ODS_TOOL_ARROW_VERSION").to_string());
+    }
+    if prov.tool_zstd_level.is_none() {
+        prov.tool_zstd_level = Some(3);
+    }
 
     prov.derived_artifacts = Some(hashes);
     if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
@@ -434,6 +467,66 @@ mod tests {
 
         let parsed = try_parse_provenance_line(&json).unwrap();
         assert_eq!(parsed.publication_date, Some("2026-07-31".to_string()));
+    }
+
+    /// `build.rs` reads the resolved `parquet` and `arrow` versions out of
+    /// `Cargo.lock`. If it ever fails to find the lock file — a packaged crate,
+    /// a vendored build, an unusual workspace layout — it falls back to
+    /// `"unknown"` and every release would silently start recording that.
+    ///
+    /// These versions exist to explain a byte-level hash after the fact, so an
+    /// absent or stale value defeats the field's whole purpose. Assert both that
+    /// it was derived at all, and that it still matches the lock file.
+    #[test]
+    fn tool_crate_versions_are_derived_from_cargo_lock() {
+        let parquet_ver = env!("ODS_TOOL_PARQUET_VERSION");
+        let arrow_ver = env!("ODS_TOOL_ARROW_VERSION");
+
+        for (name, ver) in [("parquet", parquet_ver), ("arrow", arrow_ver)] {
+            assert_ne!(
+                ver, "unknown",
+                "build.rs could not read Cargo.lock, so the {name} version was not recorded"
+            );
+            assert_eq!(
+                ver.split('.').count(),
+                3,
+                "expected a semver for {name}, got {ver:?}"
+            );
+        }
+
+        // Re-derive independently and compare, so a dependency bump that does
+        // not trigger a rebuild is caught rather than shipped.
+        let lock = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
+        )
+        .expect("Cargo.lock is present in the repo");
+
+        let version_of = |pkg: &str| -> Option<String> {
+            let mut current = String::new();
+            for line in lock.lines().map(str::trim) {
+                if line == "[[package]]" {
+                    current.clear();
+                } else if let Some(v) = line.strip_prefix("name = ") {
+                    current = v.trim_matches('"').to_string();
+                } else if let Some(v) = line.strip_prefix("version = ") {
+                    if current == pkg {
+                        return Some(v.trim_matches('"').to_string());
+                    }
+                }
+            }
+            None
+        };
+
+        assert_eq!(
+            version_of("parquet").as_deref(),
+            Some(parquet_ver),
+            "recorded parquet version has drifted from Cargo.lock"
+        );
+        assert_eq!(
+            version_of("arrow").as_deref(),
+            Some(arrow_ver),
+            "recorded arrow version has drifted from Cargo.lock"
+        );
     }
 
     #[test]

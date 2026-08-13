@@ -72,3 +72,8 @@ How to Cite
   TRUD ODS XML. You can verify this by running `ods trud audit` or
   by rebuilding from source with `ods trud pull && ods make`.
 ```
+
+### Reproducibility Guarantee
+
+Parquet projections are byte-identical for a given `ods` tool version. Encoding parameters (ZSTD Level 3, max row group size 64,000) and crate versions are embedded in the dataset metadata and `_provenance.json` (`tool_parquet_version`, `tool_arrow_version`, `tool_zstd_level`).
+

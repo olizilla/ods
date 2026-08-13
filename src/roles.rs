@@ -259,6 +259,35 @@ mod tests {
         assert_eq!(rules.categorise("RO177", &roles), "Prescribing Cost Centre");
     }
 
+    /// Prescribing cost centre subtypes are taxonomy, not correction: the
+    /// entity genuinely IS a prescribing cost centre and the subtype only says
+    /// which service holds the budget. Same treatment as school subtypes.
+    ///
+    /// They must not be renamed to the bare service either — 96 entities hold
+    /// RO175 "Prison" and 130 hold RO82 "Prison Prescribing Cost Centre" with
+    /// zero overlap, so collapsing them would merge two distinct record types.
+    #[test]
+    fn prescribing_cost_centre_subtypes_fall_through_to_the_default() {
+        let rules = category_rules();
+        for subtype in ["RO250", "RO247", "RO321", "RO82", "RO248", "RO249"] {
+            let roles = vec!["RO177".to_string(), subtype.to_string()];
+            assert_eq!(
+                rules.categorise("RO177", &roles),
+                "Prescribing Cost Centre",
+                "{subtype} should not get a category of its own"
+            );
+        }
+    }
+
+    /// The opinion stays small on purpose: five rules, each one a case where the
+    /// ODS primary role is wrong about the kind of thing.
+    #[test]
+    fn the_rule_set_stays_small() {
+        let rules = category_rules();
+        assert_eq!(rules.rules.len(), 5, "rules: {:?}",
+            rules.rules.iter().map(|r| &r.when_role).collect::<Vec<_>>());
+    }
+
     /// Taxonomic detail is reachable via `roles` and deliberately has no rule.
     #[test]
     fn school_subtypes_do_not_get_their_own_category() {

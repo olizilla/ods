@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 fn find_real_trud_zip() -> Option<PathBuf> {
     let candidates = vec![
+        ".local/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         "./ods_data_good/releases/2026-07-31/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         "./ods_data/releases/2026-07-31/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         "./ods_data/current/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -50,9 +51,11 @@ fn test_synthetic_parquet_hash_stability() {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
+        "org_roles.parquet",
         "roles.parquet",
         "rels.parquet",
         "successors.parquet",
+        "category_rules.json",
     ];
 
     for file_name in parquet_files {
@@ -104,9 +107,11 @@ fn test_real_trud_parquet_hash_stability() {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
+        "org_roles.parquet",
         "roles.parquet",
         "rels.parquet",
         "successors.parquet",
+        "category_rules.json",
     ];
 
     for file_name in parquet_files {

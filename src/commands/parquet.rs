@@ -46,8 +46,20 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
         }]
     };
 
+    // Parquet Encoding Rationale:
+    // 1. ZSTD at level 3 is explicitly pinned for deterministic cross-build compression and byte stability.
+    // 2. Max row group size is set to 64,000. This aligns with our 50,000 BATCH_SIZE and splits large
+    //    tables (orgs: 216k, orgs_all: 305k, rels: 662k) into multiple row groups to enable HTTP range-request
+    //    pruning in DuckDB.
+    // 3. Rows are pre-sorted by `ods_code` before export, giving non-overlapping min/max ranges per row group.
+    //    Because min/max stats provide 100% selective pruning for `ods_code` lookups, bloom filters are omitted
+    //    to avoid inflating file size without adding pruning benefit.
     WriterProperties::builder()
         .set_key_value_metadata(Some(meta_kv))
+        .set_compression(parquet::basic::Compression::ZSTD(
+            parquet::basic::ZstdLevel::try_new(3).expect("valid zstd level 3"),
+        ))
+        .set_max_row_group_size(64_000)
         .build()
 }
 

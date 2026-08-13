@@ -427,6 +427,9 @@ fn write_provenance_json_with_verification(
         publication_schema_version: pub_version,
         publication_record_count: pub_count,
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
+        tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
+        tool_zstd_level: Some(3),
         derived_artifacts: None,
     };
 
