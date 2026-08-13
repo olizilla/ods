@@ -480,8 +480,7 @@ fn load_dataset(data_dir: &Path) -> Result<(Vec<OrgItem>, String)> {
         let name_arr = get_str_column("name").context("missing name")?;
         let record_class_arr = get_str_column("record_class");
         let status_arr = get_str_column("status");
-        let role_arr = get_str_column("role");
-        let role_code_arr = get_str_column("role_code");
+        let role_code_arr = get_str_column("primary_role");
         let address_arr = get_str_column("address");
         let town_arr = get_str_column("town");
         let postcode_arr = get_str_column("postcode");
@@ -501,8 +500,12 @@ fn load_dataset(data_dir: &Path) -> Result<(Vec<OrgItem>, String)> {
             let name = name_arr.value(i).to_string();
             let record_class = record_class_arr.map(|a| a.value(i)).unwrap_or("").to_string();
             let status = status_arr.map(|a| a.value(i)).unwrap_or("Active").to_string();
-            let role = role_arr.map(|a| a.value(i)).unwrap_or("").to_string();
             let role_code = role_code_arr.map(|a| a.value(i)).unwrap_or("").to_string();
+            // orgs.parquet stores the role code; resolve the curated name for display.
+            let role = crate::roles::role_names()
+                .name(&role_code)
+                .unwrap_or(&role_code)
+                .to_string();
             let address = address_arr.map(|a| a.value(i)).unwrap_or("").to_string();
             let town = town_arr.map(|a| a.value(i)).unwrap_or("").to_string();
             let postcode = postcode_arr.map(|a| a.value(i)).unwrap_or("").to_string();

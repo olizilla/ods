@@ -114,21 +114,24 @@ fn load_roles(path: &Path) -> Result<HashMap<String, Vec<RoleRow>>> {
         let batch = batch?;
         let schema = batch.schema();
         let ods_code_idx = schema.index_of("ods_code")?;
-        let role_idx = schema.index_of("role")?;
         let is_primary_idx = schema.index_of("is_primary")?;
         let role_code_idx = schema.index_of("role_code")?;
 
         let ods_code_arr = col_str(&batch, ods_code_idx, "ods_code");
-        let role_arr = col_str(&batch, role_idx, "role");
         let is_primary_arr = col_bool(&batch, is_primary_idx, "is_primary");
         let role_code_arr = col_str(&batch, role_code_idx, "role_code");
 
+        // org_roles.parquet carries codes only; names come from the curated
+        // vocabulary, which this same `ods make` run just wrote.
+        let vocab = crate::roles::role_names();
+
         for i in 0..batch.num_rows() {
             let ods_code = ods_code_arr.value(i).to_string();
+            let role_code = role_code_arr.value(i).to_string();
             let row = RoleRow {
-                role: role_arr.value(i).to_string(),
+                role: vocab.name(&role_code).unwrap_or(&role_code).to_string(),
                 is_primary: is_primary_arr.value(i),
-                role_code: role_code_arr.value(i).to_string(),
+                role_code,
             };
             map.entry(ods_code).or_default().push(row);
         }
@@ -170,7 +173,7 @@ fn load_rels(path: &Path) -> Result<HashMap<String, Vec<RelRow>>> {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let roles_path = args.input.join("roles.parquet");
+    let roles_path = args.input.join("org_roles.parquet");
     let rels_path = args.input.join("rels.parquet");
     let orgs_path = args.input.join("orgs.parquet");
 
@@ -179,7 +182,7 @@ pub fn run(args: Args) -> Result<()> {
         anyhow::bail!("Missing 'orgs.parquet' in input directory: {}", args.input.display());
     }
     if !roles_path.exists() {
-        anyhow::bail!("Missing 'roles.parquet' in input directory: {}", args.input.display());
+        anyhow::bail!("Missing 'org_roles.parquet' in input directory: {}", args.input.display());
     }
     if !rels_path.exists() {
         anyhow::bail!("Missing 'rels.parquet' in input directory: {}", args.input.display());
@@ -216,8 +219,7 @@ pub fn run(args: Args) -> Result<()> {
         let ods_code_idx = schema.index_of("ods_code")?;
         let record_class_idx = schema.index_of("record_class")?;
         let status_idx = schema.index_of("status")?;
-        let role_idx = schema.index_of("role")?;
-        let role_code_idx = schema.index_of("role_code")?;
+        let primary_role_idx = schema.index_of("primary_role")?;
         let name_idx = schema.index_of("name")?;
         let address_idx = schema.index_of("address")?;
         let postcode_idx = schema.index_of("postcode")?;
@@ -246,8 +248,8 @@ pub fn run(args: Args) -> Result<()> {
         let ods_code_arr = col_str(&batch, ods_code_idx, "ods_code");
         let record_class_arr = col_str(&batch, record_class_idx, "record_class");
         let status_arr = col_str(&batch, status_idx, "status");
-        let role_arr = col_str(&batch, role_idx, "role");
-        let role_code_arr = col_str(&batch, role_code_idx, "role_code");
+        let primary_role_arr = col_str(&batch, primary_role_idx, "primary_role");
+        let org_vocab = crate::roles::role_names();
         let name_arr = col_str(&batch, name_idx, "name");
 
         for i in 0..batch.num_rows() {
@@ -255,8 +257,11 @@ pub fn run(args: Args) -> Result<()> {
                 ods_code: ods_code_arr.value(i).to_string(),
                 record_class: record_class_arr.value(i).to_string(),
                 status: status_arr.value(i).to_string(),
-                role: role_arr.value(i).to_string(),
-                role_code: role_code_arr.value(i).to_string(),
+                role: org_vocab
+                    .name(primary_role_arr.value(i))
+                    .unwrap_or(primary_role_arr.value(i))
+                    .to_string(),
+                role_code: primary_role_arr.value(i).to_string(),
                 name: name_arr.value(i).to_string(),
                 address: col_opt_str(&batch, address_idx, i, "address"),
                 postcode: col_opt_str(&batch, postcode_idx, i, "postcode"),

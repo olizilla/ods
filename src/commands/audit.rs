@@ -179,7 +179,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Verify SHA256SUMS and Parquet files integrity
-    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "roles.parquet", "rels.parquet", "successors.parquet"];
+    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "rels.parquet", "successors.parquet"];
     let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
         parquet_dir.join("SHA256SUMS")
     } else {
@@ -260,16 +260,19 @@ pub fn run(args: Args) -> Result<()> {
             println!("     ✖ Data Provenance mismatch: Input {} vs Workspace {}", input_date, workspace_date);
         }
 
-        if sums_matched_count == parquet_files.len() {
-            println!("     ✓ SHA256SUMS Verification: 5/5 Parquet files match recorded checksums");
+        // Report the real denominator: hardcoding it meant the audit claimed
+        // "5/5" while actually verifying six files.
+        let expected = parquet_files.len();
+        if sums_matched_count == expected {
+            println!("     ✓ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
         } else {
-            println!("     ✖ SHA256SUMS Verification: {}/5 Parquet files match recorded checksums", sums_matched_count);
+            println!("     ✖ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
         }
 
-        if prov_derived_matched_count == parquet_files.len() {
-            println!("     ✓ Provenance Artifact Chain: 5/5 Parquet files match _provenance.json derived_artifacts");
+        if prov_derived_matched_count == expected {
+            println!("     ✓ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json derived_artifacts");
         } else {
-            println!("     ✖ Provenance Artifact Chain: {}/5 Parquet files match _provenance.json derived_artifacts", prov_derived_matched_count);
+            println!("     ✖ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json derived_artifacts");
         }
 
         println!();
@@ -284,7 +287,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let orgs_all_parquet = parquet_dir.join("orgs_all.parquet");
     let orgs_parquet = parquet_dir.join("orgs.parquet");
-    let roles_parquet = parquet_dir.join("roles.parquet");
+    let roles_parquet = parquet_dir.join("org_roles.parquet");
     let rels_parquet = parquet_dir.join("rels.parquet");
     let succs_parquet = parquet_dir.join("successors.parquet");
 
@@ -305,7 +308,7 @@ pub fn run(args: Args) -> Result<()> {
     let roles_match = raw_xml_invariants.roles_count == roles_parquet_cnt;
     if !roles_match {
         discrepancies.push(format!(
-            "Role Parity Error: XML roles ({}) != roles.parquet ({})",
+            "Role Parity Error: XML roles ({}) != org_roles.parquet ({})",
             raw_xml_invariants.roles_count, roles_parquet_cnt
         ));
     }
@@ -326,7 +329,7 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         if roles_match {
-            println!("     ✓ Roles: {:<30} # XML roles count matches roles.parquet", raw_xml_invariants.roles_count);
+            println!("     ✓ Roles: {:<30} # XML roles count matches org_roles.parquet", raw_xml_invariants.roles_count);
         } else {
             println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, roles_parquet_cnt);
         }
@@ -642,7 +645,7 @@ fn audit_referential_integrity(
     }
 
     let mut orphan_roles = 0;
-    // 2. Foreign Key Check: roles.parquet ods_code -> orgs_all.parquet
+    // 2. Foreign Key Check: org_roles.parquet ods_code -> orgs_all.parquet
     if roles_parquet.exists() {
         let rfile = File::open(roles_parquet)?;
         let rbuilder = ParquetRecordBatchReaderBuilder::try_new(rfile)?;
@@ -664,7 +667,7 @@ fn audit_referential_integrity(
 
         if orphan_roles > 0 {
             discrepancies.push(format!(
-                "Referential Integrity Violation: Found {} orphan ods_code links in roles.parquet",
+                "Referential Integrity Violation: Found {} orphan ods_code links in org_roles.parquet",
                 orphan_roles
             ));
         }

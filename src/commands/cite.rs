@@ -23,6 +23,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     let files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
+        "org_roles.parquet",
         "roles.parquet",
         "rels.parquet",
         "successors.parquet",

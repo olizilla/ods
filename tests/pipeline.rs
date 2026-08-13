@@ -179,7 +179,7 @@ fn full_pipeline_parquet_and_md() {
     let zip_file = std::fs::File::open(&zip_path).unwrap();
     let mut archive = zip::ZipArchive::new(zip_file).unwrap();
 
-    let entry_name = "organisations/general_practice/Y01234.md";
+    let entry_name = "organisations/gp_practice/Y01234.md";
     let mut entry = archive
         .by_name(entry_name)
         .unwrap_or_else(|_| panic!("{entry_name} not found in wiki.zip"));
@@ -188,7 +188,7 @@ fn full_pipeline_parquet_and_md() {
     entry.read_to_string(&mut md).unwrap();
 
     // YAML frontmatter fields
-    assert!(md.contains("type: general practice"),  "missing 'type' frontmatter\n---\n{md}");
+    assert!(md.contains("type: GP Practice"),  "missing 'type' frontmatter\n---\n{md}");
     assert!(md.contains("title: Mock GP Practice"),  "missing 'title' frontmatter\n---\n{md}");
     assert!(md.contains("postcode: SO15 5SY"),        "missing 'postcode' frontmatter\n---\n{md}");
     assert!(md.contains(r#"uprn: "100062506311""#),   "missing 'uprn' frontmatter\n---\n{md}");

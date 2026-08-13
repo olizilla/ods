@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use arrow::array::{ArrayRef, BooleanBuilder, StringBuilder, Date32Builder};
+use arrow::array::{ArrayRef, BooleanBuilder, Date32Builder, ListBuilder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use clap::Parser;
@@ -121,7 +121,9 @@ pub fn run(args: Args) -> Result<()> {
     // 2. Export orgs_all.parquet (All records)
     export_orgs_all(&args.output, &records, provenance.as_ref())?;
 
-    // 3. Export roles.parquet
+    // 3. Export org_roles.parquet (the org↔role bridge) and roles.parquet
+    //    (the vocabulary those rows join to).
+    export_org_roles(&args.output, &records, provenance.as_ref())?;
     export_roles(&args.output, &records, provenance.as_ref())?;
 
     // 4. Export rels.parquet
@@ -190,8 +192,20 @@ pub fn orgs_schema() -> Schema {
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("record_class", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
-        Field::new("role", DataType::Utf8, false),
-        Field::new("role_code", DataType::Utf8, false),
+        // The ODS primary role code. This is the *register* the record belongs
+        // to — the identity under which it appears in national datasets (RO177
+        // is how a GP practice shows up in NHS BSA prescribing data). It does
+        // not describe what the organisation does; `roles` and `category` do.
+        Field::new("primary_role", DataType::Utf8, false),
+        // Every role code held, including the primary one. Deduplicated and
+        // sorted, so `list_contains(roles, 'RO76')` finds every GP practice
+        // without a join and without depending on which role ODS flagged
+        // primary.
+        Field::new(
+            "roles",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
         Field::new("name", DataType::Utf8, false),
         Field::new("address", DataType::Utf8, true),
         Field::new("town", DataType::Utf8, true),
@@ -225,7 +239,8 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
     let mut ods_code = StringBuilder::new();
     let mut record_class = StringBuilder::new();
     let mut status = StringBuilder::new();
-    let mut role = StringBuilder::new();
+    let mut primary_role = StringBuilder::new();
+    let mut roles_list = ListBuilder::new(StringBuilder::new());
     let mut name = StringBuilder::new();
     let mut address = StringBuilder::new();
     let mut town = StringBuilder::new();
@@ -247,7 +262,6 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
     let mut icb_code = StringBuilder::new();
     let mut region = StringBuilder::new();
     let mut region_code = StringBuilder::new();
-    let mut role_code = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
@@ -258,8 +272,25 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
         ods_code.append_value(&r.ods_code);
         record_class.append_value(&r.record_class);
         status.append_value(&r.status);
-        role.append_value(&r.role);
         name.append_value(&r.name);
+
+        // An active organisation lists only its currently active roles. A
+        // closed one lists all of them: its roles went inactive at closure, so
+        // filtering by status would leave every closed entity with an empty
+        // list. The result is the role set as-at the entity's last active day.
+        let org_is_active = r.status.eq_ignore_ascii_case("active");
+        let mut codes: Vec<&str> = r
+            .roles
+            .iter()
+            .filter(|role| !org_is_active || role.status.eq_ignore_ascii_case("active"))
+            .map(|role| role.id.as_str())
+            .collect();
+        codes.sort_unstable();
+        codes.dedup();
+        for code in codes {
+            roles_list.values().append_value(code);
+        }
+        roles_list.append(true);
 
         if let Some(ref loc) = r.geo_loc {
             let mut parts = Vec::new();
@@ -331,7 +362,7 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             .find(|role| role.primary_role)
             .map(|role| role.id.as_str())
             .unwrap_or("");
-        role_code.append_value(primary_role_id);
+        primary_role.append_value(primary_role_id);
 
         let (l_start, l_end, o_start, o_end) = extract_dates(&r.dates);
         append_date(&mut legal_start, l_start.as_deref());
@@ -347,8 +378,8 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(record_class.finish()) as ArrayRef,
             Arc::new(status.finish()) as ArrayRef,
-            Arc::new(role.finish()) as ArrayRef,
-            Arc::new(role_code.finish()) as ArrayRef,
+            Arc::new(primary_role.finish()) as ArrayRef,
+            Arc::new(roles_list.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
             Arc::new(address.finish()) as ArrayRef,
             Arc::new(town.finish()) as ArrayRef,
@@ -432,29 +463,36 @@ pub fn export_orgs_all(output_dir: &Path, records: &[OdsRecord], provenance: Opt
 }
 
 // ==========================================
-// roles.parquet
+// org_roles.parquet — the organisation↔role bridge.
+//
+// Grain is one row per role *instance*: `role_code` says which kind of role
+// (RO76 is shared by thousands of organisations) and `role_id` says which
+// assignment of it. The same code can be held more than once over
+// non-overlapping periods, so `role_id` is what makes rows identifiable.
+//
+// Role display names live in roles.parquet, one join away.
 // ==========================================
 
 #[derive(Clone)]
 struct RoleRow {
-    role: String,
-    is_primary: bool,
-    status: String,
     ods_code: String,
     role_code: String,
+    role_id: String,
+    is_primary: bool,
+    status: String,
     legal_start: Option<String>,
     legal_end: Option<String>,
     operational_start: Option<String>,
     operational_end: Option<String>,
 }
 
-fn roles_schema() -> Schema {
+fn org_roles_schema() -> Schema {
     Schema::new(vec![
-        Field::new("role", DataType::Utf8, false),
-        Field::new("is_primary", DataType::Boolean, false),
-        Field::new("status", DataType::Utf8, false),
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("role_code", DataType::Utf8, false),
+        Field::new("role_id", DataType::Utf8, false),
+        Field::new("is_primary", DataType::Boolean, false),
+        Field::new("status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
@@ -462,23 +500,23 @@ fn roles_schema() -> Schema {
     ])
 }
 
-fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<RecordBatch> {
-    let mut role = StringBuilder::new();
-    let mut is_primary = BooleanBuilder::new();
-    let mut status = StringBuilder::new();
+fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut role_code = StringBuilder::new();
+    let mut role_id = StringBuilder::new();
+    let mut is_primary = BooleanBuilder::new();
+    let mut status = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
 
     for r in rows {
-        role.append_value(&r.role);
-        is_primary.append_value(r.is_primary);
-        status.append_value(&r.status);
         ods_code.append_value(&r.ods_code);
         role_code.append_value(&r.role_code);
+        role_id.append_value(&r.role_id);
+        is_primary.append_value(r.is_primary);
+        status.append_value(&r.status);
         append_date(&mut legal_start, r.legal_start.as_deref());
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
@@ -488,34 +526,34 @@ fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<RecordBat
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(role.finish()) as ArrayRef,
-            Arc::new(is_primary.finish()) as ArrayRef,
-            Arc::new(status.finish()) as ArrayRef,
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(role_code.finish()) as ArrayRef,
+            Arc::new(role_id.finish()) as ArrayRef,
+            Arc::new(is_primary.finish()) as ArrayRef,
+            Arc::new(status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
         ],
     )
-    .context("building Arrow roles batch")?;
+    .context("building Arrow org_roles batch")?;
 
     Ok(batch)
 }
 
-pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
     let mut rows = Vec::new();
     for r in records {
         for role_record in &r.roles {
             let (l_start, l_end, o_start, o_end) = extract_dates(&role_record.dates);
 
             rows.push(RoleRow {
-                role: role_record.display_name.clone().unwrap_or_else(|| role_record.id.clone()),
-                is_primary: role_record.primary_role,
-                status: role_record.status.clone(),
                 ods_code: r.ods_code.clone(),
                 role_code: role_record.id.clone(),
+                role_id: role_record.unique_role_id.clone(),
+                is_primary: role_record.primary_role,
+                status: role_record.status.clone(),
                 legal_start: l_start,
                 legal_end: l_end,
                 operational_start: o_start,
@@ -524,27 +562,99 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
         }
     }
 
-    // Sort: ods_code ASC, role_code ASC, operational_start DESC
+    // Sort: ods_code ASC, role_code ASC, role_id ASC. role_id breaks ties
+    // deterministically where one organisation holds the same code twice.
     rows.sort_by(|a, b| {
         a.ods_code
             .cmp(&b.ods_code)
             .then_with(|| a.role_code.cmp(&b.role_code))
-            .then_with(|| b.operational_start.cmp(&a.operational_start))
+            .then_with(|| a.role_id.cmp(&b.role_id))
     });
 
+    let schema = embed_metadata(&org_roles_schema(), provenance);
+    let output_file = File::create(output_dir.join("org_roles.parquet"))
+        .context("creating org_roles.parquet")?;
+    let props = writer_properties(provenance);
+    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
+        .context("creating org_roles ArrowWriter")?;
+
+    for chunk in rows.chunks(BATCH_SIZE) {
+        let batch = build_org_roles_batch(&schema, chunk)?;
+        writer.write(&batch).context("writing org_roles batch")?;
+    }
+    writer.close().context("finalising org_roles writer")?;
+    println!("Exported {} records to org_roles.parquet.", rows.len());
+    Ok(())
+}
+
+// ==========================================
+// roles.parquet — the role vocabulary.
+//
+// One row per role code in this release. `can_be_primary` is computed from the
+// data rather than curated: the register/function split is an observed property
+// of the release, so if ODS ever moves a code across that boundary this table
+// reflects it instead of asserting a stale opinion.
+// ==========================================
+
+fn roles_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("role_code", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("can_be_primary", DataType::Boolean, false),
+    ])
+}
+
+pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+    // Observed vocabulary: every role code in the release, and whether it ever
+    // appears as a primary role.
+    let mut can_be_primary: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    for r in records {
+        for role in &r.roles {
+            let entry = can_be_primary.entry(role.id.clone()).or_insert(false);
+            *entry |= role.primary_role;
+        }
+    }
+
+    // A role code with no curated name is a build failure, not a blank cell.
+    let observed: std::collections::HashSet<String> = can_be_primary.keys().cloned().collect();
+    crate::roles::ensure_vocabulary_covers(&observed)?;
+
+    let vocab = crate::roles::role_names();
+    let mut role_code = StringBuilder::new();
+    let mut name = StringBuilder::new();
+    let mut primary_flag = BooleanBuilder::new();
+
+    for (code, is_primary_capable) in &can_be_primary {
+        role_code.append_value(code);
+        name.append_value(vocab.name(code).unwrap_or(code));
+        primary_flag.append_value(*is_primary_capable);
+    }
+
     let schema = embed_metadata(&roles_schema(), provenance);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(role_code.finish()) as ArrayRef,
+            Arc::new(name.finish()) as ArrayRef,
+            Arc::new(primary_flag.finish()) as ArrayRef,
+        ],
+    )
+    .context("building Arrow roles batch")?;
+
     let output_file = File::create(output_dir.join("roles.parquet"))
         .context("creating roles.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating roles ArrowWriter")?;
-
-    for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_roles_batch(&schema, chunk)?;
-        writer.write(&batch).context("writing roles batch")?;
-    }
+    writer.write(&batch).context("writing roles batch")?;
     writer.close().context("finalising roles writer")?;
-    println!("Exported {} records to roles.parquet.", rows.len());
+
+    let primary_count = can_be_primary.values().filter(|v| **v).count();
+    println!(
+        "Exported {} role definitions to roles.parquet ({} can be primary).",
+        can_be_primary.len(),
+        primary_count
+    );
     Ok(())
 }
 

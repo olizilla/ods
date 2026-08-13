@@ -56,8 +56,12 @@ struct MatchedRecord {
     name: String,
     record_class: String,
     status: String,
-    role: String,
-    role_code: String,
+    /// The ODS primary role *code* (e.g. RO177).
+    primary_role: String,
+    /// Curated display name for `primary_role`, resolved from roles.parquet.
+    role_name: String,
+    /// Every active role code held, including the primary one.
+    roles: Vec<String>,
     address: String,
     town: String,
     county: String,
@@ -133,50 +137,49 @@ fn load_successors_map(parquet_dir: &Path) -> HashMap<String, Vec<SuccessorInfo>
     map
 }
 
-fn load_secondary_roles_map(parquet_dir: &Path) -> HashMap<String, Vec<String>> {
+/// Loads the release's role vocabulary: `role_code` -> curated display name.
+///
+/// The vocabulary ships alongside the data, so a workspace built by a different
+/// `ods` version still renders with the names that release was published with.
+/// Falls back to the compiled-in vocabulary when the file is absent.
+fn load_role_vocabulary(parquet_dir: &Path) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
     let path = parquet_dir.join("roles.parquet");
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    if !path.exists() {
-        return map;
-    }
-    let Ok(file) = File::open(&path) else { return map };
-    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return map };
-    let Ok(reader) = builder.build() else { return map };
 
-    for batch in reader.flatten() {
-        let schema = batch.schema();
-        let Ok(ods_idx) = schema.index_of("ods_code") else { continue };
-        let Ok(name_idx) = schema.index_of("role") else { continue };
-        let Ok(code_idx) = schema.index_of("role_code") else { continue };
-        let Ok(prim_idx) = schema.index_of("is_primary") else { continue };
-
-        let ods_arr = batch.column(ods_idx).as_any().downcast_ref::<StringArray>();
-        let name_arr = batch.column(name_idx).as_any().downcast_ref::<StringArray>();
-        let code_arr = batch.column(code_idx).as_any().downcast_ref::<StringArray>();
-        let prim_arr = batch.column(prim_idx).as_any().downcast_ref::<arrow::array::BooleanArray>();
-
-        let (Some(ods_arr), Some(name_arr), Some(code_arr), Some(prim_arr)) =
-            (ods_arr, name_arr, code_arr, prim_arr) else { continue };
-
-        for i in 0..batch.num_rows() {
-            if prim_arr.is_valid(i) && prim_arr.value(i) {
-                continue; // Skip primary roles
-            }
-            let ods_code = ods_arr.value(i).to_string();
-            let role_name = name_arr.value(i);
-            let role_code = code_arr.value(i);
-            let role_display = if !role_code.is_empty() {
-                format!("{role_name} ({role_code})")
-            } else {
-                role_name.to_string()
-            };
-            let entry = map.entry(ods_code).or_default();
-            if !entry.contains(&role_display) {
-                entry.push(role_display);
+    if let Ok(file) = File::open(&path) {
+        if let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) {
+            if let Ok(reader) = builder.build() {
+                for batch in reader.flatten() {
+                    let schema = batch.schema();
+                    let (Ok(code_idx), Ok(name_idx)) =
+                        (schema.index_of("role_code"), schema.index_of("name")) else { continue };
+                    let code_arr = batch.column(code_idx).as_any().downcast_ref::<StringArray>();
+                    let name_arr = batch.column(name_idx).as_any().downcast_ref::<StringArray>();
+                    let (Some(code_arr), Some(name_arr)) = (code_arr, name_arr) else { continue };
+                    for i in 0..batch.num_rows() {
+                        map.insert(code_arr.value(i).to_string(), name_arr.value(i).to_string());
+                    }
+                }
             }
         }
     }
+
+    if map.is_empty() {
+        let vocab = crate::roles::role_names();
+        for (code, name) in &vocab.names {
+            map.insert(code.clone(), name.clone());
+        }
+    }
     map
+}
+
+/// `RO76` -> `GP Practice (RO76)`, falling back to the bare code when the
+/// vocabulary does not know it.
+fn role_display(vocab: &HashMap<String, String>, code: &str) -> String {
+    match vocab.get(code) {
+        Some(name) => format!("{name} ({code})"),
+        None => code.to_string(),
+    }
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -224,7 +227,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let role_filter_lower = args.role.map(|r| r.to_lowercase());
 
     let successors_map = load_successors_map(parquet_dir);
-    let secondary_roles_map = load_secondary_roles_map(parquet_dir);
+    let role_vocab = load_role_vocabulary(parquet_dir);
 
     let mut matches: Vec<MatchedRecord> = Vec::new();
 
@@ -241,10 +244,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("record_class StringArray")?;
         let status_arr = batch.column(schema.index_of("status")?)
             .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
-        let role_arr = batch.column(schema.index_of("role")?)
-            .as_any().downcast_ref::<StringArray>().context("role StringArray")?;
+        let primary_role_arr = batch.column(schema.index_of("primary_role")?)
+            .as_any().downcast_ref::<StringArray>().context("primary_role StringArray")?;
+        let roles_arr = batch.column(schema.index_of("roles")?)
+            .as_any().downcast_ref::<arrow::array::ListArray>().context("roles ListArray")?;
 
-        let role_code_idx = schema.index_of("role_code").ok();
         let address_idx = schema.index_of("address").ok();
         let town_idx = schema.index_of("town").ok();
         let county_idx = schema.index_of("county").ok();
@@ -290,12 +294,21 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let name = name_arr.value(i);
             let class = record_class_arr.value(i);
             let status = status_arr.value(i);
-            let role = role_arr.value(i);
+            let primary_role = primary_role_arr.value(i);
+            let role_name = role_vocab
+                .get(primary_role)
+                .cloned()
+                .unwrap_or_else(|| primary_role.to_string());
 
-            let role_code = role_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
+            let role_codes: Vec<String> = if roles_arr.is_valid(i) {
+                let vals = roles_arr.value(i);
+                vals.as_any()
+                    .downcast_ref::<StringArray>()
+                    .map(|a| (0..a.len()).map(|j| a.value(j).to_string()).collect())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
 
             let address = address_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
@@ -405,6 +418,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
             let is_exact_code = code.to_lowercase() == query_lower;
 
+            // Every role the entity holds, as a display name, so a query for
+            // "gp practice" reaches practices whose *primary* role is
+            // "prescribing cost centre".
+            let role_names_lower: Vec<String> = role_codes
+                .iter()
+                .map(|c| role_vocab.get(c).cloned().unwrap_or_else(|| c.clone()).to_lowercase())
+                .collect();
+
             let matched = is_exact_code || query_words.iter().all(|word| {
                 code.to_lowercase().starts_with(word)
                 || name.to_lowercase().contains(word)
@@ -412,15 +433,18 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 || town.to_lowercase().contains(word)
                 || commissioner.to_lowercase().contains(word)
                 || parent.to_lowercase().contains(word)
-                || role.to_lowercase().contains(word)
+                || role_names_lower.iter().any(|r| r.contains(word))
             });
 
             if matched {
+                // --role accepts either a curated name fragment ("gp practice")
+                // or an RO code ("RO76"), matched against every role held.
                 if let Some(ref role_filter) = role_filter_lower {
-                    let matches_primary = role.to_lowercase().contains(role_filter);
-                    let matches_secondary = secondary_roles_map.get(code)
-                        .map_or(false, |roles| roles.iter().any(|r| r.to_lowercase().contains(role_filter)));
-                    if !matches_primary && !matches_secondary {
+                    let matches_name = role_names_lower.iter().any(|r| r.contains(role_filter));
+                    let matches_code = role_codes
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case(role_filter));
+                    if !matches_name && !matches_code {
                         continue;
                     }
                 }
@@ -430,8 +454,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     name: name.to_string(),
                     record_class: class.to_string(),
                     status: status.to_string(),
-                    role: role.to_string(),
-                    role_code: role_code.to_string(),
+                    primary_role: primary_role.to_string(),
+                    role_name: role_name.clone(),
+                    roles: role_codes.clone(),
                     address: address.to_string(),
                     town: town.to_string(),
                     county: county.to_string(),
@@ -481,7 +506,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     match args.format {
         OutputFormat::Json => {
             for r in &matches {
-                let sec_roles = secondary_roles_map.get(&r.ods_code).cloned().unwrap_or_default();
                 let (succ_code, succ_name) = if r.status.eq_ignore_ascii_case("inactive") {
                     successors_map.get(&r.ods_code)
                         .and_then(|succs| succs.iter().find_map(|s| {
@@ -496,9 +520,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "ods_code": r.ods_code,
                     "record_class": r.record_class,
                     "status": r.status,
-                    "role": r.role,
-                    "role_code": r.role_code,
-                    "secondary_roles": sec_roles,
+                    "primary_role": r.primary_role,
+                    "roles": r.roles,
+                    "role_name": r.role_name,
                     "name": r.name,
                     "address": if r.address.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.address.clone()) },
                     "town": if r.town.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.town.clone()) },
@@ -532,7 +556,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,record_class,status,role,role_code,secondary_roles,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date")?;
+            writeln!(writer, "ods_code,record_class,status,primary_role,roles,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date")?;
             let escape_csv = |s: &str| -> String {
                 if s.contains(',') || s.contains('"') || s.contains('\n') {
                     format!("\"{}\"", s.replace('"', "\"\""))
@@ -541,8 +565,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 }
             };
             for r in &matches {
-                let sec_roles = secondary_roles_map.get(&r.ods_code).cloned().unwrap_or_default();
-                let sec_roles_str = sec_roles.join("; ");
+                // List columns flatten to a semicolon-separated field in CSV.
+                let roles_str = r.roles.join("; ");
                 let (succ_code, succ_name) = if r.status.eq_ignore_ascii_case("inactive") {
                     successors_map.get(&r.ods_code)
                         .and_then(|succs| succs.iter().find_map(|s| {
@@ -557,9 +581,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.ods_code.as_str(),
                     r.record_class.as_str(),
                     r.status.as_str(),
-                    &escape_csv(&r.role),
-                    r.role_code.as_str(),
-                    &escape_csv(&sec_roles_str),
+                    r.primary_role.as_str(),
+                    &escape_csv(&roles_str),
+                    &escape_csv(&r.role_name),
                     &escape_csv(&r.name),
                     &escape_csv(&r.address),
                     &escape_csv(&r.town),
@@ -599,8 +623,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
                 // Shared Markdown inspector view
                 for r in &matches {
-                    let empty_vec = Vec::new();
-                    let sec_roles = secondary_roles_map.get(&r.ods_code).unwrap_or(&empty_vec);
+                    // Roles other than the primary one, rendered as
+                    // "GP Practice (RO76)".
+                    let sec_roles: Vec<String> = r
+                        .roles
+                        .iter()
+                        .filter(|c| **c != r.primary_role)
+                        .map(|c| role_display(&role_vocab, c))
+                        .collect();
                     let successors_vec: Vec<crate::formatting::SuccessorLink> = if r.status.eq_ignore_ascii_case("inactive") {
                         successors_map.get(&r.ods_code)
                             .map(|succs| succs.iter().filter_map(|s| {
@@ -619,9 +649,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                         name: &r.name,
                         record_class: &r.record_class,
                         status: &r.status,
-                        role: &r.role,
-                        role_code: &r.role_code,
-                        other_roles: sec_roles,
+                        role: &r.role_name,
+                        role_code: &r.primary_role,
+                        other_roles: &sec_roles,
                         address: &r.address,
                         country: &r.country,
                         uprn: &r.uprn,
@@ -679,8 +709,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 for r in &matches {
                     let name_truncated = if r.name.len() > 45 { &r.name[..42] } else { &r.name };
                     let name_display = if r.name.len() > 45 { format!("{}...", name_truncated) } else { r.name.to_string() };
-                    let role_truncated = if r.role.len() > 25 { &r.role[..22] } else { &r.role };
-                    let role_display = if r.role.len() > 25 { format!("{}...", role_truncated) } else { r.role.to_string() };
+                    let role_truncated = if r.role_name.len() > 25 { &r.role_name[..22] } else { &r.role_name };
+                    let role_display = if r.role_name.len() > 25 { format!("{}...", role_truncated) } else { r.role_name.to_string() };
 
                     if args.all {
                         let succ_display = if r.status.eq_ignore_ascii_case("inactive") {
@@ -731,10 +761,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_load_secondary_roles_map_nonexistent() {
+    fn test_load_role_vocabulary_falls_back_to_compiled_in() {
         let dir = tempdir().unwrap();
-        let map = load_secondary_roles_map(dir.path());
-        assert!(map.is_empty());
+        // No roles.parquet present: fall back to the vocabulary compiled
+        // into the binary rather than rendering bare RO codes.
+        let vocab = load_role_vocabulary(dir.path());
+        assert_eq!(vocab.get("RO76").map(|s| s.as_str()), Some("GP Practice"));
     }
 
     #[test]
@@ -916,7 +948,9 @@ mod tests {
         assert!(s.contains("## Contact Details"));
         assert!(s.contains("## Relationships"));
         assert!(s.contains("Other Roles"));
-        assert!(s.contains("gp practice (RO76)"));
+        // Role names now come from the curated vocabulary, not the source's
+        // lower-cased display string.
+        assert!(s.contains("GP Practice (RO76)"), "expected curated role name\n{s}");
 
         // Test 5: CSV output
         let mut out = Vec::new();
@@ -934,7 +968,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,record_class,status,role,role_code,secondary_roles,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date"));
+        assert!(s.starts_with("ods_code,record_class,status,primary_role,roles,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -970,9 +1004,10 @@ mod tests {
         // List of fields from orgs.parquet intentionally excluded from find --format json (currently empty)
         let ignored_fields: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-        // Additional enriching fields added from secondary lookups
+        // Additional enriching fields resolved from the role vocabulary and
+        // the successor chain rather than read straight from orgs.parquet.
         let enriching_fields: std::collections::HashSet<&str> =
-            ["secondary_roles", "successor_code", "successor"].into_iter().collect();
+            ["role_name", "successor_code", "successor"].into_iter().collect();
 
         // Construct a synthetic MatchedRecord with all fields populated
         let record = MatchedRecord {
@@ -980,8 +1015,9 @@ mod tests {
             name: "Test Org".to_string(),
             record_class: "org".to_string(),
             status: "active".to_string(),
-            role: "gp practice".to_string(),
-            role_code: "RO76".to_string(),
+            primary_role: "RO177".to_string(),
+            role_name: "Prescribing Cost Centre".to_string(),
+            roles: vec!["RO76".to_string(), "RO177".to_string()],
             address: "1 Main St".to_string(),
             town: "Town".to_string(),
             county: "County".to_string(),
@@ -1018,9 +1054,9 @@ mod tests {
             "ods_code": record.ods_code,
             "record_class": record.record_class,
             "status": record.status,
-            "role": record.role,
-            "role_code": record.role_code,
-            "secondary_roles": secondary_roles,
+            "primary_role": record.primary_role,
+            "roles": record.roles,
+            "role_name": record.role_name,
             "name": record.name,
             "address": record.address,
             "town": record.town,
@@ -1078,9 +1114,9 @@ mod tests {
         assert_eq!(json_keys_vec[0], "ods_code");
         assert_eq!(json_keys_vec[1], "record_class");
         assert_eq!(json_keys_vec[2], "status");
-        assert_eq!(json_keys_vec[3], "role");
-        assert_eq!(json_keys_vec[4], "role_code");
-        assert_eq!(json_keys_vec[5], "secondary_roles");
+        assert_eq!(json_keys_vec[3], "primary_role");
+        assert_eq!(json_keys_vec[4], "roles");
+        assert_eq!(json_keys_vec[5], "role_name");
         assert_eq!(json_keys_vec[6], "name");
         assert_eq!(json_keys_vec[27], "successor_code");
         assert_eq!(json_keys_vec[28], "successor");

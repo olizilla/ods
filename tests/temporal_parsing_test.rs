@@ -248,13 +248,14 @@ fn parquet_projection_populates_date_columns() {
         non_null_count(&out_dir.join("orgs.parquet"), "legal_start") > 0,
         "orgs.parquet legal_start is entirely null"
     );
+    // Role dates live on the org<->role bridge, not the vocabulary table.
     assert!(
-        non_null_count(&out_dir.join("roles.parquet"), "operational_start") > 0,
-        "roles.parquet operational_start is entirely null"
+        non_null_count(&out_dir.join("org_roles.parquet"), "operational_start") > 0,
+        "org_roles.parquet operational_start is entirely null"
     );
     assert!(
-        non_null_count(&out_dir.join("roles.parquet"), "operational_end") > 0,
-        "roles.parquet operational_end is entirely null"
+        non_null_count(&out_dir.join("org_roles.parquet"), "operational_end") > 0,
+        "org_roles.parquet operational_end is entirely null"
     );
 }
 

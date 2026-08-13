@@ -171,8 +171,10 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
             .as_any().downcast_ref::<arrow::array::StringArray>().context("name StringArray")?;
         let status_arr = batch.column(schema.index_of("status")?)
             .as_any().downcast_ref::<arrow::array::StringArray>().context("status StringArray")?;
-        let role_arr = batch.column(schema.index_of("role")?)
-            .as_any().downcast_ref::<arrow::array::StringArray>().context("role StringArray")?;
+        // orgs.parquet carries the primary role *code*; diff reports the
+        // curated name so changelogs stay readable.
+        let role_arr = batch.column(schema.index_of("primary_role")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("primary_role StringArray")?;
         let record_class_idx = schema.index_of("record_class").ok();
         let parent_idx = schema.index_of("parent").ok();
         let parent_code_idx = schema.index_of("parent_code").ok();
@@ -187,7 +189,11 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
             let ods_code = ods_code_arr.value(i).to_string();
             let name = name_arr.value(i).to_string();
             let status = status_arr.value(i).to_string();
-            let role = role_arr.value(i).to_string();
+            let role_code = role_arr.value(i);
+            let role = crate::roles::role_names()
+                .name(role_code)
+                .unwrap_or(role_code)
+                .to_string();
             let record_class = record_class_idx.map(|idx| batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(i).to_string()).unwrap_or_else(|| "org".to_string());
 
             let parent = parent_idx.and_then(|idx| {
