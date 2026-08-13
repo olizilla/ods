@@ -28,9 +28,9 @@ fn test_find_sedbergh_output_matches_good_binary() {
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     let lines: Vec<&str> = output_str.lines().collect();
 
-    // 1. Verify table header and column ordering: ODS Code | Name | Postcode | Role | Class
+    // 1. Verify table header and column ordering: ODS Code | Name | Postcode | Category | Class
     assert!(
-        lines.iter().any(|l| l.contains("ODS Code") && l.contains("Postcode") && l.contains("Role") && l.contains("Class")),
+        lines.iter().any(|l| l.contains("ODS Code") && l.contains("Postcode") && l.contains("Category") && l.contains("Class")),
         "Header row missing expected columns in order: {}",
         output_str
     );

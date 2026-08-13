@@ -179,7 +179,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Verify SHA256SUMS and Parquet files integrity
-    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "rels.parquet", "successors.parquet"];
+    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "rels.parquet", "successors.parquet", "category_rules.json"];
     let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
         parquet_dir.join("SHA256SUMS")
     } else {

@@ -62,6 +62,8 @@ struct MatchedRecord {
     role_name: String,
     /// Every active role code held, including the primary one.
     roles: Vec<String>,
+    /// What this entity actually is, per data/category_rules.json.
+    category: String,
     address: String,
     town: String,
     county: String,
@@ -248,6 +250,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("primary_role StringArray")?;
         let roles_arr = batch.column(schema.index_of("roles")?)
             .as_any().downcast_ref::<arrow::array::ListArray>().context("roles ListArray")?;
+        let category_arr = batch.column(schema.index_of("category")?)
+            .as_any().downcast_ref::<StringArray>().context("category StringArray")?;
 
         let address_idx = schema.index_of("address").ok();
         let town_idx = schema.index_of("town").ok();
@@ -457,6 +461,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     primary_role: primary_role.to_string(),
                     role_name: role_name.clone(),
                     roles: role_codes.clone(),
+                    category: category_arr.value(i).to_string(),
                     address: address.to_string(),
                     town: town.to_string(),
                     county: county.to_string(),
@@ -522,6 +527,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "status": r.status,
                     "primary_role": r.primary_role,
                     "roles": r.roles,
+                    "category": r.category,
                     "role_name": r.role_name,
                     "name": r.name,
                     "address": if r.address.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.address.clone()) },
@@ -556,7 +562,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,record_class,status,primary_role,roles,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date")?;
+            writeln!(writer, "ods_code,record_class,status,primary_role,roles,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date")?;
             let escape_csv = |s: &str| -> String {
                 if s.contains(',') || s.contains('"') || s.contains('\n') {
                     format!("\"{}\"", s.replace('"', "\"\""))
@@ -583,6 +589,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.status.as_str(),
                     r.primary_role.as_str(),
                     &escape_csv(&roles_str),
+                    &escape_csv(&r.category),
                     &escape_csv(&r.role_name),
                     &escape_csv(&r.name),
                     &escape_csv(&r.address),
@@ -686,7 +693,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} | {}",
-                        "ODS Code", "Name", "Postcode", "Role", "Class", "Status", "Successor"
+                        "ODS Code", "Name", "Postcode", "Category", "Class", "Status", "Successor"
                     )?;
                     writeln!(
                         writer,
@@ -697,7 +704,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                        "ODS Code", "Name", "Postcode", "Role", "Class"
+                        "ODS Code", "Name", "Postcode", "Category", "Class"
                     )?;
                     writeln!(
                         writer,
@@ -709,8 +716,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 for r in &matches {
                     let name_truncated = if r.name.len() > 45 { &r.name[..42] } else { &r.name };
                     let name_display = if r.name.len() > 45 { format!("{}...", name_truncated) } else { r.name.to_string() };
-                    let role_truncated = if r.role_name.len() > 25 { &r.role_name[..22] } else { &r.role_name };
-                    let role_display = if r.role_name.len() > 25 { format!("{}...", role_truncated) } else { r.role_name.to_string() };
+                    let role_truncated = if r.category.len() > 25 { &r.category[..22] } else { &r.category };
+                    let role_display = if r.category.len() > 25 { format!("{}...", role_truncated) } else { r.category.to_string() };
 
                     if args.all {
                         let succ_display = if r.status.eq_ignore_ascii_case("inactive") {
@@ -968,7 +975,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,record_class,status,primary_role,roles,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date"));
+        assert!(s.starts_with("ods_code,record_class,status,primary_role,roles,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1018,6 +1025,7 @@ mod tests {
             primary_role: "RO177".to_string(),
             role_name: "Prescribing Cost Centre".to_string(),
             roles: vec!["RO76".to_string(), "RO177".to_string()],
+            category: "GP Practice".to_string(),
             address: "1 Main St".to_string(),
             town: "Town".to_string(),
             county: "County".to_string(),
@@ -1056,6 +1064,7 @@ mod tests {
             "status": record.status,
             "primary_role": record.primary_role,
             "roles": record.roles,
+            "category": record.category,
             "role_name": record.role_name,
             "name": record.name,
             "address": record.address,
@@ -1116,11 +1125,12 @@ mod tests {
         assert_eq!(json_keys_vec[2], "status");
         assert_eq!(json_keys_vec[3], "primary_role");
         assert_eq!(json_keys_vec[4], "roles");
-        assert_eq!(json_keys_vec[5], "role_name");
-        assert_eq!(json_keys_vec[6], "name");
-        assert_eq!(json_keys_vec[27], "successor_code");
-        assert_eq!(json_keys_vec[28], "successor");
-        assert_eq!(json_keys_vec[33], "last_change_date");
+        assert_eq!(json_keys_vec[5], "category");
+        assert_eq!(json_keys_vec[6], "role_name");
+        assert_eq!(json_keys_vec[7], "name");
+        assert_eq!(json_keys_vec[28], "successor_code");
+        assert_eq!(json_keys_vec[29], "successor");
+        assert_eq!(json_keys_vec[34], "last_change_date");
     }
 
     #[test]

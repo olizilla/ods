@@ -30,11 +30,17 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    let result = match cli.command {
         Command::Find(args) => commands::find::run(args),
         Command::Pull(args) => commands::pull::run(args),
         Command::Cite(args) => commands::cite::run(args),
         Command::Trud(args) => commands::trud::run(args),
         Command::Make(args) => commands::make::run(args),
-    }
+    };
+
+    // Release XML is unpacked to scratch space (~660 MB) for the duration of
+    // the command only. Remove it on the way out, including on error.
+    commands::ndjson::cleanup_scratch();
+
+    result
 }

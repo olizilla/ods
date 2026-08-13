@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -210,7 +211,190 @@ pub struct OdsRecord {
     pub operational_end: Option<String>,
 }
 
+/// Best-effort removal of extraction directories left behind by earlier runs.
+///
+/// Each extraction unpacks a ~660 MB XML, and the returned path has to outlive
+/// this call, so the directory cannot be scoped to a `TempDir` guard here.
+/// Sweeping stale ones on entry keeps the leak bounded rather than unbounded —
+/// without this, every `ods make` and `ods trud audit` permanently consumed
+/// another 660 MB of temp space.
+fn sweep_stale_extractions() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    let now = std::time::SystemTime::now();
+    let ours = format!("ods_zip_{}_", std::process::id());
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("ods_zip_") || name.starts_with(&ours) {
+            continue;
+        }
+        // Leave anything recent enough that a concurrent `ods` run might still
+        // be reading from it.
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age.as_secs() > 3600);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Opt-in cache location for extracted release XML, or `None` to extract to
+/// scratch space that is deleted when the command finishes.
+///
+/// **Caching is off by default, deliberately.** Unpacking a release is a
+/// ~660 MB write, and a normal `ods make` or `ods trud audit` run needs the XML
+/// only for the duration of that command. Persisting it would mean a user who
+/// ran one command silently acquired 660 MB of cache they never asked for.
+///
+/// It also matters for correctness in `ods trud audit`, whose job is to verify
+/// the published artifacts against ground-truth XML. Re-extracting from the
+/// archive on every run means the audit always derives that ground truth from
+/// the SHA-256-verified archive, rather than trusting an unpack it performed
+/// earlier and never verified.
+///
+/// Set `ODS_CACHE_DIR` to trade that away for speed when iterating locally
+/// against the same release repeatedly — a developer workflow, not a user one.
+pub fn xml_cache_root() -> Option<PathBuf> {
+    match std::env::var("ODS_CACHE_DIR") {
+        Ok(dir) if !dir.trim().is_empty() => Some(PathBuf::from(dir)),
+        _ => None,
+    }
+}
+
+/// Scratch directory for this process, created on first use.
+///
+/// One per process rather than one per extraction: the returned XML path has to
+/// outlive the extraction call, so it cannot be scoped to a `TempDir` guard
+/// there. `cleanup_scratch()` removes it when the command exits.
+fn process_scratch() -> Result<PathBuf> {
+    static SCRATCH: OnceLock<PathBuf> = OnceLock::new();
+    let dir = SCRATCH.get_or_init(|| {
+        std::env::temp_dir().join(format!("ods_zip_{}_{}", std::process::id(), rand_suffix()))
+    });
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating scratch directory {}", dir.display()))?;
+    Ok(dir.clone())
+}
+
+/// Removes this process's scratch directory. Call once, as the command exits.
+pub fn cleanup_scratch() {
+    if let Some(dir) = std::env::temp_dir()
+        .join(format!("ods_zip_{}", std::process::id()))
+        .parent()
+    {
+        // Only our own pid-prefixed directories.
+        let prefix = format!("ods_zip_{}_", std::process::id());
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+    }
+}
+
+/// Cache key for a release archive.
+///
+/// TRUD filenames already encode version, date and sequence and never change
+/// for a given release; length is included so a truncated or replaced download
+/// misses the cache rather than silently reusing a stale unpack.
+fn cache_key(zip_path: &Path) -> Result<String> {
+    let stem = zip_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "release".to_string());
+    let len = std::fs::metadata(zip_path)
+        .with_context(|| format!("reading metadata for {}", zip_path.display()))?
+        .len();
+    Ok(format!("{stem}_{len}"))
+}
+
+/// Returns a non-empty `.xml` in `dir`, if one is already cached there.
+fn cached_xml(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "xml")
+            && entry.metadata().ok().is_some_and(|m| m.len() > 0)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Extracts the release XML, reusing a previous unpack when one exists.
+///
+/// Unpacking is ~660 MB and previously ran on every invocation, leaving the
+/// result behind in the temp directory each time. Now it happens once per
+/// release and is shared.
 pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
+    sweep_stale_extractions();
+
+    // Default path: extract to process scratch, cleaned up when the command
+    // exits. No persistent state, and `audit` re-derives ground truth from the
+    // verified archive every time.
+    let Some(root) = xml_cache_root() else {
+        return extract_into(zip_path, &process_scratch()?);
+    };
+
+    let key = cache_key(zip_path)?;
+    let cache_dir = root.join(&key);
+
+    if let Some(xml) = cached_xml(&cache_dir) {
+        return Ok(xml);
+    }
+
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("creating XML cache directory {}", root.display()))?;
+
+    // Stage inside the cache root so the publish step is a same-filesystem
+    // rename, and a crashed run leaves a `.staging-` directory the sweep
+    // collects rather than a half-written cache entry that looks valid.
+    let staging = root.join(format!(
+        ".staging-{}-{}",
+        std::process::id(),
+        rand_suffix()
+    ));
+    std::fs::create_dir_all(&staging)?;
+
+    let extracted = match extract_into(zip_path, &staging) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+    };
+
+    // Keep only the XML; the intermediate inner zip is another ~30 MB.
+    if let Ok(entries) = std::fs::read_dir(&staging) {
+        for entry in entries.flatten() {
+            if entry.path() != extracted {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    match std::fs::rename(&staging, &cache_dir) {
+        Ok(()) => Ok(cache_dir.join(extracted.file_name().unwrap())),
+        Err(_) => {
+            // Another process published this release first: prefer theirs and
+            // discard our copy.
+            if let Some(xml) = cached_xml(&cache_dir) {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Ok(xml);
+            }
+            Ok(extracted)
+        }
+    }
+}
+
+fn extract_into(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
     let file = File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
@@ -226,9 +410,6 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
             direct_xml_names.push(name);
         }
     }
-
-    let temp_dir = std::env::temp_dir().join(format!("ods_zip_{}_{}", std::process::id(), rand_suffix()));
-    std::fs::create_dir_all(&temp_dir)?;
 
     if !inner_zip_names.is_empty() {
         let selected_inner = inner_zip_names
@@ -247,11 +428,13 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
         };
 
         let mut inner_file = archive.by_name(&selected_inner)?;
-        let inner_zip_path = temp_dir.join(&selected_inner);
+        let inner_zip_path = dest.join(Path::new(&selected_inner).file_name().unwrap());
         let mut out = File::create(&inner_zip_path)?;
         std::io::copy(&mut inner_file, &mut out)?;
 
-        return extract_xml_from_zip(&inner_zip_path);
+        // Recurse without re-entering the cache: the cache is keyed on the
+        // outer release archive, not on intermediate inner zips.
+        return extract_into(&inner_zip_path, dest);
     }
 
     if !direct_xml_names.is_empty() {
@@ -272,7 +455,7 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
 
         let mut xml_file = archive.by_name(&selected_xml)?;
         let file_name = Path::new(&selected_xml).file_name().unwrap();
-        let extracted_xml_path = temp_dir.join(file_name);
+        let extracted_xml_path = dest.join(file_name);
         let mut out = File::create(&extracted_xml_path)?;
         std::io::copy(&mut xml_file, &mut out)?;
 
@@ -326,17 +509,35 @@ pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
         }
     });
 
+    // Extraction failures must not be swallowed. A zip that is present but
+    // cannot be unpacked — a full disk, a permissions problem, a truncated
+    // download — is a completely different situation from "there is no zip
+    // here", and reporting both as "No XML file found" makes it undiagnosable.
+    let mut failures: Vec<String> = Vec::new();
     for path in &candidates {
         if path.extension().is_some_and(|ext| ext == "zip") {
-            if let Ok(xml) = extract_xml_from_zip(path) {
-                return Ok(xml);
+            match extract_xml_from_zip(path) {
+                Ok(xml) => return Ok(xml),
+                Err(e) => failures.push(format!("  {}: {e:#}", path.display())),
             }
         } else if path.extension().is_some_and(|ext| ext == "xml") {
             return Ok(path.clone());
         }
     }
 
-    anyhow::bail!("No XML file found in {}", input_path.display())
+    if failures.is_empty() {
+        anyhow::bail!(
+            "No XML or ZIP file found in {}",
+            input_path.display()
+        );
+    }
+
+    anyhow::bail!(
+        "Found {} archive(s) in {} but none could be extracted:\n{}",
+        failures.len(),
+        input_path.display(),
+        failures.join("\n")
+    )
 }
 
 pub fn run(args: Args) -> Result<()> {

@@ -269,6 +269,9 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
 }
 
 pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
+    // Data and opinions alike: `category_rules.json` states where we disagree
+    // with the ODS primary role, so it is hashed like any other artifact. Its
+    // hash is what answers "did the opinion change between these releases?".
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
@@ -276,6 +279,7 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         "roles.parquet",
         "rels.parquet",
         "successors.parquet",
+        "category_rules.json",
     ];
 
     let mut hashes = std::collections::BTreeMap::new();

@@ -132,6 +132,14 @@ pub fn run(args: Args) -> Result<()> {
     // 5. Export successors.parquet
     export_successors(&args.output, &records, provenance.as_ref())?;
 
+    // 6. Ship the category rules alongside the data so the derivation is
+    //    reproducible from a release alone, without the tool.
+    std::fs::write(
+        args.output.join("category_rules.json"),
+        crate::roles::CATEGORY_RULES_JSON,
+    )
+    .context("writing category_rules.json")?;
+
     Ok(())
 }
 
@@ -206,6 +214,10 @@ pub fn orgs_schema() -> Schema {
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
+        // The one opinionated column: what this entity actually is. Derived
+        // from the curated name of `primary_role`, except where a rule in
+        // data/category_rules.json says the register label misleads.
+        Field::new("category", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
         Field::new("address", DataType::Utf8, true),
         Field::new("town", DataType::Utf8, true),
@@ -241,6 +253,7 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
     let mut status = StringBuilder::new();
     let mut primary_role = StringBuilder::new();
     let mut roles_list = ListBuilder::new(StringBuilder::new());
+    let mut category = StringBuilder::new();
     let mut name = StringBuilder::new();
     let mut address = StringBuilder::new();
     let mut town = StringBuilder::new();
@@ -287,10 +300,19 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             .collect();
         codes.sort_unstable();
         codes.dedup();
+        let owned_codes: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
         for code in codes {
             roles_list.values().append_value(code);
         }
         roles_list.append(true);
+
+        let primary_role_id = r.roles.iter()
+            .find(|role| role.primary_role)
+            .map(|role| role.id.as_str())
+            .unwrap_or("");
+        category.append_value(
+            crate::roles::category_rules().categorise(primary_role_id, &owned_codes),
+        );
 
         if let Some(ref loc) = r.geo_loc {
             let mut parts = Vec::new();
@@ -380,6 +402,7 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             Arc::new(status.finish()) as ArrayRef,
             Arc::new(primary_role.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
+            Arc::new(category.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
             Arc::new(address.finish()) as ArrayRef,
             Arc::new(town.finish()) as ArrayRef,
@@ -604,6 +627,45 @@ fn roles_schema() -> Schema {
     ])
 }
 
+/// Prints how many entities each category rule claimed.
+///
+/// A rule quietly falling to zero is the signal that ODS changed something
+/// underneath us, so the counts are surfaced on every build rather than kept
+/// for a report nobody runs.
+fn report_category_rule_hits(records: &[OdsRecord]) {
+    let rules = crate::roles::category_rules();
+    let mut hits = vec![0usize; rules.rules.len()];
+    let mut defaulted = 0usize;
+
+    for r in records {
+        let org_is_active = r.status.eq_ignore_ascii_case("active");
+        let codes: Vec<String> = r
+            .roles
+            .iter()
+            .filter(|role| !org_is_active || role.status.eq_ignore_ascii_case("active"))
+            .map(|role| role.id.clone())
+            .collect();
+
+        match rules.matched_rule(&codes) {
+            Some(idx) => hits[idx] += 1,
+            None => defaulted += 1,
+        }
+    }
+
+    println!("Category rules (v{}):", rules.version);
+    for (rule, count) in rules.rules.iter().zip(&hits) {
+        let flag = if *count == 0 { "  ⚠ no longer fires" } else { "" };
+        println!(
+            "  {:<6} → {:<54} {:>7}{}",
+            rule.when_role, rule.category, count, flag
+        );
+    }
+    println!(
+        "  {:<6}   {:<54} {:>7}",
+        "", "(default: curated name of primary role)", defaulted
+    );
+}
+
 pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
     // Observed vocabulary: every role code in the release, and whether it ever
     // appears as a primary role.
@@ -618,6 +680,8 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
     // A role code with no curated name is a build failure, not a blank cell.
     let observed: std::collections::HashSet<String> = can_be_primary.keys().cloned().collect();
     crate::roles::ensure_vocabulary_covers(&observed)?;
+    crate::roles::ensure_rules_reference_known_roles()?;
+    report_category_rule_hits(records);
 
     let vocab = crate::roles::role_names();
     let mut role_code = StringBuilder::new();

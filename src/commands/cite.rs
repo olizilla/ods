@@ -27,6 +27,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "roles.parquet",
         "rels.parquet",
         "successors.parquet",
+        "category_rules.json",
     ];
 
     let input_dir = match args.input {
