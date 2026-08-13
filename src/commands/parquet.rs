@@ -169,10 +169,10 @@ fn extract_dates(dates: &[crate::commands::ndjson::OdsDate]) -> (Option<String>,
     let mut operational_end = None;
 
     for d in dates {
-        if d.date_type == "Legal" {
+        if d.date_type.eq_ignore_ascii_case("Legal") {
             legal_start = d.start.clone();
             legal_end = d.end.clone();
-        } else if d.date_type == "Operational" {
+        } else if d.date_type.eq_ignore_ascii_case("Operational") {
             operational_start = d.start.clone();
             operational_end = d.end.clone();
         }

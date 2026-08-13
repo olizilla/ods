@@ -412,28 +412,67 @@ fn resolve_commissioner(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Opti
         let Some(rec) = parsed.get(&current) else {
             return None;
         };
-        let is_icb = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_ICB && r.status.eq_ignore_ascii_case("active"));
-        if is_icb {
+        let is_commissioner = rec.roles.iter().any(|r| {
+            (r.id == crate::ods_codes::ROLE_ICB || r.id == "RO319" || r.id == "RO98" || r.id == "RO326")
+                && r.status.eq_ignore_ascii_case("active")
+        });
+        if is_commissioner && current != code {
             return Some((rec.ods_code.clone(), rec.name.clone()));
         }
-        let mut next = None;
-        for rel in &rec.relationships {
+
+        // Stage 1: Prefer active target orgs with REL_COMMISSIONED_BY
+        let mut next = rec.relationships.iter().find_map(|rel| {
             if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
-                next = Some(rel.target.ods_code.clone());
-                break;
+                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                    if target_rec.status.eq_ignore_ascii_case("active") {
+                        return Some(rel.target.ods_code.clone());
+                    }
+                }
             }
-        }
+            None
+        });
+
+        // Stage 2 (Fallback): If Sub-ICB Location (RO319), check REL_REGION (RE5) or REL_COMMISSIONED_BY (RE4)
         if next.is_none() {
             let is_sub_icb = rec.roles.iter().any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
             if is_sub_icb {
                 for rel in &rec.relationships {
-                    if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
-                        next = Some(rel.target.ods_code.clone());
+                    if rel.status.eq_ignore_ascii_case("active")
+                        && (rel.id == crate::ods_codes::REL_REGION || rel.id == crate::ods_codes::REL_COMMISSIONED_BY)
+                    {
+                        if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                            if target_rec.status.eq_ignore_ascii_case("active") {
+                                next = Some(rel.target.ods_code.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Stage 3 (Fallback): Inactive target org + succession chain fallback
+        if next.is_none() {
+            for rel in &rec.relationships {
+                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
+                    let target_code = &rel.target.ods_code;
+                    if let Some(target_rec) = parsed.get(target_code) {
+                        for succ in &target_rec.successors {
+                            if let Some(succ_rec) = parsed.get(&succ.target.ods_code) {
+                                if succ_rec.status.eq_ignore_ascii_case("active") {
+                                    next = Some(succ.target.ods_code.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if next.is_some() {
                         break;
                     }
                 }
             }
         }
+
         if let Some(n) = next {
             current = n;
         } else {
@@ -454,13 +493,26 @@ fn resolve_parent(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(St
         if is_trust {
             return Some((rec.ods_code.clone(), rec.name.clone()));
         }
-        let mut next = None;
-        for rel in &rec.relationships {
+        let mut next = rec.relationships.iter().find_map(|rel| {
             if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                next = Some(rel.target.ods_code.clone());
-                break;
+                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                    if target_rec.status.eq_ignore_ascii_case("active") {
+                        return Some(rel.target.ods_code.clone());
+                    }
+                }
+            }
+            None
+        });
+
+        if next.is_none() {
+            for rel in &rec.relationships {
+                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                    next = Some(rel.target.ods_code.clone());
+                    break;
+                }
             }
         }
+
         if let Some(n) = next {
             current = n;
         } else if let Some(ref parent) = rec.parent_organisation {
@@ -484,7 +536,9 @@ fn resolve_pcn(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(Strin
     for rel in &rec.relationships {
         if rel.status.eq_ignore_ascii_case("active") {
             if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                if target_rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
+                if target_rec.status.eq_ignore_ascii_case("active")
+                    && target_rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active"))
+                {
                     return Some((target_rec.ods_code.clone(), target_rec.name.clone()));
                 }
             }
@@ -501,13 +555,26 @@ fn resolve_trust(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(Str
         if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active")) {
             return Some((rec.ods_code.clone(), rec.name.clone()));
         }
-        let mut next = None;
-        for rel in &rec.relationships {
+        let mut next = rec.relationships.iter().find_map(|rel| {
             if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                next = Some(rel.target.ods_code.clone());
-                break;
+                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                    if target_rec.status.eq_ignore_ascii_case("active") {
+                        return Some(rel.target.ods_code.clone());
+                    }
+                }
+            }
+            None
+        });
+
+        if next.is_none() {
+            for rel in &rec.relationships {
+                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
+                    next = Some(rel.target.ods_code.clone());
+                    break;
+                }
             }
         }
+
         if let Some(n) = next {
             current = n;
         } else if let Some(ref parent) = rec.parent_organisation {
@@ -523,23 +590,60 @@ fn resolve_icb(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(Strin
     let mut current = code.to_string();
     let mut visited = std::collections::HashSet::new();
     while visited.insert(current.clone()) {
-        let rec = parsed.get(&current)?;
-        let is_icb = rec.roles.iter().any(|r| (r.id == crate::ods_codes::ROLE_ICB || r.id == "RO98" || r.id == "RO319") && r.status.eq_ignore_ascii_case("active"));
-        if is_icb {
+        let Some(rec) = parsed.get(&current) else {
+            return None;
+        };
+
+        let is_root_icb = rec
+            .roles
+            .iter()
+            .any(|r| r.id == crate::ods_codes::ROLE_ICB && r.status.eq_ignore_ascii_case("active"));
+        if is_root_icb {
             return Some((rec.ods_code.clone(), rec.name.clone()));
         }
-        if let Some((comm_code, comm_name)) = resolve_commissioner(&current, parsed) {
-            if comm_code != current {
-                current = comm_code;
-            } else {
-                return Some((comm_code, comm_name));
+
+        let mut next = None;
+
+        // If current is a Sub-ICB Location (RO319), follow RE5 / RE4 to root ICB (RO318)
+        let is_sub_icb = rec
+            .roles
+            .iter()
+            .any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
+        if is_sub_icb {
+            for rel in &rec.relationships {
+                if rel.status.eq_ignore_ascii_case("active")
+                    && (rel.id == crate::ods_codes::REL_REGION || rel.id == crate::ods_codes::REL_COMMISSIONED_BY)
+                {
+                    if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
+                        if target_rec.status.eq_ignore_ascii_case("active") {
+                            next = Some(rel.target.ods_code.clone());
+                            break;
+                        }
+                    }
+                }
             }
-        } else if let Some(ref parent) = rec.parent_organisation {
-            if parent.ods_code != current {
-                current = parent.ods_code.clone();
-            } else {
-                break;
+        }
+
+        if next.is_none() {
+            if let Some((comm_code, comm_name)) = resolve_commissioner(&current, parsed) {
+                if comm_code != current {
+                    next = Some(comm_code);
+                } else {
+                    return Some((comm_code, comm_name));
+                }
             }
+        }
+
+        if next.is_none() {
+            if let Some(ref parent) = rec.parent_organisation {
+                if parent.ods_code != current {
+                    next = Some(parent.ods_code.clone());
+                }
+            }
+        }
+
+        if let Some(n) = next {
+            current = n;
         } else {
             break;
         }
@@ -897,6 +1001,7 @@ struct OrgState {
 
 struct ParserState {
     in_organisation: bool,
+    in_role: bool,
     in_rel: bool,
     in_succ: bool,
     in_geoloc: bool,
@@ -909,6 +1014,7 @@ impl ParserState {
     fn new() -> Self {
         Self {
             in_organisation: false,
+            in_role: false,
             in_rel: false,
             in_succ: false,
             in_geoloc: false,
@@ -920,6 +1026,7 @@ impl ParserState {
 
     fn reset_org(&mut self) {
         self.in_organisation = true;
+        self.in_role = false;
         self.in_rel = false;
         self.in_succ = false;
         self.in_geoloc = false;
@@ -950,20 +1057,49 @@ impl ParserState {
             b"Name" if self.in_organisation => {
                 self.current_text_target = TextTarget::OrgName;
             }
-            b"Date" if self.in_organisation => {
-                let mut date_type = None;
-                for attr in e.attributes() {
-                    let attr = attr?;
-                    if attr.key.as_ref() == b"type" {
-                        date_type = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+            // ODS expresses dates as child elements, never attributes:
+            //   <Date><Type value="Legal"/><Start value="..."/><End value="..."/></Date>
+            // The enclosing <Date> therefore carries no data of its own; it just
+            // opens a slot that Type/Start/End fill and </Date> routes to the
+            // organisation, role, relationship or successor currently in scope.
+            b"Date" if self.in_organisation && !is_empty => {
+                self.org.date = Some(OdsDate {
+                    date_type: String::new(),
+                    start: None,
+                    end: None,
+                });
+            }
+            // Must precede the `in_succ` arm below: a <Succ> contains BOTH a
+            // <Date><Type value="Legal"/></Date> and a sibling <Type>Predecessor</Type>,
+            // which mean different things.
+            b"Type" if self.org.date.is_some() => {
+                if let Some(ref mut date) = self.org.date {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"value" {
+                            date.date_type = attr.decode_and_unescape_value(reader)?.into_owned();
+                        }
                     }
                 }
-                if let Some(t) = date_type {
-                    self.org.date = Some(OdsDate {
-                        date_type: t,
-                        start: None,
-                        end: None,
-                    });
+            }
+            b"Start" if self.org.date.is_some() => {
+                if let Some(ref mut date) = self.org.date {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"value" {
+                            date.start = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                        }
+                    }
+                }
+            }
+            b"End" if self.org.date.is_some() => {
+                if let Some(ref mut date) = self.org.date {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"value" {
+                            date.end = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                        }
+                    }
                 }
             }
             b"GeoLoc" if self.in_organisation => {
@@ -1013,10 +1149,14 @@ impl ParserState {
                 }
             }
             b"Role" if self.in_organisation => {
+                self.in_role = !is_empty;
                 let mut role_id = None;
                 let mut unique_role_id = None;
                 let mut primary_role = false;
-                let mut status = "active".to_string();
+                // Real ODS data always supplies <Status> as a child element,
+                // which overwrites this. The default only covers records that
+                // omit it entirely.
+                let status = "active".to_string();
 
                 for attr in e.attributes() {
                     let attr = attr?;
@@ -1028,8 +1168,6 @@ impl ParserState {
                     } else if key == b"primaryRole" {
                         let val = attr.decode_and_unescape_value(reader)?;
                         primary_role = val.eq_ignore_ascii_case("true");
-                    } else if key == b"status" {
-                        status = attr.decode_and_unescape_value(reader)?.into_owned();
                     }
                 }
 
@@ -1050,10 +1188,11 @@ impl ParserState {
                 }
             }
             b"Relationship" | b"Rel" if self.in_organisation => {
-                self.in_rel = true;
+                self.in_rel = !is_empty;
                 let mut rel_id = None;
                 let mut unique_rel_id = None;
-                let mut status = "active".to_string();
+                // As with <Role>, a <Status> child element overwrites this.
+                let status = "active".to_string();
 
                 for attr in e.attributes() {
                     let attr = attr?;
@@ -1062,8 +1201,6 @@ impl ParserState {
                         rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
                     } else if key.eq_ignore_ascii_case(b"uniquerelid") {
                         unique_rel_id = Some(attr.decode_and_unescape_value(reader)?.into_owned());
-                    } else if key == b"status" {
-                        status = attr.decode_and_unescape_value(reader)?.into_owned();
                     }
                 }
 
@@ -1163,7 +1300,29 @@ impl ParserState {
                     }
                 }
             }
-            b"Status" if self.in_organisation && !self.in_rel && !self.in_succ && self.org.role.is_none() => {
+            // <Status> appears at organisation, role and relationship level.
+            // The narrower scopes must be matched first.
+            b"Status" if self.in_role => {
+                if let Some(ref mut role) = self.org.role {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"value" {
+                            role.status = attr.decode_and_unescape_value(reader)?.into_owned();
+                        }
+                    }
+                }
+            }
+            b"Status" if self.in_rel => {
+                if let Some(ref mut rel) = self.org.rel {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"value" {
+                            rel.status = attr.decode_and_unescape_value(reader)?.into_owned();
+                        }
+                    }
+                }
+            }
+            b"Status" if self.in_organisation && !self.in_role && !self.in_rel && !self.in_succ => {
                 for attr in e.attributes() {
                     let attr = attr?;
                     if attr.key.as_ref() == b"value" {
@@ -1316,6 +1475,7 @@ impl ParserState {
                 if let Some(role) = self.org.role.take() {
                     self.org.roles.push(role);
                 }
+                self.in_role = false;
             }
             b"Relationship" | b"Rel" => {
                 if let Some(mut rel) = self.org.rel.take() {

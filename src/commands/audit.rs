@@ -754,6 +754,7 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
         let ods_code_idx = schema.index_of("ods_code").ok();
         let role_idx = schema.index_of("role").ok();
         let role_code_idx = schema.index_of("role_code").ok();
+        let icb_code_idx = schema.index_of("icb_code").ok();
         let parent_code_idx = schema.index_of("parent_code").ok();
         let trust_code_idx = schema.index_of("trust_code").ok();
 
@@ -773,7 +774,7 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
 
-            let has_parent = parent_code_idx.and_then(|idx| {
+            let has_icb = icb_code_idx.or(parent_code_idx).and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(!arr.value(i).is_empty()) } else { None }
             }).unwrap_or(false);
@@ -785,7 +786,7 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
 
             if role_code == "RO76" || role.contains("prescribing cost centre") || role.contains("general practice") {
                 practice_codes.insert(code.to_string());
-                if has_parent {
+                if has_icb {
                     practice_linked_codes.insert(code.to_string());
                 }
             }

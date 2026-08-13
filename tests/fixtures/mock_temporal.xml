@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<HSCOrgRefData:OrgRefData xmlns:HSCOrgRefData="http://refdata.hscic.gov.uk/org/v2-0-0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://refdata.hscic.gov.uk/org/v2-0-0 HSCOrgRefData.xsd">
+  <Manifest>
+    <Version value="2-0-0" />
+    <PublicationType value="Full" />
+    <PublicationSource value="HSCIC" />
+    <PublicationDate value="2026-07-28" />
+    <PublicationSeqNum value="4700" />
+    <FileCreationDateTime value="2026-07-28T16:46:22" />
+    <RecordCount value="3" />
+    <ContentDescription value="mock_temporal" />
+  </Manifest>
+  <CodeSystems>
+    <CodeSystem name="OrganisationRole" oid="2.16.840.1.113883.2.1.3.2.4.17.507">
+      <concept id="RO177" code="177" displayName="PRESCRIBING COST CENTRE" />
+      <concept id="RO76" code="76" displayName="GP PRACTICE" />
+      <concept id="RO180" code="180" displayName="PRIMARY CARE TRUST SITE" />
+      <concept id="RO269" code="269" displayName="CARE HOME" />
+      <concept id="RO270" code="270" displayName="DOMICILIARY CARE" />
+    </CodeSystem>
+    <CodeSystem name="Relationship" oid="2.16.840.1.113883.2.1.3.2.4.17.508">
+      <concept id="RE4" code="4" displayName="is commissioned by" />
+    </CodeSystem>
+  </CodeSystems>
+  <Organisations>
+
+    <!-- TMP01: Legal and Operational intervals deliberately DIFFER, at both
+         organisation and role level. Mirrors real ODS behaviour. -->
+    <Organisation orgRecordClass="RC1">
+      <Name>TEMPORAL TEST ORG</Name>
+      <OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" assigningAuthorityName="HSCIC" extension="TMP01" />
+      <Status value="Active" />
+      <LastChangeDate value="2026-07-14" />
+      <Date>
+        <Type value="Legal" />
+        <Start value="2006-10-01" />
+        <End value="2013-03-31" />
+      </Date>
+      <Date>
+        <Type value="Operational" />
+        <Start value="2006-10-02" />
+        <End value="2020-09-30" />
+      </Date>
+      <Roles>
+        <Role id="RO177" uniqueRoleId="1001" primaryRole="true">
+          <Date>
+            <Type value="Operational" />
+            <Start value="2006-10-01" />
+          </Date>
+          <Status value="Active" />
+        </Role>
+        <Role id="RO76" uniqueRoleId="1002" primaryRole="false">
+          <Date>
+            <Type value="Operational" />
+            <Start value="2007-04-01" />
+          </Date>
+          <Status value="Active" />
+        </Role>
+      </Roles>
+    </Organisation>
+
+    <!-- TMP02: active organisation carrying an INACTIVE primary role with a
+         closed date range. Role status must not leak to the organisation. -->
+    <Organisation orgRecordClass="RC1">
+      <Name>CLOSED ROLE ORG</Name>
+      <OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" assigningAuthorityName="HSCIC" extension="TMP02" />
+      <Status value="Active" />
+      <Date>
+        <Type value="Operational" />
+        <Start value="2001-04-01" />
+      </Date>
+      <Roles>
+        <Role id="RO180" uniqueRoleId="2001" primaryRole="true">
+          <Date>
+            <Type value="Legal" />
+            <Start value="2006-10-01" />
+            <End value="2013-03-31" />
+          </Date>
+          <Date>
+            <Type value="Operational" />
+            <Start value="2006-10-01" />
+            <End value="2020-09-30" />
+          </Date>
+          <Status value="Inactive" />
+        </Role>
+      </Roles>
+      <!-- A <Succ> contains BOTH <Date><Type value="Legal"/></Date> and a
+           sibling <Type>Predecessor</Type>. They must not be confused. -->
+      <Succs>
+        <Succ uniqueSuccId="171">
+          <Date>
+            <Type value="Legal" />
+            <Start value="2006-10-01" />
+          </Date>
+          <Type>Predecessor</Type>
+          <Target>
+            <OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" assigningAuthorityName="HSCIC" extension="TMP01" />
+            <PrimaryRoleId id="RO180" uniqueRoleId="44844" />
+          </Target>
+        </Succ>
+      </Succs>
+      <Rels>
+        <Rel id="RE4" uniqueRelId="3001">
+          <Date>
+            <Type value="Operational" />
+            <Start value="2013-04-01" />
+            <End value="2022-06-30" />
+          </Date>
+          <Status value="Inactive" />
+          <Target>
+            <OrgId extension="TMP01" />
+          </Target>
+        </Rel>
+      </Rels>
+    </Organisation>
+
+    <!-- TMP03: the same role code held twice across non-overlapping periods,
+         distinguished only by uniqueRoleId. Guards dedup and grain. -->
+    <Organisation orgRecordClass="RC1">
+      <Name>REPEAT ROLE ORG</Name>
+      <OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" assigningAuthorityName="HSCIC" extension="TMP03" />
+      <Status value="Active" />
+      <Roles>
+        <Role id="RO269" uniqueRoleId="4001" primaryRole="true">
+          <Status value="Active" />
+        </Role>
+        <Role id="RO270" uniqueRoleId="4002" primaryRole="false">
+          <Date>
+            <Type value="Operational" />
+            <Start value="2010-01-01" />
+            <End value="2015-12-31" />
+          </Date>
+          <Status value="Inactive" />
+        </Role>
+        <Role id="RO270" uniqueRoleId="4003" primaryRole="false">
+          <Date>
+            <Type value="Operational" />
+            <Start value="2016-01-01" />
+          </Date>
+          <Status value="Active" />
+        </Role>
+      </Roles>
+    </Organisation>
+
+  </Organisations>
+</HSCOrgRefData:OrgRefData>
