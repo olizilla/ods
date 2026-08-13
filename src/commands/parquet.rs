@@ -41,7 +41,7 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
             .collect()
     } else {
         vec![parquet::file::metadata::KeyValue {
-            key: "ods.compiler_version".to_string(),
+            key: "ods.tool_version".to_string(),
             value: Some(env!("CARGO_PKG_VERSION").to_string()),
         }]
     };
@@ -91,6 +91,18 @@ pub fn run(args: Args) -> Result<()> {
 
         let xml_path = crate::commands::ndjson::find_xml_file(&args.input)?;
         let (mut prov, _concept_map, parsed) = crate::commands::ndjson::parse_single_pass(&xml_path)?;
+
+        let actual_parsed_count = parsed.len();
+        if let Some(declared_count) = prov.publication_record_count {
+            if declared_count != actual_parsed_count {
+                anyhow::bail!(
+                    "✖ Manifest record count mismatch: declared {} != parsed {}",
+                    declared_count,
+                    actual_parsed_count
+                );
+            }
+        }
+
         if let Some(parent) = parent_prov {
             if parent.trud_release_date.is_some() {
                 prov.trud_release_date = parent.trud_release_date;
@@ -103,6 +115,12 @@ pub fn run(args: Args) -> Result<()> {
             }
             if parent.trud_release_sha256.is_some() {
                 prov.trud_release_sha256 = parent.trud_release_sha256;
+            }
+            if parent.trud_release_sha256_verified.is_some() {
+                prov.trud_release_sha256_verified = parent.trud_release_sha256_verified;
+            }
+            if parent.trud_release_filesize_bytes.is_some() {
+                prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
             }
             if parent.trud_release_url.is_some() {
                 prov.trud_release_url = parent.trud_release_url;
@@ -139,6 +157,13 @@ pub fn run(args: Args) -> Result<()> {
         crate::roles::CATEGORY_RULES_JSON,
     )
     .context("writing category_rules.json")?;
+
+    // 7. Write updated _provenance.json to output directory
+    if let Some(ref p) = provenance {
+        if let Ok(prov_json) = serde_json::to_string_pretty(p) {
+            let _ = std::fs::write(args.output.join(crate::provenance::PROVENANCE_FILENAME), prov_json);
+        }
+    }
 
     Ok(())
 }

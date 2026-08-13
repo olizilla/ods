@@ -41,28 +41,34 @@ This is the target output of `ods cite`
 
 ```
 Source
-  NHS Digital Organisation Data Service (ODS), published by HSCIC via NHS TRUD.
+  NHS England Organisation Data Service (ODS), published via NHS TRUD.
   Publication date:   2026-07-28
-  Publication seq:    #4700
+  Publication seq:    4700
   Publication type:   Full
-  Source SHA-256:     8151248ddc290f3affdabae22d88e0bbd118947d948ab7bdd37e74088cfba933
+  Release file:       hscorgrefdataxml_data_7.0.0_20260731000001.zip
+  Release SHA-256:    8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933
+
 Derived Sources
   Created by:         github.com/olizilla/ods v0.1.0 
   Format:             Apache Parquet
-  orgs.parquet:       b47da8fab975428af8fd19226dc3d2e937d05a42d018e7ae44ec034ba1a171d5
-  orgs_all.parquet:   8b8ec72be1493c689e8d468e4b1e2e0a8097eb5f697998d06ea10beaf0d7d1bd
-  roles.parquet:      ede9c910fb237a8de56eb25824e0ea279bde991b2ec3445248e364c4cd983589
-  rels.parquet:       64b88b2123e4c9bffd980fded013cfcd35c1aa7b2a056b5b27bde079c3004283
-  successors.parquet: 83bfd672e6610c465bdb82cd2eda58aba4c1284972119e16471c1e56951809fd
+  orgs.parquet:       B47DA8FAB975428AF8FD19226DC3D2E937D05A42D018E7AE44EC034BA1A171D5
+  orgs_all.parquet:   8B8EC72BE1493C689E8D468E4B1E2E0A8097EB5F697998D06EA10BEAF0D7D1BD
+  org_roles.parquet:  F89C4B7D21A639B0E12356A8F83E71A12C59D960815E715B802FA834C19842A1
+  roles.parquet:      EDE9C910FB237A8DE56EB25824E0EA279BDE991B2EC3445248E364CD983589
+  rels.parquet:       64B88B2123E4C9BFFD980FDED013CFCD35C1AA7B2A056B5B27BDE079C3004283
+  successors.parquet: 83BFD672E6610C465BDB82CD2EDA58ABA4C1284972119E16471C1E56951809FD
+  category_rules.json: 45A93D0F7E9110B6EAE821F4C3B9807E92A1A88301594F3E2298FCD782A0284D
+
 How to Cite
   When citing the source data:
-    HSCIC. (2026). NHS Organisation Data Service — Full Publication
-    (2026-07-28, Seq #4700). NHS TRUD. https://isd.digital.nhs.uk/trud
-  When citing this derived dataset:
+    NHS England. (2026). Organisation Data Service: Full publication
+    (2026-07-28, Seq 4700). NHS TRUD. https://isd.digital.nhs.uk/trud
+
+  When citing the derived sources:
     Evans, O. (2026). ods: NHS Organisation Data in Open Formats
     (v0.1.0) [Software]. https://github.com/olizilla/ods
+
   These Parquet files are deterministic projections of the official
   TRUD ODS XML. You can verify this by running `ods trud audit` or
   by rebuilding from source with `ods trud pull && ods make`.
 ```
-

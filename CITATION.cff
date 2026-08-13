@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software or data, please cite it as below."
+authors:
+  - name: "NHS England"
+title: "Organisation Data Service"
+abstract: "NHS Organisation Data Service (ODS) release data and open Parquet format projections."
+repository-code: "https://github.com/olizilla/ods"
+url: "https://isd.digital.nhs.uk/trud"
+license: "Open Government Licence v3.0"

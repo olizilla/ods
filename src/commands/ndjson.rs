@@ -1101,10 +1101,10 @@ pub fn parse_single_pass(
 
     let mut pub_date = None;
     let mut pub_seq = None;
-    let mut xml_creation = None;
-    let mut _pub_type = None;
-    let mut _pub_source = None;
-    let mut _xml_version = None;
+    let mut pub_type = None;
+    let mut pub_source = None;
+    let mut xml_version = None;
+    let mut manifest_record_count = None;
  
     loop {
         match reader.read_event_into(&mut buf)? {
@@ -1113,6 +1113,18 @@ pub fn parse_single_pass(
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
+                } else if name_ref == b"PublicationDate" {
+                    pub_date = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSeqNum" {
+                    pub_seq = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationType" {
+                    pub_type = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSource" {
+                    pub_source = get_manifest_attr(e, &reader);
+                } else if name_ref == b"Version" {
+                    xml_version = get_manifest_attr(e, &reader);
+                } else if name_ref == b"RecordCount" {
+                    manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, false, &reader, &concept_map)?;
                 }
@@ -1127,13 +1139,13 @@ pub fn parse_single_pass(
                 } else if name_ref == b"PublicationSeqNum" {
                     pub_seq = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationType" {
-                    _pub_type = get_manifest_attr(e, &reader);
+                    pub_type = get_manifest_attr(e, &reader);
                 } else if name_ref == b"PublicationSource" {
-                    _pub_source = get_manifest_attr(e, &reader);
+                    pub_source = get_manifest_attr(e, &reader);
                 } else if name_ref == b"Version" {
-                    _xml_version = get_manifest_attr(e, &reader);
-                } else if name_ref == b"FileCreationDateTime" {
-                    xml_creation = get_manifest_attr(e, &reader);
+                    xml_version = get_manifest_attr(e, &reader);
+                } else if name_ref == b"RecordCount" {
+                    manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, true, &reader, &concept_map)?;
                 }
@@ -1155,12 +1167,15 @@ pub fn parse_single_pass(
     }
 
     let mut provenance = crate::provenance::OdsProvenance::new(
-        pub_date,
+        pub_date.clone(),
         Some(xml_path),
     );
-    provenance.xml_manifest_created = xml_creation;
-    provenance.xml_manifest_seq_num = pub_seq;
-    provenance.xml_manifest_record_count = Some(parsed.len());
+    provenance.publication_date = pub_date;
+    provenance.publication_seq_num = pub_seq;
+    provenance.publication_type = pub_type;
+    provenance.publication_source = pub_source;
+    provenance.publication_schema_version = xml_version;
+    provenance.publication_record_count = manifest_record_count;
 
     Ok((provenance, concept_map, parsed))
 }

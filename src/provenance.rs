@@ -12,6 +12,10 @@ fn default_type_tag() -> String {
     NDJSON_TYPE_TAG.to_string()
 }
 
+fn default_tool_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Unified dataset and build provenance metadata emitted as line 1 of canonical `ods.ndjson`
 /// and saved as `provenance.json` in workspace release directories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -44,16 +48,26 @@ pub struct OdsProvenance {
 
     // --- 2. Inner XML Manifest Metadata ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub xml_manifest_created: Option<String>,
+    pub publication_date: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub xml_manifest_seq_num: Option<String>,
+    pub publication_seq_num: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub xml_manifest_record_count: Option<usize>,
+    pub publication_type: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_source: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_schema_version: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_record_count: Option<usize>,
 
     // --- 3. Tool Build Info & Artifact Hashes ---
-    pub ods_cmd_version: String,
+    #[serde(default = "default_tool_version")]
+    pub tool_version: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub derived_artifacts: Option<std::collections::BTreeMap<String, String>>,
@@ -72,10 +86,13 @@ impl Default for OdsProvenance {
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
             trud_release_url: None,
-            xml_manifest_created: None,
-            xml_manifest_seq_num: None,
-            xml_manifest_record_count: None,
-            ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
+            publication_date: None,
+            publication_seq_num: None,
+            publication_type: None,
+            publication_source: None,
+            publication_schema_version: None,
+            publication_record_count: None,
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
             derived_artifacts: None,
         }
     }
@@ -99,7 +116,19 @@ impl OdsProvenance {
         if let Some(ref u) = self.trud_release_url {
             meta.insert("ods.trud_release_url".to_string(), u.clone());
         }
-        meta.insert("ods.cmd_version".to_string(), self.ods_cmd_version.clone());
+        if let Some(ref d) = self.publication_date {
+            meta.insert("ods.publication_date".to_string(), d.clone());
+        }
+        if let Some(ref s) = self.publication_seq_num {
+            meta.insert("ods.publication_seq_num".to_string(), s.clone());
+        }
+        if let Some(ref t) = self.publication_type {
+            meta.insert("ods.publication_type".to_string(), t.clone());
+        }
+        if let Some(ref s) = self.publication_source {
+            meta.insert("ods.publication_source".to_string(), s.clone());
+        }
+        meta.insert("ods.tool_version".to_string(), self.tool_version.clone());
         meta
     }
 
@@ -211,27 +240,34 @@ impl OdsProvenance {
         Self {
             type_tag: NDJSON_TYPE_TAG.to_string(),
             trud_release_name: None,
-            trud_release_date: publication_date,
+            trud_release_date: None,
             trud_release_file: source_file,
             trud_release_filesize_bytes: None,
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
             trud_release_url: None,
-            xml_manifest_created: None,
-            xml_manifest_seq_num: None,
-            xml_manifest_record_count: None,
-            ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
+            publication_date,
+            publication_seq_num: None,
+            publication_type: None,
+            publication_source: None,
+            publication_schema_version: None,
+            publication_record_count: None,
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
             derived_artifacts: None,
         }
     }
+
     pub fn validate_baseline(&self) -> Result<()> {
-        if self.trud_release_name.as_deref().unwrap_or("").is_empty() {
+        let name = self.trud_release_name.as_deref().unwrap_or("");
+        if name.is_empty() {
             anyhow::bail!("Missing trud_release_name in _provenance.json");
         }
-        if self.trud_release_date.as_deref().unwrap_or("").is_empty() {
+        let date = self.trud_release_date.as_deref().unwrap_or("");
+        if date.is_empty() {
             anyhow::bail!("Missing trud_release_date in _provenance.json");
         }
-        if self.trud_release_file.as_deref().unwrap_or("").is_empty() {
+        let file = self.trud_release_file.as_deref().unwrap_or("");
+        if file.is_empty() {
             anyhow::bail!("Missing trud_release_file in _provenance.json");
         }
         if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
@@ -240,6 +276,32 @@ impl OdsProvenance {
         if self.trud_release_sha256_verified != Some(true) {
             anyhow::bail!("trud_release_sha256_verified must be true in _provenance.json");
         }
+
+        // Validate URL is not local file:// or local path
+        if let Some(ref url) = self.trud_release_url {
+            if url.starts_with("file://") || url.starts_with('/') || url.contains("/tmp/") {
+                anyhow::bail!("trud_release_url must be a canonical remote TRUD URL, got: {}", url);
+            }
+        }
+
+        // Validate plausible filesize (> 1 MB)
+        if let Some(sz) = self.trud_release_filesize_bytes {
+            if sz < 1_000_000 {
+                anyhow::bail!("trud_release_filesize_bytes is implausibly small ({} bytes)", sz);
+            }
+        }
+
+        // Validate release file matches version and date
+        let date_digits: String = date.chars().filter(|c| c.is_ascii_digit()).collect();
+        if !date_digits.is_empty() && !file.contains(&date_digits) {
+            anyhow::bail!("trud_release_file '{}' does not match release date '{}'", file, date);
+        }
+        if let Some(ver) = name.strip_prefix("Release ").or_else(|| name.strip_prefix("release ")) {
+            if !file.contains(ver) {
+                anyhow::bail!("trud_release_file '{}' does not match release version '{}'", file, ver);
+            }
+        }
+
         Ok(())
     }
 }
@@ -306,11 +368,35 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         OdsProvenance::default()
     };
 
+    // Defect B Fix: freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
+    if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(output_dir) {
+        if let Ok((xml_prov, _, _)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
+            if xml_prov.publication_date.is_some() {
+                prov.publication_date = xml_prov.publication_date;
+            }
+            if xml_prov.publication_seq_num.is_some() {
+                prov.publication_seq_num = xml_prov.publication_seq_num;
+            }
+            if xml_prov.publication_type.is_some() {
+                prov.publication_type = xml_prov.publication_type;
+            }
+            if xml_prov.publication_source.is_some() {
+                prov.publication_source = xml_prov.publication_source;
+            }
+            if xml_prov.publication_schema_version.is_some() {
+                prov.publication_schema_version = xml_prov.publication_schema_version;
+            }
+            if xml_prov.publication_record_count.is_some() {
+                prov.publication_record_count = xml_prov.publication_record_count;
+            }
+        }
+    }
+
     if prov.type_tag.is_empty() {
         prov.type_tag = NDJSON_TYPE_TAG.to_string();
     }
-    if prov.ods_cmd_version.is_empty() {
-        prov.ods_cmd_version = env!("CARGO_PKG_VERSION").to_string();
+    if prov.tool_version.is_empty() {
+        prov.tool_version = env!("CARGO_PKG_VERSION").to_string();
     }
 
     prov.derived_artifacts = Some(hashes);
@@ -347,7 +433,7 @@ mod tests {
         assert!(json.contains("2026-07-31"));
 
         let parsed = try_parse_provenance_line(&json).unwrap();
-        assert_eq!(parsed.trud_release_date, Some("2026-07-31".to_string()));
+        assert_eq!(parsed.publication_date, Some("2026-07-31".to_string()));
     }
 
     #[test]

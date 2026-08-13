@@ -1,0 +1,116 @@
+{
+  "_type": "ods_category_rules",
+  "version": 1,
+  "default": "The curated name of the entity's primary_role, from roles.parquet.",
+  "policy": [
+    "A rule exists only where the ODS primary role actively misleads about what",
+    "the entity is. Rules do not add taxonomic detail: school subtypes, dental",
+    "practice ownership and regulatory registrations are all reachable through",
+    "the `roles` column and do not need a category of their own.",
+    "Array order is precedence and the first matching rule wins. A code with no",
+    "rule can never win, which is why generic codes such as RO72 'Other",
+    "Prescribing Cost Centre' are simply absent rather than explicitly ranked."
+  ],
+  "rules": [
+    {
+      "when_role": "RO76",
+      "category": "GP Practice",
+      "why": "ODS registers GP practices under primary role RO177 Prescribing Cost Centre, which describes the prescribing contract rather than the practice. Placed first so it also wins for Scottish practices (primary RO227), giving one UK-wide answer for 'GP Practice'; jurisdiction remains available via country and primary_role."
+    },
+    {
+      "when_role": "RO318",
+      "category": "ICB",
+      "why": "ICBs carry primary role RO261 Strategic Partnership, which also covers mental health provider collaboratives and other partnerships. RO318 selects exactly the 48 ICBs."
+    },
+    {
+      "when_role": "RO7",
+      "category": "Hospice",
+      "why": "RO7 is never a primary role. All 304 hospices are registered under something else — 225 as Non-NHS Organisation and 75 as NHS Trust — so without this rule no entity in the dataset is identifiable as a hospice."
+    },
+    {
+      "when_role": "RO269",
+      "category": "Care Home",
+      "why": "Care homes are registered under primary role RO101 Social Care Site. Placed before RO270 so the 307 entities providing both care home and domiciliary care categorise as the physical establishment."
+    },
+    {
+      "when_role": "RO270",
+      "category": "Domiciliary Care",
+      "why": "Domiciliary care providers are registered under primary role RO101 Social Care Site, which describes the register rather than the service."
+    },
+    {
+      "when_role": "RO321",
+      "category": "PCN Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO247",
+      "category": "Community Health Service Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO250",
+      "category": "Hospital Service Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO249",
+      "category": "Hospice Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not. Ordered after RO7 so an entity that is itself a hospice categorises as Hospice."
+    },
+    {
+      "when_role": "RO246",
+      "category": "Care Home / Nursing Home Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO255",
+      "category": "Public Health Service Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO259",
+      "category": "Urgent & Emergency Care Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO252",
+      "category": "Optometry Service Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO82",
+      "category": "Prison Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO256",
+      "category": "Secure Children's Home Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO251",
+      "category": "Immigration Removal Centre Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO258",
+      "category": "Sexual Assault Referral Centre Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO260",
+      "category": "Young Offender Institution Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO257",
+      "category": "Secure Training Centre Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    },
+    {
+      "when_role": "RO248",
+      "category": "Court Prescribing Cost Centre",
+      "why": "Names the service holding the prescribing budget; the RO177 primary role does not."
+    }
+  ]
+}

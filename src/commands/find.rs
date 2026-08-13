@@ -1054,7 +1054,7 @@ mod tests {
             is_exact_code_match: true,
         };
 
-        let secondary_roles = vec!["gp practice (RO76)".to_string()];
+        let _secondary_roles = vec!["gp practice (RO76)".to_string()];
         let succ_code = Some("SUCC1".to_string());
         let succ_name = Some("Successor Org".to_string());
 

@@ -45,10 +45,14 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
     prov.trud_release_sha256_verified = Some(true);
-    prov.xml_manifest_seq_num = Some("4700".to_string());
-    prov.xml_manifest_record_count = Some(1);
+    prov.trud_release_url = Some("https://isd.digital.nhs.uk/trud/items/341/hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov.publication_date = Some("2026-07-28".to_string());
+    prov.publication_seq_num = Some("4700".to_string());
+    prov.publication_type = Some("Full".to_string());
+    prov.publication_record_count = Some(1);
 
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),

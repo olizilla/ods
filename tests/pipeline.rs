@@ -229,6 +229,7 @@ fn full_pipeline_parquet_and_md() {
     cite::run_with_writer(
         cite::Args {
             input: Some(parquet_dir),
+            format: "text".to_string(),
         },
         &mut cite_out,
     )

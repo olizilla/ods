@@ -394,14 +394,21 @@ fn write_provenance_json_with_verification(
 
     println!("Writing provenance metadata...");
     let trud_dir = release_dir.join("trud");
-    let (xml_created, xml_seq, xml_count) = if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(&trud_dir) {
+    let (pub_date, pub_seq, pub_type, pub_source, pub_version, pub_count) = if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(&trud_dir) {
         if let Ok((parsed_prov, _, parsed_map)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
-            (parsed_prov.xml_manifest_created, parsed_prov.xml_manifest_seq_num, Some(parsed_map.len()))
+            (
+                parsed_prov.publication_date,
+                parsed_prov.publication_seq_num,
+                parsed_prov.publication_type,
+                parsed_prov.publication_source,
+                parsed_prov.publication_schema_version,
+                parsed_prov.publication_record_count.or(Some(parsed_map.len())),
+            )
         } else {
-            (None, None, None)
+            (None, None, None, None, None, None)
         }
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None)
     };
 
     let prov = OdsProvenance {
@@ -413,10 +420,13 @@ fn write_provenance_json_with_verification(
         trud_release_sha256_verified: Some(verified),
         trud_release_file: Some(release.archive_file_name.clone()),
         trud_release_filesize_bytes: Some(release.archive_file_size),
-        xml_manifest_created: xml_created,
-        xml_manifest_seq_num: xml_seq,
-        xml_manifest_record_count: xml_count,
-        ods_cmd_version: env!("CARGO_PKG_VERSION").to_string(),
+        publication_date: pub_date,
+        publication_seq_num: pub_seq,
+        publication_type: pub_type,
+        publication_source: pub_source,
+        publication_schema_version: pub_version,
+        publication_record_count: pub_count,
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
         derived_artifacts: None,
     };
 
