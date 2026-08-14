@@ -877,11 +877,24 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
 
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, None).unwrap();
-        crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, None).unwrap();
-        crate::commands::parquet::export_roles(&parquet_dir, &records, None).unwrap();
-        crate::commands::parquet::export_relationships(&parquet_dir, &records, None).unwrap();
-        crate::commands::parquet::export_successions(&parquet_dir, &records, None).unwrap();
+        let mut prov = crate::provenance::OdsProvenance::default();
+        prov.primary_role_scope = Some(vec![
+            "RO177".to_string(),
+            "RO261".to_string(),
+            "RO198".to_string(),
+            "RO180".to_string(),
+            "RO76".to_string(),
+            "RO318".to_string(),
+            "RO7".to_string(),
+            "RO269".to_string(),
+            "RO270".to_string(),
+        ]);
+
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+        crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
+        crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
+        crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
 
         (dir, parquet_dir)
     }

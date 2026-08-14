@@ -65,6 +65,9 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publication_record_count: Option<usize>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_role_scope: Option<Vec<String>>,
+
     // --- 3. Tool Build Info & Artifact Hashes ---
     #[serde(default = "default_tool_version")]
     pub tool_version: String,
@@ -104,6 +107,7 @@ impl Default for OdsProvenance {
             publication_source: None,
             publication_schema_version: None,
             publication_record_count: None,
+            primary_role_scope: None,
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             tool_parquet_version: None,
             tool_arrow_version: None,
@@ -280,6 +284,7 @@ impl OdsProvenance {
             publication_source: None,
             publication_schema_version: None,
             publication_record_count: None,
+            primary_role_scope: None,
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
             tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
@@ -421,6 +426,9 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
             if xml_prov.publication_record_count.is_some() {
                 prov.publication_record_count = xml_prov.publication_record_count;
             }
+            if xml_prov.primary_role_scope.is_some() {
+                prov.primary_role_scope = xml_prov.primary_role_scope;
+            }
         }
     }
 
@@ -440,6 +448,7 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         prov.tool_zstd_level = Some(3);
     }
 
+    prov.primary_role_scope = None;
     prov.derived_artifacts = Some(hashes);
     if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
         let _ = std::fs::write(&prov_path, updated_json);

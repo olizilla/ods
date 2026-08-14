@@ -86,6 +86,15 @@ pub fn run(args: Args) -> Result<()> {
                 .with_context(|| format!("parsing JSON line: {}", trimmed))?;
             recs.push(record);
         }
+        if let Some(ref mut prov) = _prov {
+            if prov.primary_role_scope.is_none() {
+                if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(&args.input) {
+                    if let Ok((xml_prov, _, _)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
+                        prov.primary_role_scope = xml_prov.primary_role_scope;
+                    }
+                }
+            }
+        }
         (_prov, recs)
     } else {
         let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
@@ -737,18 +746,26 @@ fn report_category_rule_hits(records: &[OdsRecord]) {
 }
 
 pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
-    // Observed vocabulary: every role code in the release, and whether it ever
-    // appears as a primary role.
-    let mut can_be_primary: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    // Observed vocabulary: every role code in the release.
+    let mut observed_roles: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut observed_primary: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for r in records {
         for role in &r.roles {
-            let entry = can_be_primary.entry(role.id.clone()).or_insert(false);
-            *entry |= role.primary_role;
+            observed_roles.insert(role.id.clone());
+            if role.primary_role {
+                observed_primary.insert(role.id.clone());
+            }
         }
     }
 
+    let primary_scope_set: std::collections::HashSet<&str> = match provenance.and_then(|p| p.primary_role_scope.as_ref()) {
+        Some(scope) if !scope.is_empty() => scope.iter().map(|s| s.as_str()).collect(),
+        _ => anyhow::bail!("Missing <PrimaryRoleScope> in release manifest"),
+    };
+
     // A role code with no curated name is a build failure, not a blank cell.
-    let observed: std::collections::HashSet<String> = can_be_primary.keys().cloned().collect();
+    let observed: std::collections::HashSet<String> = observed_roles.iter().cloned().collect();
     crate::roles::ensure_vocabulary_covers(&observed)?;
     crate::roles::ensure_rules_reference_known_roles()?;
     report_category_rule_hits(records);
@@ -758,10 +775,18 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
     let mut name = StringBuilder::new();
     let mut primary_flag = BooleanBuilder::new();
 
-    for (code, is_primary_capable) in &can_be_primary {
+    let mut primary_count = 0usize;
+
+    for code in &observed_roles {
+        let is_primary_capable = primary_scope_set.contains(code.as_str());
+
+        if is_primary_capable {
+            primary_count += 1;
+        }
+
         role_code.append_value(code);
         name.append_value(vocab.name(code).unwrap_or(code));
-        primary_flag.append_value(*is_primary_capable);
+        primary_flag.append_value(is_primary_capable);
     }
 
     let schema = embed_metadata(&roles_schema(), provenance);
@@ -783,10 +808,9 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
     writer.write(&batch).context("writing roles batch")?;
     writer.close().context("finalising roles writer")?;
 
-    let primary_count = can_be_primary.values().filter(|v| **v).count();
     println!(
         "Exported {} role definitions to roles.parquet ({} can be primary).",
-        can_be_primary.len(),
+        observed_roles.len(),
         primary_count
     );
     Ok(())
@@ -1379,5 +1403,36 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         export_relationships(temp_dir.path(), &[record], None).unwrap();
         assert!(temp_dir.path().join("relationships.parquet").exists());
+    }
+
+    #[test]
+    fn test_export_roles_requires_primary_role_scope() {
+        let record = OdsRecord {
+            ods_code: "A100".to_string(),
+            name: "Test Practice".to_string(),
+            roles: vec![crate::commands::ndjson::OdsRole {
+                id: "RO177".to_string(),
+                code: None,
+                unique_role_id: "1".to_string(),
+                primary_role: true,
+                status: "active".to_string(),
+                dates: vec![],
+                display_name: None,
+            }],
+            ..Default::default()
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Must fail without PrimaryRoleScope in provenance
+        let err = export_roles(temp_dir.path(), &[record.clone()], None);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("Missing <PrimaryRoleScope>"));
+
+        // 2. Must succeed with PrimaryRoleScope in provenance
+        let mut prov = crate::provenance::OdsProvenance::default();
+        prov.primary_role_scope = Some(vec!["RO177".to_string()]);
+        let res = export_roles(temp_dir.path(), &[record], Some(&prov));
+        assert!(res.is_ok());
     }
 }

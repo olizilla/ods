@@ -9,6 +9,10 @@
       <concept id="RE4" code="4" displayName="is commissioned by" />
     </CodeSystem>
   </CodeSystems>
+  <PrimaryRoleScope>
+    <PrimaryRole id="RO197" displayName="NHS Trust" />
+    <PrimaryRole id="RO76" displayName="General Practice" />
+  </PrimaryRoleScope>
   <Organisations>
     <Organisation>
       <Name>ALDER HEY CHILDREN'S NHS FOUNDATION TRUST</Name>

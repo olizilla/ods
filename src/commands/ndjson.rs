@@ -999,9 +999,6 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
         }
         for rel in &mut org.relationships {
             rel.status = rel.status.to_lowercase();
-            if let Some(ref mut d) = rel.display_name {
-                *d = d.to_lowercase();
-            }
             if let Some(ref mut prd) = rel.target.primary_role_display_name {
                 *prd = prd.to_lowercase();
             }
@@ -1106,6 +1103,8 @@ pub fn parse_single_pass(
     let mut xml_version = None;
     let mut manifest_record_count = None;
  
+    let mut primary_role_scope: Vec<String> = Vec::new();
+
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Start(ref e) => {
@@ -1125,6 +1124,14 @@ pub fn parse_single_pass(
                     xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
                     manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
+                } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") && !parser_state.in_organisation {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref().eq_ignore_ascii_case(b"id") {
+                            if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                primary_role_scope.push(val.into_owned());
+                            }
+                        }
+                    }
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, false, &reader, &concept_map)?;
                 }
@@ -1146,6 +1153,14 @@ pub fn parse_single_pass(
                     xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
                     manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
+                } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") && !parser_state.in_organisation {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref().eq_ignore_ascii_case(b"id") {
+                            if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                primary_role_scope.push(val.into_owned());
+                            }
+                        }
+                    }
                 } else {
                     parser_state.handle_start_or_empty(name_ref, e, true, &reader, &concept_map)?;
                 }
@@ -1176,6 +1191,12 @@ pub fn parse_single_pass(
     provenance.publication_source = pub_source;
     provenance.publication_schema_version = xml_version;
     provenance.publication_record_count = manifest_record_count;
+
+    primary_role_scope.sort();
+    primary_role_scope.dedup();
+    if !primary_role_scope.is_empty() {
+        provenance.primary_role_scope = Some(primary_role_scope);
+    }
 
     Ok((provenance, concept_map, parsed))
 }

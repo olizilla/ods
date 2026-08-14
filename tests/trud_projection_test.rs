@@ -86,6 +86,9 @@ fn test_status_scoping_prevents_role_status_leak() {
     <un:PublicationType value="Full" />
     <un:PublicationDate value="2026-05-18" />
     <un:PublicationSeqNum value="1" />
+    <un:PrimaryRoleScope>
+      <un:PrimaryRole id="RO197" displayName="NHS Trust" />
+    </un:PrimaryRoleScope>
   </un:ManifestHeader>
   <un:Organisations>
     <un:Organisation orgRecordClass="RC1">

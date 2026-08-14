@@ -16,6 +16,9 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     <un:PublicationType value="Full" />
     <un:PublicationDate value="2026-07-31" />
     <un:PublicationSeqNum value="4700" />
+    <un:PrimaryRoleScope>
+      <un:PrimaryRole id="RO177" displayName="Prescribing Cost Centre" />
+    </un:PrimaryRoleScope>
   </un:ManifestHeader>
   <un:Organisations>
     <un:Organisation>

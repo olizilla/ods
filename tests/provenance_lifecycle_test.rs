@@ -265,3 +265,37 @@ fn test_update_provenance_populates_missing_publication_fields_from_xml() -> Res
     Ok(())
 }
 
+#[test]
+fn test_primary_role_scope_parsing_and_export() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let xml_path = temp_dir.path().join("test_manifest.xml");
+
+    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PrimaryRoleScope>
+      <un:PrimaryRole id="RO180" displayName="PRIMARY CARE TRUST SITE" />
+      <un:PrimaryRole id="RO198" displayName="NHS TRUST SITE" />
+    </un:PrimaryRoleScope>
+  </un:ManifestHeader>
+  <un:Organisations>
+    <un:Organisation>
+      <un:Name>TEST ORG</un:Name>
+      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A100" />
+      <un:Status value="Active" />
+      <un:OrgRecordClass value="RC1" />
+      <un:PrimaryRoleId id="RO180" uniqueRoleId="1" status="Active" display_name="Primary Role" />
+      <un:RoleId id="RO177" uniqueRoleId="2" status="Active" display_name="Inactive-only primary candidate" />
+    </un:Organisation>
+  </un:Organisations>
+</un:OrganisationManifest>"#;
+
+    fs::write(&xml_path, xml_content)?;
+    let (prov, _concept_map, _parsed) = ods::commands::ndjson::parse_single_pass(&xml_path)?;
+
+    let scope = prov.primary_role_scope.as_ref().expect("primary_role_scope must be parsed");
+    assert_eq!(scope, &vec!["RO180".to_string(), "RO198".to_string()]);
+
+    Ok(())
+}
+
