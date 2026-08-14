@@ -53,8 +53,8 @@ fn test_synthetic_parquet_hash_stability() {
         "orgs_all.parquet",
         "org_roles.parquet",
         "roles.parquet",
-        "rels.parquet",
-        "successors.parquet",
+        "relationships.parquet",
+        "successions.parquet",
         "category_rules.json",
     ];
 
@@ -109,8 +109,8 @@ fn test_real_trud_parquet_hash_stability() {
         "orgs_all.parquet",
         "org_roles.parquet",
         "roles.parquet",
-        "rels.parquet",
-        "successors.parquet",
+        "relationships.parquet",
+        "successions.parquet",
         "category_rules.json",
     ];
 

@@ -156,12 +156,12 @@ fn full_pipeline_parquet_and_md() {
         "roles.parquet not created"
     );
     assert!(
-        parquet_dir.join("rels.parquet").exists(),
-        "rels.parquet not created"
+        parquet_dir.join("relationships.parquet").exists(),
+        "relationships.parquet not created"
     );
     assert!(
-        parquet_dir.join("successors.parquet").exists(),
-        "successors.parquet not created"
+        parquet_dir.join("successions.parquet").exists(),
+        "successions.parquet not created"
     );
 
     // Stage 3: md

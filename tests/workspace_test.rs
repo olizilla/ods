@@ -114,6 +114,6 @@ fn test_parquet_handles_trud_zip_input() {
 
     assert!(out_dir.join("orgs.parquet").exists());
     assert!(out_dir.join("roles.parquet").exists());
-    assert!(out_dir.join("rels.parquet").exists());
+    assert!(out_dir.join("relationships.parquet").exists());
 }
 

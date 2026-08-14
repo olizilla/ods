@@ -371,8 +371,8 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         "orgs_all.parquet",
         "org_roles.parquet",
         "roles.parquet",
-        "rels.parquet",
-        "successors.parquet",
+        "relationships.parquet",
+        "successions.parquet",
         "category_rules.json",
     ];
 

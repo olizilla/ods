@@ -99,7 +99,11 @@ struct SuccessorInfo {
 }
 
 fn load_successors_map(parquet_dir: &Path) -> HashMap<String, Vec<SuccessorInfo>> {
-    let path = parquet_dir.join("successors.parquet");
+    let path = if parquet_dir.join("successions.parquet").exists() {
+        parquet_dir.join("successions.parquet")
+    } else {
+        parquet_dir.join("successors.parquet")
+    };
     let mut map: HashMap<String, Vec<SuccessorInfo>> = HashMap::new();
     if !path.exists() {
         return map;
@@ -110,24 +114,26 @@ fn load_successors_map(parquet_dir: &Path) -> HashMap<String, Vec<SuccessorInfo>
 
     for batch in reader.flatten() {
         let schema = batch.schema();
-        let Ok(ods_idx) = schema.index_of("ods_code") else { continue };
-        let Ok(succ_code_idx) = schema.index_of("successor_code") else { continue };
-        let Ok(succ_name_idx) = schema.index_of("successor") else { continue };
-        let Ok(chain_idx) = schema.index_of("succession_chain") else { continue };
+        let ods_idx = schema.index_of("predecessor_code").or_else(|_| schema.index_of("ods_code")).ok();
+        let succ_code_idx = schema.index_of("successor_code").ok();
+        let succ_name_idx = schema.index_of("successor").ok();
+        let chain_idx = schema.index_of("succession_chain").ok();
+
+        let Some(ods_idx) = ods_idx else { continue };
+        let Some(succ_code_idx) = succ_code_idx else { continue };
 
         let ods_arr = batch.column(ods_idx).as_any().downcast_ref::<StringArray>();
         let succ_code_arr = batch.column(succ_code_idx).as_any().downcast_ref::<StringArray>();
-        let succ_name_arr = batch.column(succ_name_idx).as_any().downcast_ref::<StringArray>();
-        let chain_arr = batch.column(chain_idx).as_any().downcast_ref::<StringArray>();
+        let succ_name_arr = succ_name_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
+        let chain_arr = chain_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
 
-        let (Some(ods_arr), Some(succ_code_arr), Some(succ_name_arr), Some(chain_arr)) =
-            (ods_arr, succ_code_arr, succ_name_arr, chain_arr) else { continue };
+        let (Some(ods_arr), Some(succ_code_arr)) = (ods_arr, succ_code_arr) else { continue };
 
         for i in 0..batch.num_rows() {
             let code = ods_arr.value(i).to_string();
             let succ_code = if succ_code_arr.is_valid(i) { Some(succ_code_arr.value(i).to_string()) } else { None };
-            let succ_name = if succ_name_arr.is_valid(i) { Some(succ_name_arr.value(i).to_string()) } else { None };
-            let chain = chain_arr.value(i).to_string();
+            let succ_name = succ_name_arr.and_then(|arr| if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None });
+            let chain = chain_arr.map(|arr| arr.value(i).to_string()).unwrap_or_else(|| succ_code.clone().unwrap_or_default());
 
             map.entry(code).or_default().push(SuccessorInfo {
                 successor_code: succ_code,
@@ -868,10 +874,14 @@ mod tests {
         ];
 
 
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, None).unwrap();
-        crate::commands::parquet::export_orgs_all(&parquet_dir, &records, None).unwrap();
+        let edges = crate::commands::parquet::build_succession_edges(&records);
+        let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
+
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, None).unwrap();
+        crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, None).unwrap();
         crate::commands::parquet::export_roles(&parquet_dir, &records, None).unwrap();
-        crate::commands::parquet::export_successors(&parquet_dir, &records, None).unwrap();
+        crate::commands::parquet::export_relationships(&parquet_dir, &records, None).unwrap();
+        crate::commands::parquet::export_successions(&parquet_dir, &records, None).unwrap();
 
         (dir, parquet_dir)
     }
@@ -1010,8 +1020,9 @@ mod tests {
             .map(|f| f.name().clone())
             .collect();
 
-        // List of fields from orgs.parquet intentionally excluded from find --format json (currently empty)
-        let ignored_fields: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // List of fields from orgs.parquet intentionally excluded from find --format json (until Task 10 find rework)
+        let ignored_fields: std::collections::HashSet<&str> =
+            ["successor_codes", "predecessor_codes"].into_iter().collect();
 
         // Additional enriching fields resolved from the role vocabulary and
         // the successor chain rather than read straight from orgs.parquet.

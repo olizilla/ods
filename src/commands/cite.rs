@@ -39,8 +39,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "orgs_all.parquet",
         "org_roles.parquet",
         "roles.parquet",
-        "rels.parquet",
-        "successors.parquet",
+        "relationships.parquet",
+        "successions.parquet",
         "category_rules.json",
     ];
 

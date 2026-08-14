@@ -32,8 +32,8 @@ fn create_mock_dataset() -> (Vec<GithubRelease>, std::collections::BTreeMap<Stri
         ("orgs_all.parquet", b"mock orgs all parquet content".to_vec()),
         ("org_roles.parquet", b"mock org roles content".to_vec()),
         ("roles.parquet", b"mock roles content".to_vec()),
-        ("rels.parquet", b"mock rels content".to_vec()),
-        ("successors.parquet", b"mock successors content".to_vec()),
+        ("relationships.parquet", b"mock rels content".to_vec()),
+        ("successions.parquet", b"mock successions content".to_vec()),
         ("category_rules.json", b"mock category rules json".to_vec()),
         ("_provenance.json", b"{\"_type\":\"ods_provenance\"}".to_vec()),
     ];

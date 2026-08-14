@@ -150,7 +150,7 @@ fn load_rels(path: &Path) -> Result<HashMap<String, Vec<RelRow>>> {
         let batch = batch?;
         let schema = batch.schema();
         let source_code_idx = schema.index_of("source_code")?;
-        let target_idx = schema.index_of("target")?;
+        let target_idx = schema.index_of("target").ok();
         let target_code_idx = schema.index_of("target_code")?;
         let rel_type_code_idx = schema.index_of("rel_type_code")?;
 
@@ -160,8 +160,9 @@ fn load_rels(path: &Path) -> Result<HashMap<String, Vec<RelRow>>> {
 
         for i in 0..batch.num_rows() {
             let source_code = source_code_arr.value(i).to_string();
+            let target_val = target_idx.and_then(|idx| col_opt_str(&batch, idx, i, "target"));
             let row = RelRow {
-                target: col_opt_str(&batch, target_idx, i, "target"),
+                target: target_val,
                 target_code: target_code_arr.value(i).to_string(),
                 rel_type_code: rel_type_code_arr.value(i).to_string(),
             };
@@ -174,7 +175,11 @@ fn load_rels(path: &Path) -> Result<HashMap<String, Vec<RelRow>>> {
 
 pub fn run(args: Args) -> Result<()> {
     let roles_path = args.input.join("org_roles.parquet");
-    let rels_path = args.input.join("rels.parquet");
+    let rels_path = if args.input.join("relationships.parquet").exists() {
+        args.input.join("relationships.parquet")
+    } else {
+        args.input.join("rels.parquet")
+    };
     let orgs_path = args.input.join("orgs.parquet");
 
     // 1. Fail early: check input files
@@ -185,7 +190,7 @@ pub fn run(args: Args) -> Result<()> {
         anyhow::bail!("Missing 'org_roles.parquet' in input directory: {}", args.input.display());
     }
     if !rels_path.exists() {
-        anyhow::bail!("Missing 'rels.parquet' in input directory: {}", args.input.display());
+        anyhow::bail!("Missing 'relationships.parquet' in input directory: {}", args.input.display());
     }
 
     // 2. Fail early: create output parent directory and zip file handle

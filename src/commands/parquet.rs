@@ -145,22 +145,25 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::create_dir_all(&args.output)
         .with_context(|| format!("creating output directory: {}", args.output.display()))?;
 
+    let edges = build_succession_edges(&records);
+    let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
+
     // 1. Export orgs.parquet (Active only)
-    export_orgs(&args.output, &records, provenance.as_ref())?;
+    export_orgs(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
 
     // 2. Export orgs_all.parquet (All records)
-    export_orgs_all(&args.output, &records, provenance.as_ref())?;
+    export_orgs_all(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
 
     // 3. Export org_roles.parquet (the org↔role bridge) and roles.parquet
     //    (the vocabulary those rows join to).
     export_org_roles(&args.output, &records, provenance.as_ref())?;
     export_roles(&args.output, &records, provenance.as_ref())?;
 
-    // 4. Export rels.parquet
-    export_rels(&args.output, &records, provenance.as_ref())?;
+    // 4. Export relationships.parquet
+    export_relationships(&args.output, &records, provenance.as_ref())?;
 
-    // 5. Export successors.parquet
-    export_successors(&args.output, &records, provenance.as_ref())?;
+    // 5. Export successions.parquet
+    export_successions(&args.output, &records, provenance.as_ref())?;
 
     // 6. Ship the category rules alongside the data so the derivation is
     //    reproducible from a release alone, without the tool.
@@ -237,23 +240,22 @@ pub fn orgs_schema() -> Schema {
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("record_class", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
-        // The ODS primary role code. This is the *register* the record belongs
-        // to — the identity under which it appears in national datasets (RO177
-        // is how a GP practice shows up in NHS BSA prescribing data). It does
-        // not describe what the organisation does; `roles` and `category` do.
         Field::new("primary_role", DataType::Utf8, false),
-        // Every role code held, including the primary one. Deduplicated and
-        // sorted, so `list_contains(roles, 'RO76')` finds every GP practice
-        // without a join and without depending on which role ODS flagged
-        // primary.
         Field::new(
             "roles",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
-        // The one opinionated column: what this entity actually is. Derived
-        // from the curated name of `primary_role`, except where a rule in
-        // data/category_rules.json says the register label misleads.
+        Field::new(
+            "successor_codes",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "predecessor_codes",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
         Field::new("category", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
         Field::new("address", DataType::Utf8, true),
@@ -284,12 +286,19 @@ pub fn orgs_schema() -> Schema {
     ])
 }
 
-fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<RecordBatch> {
+fn build_orgs_batch(
+    schema: &Arc<Schema>,
+    records: &[&OdsRecord],
+    successor_closures: &HashMap<String, Vec<String>>,
+    predecessor_closures: &HashMap<String, Vec<String>>,
+) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut record_class = StringBuilder::new();
     let mut status = StringBuilder::new();
     let mut primary_role = StringBuilder::new();
     let mut roles_list = ListBuilder::new(StringBuilder::new());
+    let mut successor_codes_list = ListBuilder::new(StringBuilder::new());
+    let mut predecessor_codes_list = ListBuilder::new(StringBuilder::new());
     let mut category = StringBuilder::new();
     let mut name = StringBuilder::new();
     let mut address = StringBuilder::new();
@@ -318,16 +327,14 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
     let mut operational_end = Date32Builder::new();
     let mut last_change_date = Date32Builder::new();
 
+    let empty_vec = Vec::new();
+
     for r in records {
         ods_code.append_value(&r.ods_code);
         record_class.append_value(&r.record_class);
         status.append_value(&r.status);
         name.append_value(&r.name);
 
-        // An active organisation lists only its currently active roles. A
-        // closed one lists all of them: its roles went inactive at closure, so
-        // filtering by status would leave every closed entity with an empty
-        // list. The result is the role set as-at the entity's last active day.
         let org_is_active = r.status.eq_ignore_ascii_case("active");
         let mut codes: Vec<&str> = r
             .roles
@@ -342,6 +349,18 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             roles_list.values().append_value(code);
         }
         roles_list.append(true);
+
+        let succs = successor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
+        for s in succs {
+            successor_codes_list.values().append_value(s);
+        }
+        successor_codes_list.append(true);
+
+        let preds = predecessor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
+        for p in preds {
+            predecessor_codes_list.values().append_value(p);
+        }
+        predecessor_codes_list.append(true);
 
         let primary_role_id = r.roles.iter()
             .find(|role| role.primary_role)
@@ -439,6 +458,8 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
             Arc::new(status.finish()) as ArrayRef,
             Arc::new(primary_role.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
+            Arc::new(successor_codes_list.finish()) as ArrayRef,
+            Arc::new(predecessor_codes_list.finish()) as ArrayRef,
             Arc::new(category.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
             Arc::new(address.finish()) as ArrayRef,
@@ -473,7 +494,13 @@ fn build_orgs_batch(schema: &Arc<Schema>, records: &[&OdsRecord]) -> Result<Reco
     Ok(batch)
 }
 
-pub fn export_orgs(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_orgs(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    successor_closures: &HashMap<String, Vec<String>>,
+    predecessor_closures: &HashMap<String, Vec<String>>,
+    provenance: Option<&crate::provenance::OdsProvenance>,
+) -> Result<()> {
     let mut active_records: Vec<&OdsRecord> = records.iter()
         .filter(|r| r.status == "active")
         .collect();
@@ -487,7 +514,7 @@ pub fn export_orgs(output_dir: &Path, records: &[OdsRecord], provenance: Option<
         .context("creating orgs ArrowWriter")?;
 
     for chunk in active_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk)?;
+        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures)?;
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
@@ -495,7 +522,13 @@ pub fn export_orgs(output_dir: &Path, records: &[OdsRecord], provenance: Option<
     Ok(())
 }
 
-pub fn export_orgs_all(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_orgs_all(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    successor_closures: &HashMap<String, Vec<String>>,
+    predecessor_closures: &HashMap<String, Vec<String>>,
+    provenance: Option<&crate::provenance::OdsProvenance>,
+) -> Result<()> {
     let mut sorted_records: Vec<&OdsRecord> = records.iter().collect();
     sorted_records.sort_by(|a, b| {
         let a_active = a.status == "active";
@@ -514,7 +547,7 @@ pub fn export_orgs_all(output_dir: &Path, records: &[OdsRecord], provenance: Opt
         .context("creating orgs_all ArrowWriter")?;
 
     for chunk in sorted_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk)?;
+        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures)?;
         writer.write(&batch).context("writing orgs_all batch")?;
     }
     writer.close().context("finalising orgs_all writer")?;
@@ -760,33 +793,31 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
 }
 
 // ==========================================
-// rels.parquet
+// relationships.parquet
 // ==========================================
 
 #[derive(Clone)]
-struct RelRow {
-    rel_type: String,
-    status: String,
-    target: Option<String>,
-    source: String,
-    target_code: String,
+struct RelationshipRow {
+    rel_id: String,
     source_code: String,
+    target_code: String,
     rel_type_code: String,
+    rel_type_name: String,
+    rel_status: String,
     legal_start: Option<String>,
     legal_end: Option<String>,
     operational_start: Option<String>,
     operational_end: Option<String>,
 }
 
-fn rels_schema() -> Schema {
+pub fn relationships_schema() -> Schema {
     Schema::new(vec![
-        Field::new("rel_type", DataType::Utf8, false),
-        Field::new("status", DataType::Utf8, false),
-        Field::new("target", DataType::Utf8, true),
-        Field::new("source", DataType::Utf8, false),
-        Field::new("target_code", DataType::Utf8, false),
+        Field::new("rel_id", DataType::Utf8, false),
         Field::new("source_code", DataType::Utf8, false),
+        Field::new("target_code", DataType::Utf8, false),
         Field::new("rel_type_code", DataType::Utf8, false),
+        Field::new("rel_type_name", DataType::Utf8, false),
+        Field::new("rel_status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
@@ -794,27 +825,25 @@ fn rels_schema() -> Schema {
     ])
 }
 
-fn build_rels_batch(schema: &Arc<Schema>, rows: &[RelRow]) -> Result<RecordBatch> {
-    let mut rel_type = StringBuilder::new();
-    let mut status = StringBuilder::new();
-    let mut target = StringBuilder::new();
-    let mut source = StringBuilder::new();
-    let mut target_code = StringBuilder::new();
+fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow]) -> Result<RecordBatch> {
+    let mut rel_id = StringBuilder::new();
     let mut source_code = StringBuilder::new();
+    let mut target_code = StringBuilder::new();
     let mut rel_type_code = StringBuilder::new();
+    let mut rel_type_name = StringBuilder::new();
+    let mut rel_status = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
 
     for r in rows {
-        rel_type.append_value(&r.rel_type);
-        status.append_value(&r.status);
-        append_opt(&mut target, r.target.as_deref());
-        source.append_value(&r.source);
-        target_code.append_value(&r.target_code);
+        rel_id.append_value(&r.rel_id);
         source_code.append_value(&r.source_code);
+        target_code.append_value(&r.target_code);
         rel_type_code.append_value(&r.rel_type_code);
+        rel_type_name.append_value(&r.rel_type_name);
+        rel_status.append_value(&r.rel_status);
         append_date(&mut legal_start, r.legal_start.as_deref());
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
@@ -824,38 +853,40 @@ fn build_rels_batch(schema: &Arc<Schema>, rows: &[RelRow]) -> Result<RecordBatch
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(rel_type.finish()) as ArrayRef,
-            Arc::new(status.finish()) as ArrayRef,
-            Arc::new(target.finish()) as ArrayRef,
-            Arc::new(source.finish()) as ArrayRef,
-            Arc::new(target_code.finish()) as ArrayRef,
+            Arc::new(rel_id.finish()) as ArrayRef,
             Arc::new(source_code.finish()) as ArrayRef,
+            Arc::new(target_code.finish()) as ArrayRef,
             Arc::new(rel_type_code.finish()) as ArrayRef,
+            Arc::new(rel_type_name.finish()) as ArrayRef,
+            Arc::new(rel_status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
         ],
     )
-    .context("building Arrow rels batch")?;
+    .context("building Arrow relationships batch")?;
 
     Ok(batch)
 }
 
-pub fn export_rels(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_relationships(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+) -> Result<()> {
     let mut rows = Vec::new();
     for r in records {
         for rel in &r.relationships {
             let (l_start, l_end, o_start, o_end) = extract_dates(&rel.dates);
 
-            rows.push(RelRow {
-                rel_type: rel.display_name.clone().unwrap_or_else(|| rel.id.clone()),
-                status: rel.status.clone(),
-                target: rel.target.name.clone(),
-                source: r.name.clone(),
-                target_code: rel.target.ods_code.clone(),
+            rows.push(RelationshipRow {
+                rel_id: rel.unique_rel_id.clone(),
                 source_code: r.ods_code.clone(),
+                target_code: rel.target.ods_code.clone(),
                 rel_type_code: rel.id.clone(),
+                rel_type_name: rel.display_name.clone().unwrap_or_else(|| rel.id.clone()),
+                rel_status: rel.status.clone(),
                 legal_start: l_start,
                 legal_end: l_end,
                 operational_start: o_start,
@@ -864,203 +895,200 @@ pub fn export_rels(output_dir: &Path, records: &[OdsRecord], provenance: Option<
         }
     }
 
-    // Sort: source_code ASC, target_code ASC, rel_type_code ASC
+    // Sort: source_code ASC, target_code ASC, rel_type_code ASC, rel_id ASC
     rows.sort_by(|a, b| {
         a.source_code
             .cmp(&b.source_code)
             .then_with(|| a.target_code.cmp(&b.target_code))
             .then_with(|| a.rel_type_code.cmp(&b.rel_type_code))
+            .then_with(|| a.rel_id.cmp(&b.rel_id))
     });
 
-    let schema = embed_metadata(&rels_schema(), provenance);
-    let output_file = File::create(output_dir.join("rels.parquet"))
-        .context("creating rels.parquet")?;
+    let schema = embed_metadata(&relationships_schema(), provenance);
+    let output_file = File::create(output_dir.join("relationships.parquet"))
+        .context("creating relationships.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
-        .context("creating rels ArrowWriter")?;
+        .context("creating relationships ArrowWriter")?;
 
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_rels_batch(&schema, chunk)?;
-        writer.write(&batch).context("writing rels batch")?;
+        let batch = build_relationships_batch(&schema, chunk)?;
+        writer.write(&batch).context("writing relationships batch")?;
     }
-    writer.close().context("finalising rels writer")?;
-    println!("Exported {} records to rels.parquet.", rows.len());
+    writer.close().context("finalising relationships writer")?;
+    println!("Exported {} records to relationships.parquet.", rows.len());
     Ok(())
 }
 
-fn walk_successors(
-    start_code: &str,
-    adj: &HashMap<String, Vec<String>>,
-    status_map: &HashMap<String, String>,
-    name_map: &HashMap<String, String>,
-    visited: &mut HashSet<String>,
-    current_path: &mut Vec<String>,
-    results: &mut Vec<(Option<String>, Option<String>, String)>,
-) {
-    if !visited.insert(start_code.to_string()) {
-        // Cycle detected! Terminate the path.
-        let mut path_copy = current_path.clone();
-        path_copy.push(start_code.to_string());
-        let chain = path_copy.join(" -> ");
-        results.push((None, None, chain));
-        return;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuccessionEdge {
+    pub succession_id: String,
+    pub predecessor_code: String,
+    pub successor_code: String,
+    pub legal_start: Option<String>,
+}
+
+pub fn build_succession_edges(records: &[OdsRecord]) -> Vec<SuccessionEdge> {
+    let mut map: HashMap<String, SuccessionEdge> = HashMap::new();
+
+    for r in records {
+        for succ in &r.successors {
+            let succ_type = succ.succ_type.to_lowercase();
+            let legal_start = succ
+                .dates
+                .iter()
+                .find(|d| d.date_type.eq_ignore_ascii_case("legal"))
+                .and_then(|d| d.start.clone());
+
+            let (pred, succ_code) = if succ_type.contains("predecessor") {
+                (succ.target.ods_code.clone(), r.ods_code.clone())
+            } else {
+                (r.ods_code.clone(), succ.target.ods_code.clone())
+            };
+
+            let edge = SuccessionEdge {
+                succession_id: succ.unique_succ_id.clone(),
+                predecessor_code: pred,
+                successor_code: succ_code,
+                legal_start,
+            };
+
+            map.entry(succ.unique_succ_id.clone()).or_insert(edge);
+        }
     }
 
-    current_path.push(start_code.to_string());
+    let mut edges: Vec<SuccessionEdge> = map.into_values().collect();
+    edges.sort_by(|a, b| {
+        a.predecessor_code
+            .cmp(&b.predecessor_code)
+            .then_with(|| a.successor_code.cmp(&b.successor_code))
+            .then_with(|| a.succession_id.cmp(&b.succession_id))
+    });
 
-    let successors = adj.get(start_code);
-    if let Some(succs) = successors {
-        if succs.is_empty() {
-            // Dead end
-            let chain = current_path.join(" -> ");
-            results.push((None, None, chain));
-        } else {
-            for next_code in succs {
-                let status = status_map.get(next_code).map(|s| s.as_str()).unwrap_or("inactive");
-                if status == "active" {
-                    // Reached active successor!
-                    let mut path_copy = current_path.clone();
-                    path_copy.push(next_code.to_string());
-                    let chain = path_copy.join(" -> ");
-                    let name = name_map.get(next_code).cloned();
-                    results.push((Some(next_code.clone()), name, chain));
-                } else {
-                    // Recursively walk inactive successor
-                    walk_successors(next_code, adj, status_map, name_map, visited, current_path, results);
+    edges
+}
+
+pub fn compute_transitive_closures(
+    records: &[OdsRecord],
+    edges: &[SuccessionEdge],
+) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+    let mut fwd_adj: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut rev_adj: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for edge in edges {
+        fwd_adj
+            .entry(edge.predecessor_code.clone())
+            .or_default()
+            .insert(edge.successor_code.clone());
+        rev_adj
+            .entry(edge.successor_code.clone())
+            .or_default()
+            .insert(edge.predecessor_code.clone());
+    }
+
+    let mut successor_closures: HashMap<String, Vec<String>> = HashMap::new();
+    let mut predecessor_closures: HashMap<String, Vec<String>> = HashMap::new();
+
+    for r in records {
+        // Forward closure (successor_codes)
+        let mut visited = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(r.ods_code.clone());
+        visited.insert(r.ods_code.clone());
+
+        while let Some(curr) = queue.pop_front() {
+            if let Some(nexts) = fwd_adj.get(&curr) {
+                for next_code in nexts {
+                    if visited.insert(next_code.clone()) {
+                        queue.push_back(next_code.clone());
+                    }
                 }
             }
         }
-    } else {
-        // Dead end (no successor links)
-        let chain = current_path.join(" -> ");
-        results.push((None, None, chain));
+        visited.remove(&r.ods_code);
+        let mut succs: Vec<String> = visited.into_iter().collect();
+        succs.sort();
+        successor_closures.insert(r.ods_code.clone(), succs);
+
+        // Reverse closure (predecessor_codes)
+        let mut rev_visited = HashSet::new();
+        let mut rev_queue = std::collections::VecDeque::new();
+        rev_queue.push_back(r.ods_code.clone());
+        rev_visited.insert(r.ods_code.clone());
+
+        while let Some(curr) = rev_queue.pop_front() {
+            if let Some(prevs) = rev_adj.get(&curr) {
+                for prev_code in prevs {
+                    if rev_visited.insert(prev_code.clone()) {
+                        rev_queue.push_back(prev_code.clone());
+                    }
+                }
+            }
+        }
+        rev_visited.remove(&r.ods_code);
+        let mut preds: Vec<String> = rev_visited.into_iter().collect();
+        preds.sort();
+        predecessor_closures.insert(r.ods_code.clone(), preds);
     }
 
-    current_path.pop();
-    visited.remove(start_code);
+    (successor_closures, predecessor_closures)
 }
 
-struct SuccessorRow {
-    ods_code: String,
-    name: String,
-    successor_code: Option<String>,
-    successor: Option<String>,
-    succession_chain: String,
-}
-
-fn successors_schema() -> Schema {
+fn successions_schema() -> Schema {
     Schema::new(vec![
-        Field::new("ods_code", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("successor_code", DataType::Utf8, true),
-        Field::new("successor", DataType::Utf8, true),
-        Field::new("succession_chain", DataType::Utf8, false),
+        Field::new("succession_id", DataType::Utf8, false),
+        Field::new("predecessor_code", DataType::Utf8, false),
+        Field::new("successor_code", DataType::Utf8, false),
+        Field::new("legal_start", DataType::Date32, true),
     ])
 }
 
-fn build_successors_batch(schema: &Arc<Schema>, rows: &[SuccessorRow]) -> Result<RecordBatch> {
-    let mut ods_code = StringBuilder::new();
-    let mut name = StringBuilder::new();
+fn build_successions_batch(schema: &Arc<Schema>, edges: &[SuccessionEdge]) -> Result<RecordBatch> {
+    let mut succession_id = StringBuilder::new();
+    let mut predecessor_code = StringBuilder::new();
     let mut successor_code = StringBuilder::new();
-    let mut successor = StringBuilder::new();
-    let mut succession_chain = StringBuilder::new();
+    let mut legal_start = Date32Builder::new();
 
-    for r in rows {
-        ods_code.append_value(&r.ods_code);
-        name.append_value(&r.name);
-        append_opt(&mut successor_code, r.successor_code.as_deref());
-        append_opt(&mut successor, r.successor.as_deref());
-        succession_chain.append_value(&r.succession_chain);
+    for edge in edges {
+        succession_id.append_value(&edge.succession_id);
+        predecessor_code.append_value(&edge.predecessor_code);
+        successor_code.append_value(&edge.successor_code);
+        append_date(&mut legal_start, edge.legal_start.as_deref());
     }
 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(ods_code.finish()) as ArrayRef,
-            Arc::new(name.finish()) as ArrayRef,
+            Arc::new(succession_id.finish()) as ArrayRef,
+            Arc::new(predecessor_code.finish()) as ArrayRef,
             Arc::new(successor_code.finish()) as ArrayRef,
-            Arc::new(successor.finish()) as ArrayRef,
-            Arc::new(succession_chain.finish()) as ArrayRef,
+            Arc::new(legal_start.finish()) as ArrayRef,
         ],
     )
-    .context("building Arrow successors batch")?;
+    .context("building Arrow successions batch")?;
 
     Ok(batch)
 }
 
-pub fn export_successors(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
-    // 1. Build adjacency map, status map, and name map
-    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
-    let mut status_map = HashMap::new();
-    let mut name_map = HashMap::new();
-
-    for r in records {
-        status_map.insert(r.ods_code.clone(), r.status.clone());
-        name_map.insert(r.ods_code.clone(), r.name.clone());
-
-        for succ in &r.successors {
-            let succ_type = succ.succ_type.to_lowercase();
-            if succ_type.contains("successor") {
-                adj.entry(r.ods_code.clone())
-                    .or_default()
-                    .push(succ.target.ods_code.clone());
-            } else if succ_type.contains("predecessor") {
-                adj.entry(succ.target.ods_code.clone()).or_default().push(r.ods_code.clone());
-            }
-        }
-    }
-
-    // 2. Walk all inactive records
-    let mut rows = Vec::new();
-    for r in records {
-        if r.status != "active" {
-            let mut visited = std::collections::HashSet::new();
-            let mut current_path = Vec::new();
-            let mut results = Vec::new();
-
-            walk_successors(
-                &r.ods_code,
-                &adj,
-                &status_map,
-                &name_map,
-                &mut visited,
-                &mut current_path,
-                &mut results,
-            );
-
-            for (succ_code, succ_name, chain) in results {
-                rows.push(SuccessorRow {
-                    ods_code: r.ods_code.clone(),
-                    name: r.name.clone(),
-                    successor_code: succ_code,
-                    successor: succ_name,
-                    succession_chain: chain,
-                });
-            }
-        }
-    }
-
-    // Sort: ods_code ASC, succession_chain ASC
-    rows.sort_by(|a, b| {
-        match a.ods_code.cmp(&b.ods_code) {
-            std::cmp::Ordering::Equal => a.succession_chain.cmp(&b.succession_chain),
-            other => other,
-        }
-    });
-
-    let schema = embed_metadata(&successors_schema(), provenance);
-    let output_file = File::create(output_dir.join("successors.parquet"))
-        .context("creating successors.parquet")?;
+pub fn export_successions(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+) -> Result<()> {
+    let edges = build_succession_edges(records);
+    let schema = embed_metadata(&successions_schema(), provenance);
+    let output_file = File::create(output_dir.join("successions.parquet"))
+        .context("creating successions.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
-        .context("creating successors ArrowWriter")?;
+        .context("creating successions ArrowWriter")?;
 
-    for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_successors_batch(&schema, chunk)?;
-        writer.write(&batch).context("writing successors batch")?;
+    for chunk in edges.chunks(BATCH_SIZE) {
+        let batch = build_successions_batch(&schema, chunk)?;
+        writer.write(&batch).context("writing successions batch")?;
     }
-    writer.close().context("finalising successors writer")?;
-    println!("Exported {} records to successors.parquet.", rows.len());
+    writer.close().context("finalising successions writer")?;
+    println!("Exported {} records to successions.parquet.", edges.len());
     Ok(())
 }
 
@@ -1143,7 +1171,7 @@ mod tests {
         };
 
         let schema = Arc::new(orgs_schema());
-        let batch = build_orgs_batch(&schema, &[&record]).unwrap();
+        let batch = build_orgs_batch(&schema, &[&record], &HashMap::new(), &HashMap::new()).unwrap();
 
         // 1. Verify schema has "address" and does not have "address_line_1/2/3"
         assert!(schema.column_with_name("address").is_some());
@@ -1169,7 +1197,11 @@ mod tests {
         // 5. Verify postcode renamed
         assert!(schema.column_with_name("postcode").is_some());
 
-        // 6. Verify the value of "address" field
+        // 6. Verify successor_codes and predecessor_codes present
+        assert!(schema.column_with_name("successor_codes").is_some());
+        assert!(schema.column_with_name("predecessor_codes").is_some());
+
+        // 7. Verify the value of "address" field
         let address_col = batch
             .column(schema.index_of("address").unwrap())
             .as_any()
@@ -1181,284 +1213,171 @@ mod tests {
             "Suite 4, Albert House, 12 Gresham Road, London, SW9 7AY"
         );
 
-        // 7. Verify new date columns exist
+        // 8. Verify new date columns exist
         assert!(schema.column_with_name("legal_start").is_some());
         assert!(schema.column_with_name("legal_end").is_some());
     }
 
     #[test]
-    fn test_successor_resolution() {
-        // Mock a set of records for:
-        // A1 (Inactive) -> successor B2
-        // B2 (Inactive) -> successor C3
-        // C3 (Active)
-        // D4 (Inactive) -> successor E5 (dead-end inactive)
-        // F6 (Inactive) -> split to G7 and H8
-        // G7 (Active)
-        // H8 (Active)
-        // Loop: L1 -> L2 -> L1
-
-        let mut records = vec![
+    fn test_successions_and_transitive_closures() {
+        // Chain: 0AF -> 0CE -> 0CY -> YDDTR
+        // 0AN -> 0CE
+        // 0AJ -> 0CY
+        let records = vec![
             OdsRecord {
-                ods_code: "A1".to_string(),
-                name: "Old A1".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "org".to_string(),
-                successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "1".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "B2".to_string(),
-                            name: Some("Old B2".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
-                ],
+                ods_code: "0AF".to_string(),
+                status: "inactive".to_string(),
+                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                    unique_succ_id: "101".to_string(),
+                    succ_type: "Successor".to_string(),
+                    dates: vec![crate::commands::ndjson::OdsDate {
+                        date_type: "Legal".to_string(),
+                        start: Some("2002-04-01".to_string()),
+                        end: None,
+                    }],
+                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                        ods_code: "0CE".to_string(),
+                        ..Default::default()
+                    },
+                }],
                 ..Default::default()
             },
             OdsRecord {
-                ods_code: "B2".to_string(),
-                name: "Old B2".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "org".to_string(),
-                successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "2".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "C3".to_string(),
-                            name: Some("Active C3".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
-                ],
+                ods_code: "0AN".to_string(),
+                status: "inactive".to_string(),
+                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                    unique_succ_id: "102".to_string(),
+                    succ_type: "Successor".to_string(),
+                    dates: vec![],
+                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                        ods_code: "0CE".to_string(),
+                        ..Default::default()
+                    },
+                }],
                 ..Default::default()
             },
             OdsRecord {
-                ods_code: "C3".to_string(),
-                name: "Active C3".to_string(),
-                status: "Active".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
-                ..Default::default()
-            },
-            OdsRecord {
-                ods_code: "D4".to_string(),
-                name: "Old D4".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
+                ods_code: "0CE".to_string(),
+                status: "inactive".to_string(),
                 successors: vec![
+                    // Stated from both ends! Same unique_succ_id "101"
                     crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "3".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
+                        unique_succ_id: "101".to_string(),
+                        succ_type: "Predecessor".to_string(),
+                        dates: vec![crate::commands::ndjson::OdsDate {
+                            date_type: "Legal".to_string(),
+                            start: Some("2002-04-01".to_string()),
+                            end: None,
+                        }],
                         target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "E5".to_string(),
-                            name: Some("Dead End E5".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
-                ],
-                ..Default::default()
-            },
-            OdsRecord {
-                ods_code: "F6".to_string(),
-                name: "Old F6".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
-                successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "4".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "G7".to_string(),
-                            name: Some("Active G7".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
+                            ods_code: "0AF".to_string(),
+                            ..Default::default()
+                        },
                     },
                     crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "5".to_string(),
+                        unique_succ_id: "103".to_string(),
                         succ_type: "Successor".to_string(),
                         dates: vec![],
                         target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "H8".to_string(),
-                            name: Some("Active H8".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
+                            ods_code: "0CY".to_string(),
+                            ..Default::default()
+                        },
+                    },
                 ],
                 ..Default::default()
             },
             OdsRecord {
-                ods_code: "G7".to_string(),
-                name: "Active G7".to_string(),
-                status: "Active".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
+                ods_code: "0AJ".to_string(),
+                status: "inactive".to_string(),
+                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                    unique_succ_id: "104".to_string(),
+                    succ_type: "Successor".to_string(),
+                    dates: vec![],
+                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                        ods_code: "0CY".to_string(),
+                        ..Default::default()
+                    },
+                }],
                 ..Default::default()
             },
             OdsRecord {
-                ods_code: "H8".to_string(),
-                name: "Active H8".to_string(),
-                status: "Active".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
+                ods_code: "0CY".to_string(),
+                status: "inactive".to_string(),
+                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                    unique_succ_id: "105".to_string(),
+                    succ_type: "Successor".to_string(),
+                    dates: vec![],
+                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                        ods_code: "YDDTR".to_string(),
+                        ..Default::default()
+                    },
+                }],
                 ..Default::default()
             },
             OdsRecord {
-                ods_code: "L1".to_string(),
-                name: "Loop L1".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
-                successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "6".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "L2".to_string(),
-                            name: Some("Loop L2".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
-                ],
-                ..Default::default()
-            },
-            OdsRecord {
-                ods_code: "L2".to_string(),
-                name: "Loop L2".to_string(),
-                status: "Inactive".to_string(),
-                role: "GP".to_string(),
-                record_class: "Organisation".to_string(),
-                successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
-                        unique_succ_id: "7".to_string(),
-                        succ_type: "Successor".to_string(),
-                        dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
-                            ods_code: "L1".to_string(),
-                            name: Some("Loop L1".to_string()),
-                            root: None,
-                            assigning_authority_name: None,
-                            primary_role_id: None,
-                            primary_role_display_name: None,
-                            primary_role_unique_role_id: None,
-                        }
-                    }
-                ],
+                ods_code: "YDDTR".to_string(),
+                status: "active".to_string(),
                 ..Default::default()
             },
         ];
 
-        // Normalize mock records to lowercase status/role/record_class to match Option B
-        for r in &mut records {
-            r.status = r.status.to_lowercase();
-            r.role = r.role.to_lowercase();
-            r.record_class = r.record_class.to_lowercase();
-            for succ in &mut r.successors {
-                succ.succ_type = succ.succ_type.to_lowercase();
-            }
-        }
+        let edges = build_succession_edges(&records);
+        // Deduplicated: 5 unique edges (unique_succ_id 101, 102, 103, 104, 105)
+        assert_eq!(edges.len(), 5);
 
-        // Setup adjacency/status/names
-        let mut adj: HashMap<String, Vec<String>> = HashMap::new();
-        let mut status_map = HashMap::new();
-        let mut name_map = HashMap::new();
+        let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
 
-        for r in &records {
-            status_map.insert(r.ods_code.clone(), r.status.clone());
-            name_map.insert(r.ods_code.clone(), r.name.clone());
-            for succ in &r.successors {
-                if succ.succ_type == "successor" {
-                    adj.entry(r.ods_code.clone()).or_default().push(succ.target.ods_code.clone());
+        assert_eq!(succ_closures.get("0AF").unwrap(), &vec!["0CE", "0CY", "YDDTR"]);
+        assert_eq!(pred_closures.get("0AF").unwrap(), &Vec::<String>::new());
+
+        assert_eq!(succ_closures.get("0CE").unwrap(), &vec!["0CY", "YDDTR"]);
+        assert_eq!(pred_closures.get("0CE").unwrap(), &vec!["0AF", "0AN"]);
+
+        assert_eq!(succ_closures.get("0CY").unwrap(), &vec!["YDDTR"]);
+        assert_eq!(pred_closures.get("0CY").unwrap(), &vec!["0AF", "0AJ", "0AN", "0CE"]);
+
+        assert_eq!(succ_closures.get("YDDTR").unwrap(), &Vec::<String>::new());
+        assert_eq!(pred_closures.get("YDDTR").unwrap(), &vec!["0AF", "0AJ", "0AN", "0CE", "0CY"]);
+    }
+
+    #[test]
+    fn test_relationships_schema_and_export() {
+        let schema = relationships_schema();
+        assert!(schema.column_with_name("rel_id").is_some());
+        assert!(schema.column_with_name("source_code").is_some());
+        assert!(schema.column_with_name("target_code").is_some());
+        assert!(schema.column_with_name("rel_type_code").is_some());
+        assert!(schema.column_with_name("rel_type_name").is_some());
+        assert!(schema.column_with_name("rel_status").is_some());
+        assert!(schema.column_with_name("legal_start").is_some());
+
+        // Assert dropped columns source and target do not exist
+        assert!(schema.column_with_name("source").is_none());
+        assert!(schema.column_with_name("target").is_none());
+        assert!(schema.column_with_name("rel_type").is_none());
+        assert!(schema.column_with_name("status").is_none());
+
+        let record = OdsRecord {
+            ods_code: "0AF".to_string(),
+            name: "Bury HA".to_string(),
+            relationships: vec![
+                crate::commands::ndjson::OdsRelationship {
+                    id: "RE4".to_string(),
+                    display_name: Some("IS COMMISSIONED BY".to_string()),
+                    unique_rel_id: "999".to_string(),
+                    status: "active".to_string(),
+                    dates: vec![],
+                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                        ods_code: "QE1".to_string(),
+                        ..Default::default()
+                    },
                 }
-            }
-        }
+            ],
+            ..Default::default()
+        };
 
-        // Test walks
-        let mut rows = Vec::new();
-        for r in &records {
-            if r.status != "active" {
-                let mut visited = std::collections::HashSet::new();
-                let mut current_path = Vec::new();
-                let mut results = Vec::new();
-
-                walk_successors(
-                    &r.ods_code,
-                    &adj,
-                    &status_map,
-                    &name_map,
-                    &mut visited,
-                    &mut current_path,
-                    &mut results,
-                );
-
-                for (succ_code, succ_name, chain) in results {
-                    rows.push(SuccessorRow {
-                        ods_code: r.ods_code.clone(),
-                        name: r.name.clone(),
-                        successor_code: succ_code,
-                        successor: succ_name,
-                        succession_chain: chain,
-                    });
-                }
-            }
-        }
-
-        // 1. Verify A1 resolves to C3
-        let row_a1 = rows.iter().find(|row| row.ods_code == "A1").unwrap();
-        assert_eq!(row_a1.successor_code.as_deref(), Some("C3"));
-        assert_eq!(row_a1.succession_chain, "A1 -> B2 -> C3");
-
-        // 2. Verify D4 dead-ends with NULL
-        let row_d4 = rows.iter().find(|row| row.ods_code == "D4").unwrap();
-        assert_eq!(row_d4.successor_code, None);
-        assert_eq!(row_d4.succession_chain, "D4 -> E5");
-
-        // 3. Verify F6 splits into two rows
-        let rows_f6: Vec<&SuccessorRow> = rows.iter().filter(|row| row.ods_code == "F6").collect();
-        assert_eq!(rows_f6.len(), 2);
-        assert_eq!(rows_f6[0].successor_code.as_deref(), Some("G7"));
-        assert_eq!(rows_f6[0].succession_chain, "F6 -> G7");
-        assert_eq!(rows_f6[1].successor_code.as_deref(), Some("H8"));
-        assert_eq!(rows_f6[1].succession_chain, "F6 -> H8");
-
-        // 4. Verify L1 loops terminate safely
-        let row_l1 = rows.iter().find(|row| row.ods_code == "L1").unwrap();
-        assert_eq!(row_l1.successor_code, None);
-        assert_eq!(row_l1.succession_chain, "L1 -> L2 -> L1");
+        let temp_dir = tempfile::tempdir().unwrap();
+        export_relationships(temp_dir.path(), &[record], None).unwrap();
+        assert!(temp_dir.path().join("relationships.parquet").exists());
     }
 }

@@ -179,7 +179,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Verify SHA256SUMS and Parquet files integrity
-    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "rels.parquet", "successors.parquet", "category_rules.json"];
+    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "relationships.parquet", "successions.parquet", "category_rules.json"];
     let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
         parquet_dir.join("SHA256SUMS")
     } else {
@@ -288,7 +288,11 @@ pub fn run(args: Args) -> Result<()> {
     let orgs_all_parquet = parquet_dir.join("orgs_all.parquet");
     let orgs_parquet = parquet_dir.join("orgs.parquet");
     let roles_parquet = parquet_dir.join("org_roles.parquet");
-    let rels_parquet = parquet_dir.join("rels.parquet");
+    let rels_parquet = if parquet_dir.join("relationships.parquet").exists() {
+        parquet_dir.join("relationships.parquet")
+    } else {
+        parquet_dir.join("rels.parquet")
+    };
     let succs_parquet = parquet_dir.join("successors.parquet");
 
     let total_orgs_parquet = count_records_in_parquet(&orgs_all_parquet).unwrap_or(0);
@@ -683,7 +687,8 @@ fn audit_referential_integrity(
         for batch in rreader {
             let batch = batch?;
             let schema = batch.schema();
-            if let Ok(idx) = schema.index_of("target_ods_code") {
+            let target_idx = schema.index_of("target_code").or_else(|_| schema.index_of("target_ods_code"));
+            if let Ok(idx) = target_idx {
                 let target_arr = batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
                 for i in 0..batch.num_rows() {
                     let target_code = target_arr.value(i);
