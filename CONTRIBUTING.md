@@ -168,7 +168,7 @@ Worth knowing before you trust a query:
 
 - **The primary role describes the register, not the organisation.** GP practices
   are `RO177 Prescribing Cost Centre`. Use `roles` or `category`.
-- **Successions are many-to-many.** ODS code `001` has three successors. Taking the
+- **Successions are many-to-many.** ODS code `001` has five successors. Taking the
   first is wrong, and unresolved mergers are a leading source of error in
   longitudinal analysis of NHS data.
 - **`legal_*` and `operational_*` routinely disagree.** Pick deliberately.

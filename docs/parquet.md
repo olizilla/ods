@@ -2,162 +2,190 @@
 
 The tables `ods make` produces from the NHS TRUD ODS XML release.
 
-> **Pre-1.0.** This documents the schema **as it will be at first publication**,
-> including changes agreed in the schema freeze but not yet implemented:
-> `rel_id`, `succession_id`, `succession_type` and succession dates are new, and
-> `roles.name` becomes `role_name`. See
-> `.agents/briefs/schema-freeze-workplan.md`. Once a release is published and
-> citable, the shape is fixed.
-
----
+> **Pre-1.0.** This is the schema **as it will be at v1**. Several renames and
+> the succession rework are agreed but not yet implemented — see
+> `.agents/briefs/schema-freeze-workplan.md`. We publish v1 of the data once
+> we're happy with this shape, and it's fixed from then on.
 
 ## The tables
 
 | file | grain | rows (7.0.0) | purpose |
-|---|---|---|---|
+| :--- | :--- | ---: | :--- |
 | `orgs.parquet` | one per active organisation or site | 216,886 | the main analytical table |
 | `orgs_all.parquet` | one per organisation or site, active **and** inactive | 305,541 | historical work |
 | `org_roles.parquet` | one per organisation per role | 442,251 | which roles an entity holds, and when |
 | `roles.parquet` | one per role code | 205 | the role vocabulary |
-| `rels.parquet` | one per relationship | 662,558 | how entities relate |
-| `successors.parquet` | one per succession link | 90,913 | mergers, splits, renames |
+| `relationships.parquet` | one per relationship | 662,558 | how entities relate |
+| `successions.parquet` | one per succession | 11,568 | mergers, splits, renames |
 
 `orgs` and `orgs_all` share an identical schema. `orgs` is
 `orgs_all WHERE status = 'active'`, and exists so the common case needs no
-filter.
+filter and the naive query is the correct one.
 
-**Join key:** `ods_code` throughout, except `rels`, which uses `source_code` and
-`target_code`.
+`orgs` answers nearly everything about the NHS as it is today.
+`relationships` and `successions` are for deeper work and are designed to be
+joined against `orgs_all` rather than read alone.
 
----
+## Naming
 
-## Naming conventions
-
-These are recorded because the `_code` suffix looks inconsistent at a glance and
-is not. Reviewers reliably spot the apparent inconsistency and propose
-"fixing" it; this section is the answer.
-
-### `_code` does two different jobs
-
-**As a disambiguator** — there is a sibling name column, and the suffix tells
-them apart:
+One rule: **`_code` is a reference, `_name` is a display label.** Every `_code`
+resolves — to `orgs.ods_code`, to `roles.role_code`, or to a value carried
+alongside it.
 
 ```
-icb   = "NHS LANCASHIRE AND SOUTH CUMBRIA ICB"     icb_code   = "QE1"
-trust = "…"                                        trust_code = "…"
+icb_code    = "QE1"                                    icb_name = "NHS LANCASHIRE AND SOUTH CUMBRIA ICB"
+role_code   = "RO177"                                  role_name = "Prescribing Cost Centre"
+role_codes  = ['RO177','RO76']                         (a list of references)
 ```
 
-**As a type annotation** — there is no sibling, and the suffix says *"this value
-is an identifier of the ODS kind"*: `ods_code`, `role_code`, `rel_type_code`.
-There is no bare `ods` or `role` column for these to be distinguished from.
+`_id` is different again: it identifies a specific *instance* rather than a
+vocabulary entry. `role_id` is the ODS `uniqueRoleId` for one organisation's
+holding of one role; `succession_id` identifies one succession.
 
-### `_id` versus `_code`
-
-`_code` names an entry in a *vocabulary* (`role_code` = `"RO177"`, one of 205).
-`_id` identifies a specific *instance* of it (`role_id` = the ODS
-`uniqueRoleId` for one organisation's holding of one role).
-
-### The test: would a practitioner say it aloud?
-
-"ODS code" ✓ · "role code" ✓ · "ICB code" ✓ — all real phrases.
-"role codes" ✗ · "primary role code" ✗ — grammatical, but nobody says them.
-
-A name should be a phrase, not a construction.
+Four columns carry no suffix because they reference nothing — they're values in
+their own right: `name` (the row's own label, paired with `ods_code`), `status`,
+`entity_type` and `category`.
 
 ### Decisions this settles
 
-**`ods_code`, not `OrgId`.** `OrgId` is the XML serialisation's element name, and
-it is misleading here: the same element carries sites as well as organisations,
-and roughly a third of records are sites. "ODS code" is the practitioner's term,
-covers both, and is unambiguous. Trace-to-source governs *facts*; element names
-are a transport detail.
+**Everything is suffixed, even where a name column doesn't exist.**
+`primary_role_code` has no `primary_role_name` beside it, and is still
+suffixed. Consistency is worth more than brevity here: you can guess any column
+name in this schema without looking it up.
 
-**`primary_role`, not `primary_role_code`.** The disambiguator rule does not
-apply — there is no `primary_role_name` column to distinguish from — so the
-suffix would be pure length, and it fails the say-it-aloud test.
+**There is deliberately no `primary_role_name`.** `category` exists *because*
+the primary role name misleads — 9,372 GP practices are registered as
+`RO177 Prescribing Cost Centre`, which is accurate and useless. Two readable
+classification columns side by side would give no signal about which to trust.
+`primary_role_code` is safe next to `category` precisely because it's opaque:
+nobody mistakes `RO177` for a description. Join `roles.parquet` if you
+specifically want ODS's own label.
 
-**`roles`, not `role_codes`.** Same reasoning. `roles` is a word; `role_codes`
-is a construction, and this is a common grouping and filtering column where
-brevity is worth most.
+**`entity_type`, not `record_class`.** ODS calls it `orgRecordClass` with values
+`RC1` and `RC2`, but "class" of what, and "record" describes the data model
+rather than the thing. The distinction is about the entity, and the values are
+`org` and `site`.
 
-**`rels` uses `source_code` / `target_code`, not `ods_code`.** A relationship
-has two organisation references and cannot call either one `ods_code` without
-ambiguity. This creates a real discontinuity — `orgs.ods_code` joins to
-`org_roles.ods_code` by the same name but to `rels.source_code` by a different
-one. It is accepted deliberately: no suffix scheme removes it, because the
-underlying shape genuinely differs.
+We translate `RC1`/`RC2` inline while keeping `RO177` raw for roles. Two values
+translate inline; 205 need a lookup table. That's the line.
 
-### Elsewhere
+**Denormalise a tiny vocabulary; join for a rich entity.** `relationships` and
+`successions` used to carry organisation names alongside the codes. Those names
+were 54% of `relationships.parquet` by size, and if you are joining `orgs_all`
+you usually want other fields from it anyway — so they went, and every code
+resolves there with no exceptions.
 
-`status` is qualified per table — `role_status`, `rel_status` — because an active
-organisation can hold an inactive role, and three columns named `status` across
-joined tables is a footgun rather than a convenience.
+`rel_type_name` stays inline by the same test: nine values costing 0.06 MB under
+dictionary encoding, and the name is the *only* thing a lookup would hold, so a
+separate table would be a join for no gain. The names are lowercased from ODS's
+`IS LOCATED IN THE GEOGRAPHY OF` so they read as predicates in a sentence, with
+acronyms preserved (`COVID`).
 
-Dates follow ODS's own two-track model. `legal_*` is the statutory existence of
-the entity; `operational_*` is when it was actually running. **They routinely
-disagree**, and which one you want depends on the question — see
-[Point-in-time queries](#point-in-time-queries).
+**`relationships`, not `rels`.** It differed from `roles` by one letter, which
+is a hazard when both appear in the same query.
 
----
+**`successions.parquet` is plural**, like every other table.
+
+Dates follow ODS's own two-track model. `legal_*` is statutory existence,
+`operational_*` is when it was actually running. **They routinely disagree** —
+see [Point-in-time queries](#point-in-time-queries).
 
 ## `orgs.parquet` / `orgs_all.parquet`
 
-32 columns.
+35 columns.
 
 ### Identity and classification
 
 | column | type | null | description |
-|---|---|---|---|
-| `ods_code` | VARCHAR | no | ODS code — `"A82608"` |
-| `record_class` | VARCHAR | no | `"org"` or `"site"` |
-| `status` | VARCHAR | no | `"active"` or `"inactive"` |
-| `primary_role` | VARCHAR | no | ODS code of the primary role — `"RO177"` |
-| `roles` | VARCHAR[] | no | every role code held, **sorted** and deduplicated — `['RO177','RO76']` |
-| `category` | VARCHAR | no | **derived, opinionated** — `"GP Practice"`. See below |
+| :--- | :--- | :--- | :--- |
+| `ods_code` | VARCHAR | no | `"A82608"` |
 | `name` | VARCHAR | no | `"SEDBERGH MEDICAL PRACTICE"` |
+| `entity_type` | VARCHAR | no | `"org"` or `"site"` |
+| `status` | VARCHAR | no | `"active"` or `"inactive"` |
+| `primary_role_code` | VARCHAR | no | `"RO177"` — joins to `roles.role_code` |
+| `role_codes` | VARCHAR[] | no | every role held, sorted and deduplicated — `['RO177','RO76']` |
+| `category` | VARCHAR | no | derived, opinionated — `"GP Practice"` |
+
+`category` is the one column that isn't ODS data. The ODS primary role sometimes
+describes the *register* rather than the entity. Five rules cover the cases where
+it actively misleads; everything else falls back to the curated name of the
+primary role. The rules and their justifications ship in `category_rules.json`
+with every release, hashed like everything else, so you can disagree and
+recompute.
+
+For anything more precise than `category`, filter on `role_codes`:
+
+```sql
+SELECT * FROM 'orgs.parquet' WHERE list_contains(role_codes, 'RO76');
+```
+
+### Succession
+
+| column | type | null | description |
+| :--- | :--- | :--- | :--- |
+| `successor_codes` | VARCHAR[] | no | every organisation this one was eventually succeeded by |
+| `predecessor_codes` | VARCHAR[] | no | every organisation that eventually became this one |
+
+Both are the **transitive closure** of the succession graph, sorted and
+deduplicated, and exact inverses: `X` appears in `predecessor_codes` of `Y`
+precisely when `Y` appears in `successor_codes` of `X`. Empty array where there
+is none, never NULL.
+
+For the chain `0AF → 0CE → 0CY → YDDTR`:
+
+```
+0AF    successor_codes = ['0CE','0CY','YDDTR']
+0CE    successor_codes = ['0CY','YDDTR']       predecessor_codes = ['0AF','0AN']
+YDDTR  successor_codes = []                    predecessor_codes = ['0AF','0AJ','0AN','0CE','0CY']
+```
+
+Transitive rather than immediate, so mapping a historic code onto current
+organisations is one line of SQL rather than a recursive query — which is the
+step people get wrong:
+
+```sql
+-- I have code 0AF in a 2006 extract. What is it now?
+SELECT ods_code, name FROM 'orgs.parquet'
+WHERE list_contains(predecessor_codes, '0AF');
+```
+
+Note what does the work: `orgs.parquet` is active-only, so it returns exactly the
+*live* organisations descended from `0AF`. Run it against `orgs_all.parquet` to
+include ones that have since closed. There is deliberately no "terminal
+successor" concept — 5,300 chains end at an inactive organisation and 58
+organisations have both active and inactive endpoints, so "the live one it
+became" isn't always defined.
+
+Use `successions.parquet` for hop-by-hop detail and dates.
 
 ### Release identity
 
-Present on **every table**, so releases can be concatenated without losing track
-of which snapshot a row came from:
+On **every table**, so releases can be concatenated without losing track of which
+snapshot a row came from:
 
 | column | type | null | description |
-|---|---|---|---|
-| `publication_seq_num` | VARCHAR | no | ODS's own monotonic release counter — `"4700"` |
+| :--- | :--- | :--- | :--- |
 | `publication_date` | DATE | no | when NHS generated the data — `2026-07-28` |
 
-Both are constant within a file and cost almost nothing under dictionary
-encoding. They are deliberately `publication_*` rather than `release_date`: the
-TRUD *distribution* date (2026-07-31) differs from the ODS *publication* date
-(2026-07-28), and stamping the ambiguous one on 300,000 rows would spread that
-confusion rather than contain it.
+Constant within a file, so near-free under dictionary encoding. Deliberately
+`publication_date` rather than `release_date`: the TRUD *distribution* date
+(2026-07-31) differs from the ODS *publication* date (2026-07-28).
+
+ODS's sequence number identifies a publication more precisely, but monthly dates
+don't collide in practice and one column beats two. It stays in
+`_provenance.json` and the Parquet key-value metadata.
 
 ```sql
--- concatenate releases and keep track of provenance per row
 SELECT publication_date, count(*)
 FROM read_parquet('releases/*/orgs.parquet', union_by_name = true)
 GROUP BY 1 ORDER BY 1;
 ```
 
-`category` is the one column that is not ODS data. It answers "what kind of thing
-is this?" in a single readable string, because the ODS primary role sometimes
-describes the *register* rather than the entity — GP practices are registered as
-`RO177 Prescribing Cost Centre`. Five rules cover the cases where the primary
-role actively misleads; everything else falls back to the curated name of the
-primary role. The rules and their justifications ship in `category_rules.json`
-alongside the data, hashed like every other artifact.
-
-For anything more precise than `category`, filter on `roles`:
-
-```sql
-SELECT * FROM 'orgs.parquet' WHERE list_contains(roles, 'RO76');
-```
-
 ### Location and contact
 
 | column | type | null | description |
-|---|---|---|---|
-| `address` | VARCHAR | yes | address lines, joined into one string |
+| :--- | :--- | :--- | :--- |
+| `address` | VARCHAR | yes | street address lines joined into one string |
 | `town` | VARCHAR | yes | `"SEDBERGH"` |
 | `county` | VARCHAR | yes | `"CUMBRIA"` |
 | `postcode` | VARCHAR | yes | `"LA10 5DL"` — always space-separated |
@@ -166,133 +194,171 @@ SELECT * FROM 'orgs.parquet' WHERE list_contains(roles, 'RO76');
 | `telephone` | VARCHAR | yes | |
 | `website` | VARCHAR | yes | |
 
+ODS supplies up to three street address lines, which we join. That's deliberate
+and loses nothing queryable: the lines have no positional semantics — one record
+has `BROADMEADOWS` on line 2 and the village `SOUTH NORMANTON` on line 3 — while
+the structure worth querying (`town`, `county`, `postcode`, `country`) is already
+in its own columns.
+
+Line 1 is present on every record, line 2 on 172,036 and line 3 on 40,627, and
+they don't nest cleanly — a few hundred records carry line 3 without line 2. We
+join the non-empty lines in order rather than assuming positions. The
+organisation's own `name` is separate and never part of the address.
+
+`telephone` and `website` are the only contact details ODS publishes. Its
+`<Contact>` elements carry just two types across all 305,541 organisations,
+`tel` and `http`. There is no email or fax data to carry.
+
 ### Derived hierarchy
 
-Each pair is a resolved relationship, flattened for convenience. All are
-nullable, and a NULL means **ODS records no such relationship for this entity**,
-not that resolution failed.
+Resolved relationships, flattened for convenience. A NULL means **ODS records no
+such relationship for this entity**, not that resolution failed.
 
-| column | type | description |
-|---|---|---|
-| `commissioner` / `commissioner_code` | VARCHAR | commissioning body |
-| `parent` / `parent_code` | VARCHAR | immediate administrative parent |
-| `pcn` / `pcn_code` | VARCHAR | Primary Care Network |
-| `trust` / `trust_code` | VARCHAR | overarching trust |
-| `icb` / `icb_code` | VARCHAR | Integrated Care Board |
-| `region` / `region_code` | VARCHAR | NHS England regional directorate |
+| column | type | example |
+| :--- | :--- | :--- |
+| `commissioner_code` / `commissioner_name` | VARCHAR | `"QE1"` |
+| `parent_code` / `parent_name` | VARCHAR | `"01K"` |
+| `pcn_code` / `pcn_name` | VARCHAR | `"U59980"` / `"WESTERN DALES PCN"` |
+| `trust_code` / `trust_name` | VARCHAR | |
+| `icb_code` / `icb_name` | VARCHAR | |
+| `region_code` / `region_name` | VARCHAR | `"Y62"` |
 
 Fill rates on 216,886 active rows: `region_code` 103,787 · `trust_code` 40,148 ·
 `icb_code` 31,380 · `pcn_code` 7,584. The spread reflects the entity mix — most
-entities are not GP practices and so have no PCN.
+entities aren't GP practices, so most have no PCN.
 
-Use `rels.parquet` if you need the relationship's own dates or status; these
-columns are a convenience projection.
+Use `relationships.parquet` if you need the relationship's own dates or status.
 
 ### Dates
 
 | column | type | null | description |
-|---|---|---|---|
+| :--- | :--- | :--- | :--- |
 | `legal_start` | DATE | yes | statutory start |
 | `legal_end` | DATE | yes | statutory end; NULL while current |
 | `operational_start` | DATE | yes | when it began operating |
 | `operational_end` | DATE | yes | when it stopped; NULL while current |
-| `last_change_date` | DATE | yes | last modification by the publisher |
-
----
+| `last_changed` | DATE | yes | when ODS last modified this record |
 
 ## `org_roles.parquet`
 
-One row per organisation per role — including **inactive** roles, which is what
+One row per organisation per role, including **inactive** roles, which is what
 makes role history reconstructable from a single release.
 
 | column | type | null | description |
-|---|---|---|---|
+| :--- | :--- | :--- | :--- |
 | `ods_code` | VARCHAR | no | joins to `orgs.ods_code` |
-| `role_code` | VARCHAR | no | joins to `roles.role_code` — `"RO177"` |
+| `role_code` | VARCHAR | no | joins to `roles.role_code` |
 | `role_id` | VARCHAR | no | ODS `uniqueRoleId` — identifies this holding |
 | `is_primary` | BOOLEAN | no | is this the entity's primary role |
-| `role_status` | VARCHAR | no | `"active"` or `"inactive"` — of the *role holding*, not the organisation |
+| `role_status` | VARCHAR | no | of the *role holding*, not the organisation |
 | `legal_start` / `legal_end` | DATE | yes | |
 | `operational_start` / `operational_end` | DATE | yes | |
 
-All 131,871 inactive rows carry an `operational_end`, and every row carries a
-start — so "which roles did this organisation hold on date D?" is answerable
-from this table alone.
-
----
+All 131,871 inactive rows carry an `operational_end` and every row carries a
+start, so "which roles did this organisation hold on date D?" is answerable from
+this table alone.
 
 ## `roles.parquet`
 
 The role vocabulary. 205 rows, of which 97 can be a primary role.
 
 | column | type | null | description |
-|---|---|---|---|
+| :--- | :--- | :--- | :--- |
 | `role_code` | VARCHAR | no | `"RO177"` |
-| `role_name` | VARCHAR | no | curated display name — `"Prescribing Cost Centre"` |
-| `can_be_primary` | BOOLEAN | no | whether ODS ever uses it as a primary role |
+| `role_name` | VARCHAR | no | curated — `"Prescribing Cost Centre"` |
+| `can_be_primary` | BOOLEAN | no | whether ODS declares it primary-capable |
 
-Names are curated: typos fixed, abbreviations expanded, casing normalised. The
-curation file records a justification for every substantive change.
+Names are curated: typos fixed, abbreviations expanded, casing normalised, with a
+justification recorded for every substantive change.
 
----
+`can_be_primary` comes from the `<PrimaryRoleScope>` declaration in the release
+manifest, so it's ODS's own statement rather than something inferred from usage.
+That matters: 4 roles are used as primary by exactly one organisation, so a
+computed version would flip to `false` the month that organisation closed,
+without anything about the role changing.
 
-## `rels.parquet`
+**90 roles are declared, and 97 appear as primary in the data.** The extra 7 —
+`RO106`, `RO109`, `RO111`, `RO114`, `RO144`, `RO149`, `RO171` — are used only by
+*inactive* organisations. They're historical, and ODS has since dropped them from
+the current scope. So for historical work, take the roles actually in use rather
+than filtering on this column:
 
-One row per relationship, active and inactive.
+```sql
+SELECT DISTINCT primary_role_code FROM 'orgs_all.parquet';
+```
+
+## `relationships.parquet`
+
+One row per relationship, active and inactive. Organisation names come from a
+join; the relationship type is carried inline.
 
 | column | type | null | description |
-|---|---|---|---|
+| :--- | :--- | :--- | :--- |
 | `rel_id` | VARCHAR | no | ODS `uniqueRelId` — identifies this relationship |
-| `source` | VARCHAR | yes | `"NHS DARLINGTON CCG"` |
-| `source_code` | VARCHAR | no | `"00C"` — joins to `orgs.ods_code` |
-| `target` | VARCHAR | yes | `"DURHAM, DARLINGTON AND TEES AREA TEAM"` |
-| `target_code` | VARCHAR | no | `"Q45"` |
-| `rel_type` | VARCHAR | no | `"is located in the geography of"` |
+| `source_code` | VARCHAR | no | joins to `orgs.ods_code` |
+| `target_code` | VARCHAR | no | joins to `orgs.ods_code` |
 | `rel_type_code` | VARCHAR | no | `"RE5"` |
-| `rel_status` | VARCHAR | no | `"active"` or `"inactive"` — of the *relationship* |
+| `rel_type_name` | VARCHAR | no | `"is located in the geography of"` |
+| `rel_status` | VARCHAR | no | of the *relationship* |
 | `legal_start` / `legal_end` | DATE | yes | |
 | `operational_start` / `operational_end` | DATE | yes | |
 
-Relationships are directional: `source` holds the relationship *to* `target`.
+Relationships are directional: `source_code` holds the relationship *to*
+`target_code`. `rel_id` is what lets you tell a continuing relationship from a
+new one that replaced it, across releases.
 
----
-
-## `successors.parquet`
-
-Mergers, splits and renames. **Many-to-many** — an organisation may have several
-successors, and several predecessors.
-
-| column | type | null | description |
-|---|---|---|---|
-| `ods_code` | VARCHAR | no | the superseded entity — `"001"` |
-| `name` | VARCHAR | no | `"CLWYD"` |
-| `succession_id` | VARCHAR | no | ODS `uniqueSuccId` — identifies this link |
-| `succession_type` | VARCHAR | no | `"Successor"` or `"Predecessor"` |
-| `successor_code` | VARCHAR | no | `"016"` |
-| `successor` | VARCHAR | no | `"CONWY UA"` |
-| `succession_chain` | VARCHAR | no | `"001 -> 016"` |
-| `legal_start` / `legal_end` | DATE | yes | when the succession took effect |
-| `operational_start` / `operational_end` | DATE | yes | |
-
-90,913 rows across 88,655 organisations, so most successions are one-to-one, but
-the multi-successor cases are real and matter:
+The nine type names are lowercased so they compose into a sentence:
 
 ```sql
-SELECT * FROM 'successors.parquet' WHERE ods_code = '001';
--- 001 CLWYD → 016 CONWY UA
--- 001 CLWYD → 018 DENBIGHSHIRE UA
--- 001 CLWYD → 020 FLINTSHIRE UA
+SELECT s.name, r.rel_type_name, t.name
+FROM 'relationships.parquet' r
+JOIN 'orgs_all.parquet' s ON s.ods_code = r.source_code
+JOIN 'orgs_all.parquet' t ON t.ods_code = r.target_code
+WHERE r.source_code = '00C';
+-- NHS DARLINGTON CCG | is located in the geography of | DURHAM, DARLINGTON AND TEES AREA TEAM
 ```
 
-Taking only the first successor silently drops two thirds of that population.
-Unresolved mergers are a leading source of error in longitudinal analysis of
-NHS organisational data — always aggregate across the full set.
+## `successions.parquet`
 
----
+One row per succession — the immediate, hop-by-hop edges. 11,568 rows. Codes
+only, as above.
+
+| column | type | null | description |
+| :--- | :--- | :--- | :--- |
+| `succession_id` | VARCHAR | no | ODS `uniqueSuccId` |
+| `predecessor_code` | VARCHAR | no | the organisation that was superseded |
+| `successor_code` | VARCHAR | no | the organisation that took over |
+| `legal_start` | DATE | no | the date the succession took effect |
+
+Three details, all verified against the full XML:
+
+**ODS states successions from both directions.** 11,538 records say "X is my
+predecessor" and 1,760 say "Y is my successor". Both are normalised into one
+forward edge here. Where a succession is stated from both ends — 1,730 of them —
+**both records carry the same `uniqueSuccId`**, so deduplication is exact:
+13,298 records become 11,568 successions.
+
+**There is no end date, because a succession is an event.** Every record carries
+`<Date><Type value="Legal"/><Start .../></Date>` and none carries an `End`.
+Roles and relationships are states with duration, so they get both. A succession
+happens on a day.
+
+**Both endpoints can be active or inactive.** 304 active organisations have
+successors, and 5,300 chains end at an organisation that has itself closed.
+
+```sql
+-- CLWYD became five Welsh unitary authorities in 1996
+SELECT successor_code, legal_start FROM 'successions.parquet'
+WHERE predecessor_code = '001';
+```
+
+For the resolved view — everything an organisation eventually became, without
+walking the chain yourself — use `successor_codes` and `predecessor_codes` on
+`orgs`.
 
 ## Point-in-time queries
 
-`orgs.parquet` is *active as of the release date*. To ask what was open on some
+`orgs.parquet` is *active as of the release date*. To ask what was open on an
 earlier date, query `orgs_all.parquet` with a date predicate:
 
 ```sql
@@ -302,30 +368,28 @@ WHERE operational_start <= DATE '2019-03-31'
   AND (operational_end IS NULL OR operational_end > DATE '2019-03-31');
 ```
 
-Three things to know before relying on this:
+Three things to know before relying on it:
 
-1. **`legal_*` and `operational_*` routinely disagree.** Pick deliberately.
-   Operational dates usually match what a patient would have experienced; legal
-   dates match statutory records.
-2. **Closure dates are applied retrospectively.** A snapshot taken today will
-   *not* reproduce a snapshot taken in 2019 — ODS backfills end dates as
-   information arrives.
-3. **Name and address history is not in a single release.** Each release carries
-   one current name per entity. Reconstructing when a name changed requires
-   comparing releases.
+1. **`legal_*` and `operational_*` routinely disagree.** Operational dates
+   usually match what a patient would have experienced; legal dates match
+   statutory records. Pick deliberately.
+2. **Closure dates are applied retrospectively.** ODS backfills end dates as
+   information arrives, so a snapshot taken today will *not* reproduce a
+   snapshot taken in 2019.
+3. **Name and address history isn't in a single release.** Each release carries
+   one current name per entity, so reconstructing a change means comparing
+   releases.
 
-Point 2 is the reason releases are pinned and immutable. If you need the state
-as ODS knew it in 2019, you need the 2019 release, not a 2019 filter over
-today's.
-
----
+Point 2 is why releases are pinned and immutable. If you need the state as ODS
+knew it in 2019, you need the 2019 release, not a 2019 filter over today's.
 
 ## Provenance
 
-Every release ships `_provenance.json` and `SHA256SUMS`. The provenance records
-the TRUD archive it derives from, its verified SHA-256, the ODS publication date
-and sequence number, and the tool and library versions used — enough to
-reproduce the byte-identical output. `ods cite` renders it as a citation.
+Every release ships `_provenance.json` and `SHA256SUMS`, recording the TRUD
+archive it derives from, its verified SHA-256, the ODS publication date and
+sequence number, and the tool and library versions used — enough to rebuild
+byte-identical output. Hashes are uppercase throughout, matching how TRUD
+publishes theirs. `ods cite` renders it as a citation.
 
 Parquet key-value metadata carries the same facts, so a file separated from its
 directory is still self-describing:
