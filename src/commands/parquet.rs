@@ -247,11 +247,11 @@ fn extract_dates(dates: &[crate::commands::ndjson::OdsDate]) -> (Option<String>,
 pub fn orgs_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
-        Field::new("record_class", DataType::Utf8, false),
+        Field::new("entity_type", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
-        Field::new("primary_role", DataType::Utf8, false),
+        Field::new("primary_role_code", DataType::Utf8, false),
         Field::new(
-            "roles",
+            "role_codes",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
@@ -275,23 +275,23 @@ pub fn orgs_schema() -> Schema {
         Field::new("uprn", DataType::Utf8, true),
         Field::new("telephone", DataType::Utf8, true),
         Field::new("website", DataType::Utf8, true),
-        Field::new("commissioner", DataType::Utf8, true),
+        Field::new("commissioner_name", DataType::Utf8, true),
         Field::new("commissioner_code", DataType::Utf8, true),
-        Field::new("parent", DataType::Utf8, true),
+        Field::new("parent_name", DataType::Utf8, true),
         Field::new("parent_code", DataType::Utf8, true),
-        Field::new("pcn", DataType::Utf8, true),
+        Field::new("pcn_name", DataType::Utf8, true),
         Field::new("pcn_code", DataType::Utf8, true),
-        Field::new("trust", DataType::Utf8, true),
+        Field::new("trust_name", DataType::Utf8, true),
         Field::new("trust_code", DataType::Utf8, true),
-        Field::new("icb", DataType::Utf8, true),
+        Field::new("icb_name", DataType::Utf8, true),
         Field::new("icb_code", DataType::Utf8, true),
-        Field::new("region", DataType::Utf8, true),
+        Field::new("region_name", DataType::Utf8, true),
         Field::new("region_code", DataType::Utf8, true),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
-        Field::new("last_change_date", DataType::Date32, true),
+        Field::new("last_changed", DataType::Date32, true),
     ])
 }
 
@@ -594,7 +594,7 @@ fn org_roles_schema() -> Schema {
         Field::new("role_code", DataType::Utf8, false),
         Field::new("role_id", DataType::Utf8, false),
         Field::new("is_primary", DataType::Boolean, false),
-        Field::new("status", DataType::Utf8, false),
+        Field::new("role_status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
@@ -701,7 +701,7 @@ pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Op
 fn roles_schema() -> Schema {
     Schema::new(vec![
         Field::new("role_code", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
+        Field::new("role_name", DataType::Utf8, false),
         Field::new("can_be_primary", DataType::Boolean, false),
     ])
 }
@@ -1201,21 +1201,21 @@ mod tests {
         assert!(schema.column_with_name("address").is_some());
         assert!(schema.column_with_name("address_line_1").is_none());
 
-        // 2. Verify record_class field
-        assert!(schema.column_with_name("record_class").is_some());
+        // 2. Verify entity_type field
+        assert!(schema.column_with_name("entity_type").is_some());
 
         // 3. Verify commissioner / parent field presence
-        assert!(schema.column_with_name("commissioner").is_some());
+        assert!(schema.column_with_name("commissioner_name").is_some());
         assert!(schema.column_with_name("commissioner_code").is_some());
-        assert!(schema.column_with_name("parent").is_some());
+        assert!(schema.column_with_name("parent_name").is_some());
         assert!(schema.column_with_name("parent_code").is_some());
 
         // 4. Verify PCN/Trust/ICB hierarchy fields are present
-        assert!(schema.column_with_name("pcn").is_some());
+        assert!(schema.column_with_name("pcn_name").is_some());
         assert!(schema.column_with_name("pcn_code").is_some());
-        assert!(schema.column_with_name("trust").is_some());
+        assert!(schema.column_with_name("trust_name").is_some());
         assert!(schema.column_with_name("trust_code").is_some());
-        assert!(schema.column_with_name("icb").is_some());
+        assert!(schema.column_with_name("icb_name").is_some());
         assert!(schema.column_with_name("icb_code").is_some());
 
         // 5. Verify postcode renamed
@@ -1434,5 +1434,41 @@ mod tests {
         prov.primary_role_scope = Some(vec!["RO177".to_string()]);
         let res = export_roles(temp_dir.path(), &[record], Some(&prov));
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_task_6_column_renames() {
+        let orgs_s = orgs_schema();
+        assert!(orgs_s.column_with_name("entity_type").is_some());
+        assert!(orgs_s.column_with_name("primary_role_code").is_some());
+        assert!(orgs_s.column_with_name("role_codes").is_some());
+        assert!(orgs_s.column_with_name("last_changed").is_some());
+        assert!(orgs_s.column_with_name("commissioner_name").is_some());
+        assert!(orgs_s.column_with_name("parent_name").is_some());
+        assert!(orgs_s.column_with_name("pcn_name").is_some());
+        assert!(orgs_s.column_with_name("trust_name").is_some());
+        assert!(orgs_s.column_with_name("icb_name").is_some());
+        assert!(orgs_s.column_with_name("region_name").is_some());
+
+        assert!(orgs_s.column_with_name("record_class").is_none());
+        assert!(orgs_s.column_with_name("primary_role").is_none());
+        assert!(orgs_s.column_with_name("roles").is_none());
+        assert!(orgs_s.column_with_name("last_change_date").is_none());
+        assert!(orgs_s.column_with_name("commissioner").is_none());
+        assert!(orgs_s.column_with_name("parent").is_none());
+        assert!(orgs_s.column_with_name("pcn").is_none());
+        assert!(orgs_s.column_with_name("trust").is_none());
+        assert!(orgs_s.column_with_name("icb").is_none());
+        assert!(orgs_s.column_with_name("region").is_none());
+
+        let roles_s = roles_schema();
+        assert!(roles_s.column_with_name("role_code").is_some());
+        assert!(roles_s.column_with_name("role_name").is_some());
+        assert!(roles_s.column_with_name("can_be_primary").is_some());
+        assert!(roles_s.column_with_name("name").is_none());
+
+        let org_roles_s = org_roles_schema();
+        assert!(org_roles_s.column_with_name("role_status").is_some());
+        assert!(org_roles_s.column_with_name("status").is_none());
     }
 }

@@ -173,16 +173,16 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
             .as_any().downcast_ref::<arrow::array::StringArray>().context("status StringArray")?;
         // orgs.parquet carries the primary role *code*; diff reports the
         // curated name so changelogs stay readable.
-        let role_arr = batch.column(schema.index_of("primary_role")?)
-            .as_any().downcast_ref::<arrow::array::StringArray>().context("primary_role StringArray")?;
-        let record_class_idx = schema.index_of("record_class").ok();
-        let parent_idx = schema.index_of("parent").ok();
+        let role_arr = batch.column(schema.index_of("primary_role_code")?)
+            .as_any().downcast_ref::<arrow::array::StringArray>().context("primary_role_code StringArray")?;
+        let record_class_idx = schema.index_of("entity_type").ok();
+        let parent_idx = schema.index_of("parent_name").ok();
         let parent_code_idx = schema.index_of("parent_code").ok();
-        let pcn_idx = schema.index_of("pcn").ok();
+        let pcn_idx = schema.index_of("pcn_name").ok();
         let pcn_code_idx = schema.index_of("pcn_code").ok();
-        let trust_idx = schema.index_of("trust").ok();
+        let trust_idx = schema.index_of("trust_name").ok();
         let trust_code_idx = schema.index_of("trust_code").ok();
-        let icb_idx = schema.index_of("icb").ok();
+        let icb_idx = schema.index_of("icb_name").ok();
         let icb_code_idx = schema.index_of("icb_code").ok();
 
         for i in 0..num_rows {

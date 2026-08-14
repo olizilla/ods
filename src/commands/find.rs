@@ -54,14 +54,14 @@ pub struct Args {
 struct MatchedRecord {
     ods_code: String,
     name: String,
-    record_class: String,
+    entity_type: String,
     status: String,
     /// The ODS primary role *code* (e.g. RO177).
-    primary_role: String,
-    /// Curated display name for `primary_role`, resolved from roles.parquet.
+    primary_role_code: String,
+    /// Curated display name for `primary_role_code`, resolved from roles.parquet.
     role_name: String,
     /// Every active role code held, including the primary one.
-    roles: Vec<String>,
+    role_codes: Vec<String>,
     /// What this entity actually is, per data/category_rules.json.
     category: String,
     address: String,
@@ -72,23 +72,23 @@ struct MatchedRecord {
     uprn: String,
     telephone: String,
     website: String,
-    commissioner: String,
+    commissioner_name: String,
     commissioner_code: String,
-    parent: String,
+    parent_name: String,
     parent_code: String,
-    pcn: String,
+    pcn_name: String,
     pcn_code: String,
-    trust: String,
+    trust_name: String,
     trust_code: String,
-    icb: String,
+    icb_name: String,
     icb_code: String,
-    region: String,
+    region_name: String,
     region_code: String,
     operational_start: Option<String>,
     operational_end: Option<String>,
     legal_start: Option<String>,
     legal_end: Option<String>,
-    last_change_date: Option<String>,
+    last_changed: Option<String>,
     is_exact_code_match: bool,
 }
 
@@ -160,7 +160,7 @@ fn load_role_vocabulary(parquet_dir: &Path) -> HashMap<String, String> {
                 for batch in reader.flatten() {
                     let schema = batch.schema();
                     let (Ok(code_idx), Ok(name_idx)) =
-                        (schema.index_of("role_code"), schema.index_of("name")) else { continue };
+                        (schema.index_of("role_code"), schema.index_of("role_name")) else { continue };
                     let code_arr = batch.column(code_idx).as_any().downcast_ref::<StringArray>();
                     let name_arr = batch.column(name_idx).as_any().downcast_ref::<StringArray>();
                     let (Some(code_arr), Some(name_arr)) = (code_arr, name_arr) else { continue };
@@ -224,7 +224,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         );
     }
 
-    let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
+    let file = File::open(&path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
 
@@ -250,14 +250,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
         let name_arr = batch.column(schema.index_of("name")?)
             .as_any().downcast_ref::<StringArray>().context("name StringArray")?;
-        let record_class_arr = batch.column(schema.index_of("record_class")?)
-            .as_any().downcast_ref::<StringArray>().context("record_class StringArray")?;
+        let record_class_arr = batch.column(schema.index_of("entity_type")?)
+            .as_any().downcast_ref::<StringArray>().context("entity_type StringArray")?;
         let status_arr = batch.column(schema.index_of("status")?)
             .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
-        let primary_role_arr = batch.column(schema.index_of("primary_role")?)
-            .as_any().downcast_ref::<StringArray>().context("primary_role StringArray")?;
-        let roles_arr = batch.column(schema.index_of("roles")?)
-            .as_any().downcast_ref::<arrow::array::ListArray>().context("roles ListArray")?;
+        let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
+            .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
+        let roles_arr = batch.column(schema.index_of("role_codes")?)
+            .as_any().downcast_ref::<arrow::array::ListArray>().context("role_codes ListArray")?;
         let category_arr = batch.column(schema.index_of("category")?)
             .as_any().downcast_ref::<StringArray>().context("category StringArray")?;
 
@@ -269,24 +269,24 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         let uprn_idx = schema.index_of("uprn").ok();
         let telephone_idx = schema.index_of("telephone").ok();
         let website_idx = schema.index_of("website").ok();
-        let commissioner_idx = schema.index_of("commissioner").ok();
+        let commissioner_idx = schema.index_of("commissioner_name").ok();
         let commissioner_code_idx = schema.index_of("commissioner_code").ok();
-        let parent_idx = schema.index_of("parent").ok();
+        let parent_idx = schema.index_of("parent_name").ok();
         let parent_code_idx = schema.index_of("parent_code").ok();
-        let pcn_idx = schema.index_of("pcn").ok();
+        let pcn_idx = schema.index_of("pcn_name").ok();
         let pcn_code_idx = schema.index_of("pcn_code").ok();
-        let trust_idx = schema.index_of("trust").ok();
+        let trust_idx = schema.index_of("trust_name").ok();
         let trust_code_idx = schema.index_of("trust_code").ok();
-        let icb_idx = schema.index_of("icb").ok();
+        let icb_idx = schema.index_of("icb_name").ok();
         let icb_code_idx = schema.index_of("icb_code").ok();
-        let region_idx = schema.index_of("region").ok();
+        let region_idx = schema.index_of("region_name").ok();
         let region_code_idx = schema.index_of("region_code").ok();
 
         let op_start_idx = schema.index_of("operational_start").ok();
         let op_end_idx = schema.index_of("operational_end").ok();
         let leg_start_idx = schema.index_of("legal_start").ok();
         let leg_end_idx = schema.index_of("legal_end").ok();
-        let last_change_idx = schema.index_of("last_change_date").ok();
+        let last_change_idx = schema.index_of("last_changed").ok();
 
         let extract_date = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
             let idx = idx?;
@@ -464,11 +464,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 matches.push(MatchedRecord {
                     ods_code: code.to_string(),
                     name: name.to_string(),
-                    record_class: class.to_string(),
+                    entity_type: class.to_string(),
                     status: status.to_string(),
-                    primary_role: primary_role.to_string(),
+                    primary_role_code: primary_role.to_string(),
                     role_name: role_name.clone(),
-                    roles: role_codes.clone(),
+                    role_codes: role_codes.clone(),
                     category: category_arr.value(i).to_string(),
                     address: address.to_string(),
                     town: town.to_string(),
@@ -478,23 +478,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     uprn: uprn.to_string(),
                     telephone: telephone.to_string(),
                     website: website.to_string(),
-                    commissioner: commissioner.to_string(),
+                    commissioner_name: commissioner.to_string(),
                     commissioner_code: commissioner_code.to_string(),
-                    parent: parent.to_string(),
+                    parent_name: parent.to_string(),
                     parent_code: parent_code.to_string(),
-                    pcn: pcn.to_string(),
+                    pcn_name: pcn.to_string(),
                     pcn_code: pcn_code.to_string(),
-                    trust: trust.to_string(),
+                    trust_name: trust.to_string(),
                     trust_code: trust_code.to_string(),
-                    icb: icb.to_string(),
+                    icb_name: icb.to_string(),
                     icb_code: icb_code.to_string(),
-                    region: region.to_string(),
+                    region_name: region.to_string(),
                     region_code: region_code.to_string(),
                     operational_start: op_start,
                     operational_end: op_end,
                     legal_start: leg_start,
                     legal_end: leg_end,
-                    last_change_date,
+                    last_changed: last_change_date,
                     is_exact_code_match: is_exact_code,
                 });
             }
@@ -531,10 +531,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
                 let json = serde_json::json!({
                     "ods_code": r.ods_code,
-                    "record_class": r.record_class,
+                    "entity_type": r.entity_type,
                     "status": r.status,
-                    "primary_role": r.primary_role,
-                    "roles": r.roles,
+                    "primary_role_code": r.primary_role_code,
+                    "role_codes": r.role_codes,
                     "category": r.category,
                     "role_name": r.role_name,
                     "name": r.name,
@@ -546,17 +546,17 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "uprn": if r.uprn.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.uprn.clone()) },
                     "telephone": if r.telephone.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.telephone.clone()) },
                     "website": if r.website.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.website.clone()) },
-                    "commissioner": if r.commissioner.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.commissioner.clone()) },
+                    "commissioner_name": if r.commissioner_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.commissioner_name.clone()) },
                     "commissioner_code": if r.commissioner_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.commissioner_code.clone()) },
-                    "parent": if r.parent.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.parent.clone()) },
+                    "parent_name": if r.parent_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.parent_name.clone()) },
                     "parent_code": if r.parent_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.parent_code.clone()) },
-                    "pcn": if r.pcn.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.pcn.clone()) },
+                    "pcn_name": if r.pcn_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.pcn_name.clone()) },
                     "pcn_code": if r.pcn_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.pcn_code.clone()) },
-                    "trust": if r.trust.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.trust.clone()) },
+                    "trust_name": if r.trust_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.trust_name.clone()) },
                     "trust_code": if r.trust_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.trust_code.clone()) },
-                    "icb": if r.icb.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb.clone()) },
+                    "icb_name": if r.icb_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb_name.clone()) },
                     "icb_code": if r.icb_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb_code.clone()) },
-                    "region": if r.region.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region.clone()) },
+                    "region_name": if r.region_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_name.clone()) },
                     "region_code": if r.region_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_code.clone()) },
                     "successor_code": succ_code,
                     "successor": succ_name,
@@ -564,13 +564,13 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "legal_end": r.legal_end,
                     "operational_start": r.operational_start,
                     "operational_end": r.operational_end,
-                    "last_change_date": r.last_change_date,
+                    "last_changed": r.last_changed,
                 });
                 writeln!(writer, "{}", json)?;
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,record_class,status,primary_role,roles,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date")?;
+            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed")?;
             let escape_csv = |s: &str| -> String {
                 if s.contains(',') || s.contains('"') || s.contains('\n') {
                     format!("\"{}\"", s.replace('"', "\"\""))
@@ -580,7 +580,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             };
             for r in &matches {
                 // List columns flatten to a semicolon-separated field in CSV.
-                let roles_str = r.roles.join("; ");
+                let roles_str = r.role_codes.join("; ");
                 let (succ_code, succ_name) = if r.status.eq_ignore_ascii_case("inactive") {
                     successors_map.get(&r.ods_code)
                         .and_then(|succs| succs.iter().find_map(|s| {
@@ -593,9 +593,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
                 let fields = [
                     r.ods_code.as_str(),
-                    r.record_class.as_str(),
+                    r.entity_type.as_str(),
                     r.status.as_str(),
-                    r.primary_role.as_str(),
+                    r.primary_role_code.as_str(),
                     &escape_csv(&roles_str),
                     &escape_csv(&r.category),
                     &escape_csv(&r.role_name),
@@ -608,17 +608,17 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.uprn.as_str(),
                     r.telephone.as_str(),
                     &escape_csv(&r.website),
-                    &escape_csv(&r.commissioner),
+                    &escape_csv(&r.commissioner_name),
                     r.commissioner_code.as_str(),
-                    &escape_csv(&r.parent),
+                    &escape_csv(&r.parent_name),
                     r.parent_code.as_str(),
-                    &escape_csv(&r.pcn),
+                    &escape_csv(&r.pcn_name),
                     r.pcn_code.as_str(),
-                    &escape_csv(&r.trust),
+                    &escape_csv(&r.trust_name),
                     r.trust_code.as_str(),
-                    &escape_csv(&r.icb),
+                    &escape_csv(&r.icb_name),
                     r.icb_code.as_str(),
-                    &escape_csv(&r.region),
+                    &escape_csv(&r.region_name),
                     r.region_code.as_str(),
                     succ_code.as_str(),
                     &escape_csv(&succ_name),
@@ -626,7 +626,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.legal_end.as_deref().unwrap_or(""),
                     r.operational_start.as_deref().unwrap_or(""),
                     r.operational_end.as_deref().unwrap_or(""),
-                    r.last_change_date.as_deref().unwrap_or(""),
+                    r.last_changed.as_deref().unwrap_or(""),
                 ];
                 writeln!(writer, "{}", fields.join(","))?;
             }
@@ -640,10 +640,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 for r in &matches {
                     // Roles other than the primary one, rendered as
                     // "GP Practice (RO76)".
+                    // Roles other than the primary one, rendered as
+                    // "GP Practice (RO76)".
                     let sec_roles: Vec<String> = r
-                        .roles
+                        .role_codes
                         .iter()
-                        .filter(|c| **c != r.primary_role)
+                        .filter(|c| **c != r.primary_role_code)
                         .map(|c| role_display(&role_vocab, c))
                         .collect();
                     let successors_vec: Vec<crate::formatting::SuccessorLink> = if r.status.eq_ignore_ascii_case("inactive") {
@@ -662,34 +664,34 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     let inspector = crate::formatting::InspectorRecord {
                         ods_code: &r.ods_code,
                         name: &r.name,
-                        record_class: &r.record_class,
+                        record_class: &r.entity_type,
                         status: &r.status,
                         role: &r.role_name,
-                        role_code: &r.primary_role,
+                        role_code: &r.primary_role_code,
                         other_roles: &sec_roles,
                         address: &r.address,
                         country: &r.country,
                         uprn: &r.uprn,
                         telephone: &r.telephone,
                         website: &r.website,
-                        commissioner: &r.commissioner,
+                        commissioner: &r.commissioner_name,
                         commissioner_code: &r.commissioner_code,
-                        parent: &r.parent,
+                        parent: &r.parent_name,
                         parent_code: &r.parent_code,
-                        pcn: &r.pcn,
+                        pcn: &r.pcn_name,
                         pcn_code: &r.pcn_code,
-                        trust: &r.trust,
+                        trust: &r.trust_name,
                         trust_code: &r.trust_code,
-                        icb: &r.icb,
+                        icb: &r.icb_name,
                         icb_code: &r.icb_code,
-                        region: &r.region,
+                        region: &r.region_name,
                         region_code: &r.region_code,
                         successors: &successors_vec,
                         operational_start: r.operational_start.as_deref(),
                         operational_end: r.operational_end.as_deref(),
                         legal_start: r.legal_start.as_deref(),
                         legal_end: r.legal_end.as_deref(),
-                        last_change_date: r.last_change_date.as_deref(),
+                        last_change_date: r.last_changed.as_deref(),
                     };
 
                     crate::formatting::render_inspector_markdown(&inspector, use_color, writer)?;
@@ -739,13 +741,13 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                         writeln!(
                             writer,
                             "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} | {}",
-                            r.ods_code, name_display, r.postcode, role_display, r.record_class, r.status, succ_display
+                            r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status, succ_display
                         )?;
                     } else {
                         writeln!(
                             writer,
                             "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                            r.ods_code, name_display, r.postcode, role_display, r.record_class
+                            r.ods_code, name_display, r.postcode, role_display, r.entity_type
                         )?;
                     }
                 }
@@ -1000,7 +1002,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,record_class,status,primary_role,roles,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date"));
+        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1046,11 +1048,11 @@ mod tests {
         let record = MatchedRecord {
             ods_code: "TEST1".to_string(),
             name: "Test Org".to_string(),
-            record_class: "org".to_string(),
+            entity_type: "org".to_string(),
             status: "active".to_string(),
-            primary_role: "RO177".to_string(),
+            primary_role_code: "RO177".to_string(),
             role_name: "Prescribing Cost Centre".to_string(),
-            roles: vec!["RO76".to_string(), "RO177".to_string()],
+            role_codes: vec!["RO76".to_string(), "RO177".to_string()],
             category: "GP Practice".to_string(),
             address: "1 Main St".to_string(),
             town: "Town".to_string(),
@@ -1060,23 +1062,23 @@ mod tests {
             uprn: "100".to_string(),
             telephone: "0123".to_string(),
             website: "http://test".to_string(),
-            commissioner: "Comm".to_string(),
+            commissioner_name: "Comm".to_string(),
             commissioner_code: "C1".to_string(),
-            parent: "Parent".to_string(),
+            parent_name: "Parent".to_string(),
             parent_code: "P1".to_string(),
-            pcn: "PCN".to_string(),
+            pcn_name: "PCN".to_string(),
             pcn_code: "PCN1".to_string(),
-            trust: "Trust".to_string(),
+            trust_name: "Trust".to_string(),
             trust_code: "T1".to_string(),
-            icb: "ICB".to_string(),
+            icb_name: "ICB".to_string(),
             icb_code: "I1".to_string(),
-            region: "Region".to_string(),
+            region_name: "Region".to_string(),
             region_code: "R1".to_string(),
             operational_start: Some("2020-01-01".to_string()),
             operational_end: None,
             legal_start: Some("2020-01-01".to_string()),
             legal_end: None,
-            last_change_date: Some("2023-01-01".to_string()),
+            last_changed: Some("2023-01-01".to_string()),
             is_exact_code_match: true,
         };
 
@@ -1086,10 +1088,10 @@ mod tests {
 
         let json_val = serde_json::json!({
             "ods_code": record.ods_code,
-            "record_class": record.record_class,
+            "entity_type": record.entity_type,
             "status": record.status,
-            "primary_role": record.primary_role,
-            "roles": record.roles,
+            "primary_role_code": record.primary_role_code,
+            "role_codes": record.role_codes,
             "category": record.category,
             "role_name": record.role_name,
             "name": record.name,
@@ -1101,17 +1103,17 @@ mod tests {
             "uprn": record.uprn,
             "telephone": record.telephone,
             "website": record.website,
-            "commissioner": record.commissioner,
+            "commissioner_name": record.commissioner_name,
             "commissioner_code": record.commissioner_code,
-            "parent": record.parent,
+            "parent_name": record.parent_code,
             "parent_code": record.parent_code,
-            "pcn": record.pcn,
+            "pcn_name": record.pcn_name,
             "pcn_code": record.pcn_code,
-            "trust": record.trust,
+            "trust_name": record.trust_name,
             "trust_code": record.trust_code,
-            "icb": record.icb,
+            "icb_name": record.icb_name,
             "icb_code": record.icb_code,
-            "region": record.region,
+            "region_name": record.region_name,
             "region_code": record.region_code,
             "successor_code": succ_code,
             "successor": succ_name,
@@ -1119,7 +1121,7 @@ mod tests {
             "legal_end": record.legal_end,
             "operational_start": record.operational_start,
             "operational_end": record.operational_end,
-            "last_change_date": record.last_change_date,
+            "last_changed": record.last_changed,
         });
 
         let json_keys_vec: Vec<String> = json_val.as_object().unwrap().keys().cloned().collect();
@@ -1147,16 +1149,16 @@ mod tests {
 
         // 3. Assert property ordering matches Parquet schema order with grouped enriching properties
         assert_eq!(json_keys_vec[0], "ods_code");
-        assert_eq!(json_keys_vec[1], "record_class");
+        assert_eq!(json_keys_vec[1], "entity_type");
         assert_eq!(json_keys_vec[2], "status");
-        assert_eq!(json_keys_vec[3], "primary_role");
-        assert_eq!(json_keys_vec[4], "roles");
+        assert_eq!(json_keys_vec[3], "primary_role_code");
+        assert_eq!(json_keys_vec[4], "role_codes");
         assert_eq!(json_keys_vec[5], "category");
         assert_eq!(json_keys_vec[6], "role_name");
         assert_eq!(json_keys_vec[7], "name");
         assert_eq!(json_keys_vec[28], "successor_code");
         assert_eq!(json_keys_vec[29], "successor");
-        assert_eq!(json_keys_vec[34], "last_change_date");
+        assert_eq!(json_keys_vec[34], "last_changed");
     }
 
     #[test]

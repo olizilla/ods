@@ -478,20 +478,20 @@ fn load_dataset(data_dir: &Path) -> Result<(Vec<OrgItem>, String)> {
 
         let ods_code_arr = get_str_column("ods_code").context("missing ods_code")?;
         let name_arr = get_str_column("name").context("missing name")?;
-        let record_class_arr = get_str_column("record_class");
+        let record_class_arr = get_str_column("entity_type");
         let status_arr = get_str_column("status");
-        let role_code_arr = get_str_column("primary_role");
+        let role_code_arr = get_str_column("primary_role_code");
         let address_arr = get_str_column("address");
         let town_arr = get_str_column("town");
         let postcode_arr = get_str_column("postcode");
         let telephone_arr = get_str_column("telephone");
-        let icb_arr = get_str_column("icb");
+        let icb_arr = get_str_column("icb_name");
         let icb_code_arr = get_str_column("icb_code");
-        let trust_arr = get_str_column("trust");
+        let trust_arr = get_str_column("trust_name");
         let trust_code_arr = get_str_column("trust_code");
-        let pcn_arr = get_str_column("pcn");
+        let pcn_arr = get_str_column("pcn_name");
         let pcn_code_arr = get_str_column("pcn_code");
-        let region_arr = get_str_column("region");
+        let region_arr = get_str_column("region_name");
         let region_code_arr = get_str_column("region_code");
         let country_arr = get_str_column("country");
 
