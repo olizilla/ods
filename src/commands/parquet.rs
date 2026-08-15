@@ -292,6 +292,7 @@ pub fn orgs_schema() -> Schema {
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
         Field::new("last_changed", DataType::Date32, true),
+        Field::new("publication_date", DataType::Date32, true),
     ])
 }
 
@@ -300,6 +301,7 @@ fn build_orgs_batch(
     records: &[&OdsRecord],
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
+    pub_date_str: Option<&str>,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut record_class = StringBuilder::new();
@@ -335,6 +337,7 @@ fn build_orgs_batch(
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
     let mut last_change_date = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     let empty_vec = Vec::new();
 
@@ -457,6 +460,7 @@ fn build_orgs_batch(
         append_date(&mut operational_start, o_start.as_deref());
         append_date(&mut operational_end, o_end.as_deref());
         append_date(&mut last_change_date, r.last_change_date.as_deref());
+        append_date(&mut publication_date, pub_date_str);
     }
 
     let batch = RecordBatch::try_new(
@@ -496,6 +500,7 @@ fn build_orgs_batch(
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
             Arc::new(last_change_date.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow orgs batch")?;
@@ -522,8 +527,9 @@ pub fn export_orgs(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs ArrowWriter")?;
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     for chunk in active_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures)?;
+        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures, pub_date_str)?;
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
@@ -555,8 +561,9 @@ pub fn export_orgs_all(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs_all ArrowWriter")?;
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     for chunk in sorted_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures)?;
+        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures, pub_date_str)?;
         writer.write(&batch).context("writing orgs_all batch")?;
     }
     writer.close().context("finalising orgs_all writer")?;
@@ -599,10 +606,11 @@ fn org_roles_schema() -> Schema {
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
+        Field::new("publication_date", DataType::Date32, true),
     ])
 }
 
-fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<RecordBatch> {
+fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], pub_date_str: Option<&str>) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut role_code = StringBuilder::new();
     let mut role_id = StringBuilder::new();
@@ -612,6 +620,7 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<Recor
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for r in rows {
         ods_code.append_value(&r.ods_code);
@@ -623,6 +632,7 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<Recor
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
         append_date(&mut operational_end, r.operational_end.as_deref());
+        append_date(&mut publication_date, pub_date_str);
     }
 
     let batch = RecordBatch::try_new(
@@ -637,6 +647,7 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow]) -> Result<Recor
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow org_roles batch")?;
@@ -680,8 +691,9 @@ pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Op
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating org_roles ArrowWriter")?;
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_org_roles_batch(&schema, chunk)?;
+        let batch = build_org_roles_batch(&schema, chunk, pub_date_str)?;
         writer.write(&batch).context("writing org_roles batch")?;
     }
     writer.close().context("finalising org_roles writer")?;
@@ -703,6 +715,7 @@ fn roles_schema() -> Schema {
         Field::new("role_code", DataType::Utf8, false),
         Field::new("role_name", DataType::Utf8, false),
         Field::new("can_be_primary", DataType::Boolean, false),
+        Field::new("publication_date", DataType::Date32, true),
     ])
 }
 
@@ -774,7 +787,9 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
     let mut role_code = StringBuilder::new();
     let mut name = StringBuilder::new();
     let mut primary_flag = BooleanBuilder::new();
+    let mut publication_date = Date32Builder::new();
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     let mut primary_count = 0usize;
 
     for code in &observed_roles {
@@ -787,6 +802,7 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
         role_code.append_value(code);
         name.append_value(vocab.name(code).unwrap_or(code));
         primary_flag.append_value(is_primary_capable);
+        append_date(&mut publication_date, pub_date_str);
     }
 
     let schema = embed_metadata(&roles_schema(), provenance);
@@ -796,6 +812,7 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
             Arc::new(role_code.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
             Arc::new(primary_flag.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow roles batch")?;
@@ -846,10 +863,11 @@ pub fn relationships_schema() -> Schema {
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
+        Field::new("publication_date", DataType::Date32, true),
     ])
 }
 
-fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow]) -> Result<RecordBatch> {
+fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow], pub_date_str: Option<&str>) -> Result<RecordBatch> {
     let mut rel_id = StringBuilder::new();
     let mut source_code = StringBuilder::new();
     let mut target_code = StringBuilder::new();
@@ -860,6 +878,7 @@ fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow]) -> 
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for r in rows {
         rel_id.append_value(&r.rel_id);
@@ -872,6 +891,7 @@ fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow]) -> 
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
         append_date(&mut operational_end, r.operational_end.as_deref());
+        append_date(&mut publication_date, pub_date_str);
     }
 
     let batch = RecordBatch::try_new(
@@ -887,6 +907,7 @@ fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow]) -> 
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow relationships batch")?;
@@ -935,8 +956,9 @@ pub fn export_relationships(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating relationships ArrowWriter")?;
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_relationships_batch(&schema, chunk)?;
+        let batch = build_relationships_batch(&schema, chunk, pub_date_str)?;
         writer.write(&batch).context("writing relationships batch")?;
     }
     writer.close().context("finalising relationships writer")?;
@@ -1064,20 +1086,23 @@ fn successions_schema() -> Schema {
         Field::new("predecessor_code", DataType::Utf8, false),
         Field::new("successor_code", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
+        Field::new("publication_date", DataType::Date32, true),
     ])
 }
 
-fn build_successions_batch(schema: &Arc<Schema>, edges: &[SuccessionEdge]) -> Result<RecordBatch> {
+fn build_successions_batch(schema: &Arc<Schema>, edges: &[SuccessionEdge], pub_date_str: Option<&str>) -> Result<RecordBatch> {
     let mut succession_id = StringBuilder::new();
     let mut predecessor_code = StringBuilder::new();
     let mut successor_code = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for edge in edges {
         succession_id.append_value(&edge.succession_id);
         predecessor_code.append_value(&edge.predecessor_code);
         successor_code.append_value(&edge.successor_code);
         append_date(&mut legal_start, edge.legal_start.as_deref());
+        append_date(&mut publication_date, pub_date_str);
     }
 
     let batch = RecordBatch::try_new(
@@ -1087,6 +1112,7 @@ fn build_successions_batch(schema: &Arc<Schema>, edges: &[SuccessionEdge]) -> Re
             Arc::new(predecessor_code.finish()) as ArrayRef,
             Arc::new(successor_code.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow successions batch")?;
@@ -1107,8 +1133,9 @@ pub fn export_successions(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating successions ArrowWriter")?;
 
+    let pub_date_str = provenance.and_then(|p| p.publication_date.as_deref());
     for chunk in edges.chunks(BATCH_SIZE) {
-        let batch = build_successions_batch(&schema, chunk)?;
+        let batch = build_successions_batch(&schema, chunk, pub_date_str)?;
         writer.write(&batch).context("writing successions batch")?;
     }
     writer.close().context("finalising successions writer")?;
@@ -1195,7 +1222,7 @@ mod tests {
         };
 
         let schema = Arc::new(orgs_schema());
-        let batch = build_orgs_batch(&schema, &[&record], &HashMap::new(), &HashMap::new()).unwrap();
+        let batch = build_orgs_batch(&schema, &[&record], &HashMap::new(), &HashMap::new(), None).unwrap();
 
         // 1. Verify schema has "address" and does not have "address_line_1/2/3"
         assert!(schema.column_with_name("address").is_some());
@@ -1470,5 +1497,14 @@ mod tests {
         let org_roles_s = org_roles_schema();
         assert!(org_roles_s.column_with_name("role_status").is_some());
         assert!(org_roles_s.column_with_name("status").is_none());
+    }
+
+    #[test]
+    fn test_task_7_publication_date_on_all_tables() {
+        assert!(orgs_schema().column_with_name("publication_date").is_some());
+        assert!(org_roles_schema().column_with_name("publication_date").is_some());
+        assert!(roles_schema().column_with_name("publication_date").is_some());
+        assert!(relationships_schema().column_with_name("publication_date").is_some());
+        assert!(successions_schema().column_with_name("publication_date").is_some());
     }
 }

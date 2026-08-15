@@ -58,6 +58,7 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     prov.publication_seq_num = Some("4700".to_string());
     prov.publication_type = Some("Full".to_string());
     prov.publication_record_count = Some(1);
+    prov.primary_role_scope = Some(vec!["RO177".to_string()]);
 
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),

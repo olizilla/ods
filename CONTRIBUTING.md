@@ -164,19 +164,10 @@ only for work actually done. Data to stdout, progress to stderr, so `ods pull --
 
 ## The source data has issues
 
-Worth knowing before you trust a query:
-
-- **The primary role describes the register, not the organisation.** GP practices
-  are `RO177 Prescribing Cost Centre`. Use `roles` or `category`.
-- **Successions are many-to-many.** ODS code `001` has five successors. Taking the
-  first is wrong, and unresolved mergers are a leading source of error in
-  longitudinal analysis of NHS data.
-- **`legal_*` and `operational_*` routinely disagree.** Pick deliberately.
-- **Closure dates get applied retrospectively.** A snapshot taken today won't
-  reproduce one taken in 2019, which is the whole argument for pinned immutable
-  releases. The history only exists if someone keeps the snapshots.
-- **Name and address history isn't in any single release.** Each release carries one
-  current name per entity, so reconstructing a change means comparing releases.
+The primary role describes the register rather than the organisation, successions
+are many-to-many, legal dates are mostly empty, and a snapshot taken today won't
+reproduce one taken in 2019. [docs/queries.md] has the list, with the queries
+that show each one.
 
 ## Licensing
 
@@ -201,11 +192,13 @@ Per the OGL licence:
 ## Where decisions live
 
 - [docs/parquet.md] — schemas, naming rules, and the decisions they settle
+- [docs/queries.md] — worked queries, single-release and across an archive
 - [category_rules.json] — the classification opinion, with reasons, including
   removed rules
 
 
 [docs/parquet.md]: ./docs/parquet.md
+[docs/queries.md]: ./docs/queries.md
 [category_rules.json]: ./data/category_rules.json
 [role_names.json]: ./data/role_names.json
 [agpl-3.0]: https://www.gnu.org/licenses/agpl-3.0.en.html

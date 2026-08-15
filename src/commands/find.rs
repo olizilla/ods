@@ -89,6 +89,7 @@ struct MatchedRecord {
     legal_start: Option<String>,
     legal_end: Option<String>,
     last_changed: Option<String>,
+    publication_date: Option<String>,
     is_exact_code_match: bool,
 }
 
@@ -287,6 +288,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         let leg_start_idx = schema.index_of("legal_start").ok();
         let leg_end_idx = schema.index_of("legal_end").ok();
         let last_change_idx = schema.index_of("last_changed").ok();
+        let pub_date_idx = schema.index_of("publication_date").ok();
 
         let extract_date = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
             let idx = idx?;
@@ -427,6 +429,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let leg_start = extract_date(&batch, leg_start_idx, i);
             let leg_end = extract_date(&batch, leg_end_idx, i);
             let last_change_date = extract_date(&batch, last_change_idx, i);
+            let pub_date = extract_date(&batch, pub_date_idx, i);
 
             let is_exact_code = code.to_lowercase() == query_lower;
 
@@ -495,6 +498,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     legal_start: leg_start,
                     legal_end: leg_end,
                     last_changed: last_change_date,
+                    publication_date: pub_date,
                     is_exact_code_match: is_exact_code,
                 });
             }
@@ -565,12 +569,13 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "operational_start": r.operational_start,
                     "operational_end": r.operational_end,
                     "last_changed": r.last_changed,
+                    "publication_date": r.publication_date,
                 });
                 writeln!(writer, "{}", json)?;
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed")?;
+            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed,publication_date")?;
             let escape_csv = |s: &str| -> String {
                 if s.contains(',') || s.contains('"') || s.contains('\n') {
                     format!("\"{}\"", s.replace('"', "\"\""))
@@ -627,6 +632,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.operational_start.as_deref().unwrap_or(""),
                     r.operational_end.as_deref().unwrap_or(""),
                     r.last_changed.as_deref().unwrap_or(""),
+                    r.publication_date.as_deref().unwrap_or(""),
                 ];
                 writeln!(writer, "{}", fields.join(","))?;
             }
@@ -1002,7 +1008,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed"));
+        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed,publication_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1079,6 +1085,7 @@ mod tests {
             legal_start: Some("2020-01-01".to_string()),
             legal_end: None,
             last_changed: Some("2023-01-01".to_string()),
+            publication_date: Some("2026-07-28".to_string()),
             is_exact_code_match: true,
         };
 
@@ -1122,6 +1129,7 @@ mod tests {
             "operational_start": record.operational_start,
             "operational_end": record.operational_end,
             "last_changed": record.last_changed,
+            "publication_date": record.publication_date,
         });
 
         let json_keys_vec: Vec<String> = json_val.as_object().unwrap().keys().cloned().collect();
@@ -1159,6 +1167,7 @@ mod tests {
         assert_eq!(json_keys_vec[28], "successor_code");
         assert_eq!(json_keys_vec[29], "successor");
         assert_eq!(json_keys_vec[34], "last_changed");
+        assert_eq!(json_keys_vec[35], "publication_date");
     }
 
     #[test]

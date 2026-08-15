@@ -340,7 +340,16 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
     // exits. No persistent state, and `audit` re-derives ground truth from the
     // verified archive every time.
     let Some(root) = xml_cache_root() else {
-        return extract_into(zip_path, &process_scratch()?);
+        // A unique subdirectory per extraction, not the bare process scratch.
+        // Release archives all carry the same inner filename, so two concurrent
+        // extractions sharing one directory overwrite each other's XML — which
+        // showed up as an intermittent failure when several tests extracted at
+        // once. The parent is still removed by `cleanup_scratch()`, so this
+        // costs nothing in leaked space.
+        let staging = process_scratch()?.join(format!("x{}", rand_suffix()));
+        std::fs::create_dir_all(&staging)
+            .with_context(|| format!("creating extraction directory {}", staging.display()))?;
+        return extract_into(zip_path, &staging);
     };
 
     let key = cache_key(zip_path)?;

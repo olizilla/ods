@@ -1,6 +1,8 @@
 # Parquet schemas
 
-The tables `ods make` produces from the NHS TRUD ODS XML release.
+The tables `ods make` produces from the NHS TRUD ODS XML release. Worked
+examples, including how to query several releases at once, are in
+[queries.md](./queries.md).
 
 > **Pre-1.0.** This is the schema **as it will be at v1**. Several renames and
 > the succession rework are agreed but not yet implemented — see
@@ -370,18 +372,23 @@ WHERE operational_start <= DATE '2019-03-31'
 
 Three things to know before relying on it:
 
-1. **`legal_*` and `operational_*` routinely disagree.** Operational dates
-   usually match what a patient would have experienced; legal dates match
-   statutory records. Pick deliberately.
-2. **Closure dates are applied retrospectively.** ODS backfills end dates as
-   information arrives, so a snapshot taken today will *not* reproduce a
-   snapshot taken in 2019.
+1. **Use `operational_*`.** `legal_*` is only populated for organisations created
+   by statute — 14% of rows — so a predicate on it silently drops the rest. See
+   [Use the operational dates](./queries.md#use-the-operational-dates).
+2. **A snapshot taken today won't reproduce one taken in 2019.** Entities are
+   registered, closed, reopened and sometimes deleted between releases, and ODS
+   backfills end dates as information arrives.
 3. **Name and address history isn't in a single release.** Each release carries
    one current name per entity, so reconstructing a change means comparing
    releases.
 
 Point 2 is why releases are pinned and immutable. If you need the state as ODS
-knew it in 2019, you need the 2019 release, not a 2019 filter over today's.
+knew it in 2019, you need the 2019 release, not a 2019 filter over today's —
+[measured here](./queries.md#why-a-pinned-release-beats-a-date-filter).
+
+Points 2 and 3 turn into features if you keep the releases. Closures,
+reopenings, renames and reparenting are all recoverable
+[across an archive](./queries.md#across-releases).
 
 ## Provenance
 
