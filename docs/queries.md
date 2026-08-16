@@ -1,9 +1,8 @@
 # Queries
 
-Worked examples with real output, and the sharp edges in the data that'll bite
-you. Schemas and the reasoning behind them are in [parquet.md].
+Some interesting queries with real output. The schema and the reasoning behind it is in [parquet.md].
 
-No setup, no extensions, no network. Point `duckdb` at a file and go.
+You can point `duckdb` at the parquet files and go. Local-first! All examples here show the output given from the `2026-05-29` release.
 
 ```console
 $ duckdb -c "SELECT ods_code, name, category FROM 'ods_data/current/orgs.parquet' WHERE town = 'SEDBERGH' ORDER BY category"
@@ -27,79 +26,131 @@ $ duckdb -c "SELECT ods_code, name, category FROM 'ods_data/current/orgs.parquet
 └───────────┴──────────────────────────────────────────┴─────────────────────────┘
 ```
 
-_(`SEDBURGH MEDICAL CENTRE` is misspelled in the source data, not by us.)_
-
-The numbers here come from the `2026-07-31` release. Yours will differ if you're
-pinned elsewhere... `ods pull --list` tells you what you've got. Single-release
-queries come first, then the ones that need an archive of releases.
+The numbers here come from the release `current` points at, `2026-05-29`. Yours
+will differ if you're pinned elsewhere... `ods pull --list` tells you what you've
+got. Single-release queries come first, then the ones that need an archive of
+releases.
 
 ## The source data has issues
 
-Worth knowing before you trust a query.
+In the example above `SEDBURGH MEDICAL CENTRE` is misspelled in the source data. 
+If you find more errors, open issues so we can report them upstream.
 
-- **The primary role describes the register, not the organisation.** GP practices
-  are `RO177 Prescribing Cost Centre`. Use `role_codes` or `category`.
-- **Successions are many-to-many.** ODS code `001` has five successors. Taking the
-  first one is wrong, and unresolved mergers are a leading source of error in
+Other things worth knowing before you query:
+
+- **Use `category` to find out what something is.** The `primary role code` describes 
+  GP practices as `RO177 Prescribing Cost Centre`, an administrative bucket rather than its function.
+- **Use `role_codes` joined with `roles.parquet`** to find all the official buckets an entity is in. 
+- **You can filter on `country` if you need to.** ODS covers the UK. 941 of the GP
+  practices are in Scotland and 401 in Wales.
+- **Expect a list of successors, not one.** ODS code `001` has five. Following just
+  the first is a dead end, and unresolved mergers are a leading source of error in
   longitudinal analysis of NHS data.
-- **`legal_*` is mostly empty.** [Use the operational dates](#use-the-operational-dates).
-- **Names aren't identifiers.** 1,680 entities are called `DENTAL SURGERY`.
-  [Join on `ods_code`](#names-are-not-identifiers).
-- **A snapshot taken today won't reproduce one taken in 2019.** Entities get
-  registered, closed, reopened and sometimes deleted outright between releases.
-  [Use the release from the date you care about](#why-a-pinned-release-beats-a-date-filter).
-- **Name and address history isn't in any single release.** Each release carries
-  one current name per entity, so a change is only visible
-  [across releases](#name-and-address-history).
+- **[Prefer `operational` dates](#use-the-operational-dates)** to find when a thing was active. `legal_*` dates can be
+  different to "when a site was operational" and are often not available.
+- **[Join on `ods_code`](#names-are-not-identifiers).** Names aren't unique identifiers. 1,695 entities are called `DENTAL SURGERY`.
+- **[Use the latest release for history](#which-release-should-you-use)**, and the
+  release from the time if you need what ODS knew then. Entities get registered,
+  closed, reopened and sometimes deleted outright between releases.
+- **[Compare releases to see a name or address change](#name-and-address-history).**
+  Each release only carries the current name for an entity.
 
 ## What kind of thing is it
 
 ```sql
 SELECT category, count(*) AS n
 FROM 'ods_data/current/orgs.parquet'
-GROUP BY 1 ORDER BY n DESC LIMIT 8;
+WHERE entity_type = 'org' GROUP BY 1 ORDER BY n DESC LIMIT 8;
 ```
-
-| category | n |
-| :--- | ---: |
-| NHS Trust Site | 38,254 |
-| School | 25,187 |
-| Social Care Provider | 18,681 |
-| Non-NHS Organisation | 17,142 |
-| Independent Sector Healthcare Provider Site | 16,936 |
-| Care Home | 16,024 |
-| Domiciliary Care | 15,670 |
-| Pharmacy | 11,177 |
+```
+┌─────────────────────────┬───────┐
+│        category         │   n   │
+│         varchar         │ int64 │
+├─────────────────────────┼───────┤
+│ School                  │ 25176 │
+│ Social Care Provider    │ 18671 │
+│ Non-NHS Organisation    │ 17144 │
+│ Care Home               │ 15982 │
+│ Domiciliary Care        │ 15616 │
+│ Pharmacy                │ 11176 │
+│ General Dental Practice │  9771 │
+│ GP Practice             │  7578 │
+└─────────────────────────┴───────┘
+```
 
 Most of ODS isn't what you'd picture as the NHS. Schools and care homes
 outnumber NHS sites, because ODS registers everyone who exchanges data with the
 NHS, not just the bits the NHS owns.
 
 For anything finer than `category`, filter on `role_codes` and join
-`roles.parquet` for the label. Roles aren't a partition though — 92,894 active
-entities hold more than one:
+`roles.parquet` for the name. >92k active entities have more than one role:
 
 ```sql
-SELECT len(role_codes) AS n_roles, count(*) AS orgs
+SELECT len(role_codes) AS roles, count(*) AS entities
 FROM 'ods_data/current/orgs.parquet' GROUP BY 1 ORDER BY 1;
--- 1 → 123,992 · 2 → 92,297 · 3 → 594 · 4 → 3
+```
+```
+┌───────┬──────────┐
+│ roles │ entities │
+│ int64 │  int64   │
+├───────┼──────────┤
+│     1 │   123771 │
+│     2 │    92195 │
+│     3 │      595 │
+│     4 │        3 │
+└───────┴──────────┘
 ```
 
-## Where is it
+## Where things are
+
+You can group things by `town`.
 
 ```sql
--- pharmacies by town
-SELECT town, count(*) AS pharmacies
+-- Most GPs per town
+SELECT town, count(*) AS GPs
 FROM 'ods_data/current/orgs.parquet'
-WHERE category = 'Pharmacy' AND town IS NOT NULL
+WHERE category = 'GP Practice'
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
--- LONDON 1075 · BIRMINGHAM 266 · MANCHESTER 229 · LIVERPOOL 161 · NOTTINGHAM 151
+```
+```
+┌────────────┬───────┐
+│    town    │  GPs  │
+│  varchar   │ int64 │
+├────────────┼───────┤
+│ LONDON     │   686 │
+│ GLASGOW    │   214 │
+│ BIRMINGHAM │   174 │
+│ MANCHESTER │   151 │
+│ LIVERPOOL  │   124 │
+└────────────┴───────┘
+```
 
--- everything in an outward postcode. `postcode` is always space separated,
--- so a prefix match is safe
+`postcode` is always space separated, so a prefix match is safe.
+
+```sql
+-- find active GPs in SW9
 SELECT ods_code, name, category, postcode
 FROM 'ods_data/current/orgs.parquet'
-WHERE postcode LIKE 'LA10 %' ORDER BY category;
+WHERE postcode LIKE 'SW9 %' AND category = 'GP Practice' ORDER BY category;
+```
+```
+┌──────────┬──────────────────────────────┬─────────────┬──────────┐
+│ ods_code │             name             │  category   │ postcode │
+│ varchar  │           varchar            │   varchar   │ varchar  │
+├──────────┼──────────────────────────────┼─────────────┼──────────┤
+│ Y00020   │ THE GRANTHAM PRACTICE        │ GP Practice │ SW9 9BH  │
+│ Y03063   │ HETHERINGTON AT THE PAVILION │ GP Practice │ SW9 8DJ  │
+│ Y05161   │ FIVEWAYS PCN EA HUB          │ GP Practice │ SW9 6AF  │
+│ Y05163   │ LARC CLINIC (LA)             │ GP Practice │ SW9 8DJ  │
+│ G85028   │ STOCKWELL GROUP PRACTICE     │ GP Practice │ SW9 9TJ  │
+│ G85054   │ LAMBETH WALK GROUP PRACTICE  │ GP Practice │ SW9 6AF  │
+│ G85073   │ VASSALL MEDICAL CENTRE       │ GP Practice │ SW9 6NA  │
+│ G85100   │ BECKETT HOUSE PRACTICE       │ GP Practice │ SW9 9DL  │
+│ G85135   │ MINET GREEN HEALTH PRACTICE  │ GP Practice │ SW9 6AF  │
+│ G85695   │ AKERMAN MEDICAL PRACTICE     │ GP Practice │ SW9 6AF  │
+├──────────┴──────────────────────────────┴─────────────┴──────────┤
+│ 10 rows                                                4 columns │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Who's in charge of it
@@ -137,7 +188,7 @@ A NULL means ODS records no such relationship, not that we failed to resolve it.
 Go to `relationships.parquet` when you need the relationship's own dates or
 status.
 
-## What is this old code now
+## What did this become
 
 ```sql
 SELECT ods_code, name FROM 'ods_data/current/orgs.parquet'
@@ -145,25 +196,28 @@ WHERE list_contains(predecessor_codes, '0AF');
 -- YDDTR | NHS GREATER MANCHESTER SHARED SERVICES
 ```
 
-`predecessor_codes` is the transitive closure, so one line of SQL does what would
-otherwise be a recursive walk. Because `orgs.parquet` is active-only you get the
-live descendants... run it against `orgs_all.parquet` to include the ones that
-have since closed themselves. See [parquet.md] for why there's no single
-"terminal successor".
+`predecessor_codes` holds the whole chain, not just the step before it, so you
+never have to walk it yourself. `0AF` became `0CE`, which became `0CY`, which
+became `YDDTR` — and all three are listed on `YDDTR`, along with the other two
+organisations that merged in on the way.
+
+Because `orgs.parquet` is active-only you get the live descendants... run it
+against `orgs_all.parquet` to include the ones that have since closed themselves.
+See [parquet.md] for why there's no single "terminal successor".
 
 ## Use the operational dates
 
 ODS carries two date families and you want `operational_*` nearly always. They're
 the ones that are actually there:
 
-- `operational_start` — every row, all 305,541 of them
-- `operational_end` — every inactive row, plus 603 active ones with a closure
+- `operational_start` — every row, all 303,756 of them
+- `operational_end` — every inactive row, plus 569 active ones with a closure
   already scheduled _(the furthest out is 2028-08-31)_
-- `legal_start` — 14% of rows. 5.8% of active ones.
+- `legal_start` — 14% of rows. 5.7% of the active ones.
 - `legal_end` — 12% of rows
 
-So `status = 'active'` is the test for open today, not `operational_end IS NULL`,
-which drops those 603.
+Use `status = 'active'` to find what's open today, not `operational_end IS NULL`,
+which drops those 569.
 
 **For experts only.** Legal dates are reliable for organisations created by
 statute, and useless for everyone else, because a GP partnership or a corner shop
@@ -176,8 +230,8 @@ pharmacy has an opening day but no Act of Parliament. It shows in the fill rate:
 | Primary Care Trust Site | 14,693 | 93.8% |
 | Local Authority - Legacy | 418 | 89.7% |
 | Primary Care Trust | 395 | 83.5% |
-| GP Practice | 9,372 | 6.4% |
-| General Dental Practice | 12,179 | 4.2% |
+| GP Practice | 9,371 | 6.4% |
+| General Dental Practice | 12,135 | 4.2% |
 
 Even the statutory bodies aren't at 100%, so check the fill rate for your subset
 before you rely on it rather than trusting the rule.
@@ -194,10 +248,10 @@ SELECT
  (SELECT count(*) FROM 'ods_data/current/orgs_all.parquet'
    WHERE legal_start <= DATE '2019-03-31'
      AND (legal_end IS NULL OR legal_end > DATE '2019-03-31')) AS via_legal;
--- 204,991 | 9,088
+-- 205,128 | 8,913
 ```
 
-Where both starts are present they disagree on 9,750 rows, and `legal_start` is
+Where both starts are present they disagree on 9,434 rows, and `legal_start` is
 never the earlier of the two. Statutory recognition trails operation. It never
 leads it.
 
@@ -206,24 +260,26 @@ leads it.
 ```sql
 SELECT name, count(*) AS codes FROM 'ods_data/current/orgs.parquet'
 GROUP BY 1 HAVING count(*) > 1 ORDER BY 2 DESC LIMIT 3;
--- DENTAL SURGERY 1680 · BOOTS 1412 · WELL 550
+-- DENTAL SURGERY 1695 · BOOTS 1412 · WELL 558
 ```
 
-Match on name and you've matched 1,680 dental surgeries to each other. Join on
+Match on name and you've matched 1,695 dental surgeries to each other. Join on
 `ods_code`, always.
 
 ## Other things to check before you trust a result
 
-Some dates are placeholders. 12,470 rows have an `operational_start` of
-`1900-01-01`, mostly schools. It's filler, not a claim about 1900.
+**Ignore `operational_start` dates of `1900-01-01`.** 12,470 rows have one,
+mostly schools. It's filler, not a claim about 1900, and it'll skew anything that
+takes a `min()` or measures an age.
 
 ```sql
 SELECT count(*) FROM 'ods_data/current/orgs_all.parquet'
 WHERE operational_start = DATE '1900-01-01';
 ```
 
-636 active entities have no relationships at all, so an inner join against
-`relationships.parquet` quietly drops them:
+**Use a left join or an anti-join with `relationships.parquet`.** 612 active
+entities have no relationships at all, so an inner join drops them without
+saying so:
 
 ```sql
 WITH linked AS (
@@ -325,58 +381,41 @@ FROM s WHERE was IS NOT NULL AND name <> was ORDER BY ods_code;
 330 renames in June, 320 in July, and 439 then 407 postcode changes. Swap `name`
 for `address`, `town` or `uprn` to watch things move house.
 
-## Why a pinned release beats a date filter
+## Which release should you use
 
-Two ways to ask what was active on `2026-05-26` — read the May snapshot, or
-filter July's data by date.
+- **The latest one** for questions about history. ODS carries on recording
+  closures and successions after the event, so the newest release knows the most
+  about the past.
+- **The release from the time** if you need what ODS knew then. Reproducing a
+  published figure, or checking what a service saw when it made a decision.
+- **The whole archive** for names, addresses, and entities that have since been
+  deleted from the register. Those only exist in the release that carried them.
 
-```sql
-SELECT
- (SELECT count(*) FROM 'ods_data/releases/2026-05-29/orgs_all.parquet'
-   WHERE status = 'active') AS as_ods_knew_it,
- (SELECT count(*) FROM 'ods_data/releases/2026-07-31/orgs_all.parquet'
-   WHERE operational_start <= DATE '2026-05-26'
-     AND (operational_end IS NULL OR operational_end > DATE '2026-05-26')) AS reconstructed;
--- 216,564 | 216,570
-```
-
-Six apart. Looks like the reconstruction works. It doesn't — compare the sets
-rather than the counts:
+What you shouldn't do is rebuild an old month by date-filtering a newer release.
+Ask what was active on `2026-05-26` both ways and the counts land within 6 of
+each other, so it looks like it worked. They're not the same organisations
+though:
 
 ```sql
-WITH may AS (SELECT ods_code FROM 'ods_data/releases/2026-05-29/orgs_all.parquet' WHERE status = 'active'),
+WITH may AS (SELECT ods_code FROM 'ods_data/releases/2026-05-29/orgs_all.parquet'
+              WHERE status = 'active'),
      jul AS (SELECT ods_code FROM 'ods_data/releases/2026-07-31/orgs_all.parquet'
               WHERE operational_start <= DATE '2026-05-26'
                 AND (operational_end IS NULL OR operational_end > DATE '2026-05-26'))
-SELECT (SELECT count(*) FROM (SELECT * FROM may EXCEPT SELECT * FROM jul)) AS snapshot_only,
-       (SELECT count(*) FROM (SELECT * FROM jul EXCEPT SELECT * FROM may)) AS reconstruction_only;
+SELECT (SELECT count(*) FROM (SELECT * FROM may EXCEPT SELECT * FROM jul)) AS in_may_only,
+       (SELECT count(*) FROM (SELECT * FROM jul EXCEPT SELECT * FROM may)) AS in_rebuild_only;
 -- 318 | 324
 ```
 
-642 organisations wrong, netting out to 6, at two months' distance. Mostly that's
-ordinary churn rather than history being rewritten — records that were already
-closed got their end dates edited just 1 time in June and 7 in July:
-
-```sql
-WITH s AS (
-  SELECT ods_code, publication_date, status, operational_end, legal_end,
-         lag(status)          OVER w AS p_status,
-         lag(operational_end) OVER w AS p_op_end,
-         lag(legal_end)       OVER w AS p_lg_end
-  FROM read_parquet('ods_data/releases/*/orgs_all.parquet')
-  WINDOW w AS (PARTITION BY ods_code ORDER BY publication_date)
-)
-SELECT publication_date,
-       count(*) FILTER (WHERE operational_end IS DISTINCT FROM p_op_end) AS op_end_rewritten,
-       count(*) FILTER (WHERE legal_end       IS DISTINCT FROM p_lg_end) AS legal_end_rewritten
-FROM s WHERE p_status = 'inactive' AND status = 'inactive'
-GROUP BY 1 ORDER BY 1;
-```
-
-Both effects are real, they're just very different sizes. Either way, if you want
-the register as ODS knew it on a date, use the release from that date.
+642 differences at two months' distance, netting out to 6. It's mostly ordinary
+churn — things opening and closing — rather than ODS rewriting the past.
+_(Records that were already closed rarely change: 1 of them in June and 7 in
+July.)_
 
 ## Reparenting
+
+Care is needed when aggregating over things like ICB membership over time.
+ICB membership changes over a year. PCN membership barely budges. The `parent` column changes a lot.
 
 ```sql
 WITH s AS (
@@ -400,10 +439,6 @@ GROUP BY 1 ORDER BY 1;
 | :--- | ---: | ---: | ---: | ---: |
 | 2026-06-22 | 1542 | 406 | 253 | 6 |
 | 2026-07-28 | 1275 | 541 | 281 | 6 |
-
-Anything you aggregate by ICB or trust over a year is aggregating a hierarchy
-that moved underneath you. PCN membership barely budges. Parentage never sits
-still.
 
 ## Is `last_changed` honest?
 

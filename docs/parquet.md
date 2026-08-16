@@ -384,7 +384,7 @@ Three things to know before relying on it:
 
 Point 2 is why releases are pinned and immutable. If you need the state as ODS
 knew it in 2019, you need the 2019 release, not a 2019 filter over today's —
-[measured here](./queries.md#why-a-pinned-release-beats-a-date-filter).
+[measured here](./queries.md#which-release-should-you-use).
 
 Points 2 and 3 turn into features if you keep the releases. Closures,
 reopenings, renames and reparenting are all recoverable
