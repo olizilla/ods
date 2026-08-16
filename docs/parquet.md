@@ -79,9 +79,10 @@ resolves there with no exceptions.
 
 `rel_type_name` stays inline by the same test: nine values costing 0.06 MB under
 dictionary encoding, and the name is the *only* thing a lookup would hold, so a
-separate table would be a join for no gain. The names are lowercased from ODS's
-`IS LOCATED IN THE GEOGRAPHY OF` so they read as predicates in a sentence, with
-acronyms preserved (`COVID`).
+separate table would be a join for no gain. The names are carried **verbatim
+from ODS**, uppercase and uncurated — `IS LOCATED IN THE GEOGRAPHY OF`. We
+considered lowercasing them so they read as predicates in a sentence, and dropped
+it: the shouty form is harmless, and it is one less transformation to justify.
 
 **`relationships`, not `rels`.** It differed from `roles` by one letter, which
 is a hazard when both appear in the same query.
@@ -167,18 +168,21 @@ snapshot a row came from:
 
 | column | type | null | description |
 | :--- | :--- | :--- | :--- |
-| `publication_date` | DATE | no | when NHS generated the data — `2026-07-28` |
+| `trud_release_date` | DATE | no | TRUD distribution release date — `2026-07-31` |
 
-Constant within a file, so near-free under dictionary encoding. Deliberately
-`publication_date` rather than `release_date`: the TRUD *distribution* date
-(2026-07-31) differs from the ODS *publication* date (2026-07-28).
+Constant within a file, so near-free under dictionary encoding. Sourced from the
+TRUD release archive filename (e.g. `hscorgrefdataxml_data_7.0.0_20260731000001.zip`),
+which is when NHS England cut the distribution release.
 
-ODS's sequence number identifies a publication more precisely, but monthly dates
-don't collide in practice and one column beats two. It stays in
-`_provenance.json` and the Parquet key-value metadata.
+Inside the archive, the XML manifest header records a separate `publication_date`
+(e.g. `2026-07-28`) and `publication_seq_num` (e.g. `4700`) representing the internal
+ODS database export timestamp. Both are preserved in `_provenance.json` and the
+Parquet key-value metadata. The TRUD release date in the archive filename is the
+primary release identifier because it aligns with monthly release announcements and
+distribution archives.
 
 ```sql
-SELECT publication_date, count(*)
+SELECT trud_release_date, count(*)
 FROM read_parquet('releases/*/orgs.parquet', union_by_name = true)
 GROUP BY 1 ORDER BY 1;
 ```
@@ -300,7 +304,7 @@ join; the relationship type is carried inline.
 | `source_code` | VARCHAR | no | joins to `orgs.ods_code` |
 | `target_code` | VARCHAR | no | joins to `orgs.ods_code` |
 | `rel_type_code` | VARCHAR | no | `"RE5"` |
-| `rel_type_name` | VARCHAR | no | `"is located in the geography of"` |
+| `rel_type_name` | VARCHAR | no | `"IS LOCATED IN THE GEOGRAPHY OF"` — verbatim from ODS |
 | `rel_status` | VARCHAR | no | of the *relationship* |
 | `legal_start` / `legal_end` | DATE | yes | |
 | `operational_start` / `operational_end` | DATE | yes | |
@@ -309,7 +313,7 @@ Relationships are directional: `source_code` holds the relationship *to*
 `target_code`. `rel_id` is what lets you tell a continuing relationship from a
 new one that replaced it, across releases.
 
-The nine type names are lowercased so they compose into a sentence:
+The nine type names are ODS's own, uppercase:
 
 ```sql
 SELECT s.name, r.rel_type_name, t.name
@@ -317,7 +321,7 @@ FROM 'relationships.parquet' r
 JOIN 'orgs_all.parquet' s ON s.ods_code = r.source_code
 JOIN 'orgs_all.parquet' t ON t.ods_code = r.target_code
 WHERE r.source_code = '00C';
--- NHS DARLINGTON CCG | is located in the geography of | DURHAM, DARLINGTON AND TEES AREA TEAM
+-- NHS DARLINGTON CCG | IS LOCATED IN THE GEOGRAPHY OF | DURHAM, DARLINGTON AND TEES AREA TEAM
 ```
 
 ## `successions.parquet`

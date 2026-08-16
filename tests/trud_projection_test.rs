@@ -16,7 +16,7 @@ const FIXTURE_XML: &str = concat!(
 #[test]
 fn test_trud_zip_selection_prioritizes_full_over_archive() {
     let tmp = TempDir::new().unwrap();
-    let outer_zip_path = tmp.path().join("mock_trud_package.zip");
+    let outer_zip_path = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260529000001.zip");
 
     // Create mock archive.zip (containing 1 archive XML record)
     let archive_xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -78,7 +78,7 @@ fn test_trud_zip_selection_prioritizes_full_over_archive() {
 #[test]
 fn test_status_scoping_prevents_role_status_leak() {
     let tmp = TempDir::new().unwrap();
-    let xml_path = tmp.path().join("status_leak_test.xml");
+    let zip_path = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260529000001.zip");
 
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
@@ -104,11 +104,16 @@ fn test_status_scoping_prevents_role_status_leak() {
   </un:Organisations>
 </un:OrganisationManifest>"#;
 
-    fs::write(&xml_path, xml_content).unwrap();
+    let zip_file = File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full.xml", options).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
 
     let out_dir = tmp.path().join("parquet_out");
     parquet::run(parquet::Args {
-        input: xml_path,
+        input: zip_path,
         output: out_dir.clone(),
     })
     .unwrap();

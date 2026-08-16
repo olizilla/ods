@@ -7,8 +7,8 @@
 //! - `CARGO_MANIFEST_DIR` resolves the fixture path regardless of `cwd`
 
 use ods::commands::{ndjson, md, parquet, find, cite};
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Mock TRUD XML fixture: two organisations (an NHS Trust and a GP Practice
@@ -19,18 +19,43 @@ const FIXTURE_XML: &str = concat!(
     "/tests/fixtures/mock_hscorgrefdata.xml"
 );
 
+fn create_mock_trud_zip(dir: &Path) -> PathBuf {
+    let zip_path = dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let zip_file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = std::fs::read_to_string(FIXTURE_XML).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+    zip_path
+}
+
 // ---------------------------------------------------------------------------
 // Stage 1 — compile
 // ---------------------------------------------------------------------------
+
+#[test]
+fn compile_rejects_bare_xml() {
+    let tmp = TempDir::new().unwrap();
+    let res = ndjson::run(ndjson::Args {
+        input: Path::new(FIXTURE_XML).to_path_buf(),
+        output: Some(tmp.path().join("ods.ndjson")),
+    });
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("Not a TRUD release archive"));
+}
 
 /// Verifies that `ods compile` produces well-formed NDJSON with correctly
 /// resolved role names, cross-record parent lookups, and flattened contacts.
 #[test]
 fn compile_produces_ndjson_with_correct_records() {
     let tmp = TempDir::new().unwrap();
+    let zip_path = create_mock_trud_zip(tmp.path());
 
     ndjson::run(ndjson::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
+        input: zip_path,
         output: Some(tmp.path().join("ods.ndjson")),
     })
     .expect("compile::run should succeed");
@@ -127,8 +152,9 @@ fn full_pipeline_parquet_and_md() {
     let tmp = TempDir::new().unwrap();
 
     // Stage 1: compile
+    let zip_path = create_mock_trud_zip(tmp.path());
     ndjson::run(ndjson::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
+        input: zip_path,
         output: Some(tmp.path().join("ods.ndjson")),
     })
     .expect("compile::run should succeed");

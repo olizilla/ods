@@ -76,6 +76,13 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     let input_dir = temp_dir.path().join("input");
     fs::create_dir_all(&input_dir)?;
 
+    let zip_path = input_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let zip_file = fs::File::create(&zip_path)?;
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full.xml", options)?;
+    zip_writer.finish()?;
+
     let args = ods::commands::parquet::Args {
         input: input_dir.clone(),
         output: temp_dir.path().join("output"),

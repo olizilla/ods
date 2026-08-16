@@ -23,22 +23,9 @@ const FIXTURE_XML: &str = concat!(
 );
 
 fn parse_fixture() -> Vec<ndjson::OdsRecord> {
-    let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("ods.ndjson");
-
-    ndjson::run(ndjson::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
-        output: Some(out.clone()),
-    })
-    .expect("ndjson::run should succeed");
-
-    std::fs::read_to_string(&out)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<ndjson::OdsRecord>(l).ok())
-        .filter(|r: &ndjson::OdsRecord| !r.ods_code.is_empty())
-        .collect()
+    let (_prov, _cmap, parsed) = ndjson::parse_single_pass(Path::new(FIXTURE_XML)).expect("parse_single_pass should succeed");
+    let resolved = ndjson::resolve_hierarchies(parsed);
+    resolved.into_values().collect()
 }
 
 fn record<'a>(records: &'a [ndjson::OdsRecord], code: &str) -> &'a ndjson::OdsRecord {
@@ -231,11 +218,22 @@ fn successor_date_type_is_not_confused_with_succession_type() {
 /// End-to-end: dates must survive into the Parquet projection, not just NDJSON.
 #[test]
 fn parquet_projection_populates_date_columns() {
+    use std::io::Write;
     let tmp = TempDir::new().unwrap();
+    let zip_path = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    let zip_file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = std::fs::read_to_string(FIXTURE_XML).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+
     let out_dir = tmp.path().join("parquet_out");
 
     parquet::run(parquet::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
+        input: zip_path,
         output: out_dir.clone(),
     })
     .expect("parquet::run should succeed");
@@ -248,6 +246,10 @@ fn parquet_projection_populates_date_columns() {
         non_null_count(&out_dir.join("orgs.parquet"), "legal_start") > 0,
         "orgs.parquet legal_start is entirely null"
     );
+    assert!(
+        non_null_count(&out_dir.join("orgs.parquet"), "trud_release_date") > 0,
+        "orgs.parquet trud_release_date is entirely null"
+    );
     // Role dates live on the org<->role bridge, not the vocabulary table.
     assert!(
         non_null_count(&out_dir.join("org_roles.parquet"), "operational_start") > 0,
@@ -256,6 +258,10 @@ fn parquet_projection_populates_date_columns() {
     assert!(
         non_null_count(&out_dir.join("org_roles.parquet"), "operational_end") > 0,
         "org_roles.parquet operational_end is entirely null"
+    );
+    assert!(
+        non_null_count(&out_dir.join("org_roles.parquet"), "trud_release_date") > 0,
+        "org_roles.parquet trud_release_date is entirely null"
     );
 }
 

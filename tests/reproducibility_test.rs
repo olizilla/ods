@@ -28,6 +28,19 @@ fn find_real_trud_zip() -> Option<PathBuf> {
     None
 }
 
+fn create_mock_trud_zip(dir: &std::path::Path, xml_path: &std::path::Path) -> PathBuf {
+    use std::io::Write;
+    let zip_path = dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let zip_file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = std::fs::read_to_string(xml_path).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+    zip_path
+}
+
 #[test]
 fn test_synthetic_parquet_hash_stability() {
     let xml_path = PathBuf::from("tests/fixtures/mock_hscorgrefdata.xml");
@@ -36,14 +49,16 @@ fn test_synthetic_parquet_hash_stability() {
     let tmp1 = TempDir::new().unwrap();
     let tmp2 = TempDir::new().unwrap();
 
+    let zip_path = create_mock_trud_zip(tmp1.path(), &xml_path);
+
     parquet::run(parquet::Args {
-        input: xml_path.clone(),
+        input: zip_path.clone(),
         output: tmp1.path().to_path_buf(),
     })
     .expect("run 1 should succeed");
 
     parquet::run(parquet::Args {
-        input: xml_path,
+        input: zip_path,
         output: tmp2.path().to_path_buf(),
     })
     .expect("run 2 should succeed");

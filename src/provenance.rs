@@ -200,14 +200,14 @@ impl OdsProvenance {
 
     pub fn try_extract_trud_zip_provenance(input_path: &Path) -> Option<Self> {
         let find_zip = |dir: &Path| -> Option<std::path::PathBuf> {
-            if dir.is_file() && dir.extension().map_or(false, |ext| ext == "zip") {
+            if dir.is_file() && dir.extension().is_some_and(|ext| ext == "zip") {
                 return Some(dir.to_path_buf());
             }
             if dir.is_dir() {
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.is_file() && p.extension().map_or(false, |ext| ext == "zip") {
+                        if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
                             return Some(p);
                         }
                     }
@@ -217,7 +217,7 @@ impl OdsProvenance {
                     if let Ok(entries) = std::fs::read_dir(&trud_sub) {
                         for entry in entries.flatten() {
                             let p = entry.path();
-                            if p.is_file() && p.extension().map_or(false, |ext| ext == "zip") {
+                            if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
                                 return Some(p);
                             }
                         }
@@ -230,28 +230,12 @@ impl OdsProvenance {
         let zip_path = find_zip(input_path)?;
         let file_name = zip_path.file_name()?.to_string_lossy().to_string();
 
+        let (_version, release_name, release_date) = crate::archive::parse_trud_archive_filename(&file_name)?;
+
         let mut prov = Self::new(None, Some(&zip_path));
-        prov.trud_release_file = Some(file_name.clone());
-
-        // Extract date YYYYMMDD (e.g. 20260731) from filename
-        for chunk in file_name.split('_') {
-            let digits: String = chunk.chars().filter(|c: &char| c.is_ascii_digit()).collect();
-            if digits.len() >= 8 && (digits.starts_with("202") || digits.starts_with("203")) {
-                let yyyy = &digits[0..4];
-                let mm = &digits[4..6];
-                let dd = &digits[6..8];
-                prov.trud_release_date = Some(format!("{}-{}-{}", yyyy, mm, dd));
-                break;
-            }
-        }
-
-        // Extract version like 7.0.0 from filename
-        for chunk in file_name.split('_') {
-            if chunk.contains('.') && chunk.chars().any(|c: char| c.is_ascii_digit()) {
-                prov.trud_release_name = Some(format!("Release {}", chunk));
-                break;
-            }
-        }
+        prov.trud_release_file = Some(file_name);
+        prov.trud_release_date = Some(release_date);
+        prov.trud_release_name = Some(release_name);
 
         if let Ok(meta) = std::fs::metadata(&zip_path) {
             prov.trud_release_filesize_bytes = Some(meta.len());
@@ -399,10 +383,8 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         serde_json::from_str::<OdsProvenance>(&content)?
     } else if let Some(loaded) = OdsProvenance::load_from_dir(output_dir) {
         loaded
-    } else if let Some(extracted) = OdsProvenance::try_extract_trud_zip_provenance(output_dir) {
-        extracted
     } else {
-        OdsProvenance::default()
+        OdsProvenance::try_extract_trud_zip_provenance(output_dir).unwrap_or_default()
     };
 
     // Defect B Fix: freshly parsed XML manifest publication_* fields win over stale or missing fields on disk

@@ -1,12 +1,25 @@
 use ods::commands::{parquet, find, diff};
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 const FIXTURE_XML: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/mock_hscorgrefdata.xml"
 );
+
+fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
+    let zip_path = dir.join(filename);
+    let zip_file = fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+    zip_path
+}
 
 #[test]
 fn test_workspace_full_lifecycle() {
@@ -17,40 +30,44 @@ fn test_workspace_full_lifecycle() {
     let workspace_dir = root.join("ods_data");
     fs::create_dir_all(&workspace_dir).unwrap();
 
-    let release_1_dir = workspace_dir.join("releases").join("2026-05-18").join("parquet");
+    let release_1_dir = workspace_dir.join("releases").join("2026-05-29").join("parquet");
     fs::create_dir_all(&release_1_dir).unwrap();
+
+    let zip1 = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260529000001.zip");
 
     // Export fixture XML directly into workspace release 1
     parquet::run(parquet::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
+        input: zip1,
         output: release_1_dir.clone(),
     })
     .expect("parquet run into release 1 should succeed");
 
-    ods::workspace::set_active_release(&workspace_dir, "2026-05-18").unwrap();
+    ods::workspace::set_active_release(&workspace_dir, "2026-05-29").unwrap();
 
     // Verify release 1 active status
     let (active_date, active_path) = ods::workspace::get_active_release(&workspace_dir).unwrap();
-    assert_eq!(active_date, "2026-05-18");
+    assert_eq!(active_date, "2026-05-29");
     assert!(active_path.join("parquet").join("orgs.parquet").exists());
 
     // 2. Export release 2 (simulating a new monthly TRUD release)
-    let release_2_dir = workspace_dir.join("releases").join("2026-06-22").join("parquet");
+    let release_2_dir = workspace_dir.join("releases").join("2026-06-26").join("parquet");
     fs::create_dir_all(&release_2_dir).unwrap();
 
+    let zip2 = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260626000001.zip");
+
     parquet::run(parquet::Args {
-        input: Path::new(FIXTURE_XML).to_path_buf(),
+        input: zip2,
         output: release_2_dir.clone(),
     })
     .expect("parquet run into release 2 should succeed");
 
-    ods::workspace::set_active_release(&workspace_dir, "2026-06-22").unwrap();
+    ods::workspace::set_active_release(&workspace_dir, "2026-06-26").unwrap();
 
     // 3. Test release switching
-    ods::workspace::set_active_release(&workspace_dir, "2026-05-18").unwrap();
+    ods::workspace::set_active_release(&workspace_dir, "2026-05-29").unwrap();
 
     let (switched_date, _) = ods::workspace::get_active_release(&workspace_dir).unwrap();
-    assert_eq!(switched_date, "2026-05-18");
+    assert_eq!(switched_date, "2026-05-29");
 
     // 4. Test auto-discovery by `ods find`
     let discovered_parquet = ods::workspace::discover_parquet_dir(Some(&workspace_dir)).unwrap();
@@ -88,21 +105,8 @@ fn test_workspace_full_lifecycle() {
 
 #[test]
 fn test_parquet_handles_trud_zip_input() {
-    use std::io::Write;
-
     let tmp = TempDir::new().unwrap();
-    let zip_path = tmp.path().join("mock_trud_release.zip");
-
-    // Create a zip archive containing the mock XML fixture
-    let zip_file = fs::File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
-
-    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    zip_writer.write_all(xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-
+    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let out_dir = tmp.path().join("output_parquet");
 
     // Run `ods parquet` directly with ZIP input
@@ -116,4 +120,5 @@ fn test_parquet_handles_trud_zip_input() {
     assert!(out_dir.join("roles.parquet").exists());
     assert!(out_dir.join("relationships.parquet").exists());
 }
+
 

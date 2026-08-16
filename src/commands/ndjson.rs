@@ -550,13 +550,17 @@ pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    // Parse input XML first to get provenance & date
-    let xml_path = find_xml_file(&args.input)?;
+    // Resolve TRUD archive input
+    let archive_info = crate::archive::resolve_trud_archive(&args.input)?;
+    let xml_path = find_xml_file(&archive_info.archive_path)?;
     eprintln!("Found XML file: {}", xml_path.display());
 
     eprintln!("Compiling ODS database into NDJSON stream (single pass)...");
     let start_compile = std::time::Instant::now();
-    let (provenance, concept_map, records) = parse_single_pass(&xml_path)?;
+    let (mut provenance, concept_map, records) = parse_single_pass(&xml_path)?;
+    provenance.trud_release_date = Some(archive_info.release_date.clone());
+    provenance.trud_release_name = Some(archive_info.release_name);
+    provenance.trud_release_file = Some(archive_info.filename);
     eprintln!(
         "Parsing complete. Found {} concept mappings and {} organisations. Took {:?}",
         concept_map.len(),
