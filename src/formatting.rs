@@ -15,9 +15,12 @@ pub fn format_date_range(start: Option<&str>, end: Option<&str>, status: &str) -
     Some(range)
 }
 
-pub struct SuccessorLink<'a> {
-    pub successor_code: &'a str,
-    pub successor_name: Option<&'a str>,
+pub struct SuccessionHopLink<'a> {
+    pub depth: usize,
+    pub date: Option<&'a str>,
+    pub code: &'a str,
+    pub name: &'a str,
+    pub status: &'a str,
 }
 
 pub struct InspectorRecord<'a> {
@@ -45,7 +48,8 @@ pub struct InspectorRecord<'a> {
     pub icb_code: &'a str,
     pub region: &'a str,
     pub region_code: &'a str,
-    pub successors: &'a [SuccessorLink<'a>],
+    pub succession: &'a [SuccessionHopLink<'a>],
+    pub predecessors: &'a [SuccessionHopLink<'a>],
     pub operational_start: Option<&'a str>,
     pub operational_end: Option<&'a str>,
     pub legal_start: Option<&'a str>,
@@ -189,18 +193,6 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
         }
     }
 
-    if r.status.eq_ignore_ascii_case("inactive") {
-        for s in r.successors {
-            let target_name = s.successor_name.unwrap_or("");
-            let target_desc = if target_name.is_empty() {
-                s.successor_code.to_string()
-            } else {
-                format!("{} ({target_name})", s.successor_code)
-            };
-            rel_items.push(format!("- {}: {}", k("Succeeded By"), target_desc));
-        }
-    }
-
     if !rel_items.is_empty() {
         writeln!(writer, "\n{}", h("## Relationships"))?;
         for item in rel_items {
@@ -208,6 +200,39 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
         }
     }
 
+    if !r.succession.is_empty() {
+        writeln!(writer, "\n{}", h("## Succession"))?;
+        for hop in r.succession {
+            let date_str = hop.date.unwrap_or("          ");
+            let indent = "  ".repeat(hop.depth.saturating_sub(1));
+            writeln!(
+                writer,
+                "  {}  {}→  {:<6}  {:<45}  {}",
+                date_str,
+                indent,
+                hop.code,
+                hop.name,
+                s_val(hop.status)
+            )?;
+        }
+    }
+
+    if !r.predecessors.is_empty() {
+        writeln!(writer, "\n{}", h("## Predecessors"))?;
+        for pred in r.predecessors {
+            let date_str = pred.date.unwrap_or("          ");
+            writeln!(
+                writer,
+                "  {}  ←  {:<6}  {:<45}  {}",
+                date_str,
+                pred.code,
+                pred.name,
+                s_val(pred.status)
+            )?;
+        }
+    }
+
     Ok(())
 }
+
 

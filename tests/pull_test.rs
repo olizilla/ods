@@ -295,3 +295,85 @@ fn test_pull_list_errors_on_unreachable_index_even_with_local_release() {
     let err = res.expect_err("unreachable index is a failure even with local releases");
     assert!(err.downcast_ref::<AlreadyReported>().is_some());
 }
+
+#[test]
+fn test_pull_specific_local_release_succeeds_offline_without_network() {
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+
+    // Pre-populate a valid local release
+    let rel_dir = workspace_root.join("releases").join("2026-05-29");
+    fs::create_dir_all(&rel_dir).unwrap();
+    fs::write(rel_dir.join("orgs.parquet"), b"mock parquet").unwrap();
+    let hash = format!("{:x}", sha2::Sha256::digest(b"mock parquet"));
+    fs::write(rel_dir.join("SHA256SUMS"), format!("{}  orgs.parquet\n", hash)).unwrap();
+
+    let fetcher = FailingMockReleaseFetcher;
+    let args = Args {
+        release_date: Some("2026-05-29".to_string()),
+        ..Default::default()
+    };
+
+    let res = run_with_fetcher(args, &workspace_root, &fetcher);
+    assert!(
+        res.is_ok(),
+        "pull of an existing verified local release must succeed offline, got: {:?}",
+        res.err()
+    );
+
+    let (active_date, _) = ods::workspace::get_active_release(&workspace_root).unwrap();
+    assert_eq!(active_date, "2026-05-29", "current symlink must switch to 2026-05-29");
+}
+
+#[test]
+fn test_pull_latest_offline_fails_and_lists_local_options() {
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+
+    // Pre-populate a local release
+    let rel_dir = workspace_root.join("releases").join("2026-05-29");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    let fetcher = FailingMockReleaseFetcher;
+    let args = Args {
+        release_date: None,
+        ..Default::default()
+    };
+
+    let res = run_with_fetcher(args, &workspace_root, &fetcher);
+    let err = res.expect_err("pull latest offline must fail");
+    assert!(
+        err.downcast_ref::<AlreadyReported>().is_some(),
+        "must return AlreadyReported"
+    );
+}
+
+#[test]
+fn test_pull_all_states_total_size_and_caches_existing() {
+    let (mut releases, contents) = create_mock_dataset();
+    let mut release2 = releases[0].clone();
+    release2.tag_name = "data/2026-06-26".to_string();
+    releases.push(release2);
+
+    let fetcher = MockReleaseFetcher {
+        releases,
+        file_contents: contents,
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+
+    let args = Args {
+        all: true,
+        ..Default::default()
+    };
+
+    run_with_fetcher(args, &workspace_root, &fetcher).expect("pull --all must succeed");
+
+    assert!(workspace_root.join("releases").join("2026-07-31").join("orgs.parquet").exists());
+    assert!(workspace_root.join("releases").join("2026-06-26").join("orgs.parquet").exists());
+
+    let (active_date, _) = ods::workspace::get_active_release(&workspace_root).unwrap();
+    assert_eq!(active_date, "2026-07-31", "current symlink must point to latest release");
+}
+

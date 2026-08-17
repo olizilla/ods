@@ -121,4 +121,30 @@ fn test_parquet_handles_trud_zip_input() {
     assert!(out_dir.join("relationships.parquet").exists());
 }
 
+#[test]
+fn test_prepare_release_dir_does_not_create_markdown_dir() {
+    let tmp = TempDir::new().unwrap();
+    let workspace_dir = tmp.path().join("ods_data");
+    fs::create_dir_all(&workspace_dir).unwrap();
+
+    let release_dir = ods::workspace::prepare_release_dir(&workspace_dir, "2026-07-31").unwrap();
+    assert!(release_dir.join("trud").exists(), "trud directory must be created");
+    assert!(!release_dir.join("markdown").exists(), "markdown directory must NOT be created unconditionally");
+}
+
+#[test]
+fn test_ensure_workspace_gitignore_does_not_unignore_wiki_zip() {
+    let tmp = TempDir::new().unwrap();
+    let workspace_dir = tmp.path().join("ods_data");
+    fs::create_dir_all(&workspace_dir).unwrap();
+
+    ods::workspace::ensure_workspace_gitignore(&workspace_dir).unwrap();
+    let gitignore_content = fs::read_to_string(workspace_dir.join(".gitignore")).unwrap();
+    assert!(
+        !gitignore_content.contains("!releases/*/markdown/wiki.zip"),
+        ".gitignore must not un-ignore wiki.zip"
+    );
+}
+
+
 

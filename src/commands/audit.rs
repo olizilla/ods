@@ -72,7 +72,8 @@ struct RawXmlInvariants {
     pub active_orgs: usize,
     pub roles_count: usize,
     pub rels_count: usize,
-    pub succs_count: usize,
+    pub succs_raw_count: usize,
+    pub succs_distinct_count: usize,
     pub sample_orgs: HashMap<String, XmlSampleOrg>,
 }
 
@@ -288,12 +289,8 @@ pub fn run(args: Args) -> Result<()> {
     let orgs_all_parquet = parquet_dir.join("orgs_all.parquet");
     let orgs_parquet = parquet_dir.join("orgs.parquet");
     let roles_parquet = parquet_dir.join("org_roles.parquet");
-    let rels_parquet = if parquet_dir.join("relationships.parquet").exists() {
-        parquet_dir.join("relationships.parquet")
-    } else {
-        parquet_dir.join("rels.parquet")
-    };
-    let succs_parquet = parquet_dir.join("successors.parquet");
+    let rels_parquet = parquet_dir.join("relationships.parquet");
+    let succs_parquet = parquet_dir.join("successions.parquet");
 
     let total_orgs_parquet = count_records_in_parquet(&orgs_all_parquet).unwrap_or(0);
     let active_orgs_parquet = count_records_in_parquet(&orgs_parquet).unwrap_or(0);
@@ -320,8 +317,16 @@ pub fn run(args: Args) -> Result<()> {
     let rels_match = raw_xml_invariants.rels_count == rels_parquet_cnt;
     if !rels_match {
         discrepancies.push(format!(
-            "Relationship Parity Error: XML relationships ({}) != rels.parquet ({})",
+            "Relationship Parity Error: XML relationships ({}) != relationships.parquet ({})",
             raw_xml_invariants.rels_count, rels_parquet_cnt
+        ));
+    }
+
+    let succs_match = raw_xml_invariants.succs_distinct_count == succs_parquet_cnt;
+    if !succs_match {
+        discrepancies.push(format!(
+            "Successions Parity Error: XML distinct successions ({}) != successions.parquet ({})",
+            raw_xml_invariants.succs_distinct_count, succs_parquet_cnt
         ));
     }
 
@@ -339,12 +344,16 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         if rels_match {
-            println!("     ✓ Relationships: {:<22} # XML rels count matches rels.parquet", raw_xml_invariants.rels_count);
+            println!("     ✓ Relationships: {:<22} # XML rels count matches relationships.parquet", raw_xml_invariants.rels_count);
         } else {
             println!("     ✖ Relationships mismatch: XML {} vs Parquet {}", raw_xml_invariants.rels_count, rels_parquet_cnt);
         }
 
-        println!("     ✓ Successors: {:<25} # {} raw XML links resolved to {} graph paths", succs_parquet_cnt, raw_xml_invariants.succs_count, succs_parquet_cnt);
+        if succs_match {
+            println!("     ✓ Successors: {:<25} # XML successions count matches successions.parquet", succs_parquet_cnt);
+        } else {
+            println!("     ✖ Successors mismatch: XML {} vs Parquet {}", raw_xml_invariants.succs_distinct_count, succs_parquet_cnt);
+        }
         println!("     ✓ Active: {:<29} # Active orgs in orgs.parquet", active_orgs_parquet);
         println!();
         println!("  3. Schema & Referential Integrity Constraints:");
@@ -357,6 +366,37 @@ pub fn run(args: Args) -> Result<()> {
         audit_referential_integrity(&orgs_all_parquet, &roles_parquet, &rels_parquet, &succs_parquet, &mut discrepancies)?;
 
     let sample_parity_passed = audit_sample_parity(&orgs_all_parquet, &raw_xml_invariants.sample_orgs, &mut discrepancies)?;
+
+    // Unaccounted files check: any file in release directory not in SHA256SUMS
+    let mut unaccounted_files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&parquet_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "SHA256SUMS"
+                        || name == crate::provenance::PROVENANCE_FILENAME
+                        || name == "provenance.json"
+                        || name.starts_with('.')
+                    {
+                        continue;
+                    }
+                    if !recorded_sums.contains_key(name) {
+                        unaccounted_files.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    unaccounted_files.sort();
+    let unaccounted_count = unaccounted_files.len();
+    if unaccounted_count > 0 {
+        let file_list = unaccounted_files.join(", ");
+        discrepancies.push(format!(
+            "Unaccounted files found in release directory: {} not in SHA256SUMS ({})",
+            unaccounted_count, file_list
+        ));
+    }
 
     if !args.json {
         if duplicate_codes == 0 {
@@ -383,6 +423,13 @@ pub fn run(args: Args) -> Result<()> {
             println!("     ✖ Orphan Successors: {}", orphan_succs);
         }
 
+        if unaccounted_count == 0 {
+            println!("     ✓ Unaccounted files: 0");
+        } else {
+            let file_list = unaccounted_files.join(", ");
+            println!("     ✖ Unaccounted files: {:<18} # {} not in SHA256SUMS", unaccounted_count, file_list);
+        }
+
         if sample_parity_passed {
             let label = if args.full {
                 format!("{}/{} matched", raw_xml_invariants.sample_orgs.len(), raw_xml_invariants.sample_orgs.len())
@@ -400,24 +447,31 @@ pub fn run(args: Args) -> Result<()> {
     // ------------------------------------------------------------------------
     // SECTION 4: Hierarchy Graph Completeness Metrics
     // ------------------------------------------------------------------------
-    let (practice_linked, practice_total, practice_pct, trust_linked, trust_total, trust_pct) =
+    let (practice_linked, practice_total, practice_pct, english_gp_unlinked, trust_linked, trust_total, trust_pct) =
         audit_hierarchy_completeness(&orgs_parquet)?;
 
     let missing_icb_links = practice_total.saturating_sub(practice_linked);
     let missing_trust_links = trust_total.saturating_sub(trust_linked);
 
-    if practice_pct < 95.0 && active_orgs_parquet > 10 {
+    if english_gp_unlinked > 0 {
         discrepancies.push(format!(
-            "Hierarchy Resolution Error: Only {:.1}% of active GP practices have resolved parent links",
-            practice_pct
+            "Hierarchy Resolution Error: {} active English GP practice(s) lack an ICB link",
+            english_gp_unlinked
+        ));
+    }
+
+    if missing_trust_links > 0 {
+        discrepancies.push(format!(
+            "Hierarchy Resolution Error: {} active NHS trust site(s) lack a parent trust link",
+            missing_trust_links
         ));
     }
 
     if !args.json {
-        if missing_icb_links <= 100 {
-            println!("     ✓ Missing ICB links: {:<18} # Expected. Some specialised GPs have no ICB.", missing_icb_links);
+        if english_gp_unlinked == 0 {
+            println!("     ✓ Active GP practices without ICB: {:<8} # 100% of English practices linked (non-English have no ICB)", missing_icb_links);
         } else {
-            println!("     ✖ Missing ICB links: {} (Too high)", missing_icb_links);
+            println!("     ✖ Active GP practices without ICB: {} ({} English practices unlinked)", missing_icb_links, english_gp_unlinked);
         }
 
         if missing_trust_links == 0 {
@@ -451,7 +505,7 @@ pub fn run(args: Args) -> Result<()> {
         roles_parquet: roles_parquet_cnt,
         rels_xml: raw_xml_invariants.rels_count,
         rels_parquet: rels_parquet_cnt,
-        succs_xml: raw_xml_invariants.succs_count,
+        succs_xml: raw_xml_invariants.succs_distinct_count,
         succs_parquet: succs_parquet_cnt,
         sampled_records: raw_xml_invariants.sample_orgs.len(),
         practice_parent_linked: practice_linked,
@@ -486,9 +540,11 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
         active_orgs: 0,
         roles_count: 0,
         rels_count: 0,
-        succs_count: 0,
+        succs_raw_count: 0,
+        succs_distinct_count: 0,
         sample_orgs: HashMap::new(),
     };
+    let mut unique_succ_ids = HashSet::new();
 
     let mut buf = Vec::new();
     let mut org_depth = 0;
@@ -533,7 +589,16 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                         inv.rels_count += 1;
                         in_target = true;
                     }
-                    b"Successor" | b"Succ" if org_depth == 1 => inv.succs_count += 1,
+                    b"Successor" | b"Succ" if org_depth == 1 => {
+                        inv.succs_raw_count += 1;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref().eq_ignore_ascii_case(b"uniquesuccid") {
+                                if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                    unique_succ_ids.insert(val.into_owned());
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -556,7 +621,16 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                     }
                     b"Role" if org_depth == 1 && !in_target => inv.roles_count += 1,
                     b"Relationship" | b"Rel" if org_depth == 1 => inv.rels_count += 1,
-                    b"Successor" | b"Succ" if org_depth == 1 => inv.succs_count += 1,
+                    b"Successor" | b"Succ" if org_depth == 1 => {
+                        inv.succs_raw_count += 1;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref().eq_ignore_ascii_case(b"uniquesuccid") {
+                                if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                    unique_succ_ids.insert(val.into_owned());
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -606,6 +680,8 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
         }
         buf.clear();
     }
+
+    inv.succs_distinct_count = unique_succ_ids.len();
 
     Ok(inv)
 }
@@ -678,7 +754,7 @@ fn audit_referential_integrity(
     }
 
     let mut orphan_rels = 0;
-    // 2. Foreign Key Check: rels.parquet target_ods_code -> orgs_all.parquet
+    // 2. Foreign Key Check: relationships.parquet target_code / source_code -> orgs_all.parquet
     if rels_parquet.exists() {
         let rfile = File::open(rels_parquet)?;
         let rbuilder = ParquetRecordBatchReaderBuilder::try_new(rfile)?;
@@ -687,12 +763,18 @@ fn audit_referential_integrity(
         for batch in rreader {
             let batch = batch?;
             let schema = batch.schema();
-            let target_idx = schema.index_of("target_code").or_else(|_| schema.index_of("target_ods_code"));
-            if let Ok(idx) = target_idx {
-                let target_arr = batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
+            let target_idx = schema.index_of("target_code").ok();
+            let source_idx = schema.index_of("source_code").ok();
+
+            if let (Some(t_idx), Some(s_idx)) = (target_idx, source_idx) {
+                let target_arr = batch.column(t_idx).as_any().downcast_ref::<StringArray>().unwrap();
+                let source_arr = batch.column(s_idx).as_any().downcast_ref::<StringArray>().unwrap();
                 for i in 0..batch.num_rows() {
                     let target_code = target_arr.value(i);
-                    if !target_code.is_empty() && !valid_codes.contains(target_code) {
+                    let source_code = source_arr.value(i);
+                    if (!target_code.is_empty() && !valid_codes.contains(target_code))
+                        || (!source_code.is_empty() && !valid_codes.contains(source_code))
+                    {
                         orphan_rels += 1;
                     }
                 }
@@ -701,14 +783,14 @@ fn audit_referential_integrity(
 
         if orphan_rels > 0 {
             discrepancies.push(format!(
-                "Referential Integrity Violation: Found {} orphan target_ods_code links in rels.parquet",
+                "Referential Integrity Violation: Found {} orphan links in relationships.parquet",
                 orphan_rels
             ));
         }
     }
 
     let mut orphan_succs = 0;
-    // 3. Foreign Key Check: successors.parquet target_ods_code -> orgs_all.parquet
+    // 3. Foreign Key Check: successions.parquet predecessor_code / successor_code -> orgs_all.parquet
     if succs_parquet.exists() {
         let sfile = File::open(succs_parquet)?;
         let sbuilder = ParquetRecordBatchReaderBuilder::try_new(sfile)?;
@@ -717,11 +799,18 @@ fn audit_referential_integrity(
         for batch in sreader {
             let batch = batch?;
             let schema = batch.schema();
-            if let Ok(idx) = schema.index_of("target_ods_code") {
-                let target_arr = batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
+            let pred_idx = schema.index_of("predecessor_code").ok();
+            let succ_idx = schema.index_of("successor_code").ok();
+
+            if let (Some(p_idx), Some(s_idx)) = (pred_idx, succ_idx) {
+                let pred_arr = batch.column(p_idx).as_any().downcast_ref::<StringArray>().unwrap();
+                let succ_arr = batch.column(s_idx).as_any().downcast_ref::<StringArray>().unwrap();
                 for i in 0..batch.num_rows() {
-                    let target_code = target_arr.value(i);
-                    if !target_code.is_empty() && !valid_codes.contains(target_code) {
+                    let pred_code = pred_arr.value(i);
+                    let succ_code = succ_arr.value(i);
+                    if (!pred_code.is_empty() && !valid_codes.contains(pred_code))
+                        || (!succ_code.is_empty() && !valid_codes.contains(succ_code))
+                    {
                         orphan_succs += 1;
                     }
                 }
@@ -730,7 +819,7 @@ fn audit_referential_integrity(
 
         if orphan_succs > 0 {
             discrepancies.push(format!(
-                "Referential Integrity Violation: Found {} orphan target_ods_code links in successors.parquet",
+                "Referential Integrity Violation: Found {} orphan links in successions.parquet",
                 orphan_succs
             ));
         }
@@ -739,9 +828,11 @@ fn audit_referential_integrity(
     Ok((duplicate_codes, orphan_roles, orphan_rels, orphan_succs))
 }
 
-fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f64, usize, usize, f64)> {
+pub fn audit_hierarchy_completeness(
+    orgs_parquet: &Path,
+) -> Result<(usize, usize, f64, usize, usize, usize, f64)> {
     if !orgs_parquet.exists() {
-        return Ok((0, 0, 0.0, 0, 0, 0.0));
+        return Ok((0, 0, 0.0, 0, 0, 0, 0.0));
     }
 
     let file = File::open(orgs_parquet)?;
@@ -750,6 +841,7 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
 
     let mut practice_codes = HashSet::new();
     let mut practice_linked_codes = HashSet::new();
+    let mut english_gp_unlinked_codes = HashSet::new();
 
     let mut trust_site_codes = HashSet::new();
     let mut trust_site_linked_codes = HashSet::new();
@@ -760,10 +852,10 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
         let num_rows = batch.num_rows();
 
         let ods_code_idx = schema.index_of("ods_code").ok();
-        let role_idx = schema.index_of("role").ok();
-        let role_code_idx = schema.index_of("role_code").ok();
+        let category_idx = schema.index_of("category").ok();
+        let primary_role_code_idx = schema.index_of("primary_role_code").ok();
+        let country_idx = schema.index_of("country").ok();
         let icb_code_idx = schema.index_of("icb_code").ok();
-        let parent_code_idx = schema.index_of("parent_code").ok();
         let trust_code_idx = schema.index_of("trust_code").ok();
 
         for i in 0..num_rows {
@@ -772,17 +864,22 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
 
-            let role = role_idx.and_then(|idx| {
+            let category = category_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
 
-            let role_code = role_code_idx.and_then(|idx| {
+            let primary_role = primary_role_code_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
 
-            let has_icb = icb_code_idx.or(parent_code_idx).and_then(|idx| {
+            let country = country_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+
+            let has_icb = icb_code_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(!arr.value(i).is_empty()) } else { None }
             }).unwrap_or(false);
@@ -792,14 +889,16 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
                 if arr.is_valid(i) { Some(!arr.value(i).is_empty()) } else { None }
             }).unwrap_or(false);
 
-            if role_code == "RO76" || role.contains("prescribing cost centre") || role.contains("general practice") {
+            if category == "GP Practice" || primary_role == "RO76" {
                 practice_codes.insert(code.to_string());
                 if has_icb {
                     practice_linked_codes.insert(code.to_string());
+                } else if country.eq_ignore_ascii_case("england") {
+                    english_gp_unlinked_codes.insert(code.to_string());
                 }
             }
 
-            if role_code == "RO198" || role.contains("nhs trust site") {
+            if category == "NHS Trust Site" || primary_role == "RO198" {
                 trust_site_codes.insert(code.to_string());
                 if has_trust {
                     trust_site_linked_codes.insert(code.to_string());
@@ -810,6 +909,7 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
 
     let practice_total = practice_codes.len();
     let practice_parent_linked = practice_linked_codes.len();
+    let english_gp_unlinked = english_gp_unlinked_codes.len();
 
     let trust_site_total = trust_site_codes.len();
     let trust_site_trust_linked = trust_site_linked_codes.len();
@@ -826,8 +926,25 @@ fn audit_hierarchy_completeness(orgs_parquet: &Path) -> Result<(usize, usize, f6
         100.0
     };
 
-    Ok((practice_parent_linked, practice_total, practice_pct, trust_site_trust_linked, trust_site_total, trust_site_pct))
+    Ok((
+        practice_parent_linked,
+        practice_total,
+        practice_pct,
+        english_gp_unlinked,
+        trust_site_trust_linked,
+        trust_site_total,
+        trust_site_pct,
+    ))
 }
+
+#[cfg(test)]
+pub fn audit_hierarchy_completeness_for_test(
+    orgs_parquet: &Path,
+) -> Result<(usize, usize, f64, usize, usize, f64)> {
+    let (pl, pt, pp, _egp, tl, tt, tp) = audit_hierarchy_completeness(orgs_parquet)?;
+    Ok((pl, pt, pp, tl, tt, tp))
+}
+
 
 fn audit_sample_parity(
     orgs_all_parquet: &Path,

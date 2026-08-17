@@ -23,12 +23,8 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
 
     // 3. Execute fetch with local_archive without explicit output (targeting workspace_root)
     let args = ods::commands::fetch::Args {
-        api_key: None,
-        release: None,
-        output: None,
-        verify_only: None,
         local_archive: Some(local_zip.clone()),
-        verbose: false,
+        ..Default::default()
     };
 
     // Set current dir or pass workspace context

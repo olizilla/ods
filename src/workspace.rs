@@ -97,13 +97,12 @@ pub fn find_workspace_root() -> Option<PathBuf> {
 /// Ensures the directory structure for a specific release date inside workspace root:
 /// `./ods_data/releases/<date>/parquet/`
 /// `./ods_data/releases/<date>/ndjson/`
-/// `./ods_data/releases/<date>/markdown/`
+/// Ensures the directory structure for a specific release date inside workspace root:
+/// `./ods_data/releases/<date>/trud/`
 pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<PathBuf> {
     let release_dir = workspace_root.join("releases").join(release_date);
     fs::create_dir_all(release_dir.join("trud"))
         .context("Failed to create release trud directory")?;
-    fs::create_dir_all(release_dir.join("markdown"))
-        .context("Failed to create release markdown directory")?;
     ensure_workspace_gitignore(workspace_root)?;
     Ok(release_dir)
 }
@@ -112,7 +111,7 @@ pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<
 pub fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
     let gitignore_path = workspace_root.join(".gitignore");
     if !gitignore_path.exists() {
-        let content = "# Ignore raw TRUD archive downloads and extracted XML files\nreleases/*/trud/\n*.zip\n*.xml\n!releases/*/markdown/wiki.zip\n";
+        let content = "# Ignore raw TRUD archive downloads and extracted XML files\nreleases/*/trud/\n*.zip\n*.xml\n";
         fs::write(&gitignore_path, content)
             .context("Failed to write workspace .gitignore file")?;
     }

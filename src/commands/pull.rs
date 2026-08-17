@@ -21,13 +21,13 @@ pub struct Args {
     #[arg(long, short = 'l')]
     pub list: bool,
 
+    /// Fetch all available dataset releases
+    #[arg(long)]
+    pub all: bool,
+
     /// Force re-download or re-pull of specified release
     #[arg(long, short = 'f')]
     pub force: bool,
-
-    /// TRUD API key if pulling directly from TRUD
-    #[arg(long, env = "NHS_TRUD_API_KEY")]
-    pub api_key: Option<String>,
 
     /// Print verbose pull output
     #[arg(long, short = 'v')]
@@ -132,7 +132,19 @@ pub fn run_with_fetcher<F: ReleaseFetcher>(
         return run_list(workspace_root, fetcher, &mut std::io::stdout(), &mut std::io::stderr());
     }
 
+    if args.all {
+        return pull_all_releases(workspace_root, args.force, fetcher);
+    }
+
     if let Some(ref target_date) = args.release_date {
+        let release_dir = workspace_root.join("releases").join(target_date);
+        if !args.force && release_dir.exists() && is_release_dir_verified(&release_dir) {
+            eprintln!("* Release {} already local, verified", target_date);
+            set_active_release(workspace_root, target_date)?;
+            generate_workspace_readme(workspace_root, target_date, None, None)?;
+            eprintln!("✓ current updated to releases/{}", target_date);
+            return Ok(());
+        }
         return pull_specific_release(workspace_root, target_date, args.force, fetcher);
     }
 
@@ -257,7 +269,26 @@ fn pull_latest_release<F: ReleaseFetcher>(
     fetcher: &F,
 ) -> Result<()> {
     eprintln!("Querying available ODS dataset releases...");
-    let releases = fetcher.fetch_releases()?;
+    let releases = match fetcher.fetch_releases() {
+        Ok(r) => r,
+        Err(e) => {
+            let local_releases = if workspace_root.exists() {
+                list_releases(workspace_root).unwrap_or_default()
+            } else {
+                vec![]
+            };
+
+            eprintln!("{}", e);
+            if !local_releases.is_empty() {
+                let local_dates: Vec<String> = local_releases.into_iter().map(|r| r.date).collect();
+                let local_dates_str = local_dates.join(", ");
+                let latest_local = local_dates.first().cloned().unwrap_or_default();
+                eprintln!("  Locally available: {}", local_dates_str);
+                eprintln!("  Pull one by date to use it offline: ods pull {}", latest_local);
+            }
+            return Err(AlreadyReported.into());
+        }
+    };
     let mut data_releases: Vec<(String, GithubRelease)> = releases
         .into_iter()
         .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
@@ -275,6 +306,55 @@ fn pull_latest_release<F: ReleaseFetcher>(
     let (latest_date, release) = data_releases.remove(0);
 
     pull_release_by_meta(workspace_root, &latest_date, &release, force, fetcher)
+}
+
+fn pull_all_releases<F: ReleaseFetcher>(
+    workspace_root: &Path,
+    force: bool,
+    fetcher: &F,
+) -> Result<()> {
+    eprintln!("Querying available ODS dataset releases...");
+    let releases = fetcher.fetch_releases()?;
+    let mut data_releases: Vec<(String, GithubRelease)> = releases
+        .into_iter()
+        .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
+        .map(|r| {
+            let date = r.tag_name.trim_start_matches("data/").to_string();
+            (date, r)
+        })
+        .collect();
+
+    if data_releases.is_empty() {
+        anyhow::bail!("✖ No pre-built dataset releases found upstream in `data/*` namespace.");
+    }
+
+    data_releases.sort_by(|a, b| a.0.cmp(&b.0)); // chronological order
+
+    let total_count = data_releases.len();
+    let total_bytes: u64 = data_releases
+        .iter()
+        .flat_map(|(_, r)| r.assets.iter().map(|a| a.size))
+        .sum();
+    let total_mb = (total_bytes as f64 / (1024.0 * 1024.0)).round() as u64;
+
+    eprintln!("✓ {} releases available, {} MB total", total_count, total_mb);
+
+    let mut latest_date = String::new();
+    for (date, release) in &data_releases {
+        latest_date = date.clone();
+        let release_dir = workspace_root.join("releases").join(date);
+        if release_dir.exists() && !force && is_release_dir_verified(&release_dir) {
+            eprintln!("* {} (cached)", date);
+        } else {
+            pull_release_by_meta(workspace_root, date, release, force, fetcher)?;
+        }
+    }
+
+    if !latest_date.is_empty() {
+        set_active_release(workspace_root, &latest_date)?;
+    }
+    eprintln!("Done!");
+    Ok(())
 }
 
 fn pull_specific_release<F: ReleaseFetcher>(
@@ -332,11 +412,10 @@ fn pull_release_by_meta<F: ReleaseFetcher>(
 
     if release_dir.exists() && !force {
         if is_release_dir_verified(&release_dir) {
-            eprintln!("* Release {} is already cached locally.", date);
+            eprintln!("* Release {} already local, verified", date);
             set_active_release(workspace_root, date)?;
             generate_workspace_readme(workspace_root, date, None, None)?;
-            eprintln!("✓ Linked to releases/{}", date);
-            eprintln!("Done!");
+            eprintln!("✓ current updated to releases/{}", date);
             return Ok(());
         }
     }

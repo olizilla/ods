@@ -306,3 +306,70 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_sha256sums_and_derived_artifacts_are_uppercase_and_match() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let output_dir = temp_dir.path();
+
+    // Create dummy files for artifacts
+    let files = [
+        "orgs.parquet",
+        "orgs_all.parquet",
+        "org_roles.parquet",
+        "roles.parquet",
+        "relationships.parquet",
+        "successions.parquet",
+        "category_rules.json",
+    ];
+    for f in &files {
+        fs::write(output_dir.join(f), format!("dummy content for {}", f))?;
+    }
+
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    fs::write(
+        output_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov)?,
+    )?;
+
+    ods::provenance::update_provenance_and_write_sha256sums(output_dir)?;
+
+    let prov_content = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
+    let updated_prov: ods::provenance::OdsProvenance = serde_json::from_str(&prov_content)?;
+    let derived = updated_prov.derived_artifacts.expect("derived_artifacts must be present");
+
+    let sha256sums_content = fs::read_to_string(output_dir.join("SHA256SUMS"))?;
+    
+    for line in sha256sums_content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() == 2 {
+            let hash = parts[0];
+            let filename = parts[1];
+
+            // Verify hash is uppercase
+            assert_eq!(
+                hash,
+                hash.to_uppercase(),
+                "hash in SHA256SUMS for {} must be uppercase, got {}",
+                filename,
+                hash
+            );
+
+            if filename != ods::provenance::PROVENANCE_FILENAME {
+                let prov_hash = derived.get(filename).unwrap_or_else(|| {
+                    panic!("{} not found in _provenance.json derived_artifacts", filename)
+                });
+                assert_eq!(
+                    hash,
+                    prov_hash,
+                    "SHA256SUMS and _provenance.json derived_artifacts must agree exactly (including case) for {}",
+                    filename
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+

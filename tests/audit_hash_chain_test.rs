@@ -22,12 +22,25 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
   </un:ManifestHeader>
   <un:Organisations>
     <un:Organisation>
+      <un:Name>PREDECESSOR PRACTICE</un:Name>
+      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A200" />
+      <un:Status value="Inactive" />
+      <un:Date type="Legal"><un:Start value="2010-01-01" /></un:Date>
+      <un:OrgRecordClass value="RC1" />
+      <un:PrimaryRoleId id="RO177" uniqueRoleId="2" status="Active" display_name="Prescribing Cost Centre" />
+    </un:Organisation>
+    <un:Organisation>
       <un:Name>TEST PRACTICE</un:Name>
       <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A100" />
       <un:Status value="Active" />
       <un:Date type="Legal"><un:Start value="2020-01-01" /></un:Date>
       <un:OrgRecordClass value="RC1" />
       <un:PrimaryRoleId id="RO177" uniqueRoleId="1" status="Active" display_name="Prescribing Cost Centre" />
+      <un:Succ uniqueSuccId="100">
+        <Date><Type value="Legal" /><Start value="2020-01-01" /></Date>
+        <Type>Predecessor</Type>
+        <Target><OrgId extension="A200" /></Target>
+      </un:Succ>
     </un:Organisation>
   </un:Organisations>
 </un:OrganisationManifest>"#;
@@ -57,7 +70,7 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     prov.publication_date = Some("2026-07-28".to_string());
     prov.publication_seq_num = Some("4700".to_string());
     prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(1);
+    prov.publication_record_count = Some(2);
     prov.primary_role_scope = Some(vec!["RO177".to_string()]);
 
     fs::write(
@@ -211,3 +224,189 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
     assert!(result.is_err(), "audit must fail on corrupted derived_artifacts in _provenance.json");
     Ok(())
 }
+
+#[test]
+fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
+    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    // Create stray unaccounted file in active release directory
+    let stray_path = active_dir.join("rels.parquet");
+    fs::write(&stray_path, b"stray content")?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when unaccounted files exist in release directory");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Unaccounted") || err_msg.contains("rels.parquet") || err_msg.contains("discrepanc"),
+        "error message must mention unaccounted file, got: {}",
+        err_msg
+    );
+    Ok(())
+}
+
+#[test]
+fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
+    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    // Overwrite successions.parquet with empty/different file
+    let empty_records: Vec<ods::commands::ndjson::OdsRecord> = Vec::new();
+    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when XML successions count does not match successions.parquet");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Succession") || err_msg.contains("discrepanc"),
+        "error message must describe successions mismatch, got: {}",
+        err_msg
+    );
+    Ok(())
+}
+
+#[test]
+fn test_audit_fails_on_orphan_successions() -> Result<()> {
+    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    // Create an orphan succession edge
+    let record_with_orphan = ods::commands::ndjson::OdsRecord {
+        ods_code: "A100".to_string(),
+        name: "TEST".to_string(),
+        status: "active".to_string(),
+        successors: vec![ods::commands::ndjson::OdsSuccessor {
+            unique_succ_id: "999".to_string(),
+            succ_type: "Predecessor".to_string(),
+            dates: Vec::new(),
+            target: ods::commands::ndjson::OdsRelationshipTarget {
+                ods_code: "NONEXISTENT_ORG_999".to_string(),
+                ..Default::default()
+            },
+        }],
+        ..Default::default()
+    };
+    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when successions reference non-existent organisation codes");
+    Ok(())
+}
+
+#[test]
+fn test_unexpected_files_detection() -> Result<()> {
+    let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    assert!(ods::commands::parquet::get_unexpected_files(&active_dir).is_empty());
+
+    let stray1 = active_dir.join("rels.parquet");
+    let stray2 = active_dir.join("old_rules.json");
+    let ignored1 = active_dir.join(".DS_Store");
+    let ignored2 = active_dir.join("markdown");
+    fs::write(&stray1, b"stray1")?;
+    fs::write(&stray2, b"stray2")?;
+    fs::write(&ignored1, b"ds_store")?;
+    fs::create_dir_all(&ignored2)?;
+
+    let unexpected = ods::commands::parquet::get_unexpected_files(&active_dir);
+    assert_eq!(unexpected, vec!["old_rules.json".to_string(), "rels.parquet".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn test_audit_icb_hierarchy_check_reports_honest_gp_count_and_fails_on_corrupted_icb() -> Result<()> {
+    let release_parquet = std::path::PathBuf::from("./ods_data/releases/2026-07-31/orgs.parquet");
+    if !release_parquet.exists() {
+        eprintln!("Skipping test: ./ods_data/releases/2026-07-31/orgs.parquet missing");
+        return Ok(());
+    }
+
+    // 1. Verify honest counting on 2026-07-31 dataset
+    let (practice_linked, practice_total, _practice_pct, english_gp_unlinked, trust_linked, trust_total, _trust_pct) =
+        ods::commands::audit::audit_hierarchy_completeness(&release_parquet)?;
+
+    assert_eq!(practice_total, 7577, "Should independently count all active GP practices");
+    assert_eq!(practice_linked, 6236, "Should count English GP practices linked to ICB");
+    assert_eq!(practice_total - practice_linked, 1341, "Missing ICB count must equal 1341 non-English practices");
+    assert_eq!(english_gp_unlinked, 0, "100% of active English GP practices must be linked");
+    assert_eq!(trust_total, 38254, "Should independently count all NHS trust sites");
+    assert_eq!(trust_linked, 38254, "All NHS trust sites must be linked to NHS trust");
+
+    // 2. Verify audit failure when English GP practice ICB is corrupted/missing
+    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    // Create an English GP practice with NO ICB code
+    let unlinked_english_gp = ods::commands::ndjson::OdsRecord {
+        ods_code: "A100".to_string(),
+        name: "UNLINKED ENGLISH GP".to_string(),
+        status: "active".to_string(),
+        record_class: "org".to_string(),
+        role: "gp practice".to_string(),
+        geo_loc: Some(ods::commands::ndjson::Location {
+            country: Some("ENGLAND".to_string()),
+            ..Default::default()
+        }),
+        roles: vec![ods::commands::ndjson::OdsRole {
+            id: "RO76".to_string(),
+            code: None,
+            display_name: Some("gp practice".to_string()),
+            unique_role_id: "1".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        icb_code: None,
+        ..Default::default()
+    };
+
+    let empty_closures = std::collections::HashMap::new();
+    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    ods::commands::parquet::export_orgs(&active_dir, &[unlinked_english_gp], &empty_closures, &empty_closures, prov.as_ref())?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when an active English GP practice lacks an ICB link");
+    Ok(())
+}
+
+
+
+

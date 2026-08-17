@@ -93,58 +93,213 @@ struct MatchedRecord {
     is_exact_code_match: bool,
 }
 
-struct SuccessorInfo {
-    successor_code: Option<String>,
-    successor: Option<String>,
-    _chain: String,
+#[derive(Debug, Clone)]
+pub struct SuccessionEdge {
+    pub target_code: String,
+    pub date: Option<String>,
 }
 
-fn load_successors_map(parquet_dir: &Path) -> HashMap<String, Vec<SuccessorInfo>> {
-    let path = if parquet_dir.join("successions.parquet").exists() {
-        parquet_dir.join("successions.parquet")
-    } else {
-        parquet_dir.join("successors.parquet")
-    };
-    let mut map: HashMap<String, Vec<SuccessorInfo>> = HashMap::new();
+#[derive(Debug, Clone, Default)]
+pub struct SuccessionGraph {
+    pub forward: HashMap<String, Vec<SuccessionEdge>>,
+    pub reverse: HashMap<String, Vec<SuccessionEdge>>,
+}
+
+fn load_succession_graph(parquet_dir: &Path) -> SuccessionGraph {
+    let mut graph = SuccessionGraph::default();
+    let path = parquet_dir.join("successions.parquet");
     if !path.exists() {
-        return map;
+        return graph;
     }
+    let Ok(file) = File::open(&path) else { return graph };
+    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return graph };
+    let Ok(reader) = builder.build() else { return graph };
+
+    for batch in reader.flatten() {
+        let schema = batch.schema();
+        let (Ok(pred_idx), Ok(succ_idx)) = (
+            schema.index_of("predecessor_code"),
+            schema.index_of("successor_code"),
+        ) else { continue };
+
+        let date_idx = schema.index_of("legal_start").ok();
+
+        let pred_arr = batch.column(pred_idx).as_any().downcast_ref::<StringArray>();
+        let succ_arr = batch.column(succ_idx).as_any().downcast_ref::<StringArray>();
+        let date_arr = date_idx.and_then(|i| batch.column(i).as_any().downcast_ref::<Date32Array>());
+
+        let (Some(pred_arr), Some(succ_arr)) = (pred_arr, succ_arr) else { continue };
+
+        for i in 0..batch.num_rows() {
+            if pred_arr.is_null(i) || succ_arr.is_null(i) {
+                continue;
+            }
+            let pred = pred_arr.value(i).to_string();
+            let succ = succ_arr.value(i).to_string();
+            let date = date_arr.and_then(|arr| {
+                if arr.is_valid(i) {
+                    let days = arr.value(i);
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
+                    let d = epoch.checked_add_signed(chrono::Duration::days(days as i64))?;
+                    Some(d.format("%Y-%m-%d").to_string())
+                } else {
+                    None
+                }
+            });
+
+            graph.forward.entry(pred.clone()).or_default().push(SuccessionEdge {
+                target_code: succ.clone(),
+                date: date.clone(),
+            });
+            graph.reverse.entry(succ).or_default().push(SuccessionEdge {
+                target_code: pred,
+                date,
+            });
+        }
+    }
+    graph
+}
+
+fn load_org_metadata(parquet_dir: &Path) -> HashMap<String, (String, String)> {
+    let mut map = HashMap::new();
+    let path = if parquet_dir.join("orgs_all.parquet").exists() {
+        parquet_dir.join("orgs_all.parquet")
+    } else {
+        parquet_dir.join("orgs.parquet")
+    };
     let Ok(file) = File::open(&path) else { return map };
     let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return map };
     let Ok(reader) = builder.build() else { return map };
 
     for batch in reader.flatten() {
         let schema = batch.schema();
-        let ods_idx = schema.index_of("predecessor_code").or_else(|_| schema.index_of("ods_code")).ok();
-        let succ_code_idx = schema.index_of("successor_code").ok();
-        let succ_name_idx = schema.index_of("successor").ok();
-        let chain_idx = schema.index_of("succession_chain").ok();
+        let (Ok(code_idx), Ok(name_idx), Ok(status_idx)) = (
+            schema.index_of("ods_code"),
+            schema.index_of("name"),
+            schema.index_of("status"),
+        ) else { continue };
 
-        let Some(ods_idx) = ods_idx else { continue };
-        let Some(succ_code_idx) = succ_code_idx else { continue };
+        let code_arr = batch.column(code_idx).as_any().downcast_ref::<StringArray>();
+        let name_arr = batch.column(name_idx).as_any().downcast_ref::<StringArray>();
+        let status_arr = batch.column(status_idx).as_any().downcast_ref::<StringArray>();
 
-        let ods_arr = batch.column(ods_idx).as_any().downcast_ref::<StringArray>();
-        let succ_code_arr = batch.column(succ_code_idx).as_any().downcast_ref::<StringArray>();
-        let succ_name_arr = succ_name_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
-        let chain_arr = chain_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
-
-        let (Some(ods_arr), Some(succ_code_arr)) = (ods_arr, succ_code_arr) else { continue };
+        let (Some(code_arr), Some(name_arr), Some(status_arr)) = (code_arr, name_arr, status_arr) else { continue };
 
         for i in 0..batch.num_rows() {
-            let code = ods_arr.value(i).to_string();
-            let succ_code = if succ_code_arr.is_valid(i) { Some(succ_code_arr.value(i).to_string()) } else { None };
-            let succ_name = succ_name_arr.and_then(|arr| if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None });
-            let chain = chain_arr.map(|arr| arr.value(i).to_string()).unwrap_or_else(|| succ_code.clone().unwrap_or_default());
-
-            map.entry(code).or_default().push(SuccessorInfo {
-                successor_code: succ_code,
-                successor: succ_name,
-                _chain: chain,
-            });
+            if code_arr.is_valid(i) {
+                let code = code_arr.value(i).to_string();
+                let name = if name_arr.is_valid(i) { name_arr.value(i).to_string() } else { String::new() };
+                let status = if status_arr.is_valid(i) { status_arr.value(i).to_string() } else { String::new() };
+                map.insert(code, (name, status));
+            }
         }
     }
     map
 }
+
+#[derive(Debug, Clone)]
+pub struct SuccessionHop {
+    pub depth: usize,
+    pub date: Option<String>,
+    pub code: String,
+    pub name: String,
+    pub status: String,
+}
+
+pub fn walk_succession_chain(
+    code: &str,
+    graph: &SuccessionGraph,
+    org_meta: &HashMap<String, (String, String)>,
+) -> Vec<SuccessionHop> {
+    let mut hops = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(code.to_string());
+
+    fn walk(
+        curr: &str,
+        depth: usize,
+        graph: &SuccessionGraph,
+        org_meta: &HashMap<String, (String, String)>,
+        visited: &mut std::collections::HashSet<String>,
+        hops: &mut Vec<SuccessionHop>,
+    ) {
+        if let Some(edges) = graph.forward.get(curr) {
+            for edge in edges {
+                if visited.contains(&edge.target_code) {
+                    continue;
+                }
+                visited.insert(edge.target_code.clone());
+                let (name, status) = org_meta.get(&edge.target_code)
+                    .cloned()
+                    .unwrap_or_else(|| (String::new(), "unknown".to_string()));
+                hops.push(SuccessionHop {
+                    depth,
+                    date: edge.date.clone(),
+                    code: edge.target_code.clone(),
+                    name,
+                    status,
+                });
+                walk(&edge.target_code, depth + 1, graph, org_meta, visited, hops);
+            }
+        }
+    }
+
+    walk(code, 1, graph, org_meta, &mut visited, &mut hops);
+    hops
+}
+
+pub fn get_predecessors(
+    code: &str,
+    graph: &SuccessionGraph,
+    org_meta: &HashMap<String, (String, String)>,
+) -> Vec<SuccessionHop> {
+    let mut hops = Vec::new();
+    if let Some(edges) = graph.reverse.get(code) {
+        for edge in edges {
+            let (name, status) = org_meta.get(&edge.target_code)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), "unknown".to_string()));
+            hops.push(SuccessionHop {
+                depth: 1,
+                date: edge.date.clone(),
+                code: edge.target_code.clone(),
+                name,
+                status,
+            });
+        }
+    }
+    hops
+}
+
+pub fn resolve_table_successor_display(
+    hops: &[SuccessionHop],
+) -> Option<String> {
+    if hops.is_empty() {
+        return None;
+    }
+    let active_hops: Vec<&SuccessionHop> = hops.iter()
+        .filter(|h| h.status.eq_ignore_ascii_case("active"))
+        .collect();
+
+    if !active_hops.is_empty() {
+        let first = active_hops[0];
+        let first_name = if !first.name.is_empty() { &first.name } else { &first.code };
+        if active_hops.len() > 1 {
+            Some(format!("{first_name} +{}", active_hops.len() - 1))
+        } else {
+            Some(first_name.to_string())
+        }
+    } else {
+        let first = &hops[0];
+        let first_name = if !first.name.is_empty() { &first.name } else { &first.code };
+        if hops.len() > 1 {
+            Some(format!("{first_name} +{}", hops.len() - 1))
+        } else {
+            Some(first_name.to_string())
+        }
+    }
+}
+
 
 fn load_role_vocabulary(parquet_dir: &Path) -> HashMap<String, String> {
     let mut map: HashMap<String, String> = HashMap::new();
@@ -225,14 +380,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let reader = builder.build()?;
 
     let query_str = args.query.as_deref().unwrap_or_default();
-    let query_lower = query_str.to_lowercase();
+let query_lower = query_str.to_lowercase();
     let query_words: Vec<String> = query_lower
         .split_whitespace()
         .map(|s| s.to_string())
         .collect();
     let role_filter_lower = args.role.map(|r| r.to_lowercase());
-
-    let successors_map = load_successors_map(parquet_dir);
+    let successions_graph = load_succession_graph(parquet_dir);
+    let org_metadata = load_org_metadata(parquet_dir);
     let role_vocab = load_role_vocabulary(parquet_dir);
 
     let mut matches: Vec<MatchedRecord> = Vec::new();
@@ -299,122 +454,187 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         };
 
         for i in 0..num_rows {
-            let code = ods_code_arr.value(i);
+            let ods_code = ods_code_arr.value(i);
             let name = name_arr.value(i);
-            let class = record_class_arr.value(i);
-            let status = status_arr.value(i);
+            let postcode = postcode_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let town = town_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let county = county_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let country = country_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let uprn = uprn_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let telephone = telephone_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let website = website_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let commissioner = commissioner_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let commissioner_code = commissioner_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let parent = parent_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let parent_code = parent_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let pcn = pcn_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let pcn_code = pcn_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let trust = trust_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let trust_code = trust_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let icb = icb_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let icb_code = icb_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let region = region_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let region_code = region_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
             let primary_role = primary_role_arr.value(i);
-            let role_name = role_vocab
-                .get(primary_role)
-                .cloned()
-                .unwrap_or_else(|| primary_role.to_string());
-
-            let mut role_codes = Vec::new();
-            if roles_arr.is_valid(i) {
-                let values = roles_arr.value(i);
-                let str_values = values.as_any().downcast_ref::<StringArray>().unwrap();
-                for j in 0..str_values.len() {
-                    if str_values.is_valid(j) {
-                        role_codes.push(str_values.value(j).to_string());
-                    }
-                }
-            }
-
             let category = category_arr.value(i).to_string();
 
-            let extract_str = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> String {
-                idx.and_then(|index| {
-                    let col = batch.column(index);
-                    let arr = col.as_any().downcast_ref::<StringArray>()?;
-                    if arr.is_valid(row) {
-                        Some(arr.value(row).to_string())
-                    } else {
-                        None
-                    }
-                }).unwrap_or_default()
+            // Extract all role codes from the list
+            let role_codes: Vec<String> = if roles_arr.is_valid(i) {
+                let value_arr = roles_arr.value(i);
+                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
+                if let Some(str_arr) = str_arr {
+                    (0..str_arr.len())
+                        .filter(|j| str_arr.is_valid(*j))
+                        .map(|j| str_arr.value(j).to_string())
+                        .collect()
+                } else {
+                    vec![primary_role.to_string()]
+                }
+            } else {
+                vec![primary_role.to_string()]
             };
 
-            let address = extract_str(&batch, address_idx, i);
-            let town = extract_str(&batch, town_idx, i);
-            let county = extract_str(&batch, county_idx, i);
-            let postcode = extract_str(&batch, postcode_idx, i);
-            let country = extract_str(&batch, country_idx, i);
-            let uprn = extract_str(&batch, uprn_idx, i);
-            let telephone = extract_str(&batch, telephone_idx, i);
-            let website = extract_str(&batch, website_idx, i);
-            let commissioner = extract_str(&batch, commissioner_idx, i);
-            let commissioner_code = extract_str(&batch, commissioner_code_idx, i);
-            let parent = extract_str(&batch, parent_idx, i);
-            let parent_code = extract_str(&batch, parent_code_idx, i);
-            let pcn = extract_str(&batch, pcn_idx, i);
-            let pcn_code = extract_str(&batch, pcn_code_idx, i);
-            let trust = extract_str(&batch, trust_idx, i);
-            let trust_code = extract_str(&batch, trust_code_idx, i);
-            let icb = extract_str(&batch, icb_idx, i);
-            let icb_code = extract_str(&batch, icb_code_idx, i);
-            let region = extract_str(&batch, region_idx, i);
-            let region_code = extract_str(&batch, region_code_idx, i);
-
-            let op_start = extract_date(&batch, op_start_idx, i);
-            let op_end = extract_date(&batch, op_end_idx, i);
-            let leg_start = extract_date(&batch, leg_start_idx, i);
-            let leg_end = extract_date(&batch, leg_end_idx, i);
-            let last_change_date = extract_date(&batch, last_change_idx, i);
-            let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
-
-            let mut searchable_blob = format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
-                code, name, town, county, postcode, country, primary_role, role_name,
-                commissioner, parent, pcn, trust, icb, region, uprn, telephone, website
-            ).to_lowercase();
-
-            for rc in &role_codes {
-                searchable_blob.push(' ');
-                searchable_blob.push_str(&rc.to_lowercase());
-                if let Some(rname) = role_vocab.get(rc.as_str()) {
-                    searchable_blob.push(' ');
-                    searchable_blob.push_str(&rname.to_lowercase());
+            // Apply optional role filter
+            if let Some(ref rf) = role_filter_lower {
+                let matches_role = primary_role.to_lowercase() == *rf
+                    || role_codes.iter().any(|c| {
+                        c.to_lowercase() == *rf
+                            || role_vocab.get(c).is_some_and(|n| n.to_lowercase().contains(rf))
+                    })
+                    || role_vocab.get(primary_role).is_some_and(|n| n.to_lowercase().contains(rf));
+                if !matches_role {
+                    continue;
                 }
             }
 
-            let matches_query = query_words.iter().all(|w| searchable_blob.contains(w));
-            let matches_role = match &role_filter_lower {
-                Some(rf) => {
-                    primary_role.to_lowercase() == *rf
-                        || role_name.to_lowercase() == *rf
-                        || role_codes.iter().any(|rc| {
-                            rc.to_lowercase() == *rf
-                                || role_vocab.get(rc.as_str()).map(|n| n.to_lowercase() == *rf).unwrap_or(false)
-                        })
+            let matches_query = if query_words.is_empty() {
+                true
+            } else {
+                let mut search_target = format!(
+                    "{} {} {} {} {} {} {} {} {} {} {} {} {}",
+                    ods_code,
+                    name,
+                    postcode,
+                    town,
+                    county,
+                    commissioner,
+                    commissioner_code,
+                    parent,
+                    parent_code,
+                    pcn,
+                    trust,
+                    primary_role,
+                    category
+                ).to_lowercase();
+
+                for rc in &role_codes {
+                    search_target.push(' ');
+                    search_target.push_str(&rc.to_lowercase());
+                    if let Some(rname) = role_vocab.get(rc) {
+                        search_target.push(' ');
+                        search_target.push_str(&rname.to_lowercase());
+                    }
                 }
-                None => true,
+
+                query_words.iter().all(|word| search_target.contains(word))
             };
 
-            if matches_query && matches_role {
-                let is_exact_code = code.eq_ignore_ascii_case(query_str);
+            if matches_query {
+                let address = address_idx.and_then(|idx| {
+                    let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                    if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+                }).unwrap_or_default();
+
+                let op_start = extract_date(&batch, op_start_idx, i);
+                let op_end = extract_date(&batch, op_end_idx, i);
+                let leg_start = extract_date(&batch, leg_start_idx, i);
+                let leg_end = extract_date(&batch, leg_end_idx, i);
+                let last_change_date = extract_date(&batch, last_change_idx, i);
+                let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
+
+                let is_exact_code = ods_code.eq_ignore_ascii_case(query_str);
+                let role_name = role_vocab.get(primary_role).cloned().unwrap_or_else(|| primary_role.to_string());
+
                 matches.push(MatchedRecord {
-                    ods_code: code.to_string(),
+                    ods_code: ods_code.to_string(),
                     name: name.to_string(),
-                    entity_type: class.to_string(),
-                    status: status.to_string(),
+                    entity_type: record_class_arr.value(i).to_string(),
+                    status: status_arr.value(i).to_string(),
                     primary_role_code: primary_role.to_string(),
                     role_codes,
                     category,
                     role_name,
                     address,
-                    town,
-                    county,
-                    postcode,
-                    country,
-                    uprn,
-                    telephone,
-                    website,
+                    town: town.to_string(),
+                    county: county.to_string(),
+                    postcode: postcode.to_string(),
+                    country: country.to_string(),
+                    uprn: uprn.to_string(),
+                    telephone: telephone.to_string(),
+                    website: website.to_string(),
                     commissioner_name: commissioner,
                     commissioner_code,
                     parent_name: parent,
                     parent_code,
-                    pcn_name: pcn,
-                    pcn_code,
+                    pcn_name: pcn.to_string(),
+                    pcn_code: pcn_code.to_string(),
                     trust_name: trust.to_string(),
                     trust_code: trust_code.to_string(),
                     icb_name: icb.to_string(),
@@ -449,15 +669,33 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     match args.format {
         OutputFormat::Json => {
             for r in &matches {
-                let (succ_code, succ_name) = if r.status.eq_ignore_ascii_case("inactive") {
-                    successors_map.get(&r.ods_code)
-                        .and_then(|succs| succs.iter().find_map(|s| {
-                            s.successor_code.clone().map(|c| (Some(c), s.successor.clone()))
-                        }))
-                        .unwrap_or((None, None))
+                let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
+                let pred_hops = get_predecessors(&r.ods_code, &successions_graph, &org_metadata);
+
+                let succ_codes: Vec<String> = if let Some(edges) = successions_graph.forward.get(&r.ods_code) {
+                    edges.iter().map(|e| e.target_code.clone()).collect()
                 } else {
-                    (None, None)
+                    Vec::new()
                 };
+                let pred_codes: Vec<String> = if let Some(edges) = successions_graph.reverse.get(&r.ods_code) {
+                    edges.iter().map(|e| e.target_code.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+
+                let successors_json: Vec<serde_json::Value> = succ_hops.iter().map(|h| serde_json::json!({
+                    "code": h.code,
+                    "name": h.name,
+                    "status": h.status,
+                    "date": h.date,
+                })).collect();
+
+                let predecessors_json: Vec<serde_json::Value> = pred_hops.iter().map(|h| serde_json::json!({
+                    "code": h.code,
+                    "name": h.name,
+                    "status": h.status,
+                    "date": h.date,
+                })).collect();
 
                 let json = serde_json::json!({
                     "ods_code": r.ods_code,
@@ -488,8 +726,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "icb_code": if r.icb_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb_code.clone()) },
                     "region_name": if r.region_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_name.clone()) },
                     "region_code": if r.region_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_code.clone()) },
-                    "successor_code": succ_code,
-                    "successor": succ_name,
+                    "successor_codes": succ_codes,
+                    "predecessor_codes": pred_codes,
+                    "successors": successors_json,
+                    "predecessors": predecessors_json,
                     "legal_start": r.legal_start,
                     "legal_end": r.legal_end,
                     "operational_start": r.operational_start,
@@ -501,9 +741,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
+            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
             let escape_csv = |s: &str| -> String {
-                if s.contains(',') || s.contains('"') || s.contains('\n') {
+                if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains(';') {
                     format!("\"{}\"", s.replace('"', "\"\""))
                 } else {
                     s.to_string()
@@ -511,15 +751,18 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             };
             for r in &matches {
                 let roles_str = r.role_codes.join("; ");
-                let (succ_code, succ_name) = if r.status.eq_ignore_ascii_case("inactive") {
-                    successors_map.get(&r.ods_code)
-                        .and_then(|succs| succs.iter().find_map(|s| {
-                            s.successor_code.clone().map(|c| (c, s.successor.clone().unwrap_or_default()))
-                        }))
-                        .unwrap_or_default()
+                let succ_codes: Vec<String> = if let Some(edges) = successions_graph.forward.get(&r.ods_code) {
+                    edges.iter().map(|e| e.target_code.clone()).collect()
                 } else {
-                    (String::new(), String::new())
+                    Vec::new()
                 };
+                let pred_codes: Vec<String> = if let Some(edges) = successions_graph.reverse.get(&r.ods_code) {
+                    edges.iter().map(|e| e.target_code.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+                let succ_codes_str = succ_codes.join("; ");
+                let pred_codes_str = pred_codes.join("; ");
 
                 let fields = [
                     r.ods_code.as_str(),
@@ -550,8 +793,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.icb_code.as_str(),
                     &escape_csv(&r.region_name),
                     r.region_code.as_str(),
-                    succ_code.as_str(),
-                    &escape_csv(&succ_name),
+                    &escape_csv(&succ_codes_str),
+                    &escape_csv(&pred_codes_str),
+                    &escape_csv(&succ_codes_str),
+                    &escape_csv(&pred_codes_str),
                     r.legal_start.as_deref().unwrap_or(""),
                     r.legal_end.as_deref().unwrap_or(""),
                     r.operational_start.as_deref().unwrap_or(""),
@@ -563,79 +808,76 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Table => {
-            if args.verbose || matched_count == 1 {
-                use std::io::IsTerminal;
-                let use_color = std::io::stdout().is_terminal();
+            let has_exact_code_match = matches.iter().any(|r| r.is_exact_code_match);
+            use std::io::IsTerminal;
+            let use_color = std::io::stdout().is_terminal();
 
-                // Shared Markdown inspector view
-                for r in &matches {
-                    let sec_roles: Vec<String> = r
-                        .role_codes
-                        .iter()
-                        .filter(|c| **c != r.primary_role_code)
-                        .map(|c| role_display(&role_vocab, c))
-                        .collect();
-                    let successors_vec: Vec<crate::formatting::SuccessorLink> = if r.status.eq_ignore_ascii_case("inactive") {
-                        successors_map.get(&r.ods_code)
-                            .map(|succs| succs.iter().filter_map(|s| {
-                                s.successor_code.as_deref().map(|c| crate::formatting::SuccessorLink {
-                                    successor_code: c,
-                                    successor_name: s.successor.as_deref(),
-                                })
-                            }).collect())
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
+            if args.verbose || matched_count == 1 || has_exact_code_match {
+                if !args.verbose && matched_count > 1 && has_exact_code_match {
+                    let exact_matches: Vec<&MatchedRecord> = matches.iter().filter(|r| r.is_exact_code_match).collect();
+                    let related_matches: Vec<&MatchedRecord> = matches.iter().filter(|r| !r.is_exact_code_match).collect();
 
-                    let inspector = crate::formatting::InspectorRecord {
-                        ods_code: &r.ods_code,
-                        name: &r.name,
-                        record_class: &r.entity_type,
-                        status: &r.status,
-                        role: &r.role_name,
-                        role_code: &r.primary_role_code,
-                        other_roles: &sec_roles,
-                        address: &r.address,
-                        country: &r.country,
-                        uprn: &r.uprn,
-                        telephone: &r.telephone,
-                        website: &r.website,
-                        commissioner: &r.commissioner_name,
-                        commissioner_code: &r.commissioner_code,
-                        parent: &r.parent_name,
-                        parent_code: &r.parent_code,
-                        pcn: &r.pcn_name,
-                        pcn_code: &r.pcn_code,
-                        trust: &r.trust_name,
-                        trust_code: &r.trust_code,
-                        icb: &r.icb_name,
-                        icb_code: &r.icb_code,
-                        region: &r.region_name,
-                        region_code: &r.region_code,
-                        successors: &successors_vec,
-                        operational_start: r.operational_start.as_deref(),
-                        operational_end: r.operational_end.as_deref(),
-                        legal_start: r.legal_start.as_deref(),
-                        legal_end: r.legal_end.as_deref(),
-                        last_change_date: r.last_changed.as_deref(),
-                    };
+                    for r in &exact_matches {
+                        render_inspector_for_record(
+                            r,
+                            &role_vocab,
+                            &successions_graph,
+                            &org_metadata,
+                            use_color,
+                            writer,
+                        )?;
+                        writeln!(writer, "\n─────────────────────────────────────────────────────────────────────────────\n")?;
+                    }
 
-                    crate::formatting::render_inspector_markdown(&inspector, use_color, writer)?;
-                    writeln!(writer, "\n─────────────────────────────────────────────────────────────────────────────\n")?;
+                    if !related_matches.is_empty() {
+                        writeln!(writer, "Related Records ({})\n", related_matches.len())?;
+                        writeln!(
+                            writer,
+                            "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
+                            "ODS Code", "Name", "Postcode", "Category", "Class"
+                        )?;
+                        writeln!(
+                            writer,
+                            "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<5}",
+                            "", "", "", "", ""
+                        )?;
+                        for r in &related_matches {
+                            let name_display = truncate_str(&r.name, 45);
+                            let role_display = truncate_str(&r.category, 25);
+
+                            writeln!(
+                                writer,
+                                "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
+                                r.ods_code, name_display, r.postcode, role_display, r.entity_type
+                            )?;
+                        }
+                        writeln!(writer)?;
+                    }
+                } else {
+                    for r in &matches {
+                        render_inspector_for_record(
+                            r,
+                            &role_vocab,
+                            &successions_graph,
+                            &org_metadata,
+                            use_color,
+                            writer,
+                        )?;
+                        writeln!(writer, "\n─────────────────────────────────────────────────────────────────────────────\n")?;
+                    }
                 }
             } else {
                 // Padded Markdown Table layout
                 if args.all {
                     writeln!(
                         writer,
-                        "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} | {}",
-                        "ODS Code", "Name", "Postcode", "Category", "Class", "Status", "Successor"
+                        "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
+                        "ODS Code", "Name", "Postcode", "Category", "Class", "Status"
                     )?;
                     writeln!(
                         writer,
-                        "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<7}|{:-<10}|{:-<9}",
-                        "", "", "", "", "", "", ""
+                        "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<7}|{:-<10}|",
+                        "", "", "", "", "", ""
                     )?;
                 } else {
                     writeln!(
@@ -651,24 +893,25 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 }
 
                 for r in &matches {
-                    let name_truncated = if r.name.len() > 45 { &r.name[..42] } else { &r.name };
-                    let name_display = if r.name.len() > 45 { format!("{}...", name_truncated) } else { r.name.to_string() };
-                    let role_truncated = if r.category.len() > 25 { &r.category[..22] } else { &r.category };
-                    let role_display = if r.category.len() > 25 { format!("{}...", role_truncated) } else { r.category.to_string() };
+                    let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
+                        let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
+                        if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
+                            format!("{} → {}", r.name, live_succ)
+                        } else {
+                            r.name.clone()
+                        }
+                    } else {
+                        r.name.clone()
+                    };
+
+                    let name_display = truncate_str(&full_name, 45);
+                    let role_display = truncate_str(&r.category, 25);
 
                     if args.all {
-                        let succ_display = if r.status.eq_ignore_ascii_case("inactive") {
-                            successors_map.get(&r.ods_code)
-                                .and_then(|succs| succs.iter().find_map(|s| s.successor_code.clone()))
-                                .unwrap_or_else(|| "".to_string())
-                        } else {
-                            "".to_string()
-                        };
-
                         writeln!(
                             writer,
-                            "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} | {}",
-                            r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status, succ_display
+                            "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
+                            r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status
                         )?;
                     } else {
                         writeln!(
@@ -699,6 +942,95 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     Ok(())
 }
 
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count > max_chars {
+        let mut truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        truncated.push_str("...");
+        truncated
+    } else {
+        s.to_string()
+    }
+}
+
+fn render_inspector_for_record<W: std::io::Write + ?Sized>(
+    r: &MatchedRecord,
+    role_vocab: &HashMap<String, String>,
+    successions_graph: &SuccessionGraph,
+    org_metadata: &HashMap<String, (String, String)>,
+    use_color: bool,
+    writer: &mut W,
+) -> Result<()> {
+    let sec_roles: Vec<String> = r
+        .role_codes
+        .iter()
+        .filter(|c| **c != r.primary_role_code)
+        .map(|c| role_display(role_vocab, c))
+        .collect();
+
+    let succ_hops = walk_succession_chain(&r.ods_code, successions_graph, org_metadata);
+    let pred_hops = get_predecessors(&r.ods_code, successions_graph, org_metadata);
+
+    let succ_hop_links: Vec<crate::formatting::SuccessionHopLink> = succ_hops
+        .iter()
+        .map(|h| crate::formatting::SuccessionHopLink {
+            depth: h.depth,
+            date: h.date.as_deref(),
+            code: &h.code,
+            name: &h.name,
+            status: &h.status,
+        })
+        .collect();
+
+    let pred_hop_links: Vec<crate::formatting::SuccessionHopLink> = pred_hops
+        .iter()
+        .map(|h| crate::formatting::SuccessionHopLink {
+            depth: h.depth,
+            date: h.date.as_deref(),
+            code: &h.code,
+            name: &h.name,
+            status: &h.status,
+        })
+        .collect();
+
+    let inspector = crate::formatting::InspectorRecord {
+        ods_code: &r.ods_code,
+        name: &r.name,
+        record_class: &r.entity_type,
+        status: &r.status,
+        role: &r.role_name,
+        role_code: &r.primary_role_code,
+        other_roles: &sec_roles,
+        address: &r.address,
+        country: &r.country,
+        uprn: &r.uprn,
+        telephone: &r.telephone,
+        website: &r.website,
+        commissioner: &r.commissioner_name,
+        commissioner_code: &r.commissioner_code,
+        parent: &r.parent_name,
+        parent_code: &r.parent_code,
+        pcn: &r.pcn_name,
+        pcn_code: &r.pcn_code,
+        trust: &r.trust_name,
+        trust_code: &r.trust_code,
+        icb: &r.icb_name,
+        icb_code: &r.icb_code,
+        region: &r.region_name,
+        region_code: &r.region_code,
+        succession: &succ_hop_links,
+        predecessors: &pred_hop_links,
+        operational_start: r.operational_start.as_deref(),
+        operational_end: r.operational_end.as_deref(),
+        legal_start: r.legal_start.as_deref(),
+        legal_end: r.legal_end.as_deref(),
+        last_change_date: r.last_changed.as_deref(),
+    };
+
+    crate::formatting::render_inspector_markdown(&inspector, use_color, writer)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,10 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn test_load_successors_map_nonexistent() {
+    fn test_load_succession_graph_nonexistent() {
         let dir = tempdir().unwrap();
-        let map = load_successors_map(dir.path());
-        assert!(map.is_empty());
+        let graph = load_succession_graph(dir.path());
+        assert!(graph.forward.is_empty());
+        assert!(graph.reverse.is_empty());
     }
 
     fn setup_synthetic_parquet() -> (tempfile::TempDir, PathBuf) {
@@ -888,7 +1221,7 @@ mod tests {
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("B202"));
-        assert!(s.contains("A101")); // Successor code
+        assert!(s.contains("A101") || s.contains("Alpha Health Centre")); // Successor
 
         // Test 4: --verbose inspector mode
         let mut out = Vec::new();
@@ -910,8 +1243,6 @@ mod tests {
         assert!(s.contains("## Contact Details"));
         assert!(s.contains("## Relationships"));
         assert!(s.contains("Other Roles"));
-        // Role names now come from the curated vocabulary, not the source's
-        // lower-cased display string.
         assert!(s.contains("GP Practice (RO76)"), "expected curated role name\n{s}");
 
         // Test 5: CSV output
@@ -930,7 +1261,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
+        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -963,14 +1294,11 @@ mod tests {
             .map(|f| f.name().clone())
             .collect();
 
-        // List of fields from orgs.parquet intentionally excluded from find --format json (until Task 10 find rework)
         let ignored_fields: std::collections::HashSet<&str> =
             ["successor_codes", "predecessor_codes"].into_iter().collect();
 
-        // Additional enriching fields resolved from the role vocabulary and
-        // the successor chain rather than read straight from orgs.parquet.
         let enriching_fields: std::collections::HashSet<&str> =
-            ["role_name", "successor_code", "successor"].into_iter().collect();
+            ["role_name", "successor_codes", "predecessor_codes", "successors", "predecessors"].into_iter().collect();
 
         // Construct a synthetic MatchedRecord with all fields populated
         let record = MatchedRecord {
@@ -1011,10 +1339,6 @@ mod tests {
             is_exact_code_match: true,
         };
 
-        let _secondary_roles = vec!["gp practice (RO76)".to_string()];
-        let succ_code = Some("SUCC1".to_string());
-        let succ_name = Some("Successor Org".to_string());
-
         let json_val = serde_json::json!({
             "ods_code": record.ods_code,
             "entity_type": record.entity_type,
@@ -1044,8 +1368,10 @@ mod tests {
             "icb_code": record.icb_code,
             "region_name": record.region_name,
             "region_code": record.region_code,
-            "successor_code": succ_code,
-            "successor": succ_name,
+            "successor_codes": vec!["SUCC1".to_string()],
+            "predecessor_codes": Vec::<String>::new(),
+            "successors": vec![serde_json::json!({"code": "SUCC1", "name": "Successor Org", "status": "active", "date": null})],
+            "predecessors": Vec::<serde_json::Value>::new(),
             "legal_start": record.legal_start,
             "legal_end": record.legal_end,
             "operational_start": record.operational_start,
@@ -1086,10 +1412,12 @@ mod tests {
         assert_eq!(json_keys_vec[5], "category");
         assert_eq!(json_keys_vec[6], "role_name");
         assert_eq!(json_keys_vec[7], "name");
-        assert_eq!(json_keys_vec[28], "successor_code");
-        assert_eq!(json_keys_vec[29], "successor");
-        assert_eq!(json_keys_vec[34], "last_changed");
-        assert_eq!(json_keys_vec[35], "trud_release_date");
+        assert_eq!(json_keys_vec[28], "successor_codes");
+        assert_eq!(json_keys_vec[29], "predecessor_codes");
+        assert_eq!(json_keys_vec[30], "successors");
+        assert_eq!(json_keys_vec[31], "predecessors");
+        assert_eq!(json_keys_vec[36], "last_changed");
+        assert_eq!(json_keys_vec[37], "trud_release_date");
     }
 
     #[test]
@@ -1139,3 +1467,4 @@ mod tests {
         );
     }
 }
+

@@ -559,13 +559,7 @@ pub fn run(args: find::Args) -> Result<()> {
     let data_dir = args.input.clone();
     if !data_dir.join("orgs.parquet").exists() {
         eprintln!("Initialising workspace dataset...");
-        crate::commands::pull::run(crate::commands::pull::Args {
-            release_date: None,
-            list: false,
-            force: false,
-            api_key: None,
-            verbose: false,
-        })?;
+        crate::commands::pull::run(crate::commands::pull::Args::default())?;
     }
 
     let resolved_dir = crate::workspace::discover_parquet_dir(Some(&data_dir))?;

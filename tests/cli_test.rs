@@ -90,3 +90,77 @@ fn test_cli_trud_help() {
     assert!(stdout.contains("pull"));
     assert!(stdout.contains("diff"));
 }
+
+#[test]
+fn test_cli_pull_help_has_no_api_key() {
+    let output = ods_binary()
+        .arg("pull")
+        .arg("--help")
+        .output()
+        .expect("Failed to execute pull --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[RELEASE_DATE]"),
+        "pull --help must have positional [RELEASE_DATE], got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("--api-key"),
+        "pull --help must NOT have --api-key flag, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_trud_pull_help_has_positional_release_and_no_release_flag() {
+    let output = ods_binary()
+        .arg("trud")
+        .arg("pull")
+        .arg("--help")
+        .output()
+        .expect("Failed to execute trud pull --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[RELEASE_DATE]"),
+        "trud pull --help must have positional [RELEASE_DATE], got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("--release <"),
+        "trud pull --help must NOT have --release flag, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_pull_local_release_output() {
+    let output = ods_binary()
+        .arg("pull")
+        .arg("2026-05-29")
+        .output()
+        .expect("Failed to execute pull 2026-05-29");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("* Release 2026-05-29 already local, verified"),
+        "stderr must contain '* Release 2026-05-29 already local, verified', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("✓ current updated to releases/2026-05-29"),
+        "stderr must contain '✓ current updated to releases/2026-05-29', got:\n{}",
+        stderr
+    );
+
+    // Restore 2026-07-31 active pointer
+    let _ = ods_binary()
+        .arg("pull")
+        .arg("2026-07-31")
+        .output();
+}
+

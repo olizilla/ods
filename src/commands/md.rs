@@ -336,11 +336,14 @@ pub fn run(args: Args) -> Result<()> {
                 }).collect())
                 .unwrap_or_default();
 
-            let successors_vec: Vec<crate::formatting::SuccessorLink> = rels_map.get(&org.ods_code)
+            let successors_vec: Vec<crate::formatting::SuccessionHopLink> = rels_map.get(&org.ods_code)
                 .map(|rels| rels.iter().filter(|r| r.rel_type_code == "SUCCESSOR").map(|s| {
-                    crate::formatting::SuccessorLink {
-                        successor_code: &s.target_code,
-                        successor_name: s.target.as_deref(),
+                    crate::formatting::SuccessionHopLink {
+                        depth: 1,
+                        date: None,
+                        code: &s.target_code,
+                        name: s.target.as_deref().unwrap_or(""),
+                        status: "active",
                     }
                 }).collect())
                 .unwrap_or_default();
@@ -370,7 +373,8 @@ pub fn run(args: Args) -> Result<()> {
                 icb_code: org.icb_code.as_deref().unwrap_or(""),
                 region: org.region.as_deref().unwrap_or(""),
                 region_code: org.region_code.as_deref().unwrap_or(""),
-                successors: &successors_vec,
+                succession: &successors_vec,
+                predecessors: &[],
                 operational_start: org.operational_start.as_deref(),
                 operational_end: org.operational_end.as_deref(),
                 legal_start: org.legal_start.as_deref(),

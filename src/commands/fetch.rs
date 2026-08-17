@@ -10,15 +10,30 @@ use crate::workspace::{find_workspace_root, prepare_release_dir, set_active_rele
 
 pub const TRUD_ODS_ITEM_ID: &str = "341";
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 pub struct Args {
+    /// Target TRUD release date in YYYY-MM-DD format (defaults to latest available)
+    pub release_date: Option<String>,
+
+    /// List available TRUD release versions
+    #[arg(long, short = 'l')]
+    pub list: bool,
+
+    /// Number of releases to display in listing
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+
+    /// Fetch all available TRUD releases
+    #[arg(long)]
+    pub all: bool,
+
+    /// Force re-download or re-pull of specified release
+    #[arg(long, short = 'f')]
+    pub force: bool,
+
     /// TRUD API Key (defaults to $NHS_TRUD_API_KEY if omitted)
     #[arg(long, env = "NHS_TRUD_API_KEY")]
     pub api_key: Option<String>,
-
-    /// Target TRUD release date (defaults to latest available)
-    #[arg(long)]
-    pub release: Option<String>,
 
     /// Custom output directory for downloaded archive and provenance (defaults to workspace release dir ./ods_data/releases/<date>/)
     #[arg(long, short = 'o')]
@@ -37,7 +52,7 @@ pub struct Args {
     pub verbose: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TrudReleaseItem {
     pub id: String,
 
@@ -70,11 +85,23 @@ struct TrudApiResponse {
 
 pub fn run(args: Args) -> Result<()> {
     if let Some(ref local_path) = args.local_archive {
+        let resp_json_path = if local_path.is_dir() {
+            local_path.join("response.json")
+        } else {
+            local_path.with_file_name("response.json")
+        };
+        if resp_json_path.exists() {
+            let text = std::fs::read_to_string(&resp_json_path)?;
+            let resp: TrudApiResponse = serde_json::from_str(&text)?;
+            if args.list {
+                return display_trud_releases(&args, resp.releases, &mut std::io::stdout(), &mut std::io::stderr());
+            }
+        }
         return run_local_archive(&args, local_path);
     }
 
     let api_key = match args.api_key {
-        Some(key) if !key.trim().is_empty() => key,
+        Some(ref key) if !key.trim().is_empty() => key.clone(),
         _ => {
             anyhow::bail!(
                 "✖ Missing API Key\n  Please set $NHS_TRUD_API_KEY environment variable or pass --api-key <KEY>.\n  See: https://isd.digital.nhs.uk/trud/user/authenticated/group/0/pack/341/subpack/160/releases"
@@ -82,10 +109,24 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
-    println!("Querying NHS TRUD REST API for ODS release...");
-    let releases = fetch_trud_releases(&api_key, args.verbose)?;
+    if args.list {
+        return run_list(&args, &api_key, &mut std::io::stdout(), &mut std::io::stderr());
+    }
 
-    let target_release = if let Some(target_date) = &args.release {
+    eprintln!("Querying NHS TRUD REST API for ODS release...");
+    let releases = match fetch_trud_releases(&api_key, args.verbose) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}", e);
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+    };
+
+    if args.all {
+        return pull_all_trud_releases(&args, &api_key, releases);
+    }
+
+    let target_release = if let Some(ref target_date) = args.release_date {
         releases.into_iter().find(|r| r.release_date == *target_date)
             .context(format!("✖ Target Release Not Found\n  No TRUD release found for date {}", target_date))?
     } else {
@@ -93,18 +134,137 @@ pub fn run(args: Args) -> Result<()> {
             .context("✖ Target Release Not Found\n  No TRUD releases returned by API")?
     };
 
-    let size_mb = target_release.archive_file_size / (1024 * 1024);
-    println!("✓ Found Release: {}, Size: {} MB", target_release.release_date, size_mb);
+    pull_single_release(&args, &api_key, target_release)
+}
 
-    if let Some(verify_path) = args.verify_only {
-        println!("Verifying local archive {}...", verify_path.display());
-        let local_sha256 = compute_file_sha256(&verify_path)?;
+fn run_list<W1: std::io::Write, W2: std::io::Write>(
+    args: &Args,
+    api_key: &str,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> Result<()> {
+    writeln!(stderr, "Querying NHS TRUD REST API for ODS releases...\n")?;
+
+    let releases = match fetch_trud_releases(api_key, args.verbose) {
+        Ok(r) => r,
+        Err(e) => {
+            writeln!(stderr, "{}\n", e)?;
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+    };
+
+    display_trud_releases(args, releases, stdout, stderr)
+}
+
+fn display_trud_releases<W1: std::io::Write, W2: std::io::Write>(
+    args: &Args,
+    releases: Vec<TrudReleaseItem>,
+    stdout: &mut W1,
+    stderr: &mut W2,
+) -> Result<()> {
+    let workspace_root = find_workspace_root()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+
+    let (active_date, _) = crate::workspace::get_active_release(&workspace_root).unwrap_or_default();
+
+    let total_count = releases.len();
+    let display_limit = if args.limit > 0 { args.limit } else { 10 };
+    let to_display = releases.iter().take(display_limit);
+
+    for r in to_display {
+        let is_active = !active_date.is_empty() && active_date == r.release_date;
+        let release_dir = workspace_root.join("releases").join(&r.release_date).join("trud");
+        let archive_file = release_dir.join(&r.archive_file_name);
+        let is_local = archive_file.exists();
+
+        let status_str = if is_active {
+            "● active (local)"
+        } else if is_local {
+            "○ local"
+        } else {
+            "○ remote"
+        };
+
+        writeln!(stdout, "  {:14} {}", r.release_date, status_str)?;
+    }
+
+    if total_count > display_limit {
+        writeln!(
+            stderr,
+            "\nShowing {} of {} TRUD releases. Use --limit <N> to view more.",
+            display_limit, total_count
+        )?;
+    }
+
+    writeln!(stderr, "\nLegend:")?;
+    writeln!(stderr, "  ● active (local)  Active release pin (./ods_data/current)")?;
+    writeln!(stderr, "  ○ local           Cached locally in ./ods_data/releases/")?;
+    writeln!(stderr, "  ○ remote          Available for pull from TRUD")?;
+    writeln!(stderr, "\nTo pull a specific release, run: ods trud pull <YYYY-MM-DD>")?;
+
+    Ok(())
+}
+
+fn pull_all_trud_releases(
+    args: &Args,
+    api_key: &str,
+    mut releases: Vec<TrudReleaseItem>,
+) -> Result<()> {
+    let total_count = releases.len();
+    let total_bytes: u64 = releases.iter().map(|r| r.archive_file_size).sum();
+    let total_mb = (total_bytes as f64 / (1024.0 * 1024.0)).round() as u64;
+
+    eprintln!("✓ {} releases available, {} MB total", total_count, total_mb);
+
+    releases.sort_by(|a, b| a.release_date.cmp(&b.release_date)); // chronological order
+
+    let mut latest_date = String::new();
+    for release in releases {
+        latest_date = release.release_date.clone();
+        let workspace_root = find_workspace_root()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+        let release_dir = workspace_root.join("releases").join(&release.release_date);
+        let dest_path = release_dir.join("trud").join(&release.archive_file_name);
+
+        if dest_path.exists() && !args.force {
+            if let Ok(local_sha256) = compute_file_sha256(&dest_path) {
+                if local_sha256.eq_ignore_ascii_case(&release.archive_file_sha256) {
+                    eprintln!("* {} (cached)", release.release_date);
+                    continue;
+                }
+            }
+        }
+
+        pull_single_release(args, api_key, release)?;
+    }
+
+    if !latest_date.is_empty() {
+        let workspace_root = find_workspace_root()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+        ensure_active_release_link(&workspace_root, &latest_date)?;
+    }
+
+    eprintln!("Done!");
+    Ok(())
+}
+
+fn pull_single_release(
+    args: &Args,
+    api_key: &str,
+    target_release: TrudReleaseItem,
+) -> Result<()> {
+    let size_mb = target_release.archive_file_size / (1024 * 1024);
+    eprintln!("✓ Found Release: {}, Size: {} MB", target_release.release_date, size_mb);
+
+    if let Some(ref verify_path) = args.verify_only {
+        eprintln!("Verifying local archive {}...", verify_path.display());
+        let local_sha256 = compute_file_sha256(verify_path)?;
         if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-            println!("✓ SHA-256 OK ({})", target_release.archive_file_sha256);
-            println!("Done!");
+            eprintln!("✓ SHA-256 OK ({})", target_release.archive_file_sha256);
+            eprintln!("Done!");
             return Ok(());
         } else {
-            let bad_path = mark_bad_sha_file(&verify_path);
+            let bad_path = mark_bad_sha_file(verify_path);
             anyhow::bail!(
                 "✖ SHA-256 Checksum Failed!\n  Local SHA-256: {}\n  TRUD SHA-256:  {}\n  Renamed bad local file to {}",
                 local_sha256,
@@ -114,11 +274,11 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let (dest_dir, trud_dir, is_workspace) = match args.output {
+    let (dest_dir, trud_dir, is_workspace) = match &args.output {
         Some(out) => {
             let trud = out.join("trud");
             std::fs::create_dir_all(&trud)?;
-            (out, trud, false)
+            (out.clone(), trud, false)
         }
         None => {
             let workspace_root = find_workspace_root()
@@ -132,38 +292,38 @@ pub fn run(args: Args) -> Result<()> {
 
     let dest_path = trud_dir.join(&target_release.archive_file_name);
 
-    if dest_path.exists() {
+    if dest_path.exists() && !args.force {
         let local_sha256 = compute_file_sha256(&dest_path)?;
         if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-            println!("* Using {} already in ods_data dir", target_release.archive_file_name);
-            println!("Verifying archive SHA-256...");
-            println!("✓ SHA-256 OK ({})", target_release.archive_file_sha256);
+            eprintln!("* Using {} already in ods_data dir", target_release.archive_file_name);
+            eprintln!("Verifying archive SHA-256...");
+            eprintln!("✓ SHA-256 OK ({})", target_release.archive_file_sha256);
             write_provenance_json(&dest_dir, &target_release, &local_sha256, false)?;
             if is_workspace {
                 let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
                 ensure_active_release_link(&workspace_root, &target_release.release_date)?;
             }
-            println!("Done!");
+            eprintln!("Done!");
             return Ok(());
         } else {
             let bad_path = mark_bad_sha_file(&dest_path);
-            println!("✖ SHA-256 Checksum Mismatch on cached file! Renamed to {}", bad_path.display());
-            println!("Fetching fresh archive from TRUD...");
+            eprintln!("✖ SHA-256 Checksum Mismatch on cached file! Renamed to {}", bad_path.display());
+            eprintln!("Fetching fresh archive from TRUD...");
         }
     }
 
-    println!("Downloading archive {}...", target_release.archive_file_name);
-    download_archive(&target_release.download_url, &dest_path, &api_key, args.verbose)?;
-    println!("✓ Saved to {}", trud_dir.display());
+    eprintln!("Downloading archive {}...", target_release.archive_file_name);
+    download_archive(&target_release.download_url, &dest_path, api_key, args.verbose)?;
+    eprintln!("✓ Saved to {}", trud_dir.display());
 
-    println!("Verifying archive SHA-256...");
+    eprintln!("Verifying archive SHA-256...");
     let mut local_sha256 = compute_file_sha256(&dest_path)?;
 
     // Automated 1-retry fallback for remote downloads on hash mismatch
     if !local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-        println!("✖ SHA-256 Checksum Mismatch on remote download! Retrying download (attempt 2/2)...");
+        eprintln!("✖ SHA-256 Checksum Mismatch on remote download! Retrying download (attempt 2/2)...");
         let _ = std::fs::remove_file(&dest_path);
-        download_archive(&target_release.download_url, &dest_path, &api_key, args.verbose)?;
+        download_archive(&target_release.download_url, &dest_path, api_key, args.verbose)?;
         local_sha256 = compute_file_sha256(&dest_path)?;
 
         if !local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
@@ -177,7 +337,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    println!("✓ SHA-256 OK ({})", local_sha256);
+    eprintln!("✓ SHA-256 OK ({})", local_sha256);
 
     write_provenance_json(&dest_dir, &target_release, &local_sha256, true)?;
     if is_workspace {
@@ -185,7 +345,7 @@ pub fn run(args: Args) -> Result<()> {
         ensure_active_release_link(&workspace_root, &target_release.release_date)?;
     }
 
-    println!("Done!");
+    eprintln!("Done!");
     Ok(())
 }
 

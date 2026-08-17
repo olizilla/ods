@@ -39,11 +39,8 @@ pub fn run(args: TrudArgs) -> Result<()> {
         TrudCommand::Verify { path, api_key } => {
             let fetch_args = crate::commands::fetch::Args {
                 api_key,
-                release: None,
-                output: None,
                 verify_only: path,
-                local_archive: None,
-                verbose: false,
+                ..Default::default()
             };
             crate::commands::fetch::run(fetch_args)
         }

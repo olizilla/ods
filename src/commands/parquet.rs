@@ -206,7 +206,62 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
+    warn_unexpected_files(&args.output);
+
     Ok(())
+}
+
+pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
+    let known_files: HashSet<&str> = [
+        "orgs.parquet",
+        "orgs_all.parquet",
+        "org_roles.parquet",
+        "roles.parquet",
+        "relationships.parquet",
+        "successions.parquet",
+        "category_rules.json",
+        crate::provenance::PROVENANCE_FILENAME,
+        "provenance.json",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut unexpected = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext == "parquet" || ext == "json" {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if !known_files.contains(name) {
+                                unexpected.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unexpected.sort();
+    unexpected
+}
+
+pub fn warn_unexpected_files(output_dir: &Path) {
+    let unexpected = get_unexpected_files(output_dir);
+    if !unexpected.is_empty() {
+        let n = unexpected.len();
+        let file_word = if n == 1 { "file" } else { "files" };
+        eprintln!(
+            "* {} unexpected {} in {}, not part of the release:",
+            n,
+            file_word,
+            output_dir.display()
+        );
+        for f in unexpected {
+            eprintln!("    {}", f);
+        }
+    }
 }
 
 fn append_opt(builder: &mut StringBuilder, val: Option<&str>) {

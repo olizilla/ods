@@ -373,7 +373,7 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         if file_path.exists() {
             let hash = compute_file_sha256(&file_path)?;
             hashes.insert((*file_name).to_string(), hash.clone());
-            sha_lines.push(format!("{}  {}", hash.to_lowercase(), file_name));
+            sha_lines.push(format!("{}  {}", hash, file_name));
         }
     }
 
@@ -435,7 +435,7 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
     if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
         let _ = std::fs::write(&prov_path, updated_json);
         if let Ok(prov_hash) = compute_file_sha256(&prov_path) {
-            sha_lines.push(format!("{}  {}", prov_hash.to_lowercase(), PROVENANCE_FILENAME));
+            sha_lines.push(format!("{}  {}", prov_hash, PROVENANCE_FILENAME));
         }
     }
 

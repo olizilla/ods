@@ -66,6 +66,8 @@ pub fn run(args: MakeArgs) -> Result<()> {
             // 3. Write SHA256SUMS and update _provenance.json
             crate::provenance::update_provenance_and_write_sha256sums(&parquet_out)?;
 
+            crate::commands::parquet::warn_unexpected_files(&parquet_out);
+
             eprintln!("✓ Dataset target projections generated successfully.");
             Ok(())
         }
