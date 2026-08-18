@@ -2,6 +2,17 @@ use anyhow::Result;
 use std::fs;
 use tempfile::TempDir;
 
+fn create_mock_zip(path: &std::path::Path, date_str: &str) -> Result<()> {
+    use std::io::Write;
+    let file = fs::File::create(path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file(format!("test_{}.xml", date_str), options)?;
+    zip.write_all(format!("<HSCOrgRefData><Manifest><PublicationDate value=\"{}\"/></Manifest></HSCOrgRefData>", date_str).as_bytes())?;
+    zip.finish()?;
+    Ok(())
+}
+
 #[test]
 fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -12,14 +23,14 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     let rel_2026 = workspace_root.join("releases").join("2026-07-31");
     let trud_2026 = rel_2026.join("trud");
     fs::create_dir_all(&trud_2026)?;
-    fs::write(trud_2026.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"mock 2026 zip")?;
+    create_mock_zip(&trud_2026.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), "2026-07-31")?;
     ods::workspace::set_active_release(&workspace_root, "2026-07-31")?;
 
     // 2. Prepare a local archive for release 2025-05-01
     let local_archive_dir = temp_dir.path().join("local_source");
     fs::create_dir_all(&local_archive_dir)?;
     let local_zip = local_archive_dir.join("hscorgrefdataxml_data_6.5.0_20250501000001.zip");
-    fs::write(&local_zip, b"mock 2025 zip")?;
+    create_mock_zip(&local_zip, "2025-05-01")?;
 
     // 3. Execute fetch with local_archive without explicit output (targeting workspace_root)
     let args = ods::commands::fetch::Args {

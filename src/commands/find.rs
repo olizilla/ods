@@ -342,20 +342,12 @@ fn role_display(vocab: &HashMap<String, String>, code: &str) -> String {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let resolved_input = if args.input == PathBuf::from(".") {
-        if let Some(workspace_root) = crate::workspace::find_workspace_root() {
-            let active_dir = workspace_root.join("current");
-            if active_dir.join("orgs.parquet").exists() || active_dir.join("orgs_all.parquet").exists() {
-                active_dir
-            } else {
-                args.input.clone()
-            }
-        } else {
-            args.input.clone()
-        }
+    let user_input = if args.input == PathBuf::from(".") {
+        None
     } else {
-        args.input.clone()
+        Some(args.input.as_path())
     };
+    let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
 
     if args.query.is_none() {
         let mut tui_args = args;
@@ -370,8 +362,21 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let path = parquet_dir.join(file_name);
     if !path.exists() {
+        if let Some(workspace_root) = crate::workspace::find_workspace_root() {
+            let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
+            if !releases.is_empty() {
+                let n = releases.len();
+                let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
+                let newest_date = &releases[0].date;
+                anyhow::bail!(
+                    "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
+                    count_str,
+                    newest_date
+                );
+            }
+        }
         anyhow::bail!(
-            "✖ No dataset found in ods_data/current\n  Run `ods pull` to download the latest pre-built NHS ODS dataset release."
+            "✖ No dataset found in ods_data/current\n  Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
         );
     }
 

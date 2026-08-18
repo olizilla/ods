@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -1094,6 +1094,164 @@ fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) ->
         }
     }
     None
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ManifestHeader {
+    pub publication_date: Option<String>,
+    pub publication_seq_num: Option<String>,
+    pub publication_type: Option<String>,
+    pub publication_source: Option<String>,
+    pub publication_schema_version: Option<String>,
+    pub publication_record_count: Option<usize>,
+    pub primary_role_scope: Option<Vec<String>>,
+}
+
+pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Result<ManifestHeader> {
+    reader.trim_text(true);
+    let mut header = ManifestHeader::default();
+    let mut buf = Vec::new();
+    let mut primary_role_scope = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                let name = e.local_name();
+                let name_ref = name.as_ref();
+                if name_ref.eq_ignore_ascii_case(b"Organisation") || name_ref.eq_ignore_ascii_case(b"Organisations") {
+                    break;
+                }
+                if name_ref == b"PublicationDate" {
+                    header.publication_date = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSeqNum" {
+                    header.publication_seq_num = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationType" {
+                    header.publication_type = get_manifest_attr(e, &reader);
+                } else if name_ref == b"PublicationSource" {
+                    header.publication_source = get_manifest_attr(e, &reader);
+                } else if name_ref == b"Version" {
+                    header.publication_schema_version = get_manifest_attr(e, &reader);
+                } else if name_ref == b"RecordCount" {
+                    header.publication_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
+                } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref().eq_ignore_ascii_case(b"id") {
+                            if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                primary_role_scope.push(val.into_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if !primary_role_scope.is_empty() {
+        header.primary_role_scope = Some(primary_role_scope);
+    }
+
+    Ok(header)
+}
+
+fn extract_manifest_header_from_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<ManifestHeader> {
+    let mut inner_zip_names = Vec::new();
+    let mut direct_xml_names = Vec::new();
+
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            let name = file.name().to_string();
+            let lower = name.to_lowercase();
+            if lower.ends_with(".zip") {
+                inner_zip_names.push(name);
+            } else if lower.ends_with(".xml") {
+                direct_xml_names.push(name);
+            }
+        }
+    }
+
+    if !inner_zip_names.is_empty() {
+        let selected_inner = inner_zip_names
+            .iter()
+            .find(|n| n.to_lowercase().contains("full"))
+            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")));
+
+        let selected_inner = match selected_inner {
+            Some(name) => name.clone(),
+            None => {
+                anyhow::bail!("No full dataset ZIP found inside archive. Package contains only historical 'archive.zip'.");
+            }
+        };
+
+        let mut inner_file = archive.by_name(&selected_inner)?;
+        let mut inner_bytes = Vec::new();
+        inner_file.read_to_end(&mut inner_bytes)?;
+        let cursor = std::io::Cursor::new(inner_bytes);
+        let mut inner_archive = zip::ZipArchive::new(cursor)?;
+        return extract_manifest_header_from_archive(&mut inner_archive);
+    }
+
+    if !direct_xml_names.is_empty() {
+        let selected_xml = direct_xml_names
+            .iter()
+            .find(|n| n.to_lowercase().contains("full"))
+            .or_else(|| direct_xml_names.iter().find(|n| !n.to_lowercase().contains("archive")));
+
+        let selected_xml = match selected_xml {
+            Some(name) => name.clone(),
+            None => {
+                anyhow::bail!("No full dataset XML found inside archive.");
+            }
+        };
+
+        let xml_file = archive.by_name(&selected_xml)?;
+        return parse_manifest_header(Reader::from_reader(BufReader::new(xml_file)));
+    }
+
+    anyhow::bail!("No XML or ZIP files found inside archive")
+}
+
+pub fn extract_manifest_header(path: &Path) -> Result<ManifestHeader> {
+    if path.is_file() && path.extension().is_some_and(|e| e == "xml") {
+        let file = File::open(path)?;
+        return parse_manifest_header(Reader::from_reader(BufReader::new(file)));
+    }
+
+    let mut zip_candidates = Vec::new();
+    let mut xml_candidates = Vec::new();
+
+    if path.is_file() && path.extension().is_some_and(|e| e == "zip") {
+        zip_candidates.push(path.to_path_buf());
+    } else if path.is_dir() {
+        for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if p.extension().is_some_and(|e| e == "zip") {
+                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                    if !name.contains("archive") {
+                        zip_candidates.push(p.to_path_buf());
+                    }
+                } else if p.extension().is_some_and(|e| e == "xml") {
+                    xml_candidates.push(p.to_path_buf());
+                }
+            }
+        }
+    }
+
+    if let Some(xml_path) = xml_candidates.first() {
+        let file = File::open(xml_path)?;
+        return parse_manifest_header(Reader::from_reader(BufReader::new(file)));
+    }
+
+    if let Some(zip_path) = zip_candidates.first() {
+        let file = File::open(zip_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        return extract_manifest_header_from_archive(&mut archive);
+    }
+
+    anyhow::bail!("No XML or ZIP files found in {}", path.display())
 }
 
 pub fn parse_single_pass(

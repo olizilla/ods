@@ -74,8 +74,23 @@ pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
         return Ok(cwd);
     }
 
+    // Check if workspace exists with unpinned releases
+    if let Some(workspace_root) = find_workspace_root() {
+        let releases = list_releases(&workspace_root).unwrap_or_default();
+        if !releases.is_empty() {
+            let n = releases.len();
+            let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
+            let newest_date = &releases[0].date;
+            return Err(anyhow!(
+                "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
+                count_str,
+                newest_date
+            ));
+        }
+    }
+
     Err(anyhow!(
-        "No dataset found in ods_data/current\n\
+        "✖ No dataset found in ods_data/current\n\
          Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
     ))
 }

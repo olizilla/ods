@@ -1,6 +1,9 @@
 //! End-to-end CLI integration tests verifying binary execution and stdout/stderr output formatting.
 
+use sha2::Digest;
+use std::fs;
 use std::process::Command;
+use tempfile::TempDir;
 
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
@@ -45,9 +48,12 @@ fn test_cli_pull_list_output_formatting() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stderr.contains("Querying available ODS dataset releases"));
-    assert!(stderr.contains("Legend:"));
-    assert!(!stdout.is_empty() || !stderr.is_empty());
+    if output.status.success() {
+        assert!(!stdout.is_empty(), "pull --list must output rows to stdout when successful");
+        assert!(!stderr.contains("Legend:"), "piped --list must not output TTY legend to stderr");
+    } else {
+        assert!(!stderr.is_empty(), "reported failure must write diagnostics to stderr");
+    }
 }
 
 #[test]
@@ -138,13 +144,35 @@ fn test_cli_trud_pull_help_has_positional_release_and_no_release_flag() {
 
 #[test]
 fn test_cli_pull_local_release_output() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    fs::create_dir_all(&ws).unwrap();
+
+    let rel1 = ws.join("releases").join("2026-05-29");
+    fs::create_dir_all(&rel1).unwrap();
+    let p1 = rel1.join("orgs.parquet");
+    fs::write(&p1, b"dummy parquet 1").unwrap();
+    let h1 = format!("{:x}", sha2::Sha256::digest(b"dummy parquet 1"));
+    fs::write(rel1.join("SHA256SUMS"), format!("{} *orgs.parquet\n", h1)).unwrap();
+
+    let rel2 = ws.join("releases").join("2026-06-26");
+    fs::create_dir_all(&rel2).unwrap();
+    let p2 = rel2.join("orgs.parquet");
+    fs::write(&p2, b"dummy parquet 2").unwrap();
+    let h2 = format!("{:x}", sha2::Sha256::digest(b"dummy parquet 2"));
+    fs::write(rel2.join("SHA256SUMS"), format!("{} *orgs.parquet\n", h2)).unwrap();
+
+    // Ensure starting pin is 2026-06-26 so switching to 2026-05-29 moves the pin
+    ods::workspace::set_active_release(&ws, "2026-06-26").unwrap();
+
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("pull")
         .arg("2026-05-29")
         .output()
         .expect("Failed to execute pull 2026-05-29");
 
-    assert!(output.status.success());
+    assert!(output.status.success(), "stderr was: {}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("* Release 2026-05-29 already local, verified"),
@@ -152,15 +180,153 @@ fn test_cli_pull_local_release_output() {
         stderr
     );
     assert!(
-        stderr.contains("✓ current updated to releases/2026-05-29"),
-        "stderr must contain '✓ current updated to releases/2026-05-29', got:\n{}",
+        stderr.contains("current → releases/2026-05-29"),
+        "stderr must contain 'current → releases/2026-05-29', got:\n{}",
         stderr
     );
+}
 
-    // Restore 2026-07-31 active pointer
-    let _ = ods_binary()
-        .arg("pull")
-        .arg("2026-07-31")
-        .output();
+#[test]
+fn test_cli_find_empty_workspace_message() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("sedbergh")
+        .output()
+        .expect("Failed to execute find");
+
+    assert!(!output.status.success(), "find must exit non-zero on empty workspace");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("✖ No dataset found in ods_data/current"),
+        "stderr must contain '✖ No dataset found in ods_data/current', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Run `ods pull` to download the latest pre-built NHS ODS dataset release"),
+        "stderr must advise running ods pull, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_cli_cite_empty_workspace_message() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("cite")
+        .output()
+        .expect("Failed to execute cite");
+
+    assert!(!output.status.success(), "cite must exit non-zero on empty workspace");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("✖ No dataset found in ods_data/current"),
+        "stderr must contain '✖ No dataset found in ods_data/current', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Run `ods pull` to download the latest pre-built NHS ODS dataset release"),
+        "stderr must advise running ods pull, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_cli_find_unpinned_workspace_message() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    let trud_dir = ws.join("releases").join("2026-07-31").join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("sedbergh")
+        .output()
+        .expect("Failed to execute find");
+
+    assert!(!output.status.success(), "find must exit non-zero on unpinned workspace");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("✖ No active release pinned"),
+        "stderr must contain '✖ No active release pinned', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("1 release in ods_data/releases/, none active."),
+        "stderr must contain '1 release in ods_data/releases/, none active.', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Pin one:  ods pull 2026-07-31"),
+        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_cli_cite_unpinned_workspace_message() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    let trud_dir = ws.join("releases").join("2026-07-31").join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("cite")
+        .output()
+        .expect("Failed to execute cite");
+
+    assert!(!output.status.success(), "cite must exit non-zero on unpinned workspace");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("✖ No active release pinned"),
+        "stderr must contain '✖ No active release pinned', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("1 release in ods_data/releases/, none active."),
+        "stderr must contain '1 release in ods_data/releases/, none active.', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Pin one:  ods pull 2026-07-31"),
+        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    fs::create_dir_all(ws.join("releases").join("2026-05-29").join("trud")).unwrap();
+    fs::create_dir_all(ws.join("releases").join("2026-07-31").join("trud")).unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("sedbergh")
+        .output()
+        .expect("Failed to execute find");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("2 releases in ods_data/releases/, none active."),
+        "stderr must contain '2 releases in ods_data/releases/, none active.', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Pin one:  ods pull 2026-07-31"),
+        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr
+    );
 }
 

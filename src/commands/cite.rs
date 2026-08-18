@@ -59,7 +59,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     }
     if !any_exist {
         anyhow::bail!(
-            "No Parquet files found in the directory '{}'. Did you run `ods parquet` first?",
+            "✖ No Parquet files found in the directory '{}'. Did you run `ods parquet` first?",
             input_dir.display()
         );
     }
@@ -72,8 +72,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         .unwrap_or_else(|| "unknown".to_string());
     let mut publication_type = prov.as_ref().and_then(|p| p.publication_type.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    let mut _release_name = prov.as_ref().and_then(|p| p.trud_release_name.clone())
-        .unwrap_or_else(|| "Release".to_string());
     let mut release_file = prov.as_ref().and_then(|p| p.trud_release_file.clone())
         .unwrap_or_else(|| "hscorgrefdataxml".to_string());
     let mut archive_sha256 = prov.as_ref().and_then(|p| p.trud_release_sha256.clone())
@@ -111,11 +109,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                         if let Some(ref val) = item.value {
                                             publication_type = val.clone();
                                         }
-                                    }
-                                }
-                                "ods.trud_release_name" => {
-                                    if let Some(ref val) = item.value {
-                                        _release_name = val.clone();
                                     }
                                 }
                                 "ods.trud_release_file" => {

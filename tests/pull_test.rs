@@ -170,8 +170,17 @@ fn test_pull_list_stdout_redirection() {
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let args = Args::default();
+    let caps = ods::progress::ProgressCaps {
+        is_tty: true,
+        no_color: false,
+        quiet: false,
+        verbose: false,
+        width: 80,
+    };
+    let progress = ods::progress::Progress::new(caps, Box::new(std::io::sink()));
 
-    run_list(&workspace_root, &fetcher, &mut stdout, &mut stderr).unwrap();
+    run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr).unwrap();
 
     let stdout_str = String::from_utf8(stdout).unwrap();
     let stderr_str = String::from_utf8(stderr).unwrap();
@@ -249,8 +258,10 @@ fn test_pull_list_reports_api_fetch_error() {
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let args = Args::default();
+    let progress = ods::progress::Progress::stderr(ods::progress::ProgressCaps::detect(false, false, true));
 
-    let res = run_list(&workspace_root, &fetcher, &mut stdout, &mut stderr);
+    let res = run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr);
 
     let stderr_str = String::from_utf8(stderr).unwrap();
     assert!(
@@ -284,7 +295,9 @@ fn test_pull_list_errors_on_unreachable_index_even_with_local_release() {
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let res = run_list(&workspace_root, &fetcher, &mut stdout, &mut stderr);
+    let args = Args::default();
+    let progress = ods::progress::Progress::stderr(ods::progress::ProgressCaps::detect(false, false, true));
+    let res = run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr);
 
     let stdout_str = String::from_utf8(stdout).unwrap();
     assert!(

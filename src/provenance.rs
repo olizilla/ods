@@ -388,29 +388,27 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
     };
 
     // Defect B Fix: freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
-    if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(output_dir) {
-        if let Ok((xml_prov, _, _)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
-            if xml_prov.publication_date.is_some() {
-                prov.publication_date = xml_prov.publication_date;
-            }
-            if xml_prov.publication_seq_num.is_some() {
-                prov.publication_seq_num = xml_prov.publication_seq_num;
-            }
-            if xml_prov.publication_type.is_some() {
-                prov.publication_type = xml_prov.publication_type;
-            }
-            if xml_prov.publication_source.is_some() {
-                prov.publication_source = xml_prov.publication_source;
-            }
-            if xml_prov.publication_schema_version.is_some() {
-                prov.publication_schema_version = xml_prov.publication_schema_version;
-            }
-            if xml_prov.publication_record_count.is_some() {
-                prov.publication_record_count = xml_prov.publication_record_count;
-            }
-            if xml_prov.primary_role_scope.is_some() {
-                prov.primary_role_scope = xml_prov.primary_role_scope;
-            }
+    if let Ok(header) = crate::commands::ndjson::extract_manifest_header(output_dir) {
+        if header.publication_date.is_some() {
+            prov.publication_date = header.publication_date;
+        }
+        if header.publication_seq_num.is_some() {
+            prov.publication_seq_num = header.publication_seq_num;
+        }
+        if header.publication_type.is_some() {
+            prov.publication_type = header.publication_type;
+        }
+        if header.publication_source.is_some() {
+            prov.publication_source = header.publication_source;
+        }
+        if header.publication_schema_version.is_some() {
+            prov.publication_schema_version = header.publication_schema_version;
+        }
+        if header.publication_record_count.is_some() {
+            prov.publication_record_count = header.publication_record_count;
+        }
+        if header.primary_role_scope.is_some() {
+            prov.primary_role_scope = header.primary_role_scope;
         }
     }
 
