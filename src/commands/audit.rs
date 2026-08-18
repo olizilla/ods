@@ -172,15 +172,24 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let is_verified_archive = input_prov.trud_release_sha256_verified.unwrap_or(false)
-        || workspace_prov.as_ref().and_then(|p| p.trud_release_sha256_verified).unwrap_or(false);
+    let is_verified_archive = input_prov.trud_release_sha256_verified.is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified)
+        || workspace_prov.as_ref().and_then(|p| p.trud_release_sha256_verified).is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified);
 
     if !is_verified_archive {
         discrepancies.push("Unverified local archive provenance: SHA-256 has not been verified against TRUD API".to_string());
     }
 
     // Verify SHA256SUMS and Parquet files integrity
-    let parquet_files = ["orgs.parquet", "orgs_all.parquet", "org_roles.parquet", "roles.parquet", "relationships.parquet", "successions.parquet", "category_rules.json"];
+    let parquet_files = [
+        "orgs.parquet",
+        "orgs_all.parquet",
+        "org_roles.parquet",
+        "roles.parquet",
+        "relationships.parquet",
+        "successions.parquet",
+        "category_rules.json",
+        "datapackage.json",
+    ];
     let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
         parquet_dir.join("SHA256SUMS")
     } else {
@@ -223,20 +232,20 @@ pub fn run(args: Args) -> Result<()> {
                 }
 
                 if let Some(ref w_prov) = workspace_prov {
-                    if let Some(ref derived) = w_prov.derived_artifacts {
+                    if let Some(ref derived) = w_prov.dataset_file_sha256 {
                         if let Some(expected_prov_sha) = derived.get(*filename) {
                             if computed_sha.eq_ignore_ascii_case(expected_prov_sha) {
                                 prov_derived_matched_count += 1;
                             } else {
                                 discrepancies.push(format!(
-                                    "_provenance.json derived_artifacts mismatch for {filename}: Computed {computed_sha} != provenance {expected_prov_sha}"
+                                    "_provenance.json dataset_file_sha256 mismatch for {filename}: Computed {computed_sha} != provenance {expected_prov_sha}"
                                 ));
                             }
                         } else {
-                            discrepancies.push(format!("Missing _provenance.json derived_artifacts entry for {filename}"));
+                            discrepancies.push(format!("Missing _provenance.json dataset_file_sha256 entry for {filename}"));
                         }
                     } else {
-                        discrepancies.push("Missing derived_artifacts map in _provenance.json".to_string());
+                        discrepancies.push("Missing dataset_file_sha256 map in _provenance.json".to_string());
                     }
                 }
             } else {
@@ -271,9 +280,9 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         if prov_derived_matched_count == expected {
-            println!("     ✓ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json derived_artifacts");
+            println!("     ✓ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json dataset_file_sha256");
         } else {
-            println!("     ✖ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json derived_artifacts");
+            println!("     ✖ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json dataset_file_sha256");
         }
 
         println!();

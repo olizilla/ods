@@ -73,11 +73,10 @@ When executed inside an `ods` workspace directory (or default `./ods_data`), `od
 
 ### API Key Security & Redaction
 TRUD download URLs embed user API keys directly in their path parameters (`/keys/{api_key}/...`). `ods fetch` automatically redacts secret API keys from:
-- `provenance.json` outputs (`trud_release_url`)
 - `--verbose` CLI log messages
 - Error tracebacks and log files
 
-The key is replaced with `<REDACTED_API_KEY>` before writing or printing.
+The key is replaced with `<REDACTED_API_KEY>` before logging or printing.
 
 ### Fault Recovery & Idempotency
 - **Cache Hit**: Skips downloading if archive already exists and SHA-256 matches. Status lines for `provenance.json` writing and `current` symlink updating are omitted if already up to date.

@@ -75,5 +75,5 @@ How to Cite
 
 ### Reproducibility Guarantee
 
-Parquet projections are byte-identical for a given `ods` tool version. Encoding parameters (ZSTD Level 3, max row group size 64,000) and crate versions are embedded in the dataset metadata and `_provenance.json` (`tool_parquet_version`, `tool_arrow_version`, `tool_zstd_level`).
+Parquet projections are byte-identical for a given commit. Encoding parameters (ZSTD Level 3, max row group size 64,000) and tool metadata are embedded in the dataset metadata and `_provenance.json` (`tool_git_sha`, `tool_version`, `dataset_parquet_schema_version`, `dataset_file_sha256`).
 

@@ -65,13 +65,11 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(true);
-    prov.trud_release_url = Some("https://isd.digital.nhs.uk/trud/items/341/hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     prov.publication_date = Some("2026-07-28".to_string());
     prov.publication_seq_num = Some("4700".to_string());
     prov.publication_type = Some("Full".to_string());
     prov.publication_record_count = Some(2);
-    prov.primary_role_scope = Some(vec!["RO177".to_string()]);
 
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
@@ -86,7 +84,7 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
         output: rel_dir.clone(),
     }).unwrap();
 
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir).unwrap();
+    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
 
     (tmp, workspace_root, outer_zip_path)
 }
@@ -129,7 +127,7 @@ fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<
     // Set trud_release_sha256_verified to false
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
     let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256_verified = Some(false);
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
 
     let args = ods::commands::audit::Args {
@@ -204,10 +202,10 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
-    // Mutate derived_artifacts in _provenance.json
+    // Mutate dataset_file_sha256 in _provenance.json
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
     let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    if let Some(ref mut map) = prov.derived_artifacts {
+    if let Some(ref mut map) = prov.dataset_file_sha256 {
         map.insert("orgs.parquet".to_string(), "0000000000000000000000000000000000000000000000000000000000000000".to_string());
     }
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
@@ -221,7 +219,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail on corrupted derived_artifacts in _provenance.json");
+    assert!(result.is_err(), "audit must fail on corrupted dataset_file_sha256 in _provenance.json");
     Ok(())
 }
 
@@ -262,7 +260,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let empty_records: Vec<ods::commands::ndjson::OdsRecord> = Vec::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -306,7 +304,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -392,7 +390,7 @@ fn test_audit_icb_hierarchy_check_reports_honest_gp_count_and_fails_on_corrupted
     let empty_closures = std::collections::HashMap::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_orgs(&active_dir, &[unlinked_english_gp], &empty_closures, &empty_closures, prov.as_ref())?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir)?;
+    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),

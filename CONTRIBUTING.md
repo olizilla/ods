@@ -72,6 +72,21 @@ _provenance.json
 
 Anyone with a TRUD account can rebuild the release and get identical bytes.
 
+Four different claims, bought by four different mechanisms:
+
+| Claim | Meaning | Secured by |
+| :--- | :--- | :--- |
+| **Provenance** | what this derives from | TRUD's hash, `tool_git_sha`, `Cargo.lock` at that sha |
+| **Integrity** | bytes unchanged since publication | `SHA256SUMS`, hashes baked into `ods`, mirrors |
+| **Authenticity** | published by this project | the Zenodo record and the git history |
+| **Correctness** | the derivation is faithful | **someone re-running it** |
+
+Hashes prove the bytes you got are the bytes we published. They cannot prove
+we derived them correctly — every copy is served from one build. What proves
+that is rebuilding it: `tool_git_sha` and the TRUD hash in `_provenance.json`
+are there so you can, and `ods trud audit` compares the result. If you do and
+we disagree, please open an issue.
+
 Three audiences, wanting different things:
 
 | Audience | Wants | Path |

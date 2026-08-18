@@ -42,6 +42,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "relationships.parquet",
         "successions.parquet",
         "category_rules.json",
+        "datapackage.json",
     ];
 
     let input_dir = match args.input {
@@ -66,6 +67,18 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 
     let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir);
 
+    // Decline citation if source archive is unverified
+    let verification_status = prov.as_ref().and_then(|p| p.trud_release_sha256_verified);
+    match verification_status {
+        Some(crate::provenance::TrudVerificationSource::TrudApi)
+        | Some(crate::provenance::TrudVerificationSource::PublishedRelease) => {}
+        _ => {
+            anyhow::bail!(
+                "✖ Cannot generate citation for unverified release\n  The source TRUD archive has not been verified against an upstream TRUD API checksum."
+            );
+        }
+    }
+
     let mut publication_date = prov.as_ref().and_then(|p| p.publication_date.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let mut publication_seq_num = prov.as_ref().and_then(|p| p.publication_seq_num.clone())
@@ -76,7 +89,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         .unwrap_or_else(|| "hscorgrefdataxml".to_string());
     let mut archive_sha256 = prov.as_ref().and_then(|p| p.trud_release_sha256.clone())
         .unwrap_or_else(|| "<not verified>".to_string());
-    let mut tool_version = prov.as_ref().map(|p| p.tool_version.clone())
+    let mut tool_version = prov.as_ref().and_then(|p| p.tool_version.clone())
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     let mut dataset_doi = prov.as_ref().and_then(|p| p.dataset_doi.clone());
 

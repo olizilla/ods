@@ -552,6 +552,21 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     assert_eq!(prov.get("publication_type").and_then(|v| v.as_str()), Some("Full"));
     assert_eq!(prov.get("publication_source").and_then(|v| v.as_str()), Some("HSCIC"));
     assert_eq!(prov.get("publication_record_count").and_then(|v| v.as_u64()), Some(305541));
+
+    // Ownership rule: trud pull writes ONLY trud_* and publication_* (and _type)
+    let obj = prov.as_object().unwrap();
+    for key in obj.keys() {
+        assert!(
+            key == "_type" || key.starts_with("trud_") || key.starts_with("publication_"),
+            "trud pull must NOT write key '{}'. Only _type, trud_*, and publication_* allowed.",
+            key
+        );
+    }
+    assert!(!obj.contains_key("tool_version"), "tool_version must not exist after trud pull");
+    assert!(!obj.contains_key("tool_git_sha"), "tool_git_sha must not exist after trud pull");
+    assert!(!obj.contains_key("dataset_revision"), "dataset_revision must not exist after trud pull");
+    assert!(!obj.contains_key("dataset_parquet_schema_version"), "dataset_parquet_schema_version must not exist after trud pull");
+    assert!(!obj.contains_key("dataset_file_sha256"), "dataset_file_sha256 must not exist after trud pull");
 }
 
 #[test]

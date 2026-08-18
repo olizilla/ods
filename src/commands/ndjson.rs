@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Parser, Debug)]
@@ -266,6 +267,17 @@ pub fn xml_cache_root() -> Option<PathBuf> {
     }
 }
 
+static EXTRACTION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_suffix() -> String {
+    let count = EXTRACTION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}_{}_{}", std::process::id(), time, count)
+}
+
 /// Scratch directory for this process, created on first use.
 ///
 /// One per process rather than one per extraction: the returned XML path has to
@@ -274,7 +286,7 @@ pub fn xml_cache_root() -> Option<PathBuf> {
 fn process_scratch() -> Result<PathBuf> {
     static SCRATCH: OnceLock<PathBuf> = OnceLock::new();
     let dir = SCRATCH.get_or_init(|| {
-        std::env::temp_dir().join(format!("ods_zip_{}_{}", std::process::id(), rand_suffix()))
+        std::env::temp_dir().join(format!("ods_zip_{}_{}", std::process::id(), unique_suffix()))
     });
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating scratch directory {}", dir.display()))?;
@@ -346,7 +358,7 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
         // showed up as an intermittent failure when several tests extracted at
         // once. The parent is still removed by `cleanup_scratch()`, so this
         // costs nothing in leaked space.
-        let staging = process_scratch()?.join(format!("x{}", rand_suffix()));
+        let staging = process_scratch()?.join(format!("x_{}", unique_suffix()));
         std::fs::create_dir_all(&staging)
             .with_context(|| format!("creating extraction directory {}", staging.display()))?;
         return extract_into(zip_path, &staging);
@@ -366,9 +378,8 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
     // rename, and a crashed run leaves a `.staging-` directory the sweep
     // collects rather than a half-written cache entry that looks valid.
     let staging = root.join(format!(
-        ".staging-{}-{}",
-        std::process::id(),
-        rand_suffix()
+        ".staging-{}",
+        unique_suffix()
     ));
     std::fs::create_dir_all(&staging)?;
 
@@ -474,17 +485,16 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
     anyhow::bail!("No XML or ZIP files found inside archive {}", zip_path.display())
 }
 
-fn rand_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
 pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
     if input_path.is_file() {
         if input_path.extension().is_some_and(|ext| ext == "zip") {
             return extract_xml_from_zip(input_path);
+        }
+        if input_path.extension().is_some_and(|ext| ext == "xml") {
+            return Ok(input_path.to_path_buf());
+        }
+        if let Some(parent) = input_path.parent() {
+            return find_xml_file(parent);
         }
         return Ok(input_path.to_path_buf());
     }
@@ -555,12 +565,28 @@ pub fn run(args: Args) -> Result<()> {
     let xml_path = find_xml_file(&archive_info.archive_path)?;
     eprintln!("Found XML file: {}", xml_path.display());
 
+    let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
+        .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
+        .or_else(|| crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(&archive_info.archive_path));
+
     eprintln!("Compiling ODS database into NDJSON stream (single pass)...");
     let start_compile = std::time::Instant::now();
     let (mut provenance, concept_map, records) = parse_single_pass(&xml_path)?;
     provenance.trud_release_date = Some(archive_info.release_date.clone());
     provenance.trud_release_name = Some(archive_info.release_name);
     provenance.trud_release_file = Some(archive_info.filename);
+
+    if let Some(parent) = parent_prov {
+        if parent.trud_release_sha256.is_some() {
+            provenance.trud_release_sha256 = parent.trud_release_sha256;
+        }
+        if parent.trud_release_sha256_verified.is_some() {
+            provenance.trud_release_sha256_verified = parent.trud_release_sha256_verified;
+        }
+        if parent.trud_release_filesize_bytes.is_some() {
+            provenance.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
+        }
+    }
     eprintln!(
         "Parsing complete. Found {} concept mappings and {} organisations. Took {:?}",
         concept_map.len(),
@@ -1362,12 +1388,6 @@ pub fn parse_single_pass(
     provenance.publication_source = pub_source;
     provenance.publication_schema_version = xml_version;
     provenance.publication_record_count = manifest_record_count;
-
-    primary_role_scope.sort();
-    primary_role_scope.dedup();
-    if !primary_role_scope.is_empty() {
-        provenance.primary_role_scope = Some(primary_role_scope);
-    }
 
     Ok((provenance, concept_map, parsed))
 }

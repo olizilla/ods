@@ -1146,7 +1146,7 @@ mod tests {
 
         let mut prov = crate::provenance::OdsProvenance::default();
         prov.trud_release_date = Some("2026-07-31".to_string());
-        prov.primary_role_scope = Some(vec![
+        let scope = vec![
             "RO177".to_string(),
             "RO261".to_string(),
             "RO198".to_string(),
@@ -1156,11 +1156,11 @@ mod tests {
             "RO7".to_string(),
             "RO269".to_string(),
             "RO270".to_string(),
-        ]);
+        ];
 
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
         crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
+        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov), Some(&scope)).unwrap();
         crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
         crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
 

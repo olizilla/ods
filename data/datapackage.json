@@ -1,0 +1,248 @@
+{
+  "name": "nhs-ods-parquet",
+  "title": "NHS Organisation Data Service (ODS) Parquet Dataset",
+  "description": "Columnar Parquet dataset compiled from the official NHS TRUD Organisation Data Service (ODS) release",
+  "version": "0.1.0",
+  "licenses": [
+    {
+      "name": "OGL-UK-3.0",
+      "path": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+      "title": "Open Government Licence v3.0",
+      "attribution": "Contains Open Data and public sector information licensed under the Open Government Licence v3.0 from NHS England."
+    }
+  ],
+  "resources": [
+    {
+      "name": "orgs",
+      "path": "orgs.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "ods_code", "type": "string", "constraints": { "required": true } },
+          { "name": "entity_type", "type": "string", "constraints": { "required": true } },
+          { "name": "status", "type": "string", "constraints": { "required": true } },
+          { "name": "primary_role_code", "type": "string", "constraints": { "required": true } },
+          { "name": "role_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "successor_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "predecessor_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "category", "type": "string", "constraints": { "required": true } },
+          { "name": "name", "type": "string", "constraints": { "required": true } },
+          { "name": "address", "type": "string" },
+          { "name": "town", "type": "string" },
+          { "name": "county", "type": "string" },
+          { "name": "postcode", "type": "string" },
+          { "name": "country", "type": "string" },
+          { "name": "uprn", "type": "string" },
+          { "name": "telephone", "type": "string" },
+          { "name": "website", "type": "string" },
+          { "name": "commissioner_name", "type": "string" },
+          { "name": "commissioner_code", "type": "string" },
+          { "name": "parent_name", "type": "string" },
+          { "name": "parent_code", "type": "string" },
+          { "name": "pcn_name", "type": "string" },
+          { "name": "pcn_code", "type": "string" },
+          { "name": "trust_name", "type": "string" },
+          { "name": "trust_code", "type": "string" },
+          { "name": "icb_name", "type": "string" },
+          { "name": "icb_code", "type": "string" },
+          { "name": "region_name", "type": "string" },
+          { "name": "region_code", "type": "string" },
+          { "name": "legal_start", "type": "date" },
+          { "name": "legal_end", "type": "date" },
+          { "name": "operational_start", "type": "date" },
+          { "name": "operational_end", "type": "date" },
+          { "name": "last_changed", "type": "date" },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "ods_code",
+        "foreignKeys": [
+          {
+            "fields": "primary_role_code",
+            "reference": {
+              "resource": "roles",
+              "fields": "role_code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "orgs_all",
+      "path": "orgs_all.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "ods_code", "type": "string", "constraints": { "required": true } },
+          { "name": "entity_type", "type": "string", "constraints": { "required": true } },
+          { "name": "status", "type": "string", "constraints": { "required": true } },
+          { "name": "primary_role_code", "type": "string", "constraints": { "required": true } },
+          { "name": "role_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "successor_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "predecessor_codes", "type": "array", "constraints": { "required": true } },
+          { "name": "category", "type": "string", "constraints": { "required": true } },
+          { "name": "name", "type": "string", "constraints": { "required": true } },
+          { "name": "address", "type": "string" },
+          { "name": "town", "type": "string" },
+          { "name": "county", "type": "string" },
+          { "name": "postcode", "type": "string" },
+          { "name": "country", "type": "string" },
+          { "name": "uprn", "type": "string" },
+          { "name": "telephone", "type": "string" },
+          { "name": "website", "type": "string" },
+          { "name": "commissioner_name", "type": "string" },
+          { "name": "commissioner_code", "type": "string" },
+          { "name": "parent_name", "type": "string" },
+          { "name": "parent_code", "type": "string" },
+          { "name": "pcn_name", "type": "string" },
+          { "name": "pcn_code", "type": "string" },
+          { "name": "trust_name", "type": "string" },
+          { "name": "trust_code", "type": "string" },
+          { "name": "icb_name", "type": "string" },
+          { "name": "icb_code", "type": "string" },
+          { "name": "region_name", "type": "string" },
+          { "name": "region_code", "type": "string" },
+          { "name": "legal_start", "type": "date" },
+          { "name": "legal_end", "type": "date" },
+          { "name": "operational_start", "type": "date" },
+          { "name": "operational_end", "type": "date" },
+          { "name": "last_changed", "type": "date" },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "ods_code",
+        "foreignKeys": [
+          {
+            "fields": "primary_role_code",
+            "reference": {
+              "resource": "roles",
+              "fields": "role_code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "org_roles",
+      "path": "org_roles.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "ods_code", "type": "string", "constraints": { "required": true } },
+          { "name": "role_code", "type": "string", "constraints": { "required": true } },
+          { "name": "role_id", "type": "string", "constraints": { "required": true } },
+          { "name": "is_primary", "type": "boolean", "constraints": { "required": true } },
+          { "name": "role_status", "type": "string", "constraints": { "required": true } },
+          { "name": "legal_start", "type": "date" },
+          { "name": "legal_end", "type": "date" },
+          { "name": "operational_start", "type": "date" },
+          { "name": "operational_end", "type": "date" },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "role_id",
+        "foreignKeys": [
+          {
+            "fields": "ods_code",
+            "reference": {
+              "resource": "orgs_all",
+              "fields": "ods_code"
+            }
+          },
+          {
+            "fields": "role_code",
+            "reference": {
+              "resource": "roles",
+              "fields": "role_code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "roles",
+      "path": "roles.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "role_code", "type": "string", "constraints": { "required": true } },
+          { "name": "role_name", "type": "string", "constraints": { "required": true } },
+          { "name": "can_be_primary", "type": "boolean", "constraints": { "required": true } },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "role_code"
+      }
+    },
+    {
+      "name": "relationships",
+      "path": "relationships.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "rel_id", "type": "string", "constraints": { "required": true } },
+          { "name": "source_code", "type": "string", "constraints": { "required": true } },
+          { "name": "target_code", "type": "string", "constraints": { "required": true } },
+          { "name": "rel_type_code", "type": "string", "constraints": { "required": true } },
+          { "name": "rel_type_name", "type": "string", "constraints": { "required": true } },
+          { "name": "rel_status", "type": "string", "constraints": { "required": true } },
+          { "name": "legal_start", "type": "date" },
+          { "name": "legal_end", "type": "date" },
+          { "name": "operational_start", "type": "date" },
+          { "name": "operational_end", "type": "date" },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "rel_id",
+        "foreignKeys": [
+          {
+            "fields": "source_code",
+            "reference": {
+              "resource": "orgs_all",
+              "fields": "ods_code"
+            }
+          },
+          {
+            "fields": "target_code",
+            "reference": {
+              "resource": "orgs_all",
+              "fields": "ods_code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "successions",
+      "path": "successions.parquet",
+      "format": "parquet",
+      "mediatype": "application/vnd.apache.parquet",
+      "schema": {
+        "fields": [
+          { "name": "succession_id", "type": "string", "constraints": { "required": true } },
+          { "name": "predecessor_code", "type": "string", "constraints": { "required": true } },
+          { "name": "successor_code", "type": "string", "constraints": { "required": true } },
+          { "name": "legal_start", "type": "date" },
+          { "name": "trud_release_date", "type": "date", "constraints": { "required": true } }
+        ],
+        "primaryKey": "succession_id",
+        "foreignKeys": [
+          {
+            "fields": "predecessor_code",
+            "reference": {
+              "resource": "orgs_all",
+              "fields": "ods_code"
+            }
+          },
+          {
+            "fields": "successor_code",
+            "reference": {
+              "resource": "orgs_all",
+              "fields": "ods_code"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

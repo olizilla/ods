@@ -64,7 +64,10 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
 
     assert_eq!(prov.trud_release_date.as_deref(), Some("2025-05-01"));
     assert_eq!(prov.trud_release_name.as_deref(), Some("Release 6.5.0"));
-    assert_eq!(prov.trud_release_sha256_verified, Some(false));
+    assert_eq!(
+        prov.trud_release_sha256_verified,
+        Some(ods::provenance::TrudVerificationSource::Unverified)
+    );
 
     Ok(())
 }

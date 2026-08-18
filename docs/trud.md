@@ -79,11 +79,10 @@ flowchart TD
 
 ### API Key Security & Redaction
 TRUD download URLs embed user API keys directly in their path parameters (`/keys/{api_key}/...`). `ods trud pull` automatically redacts secret API keys from:
-- `provenance.json` outputs (`trud_release_url`)
 - `--verbose` CLI log messages
 - Error tracebacks and log files
 
-The key is replaced with `<REDACTED_API_KEY>` before writing or printing.
+The key is replaced with `<REDACTED_API_KEY>` before logging or printing.
 
 ---
 

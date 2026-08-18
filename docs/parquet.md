@@ -4,10 +4,7 @@ The tables `ods make` produces from the NHS TRUD ODS XML release. Worked
 examples, including how to query several releases at once, are in
 [queries.md](./queries.md).
 
-> **Pre-1.0.** This is the schema **as it will be at v1**. Several renames and
-> the succession rework are agreed but not yet implemented — see
-> `.agents/briefs/schema-freeze-workplan.md`. We publish v1 of the data once
-> we're happy with this shape, and it's fixed from then on.
+> **Pre-1.0.** This is the schema **as it will be at v1**. We publish v1 of the data once we're happy with this shape, and it's fixed from then on.
 
 ## The tables
 
@@ -259,6 +256,7 @@ makes role history reconstructable from a single release.
 | `role_status` | VARCHAR | no | of the *role holding*, not the organisation |
 | `legal_start` / `legal_end` | DATE | yes | |
 | `operational_start` / `operational_end` | DATE | yes | |
+| `trud_release_date` | DATE | no | TRUD distribution release date |
 
 All 131,871 inactive rows carry an `operational_end` and every row carries a
 start, so "which roles did this organisation hold on date D?" is answerable from
@@ -273,6 +271,7 @@ The role vocabulary. 205 rows, of which 97 can be a primary role.
 | `role_code` | VARCHAR | no | `"RO177"` |
 | `role_name` | VARCHAR | no | curated — `"Prescribing Cost Centre"` |
 | `can_be_primary` | BOOLEAN | no | whether ODS declares it primary-capable |
+| `trud_release_date` | DATE | no | TRUD distribution release date |
 
 Names are curated: typos fixed, abbreviations expanded, casing normalised, with a
 justification recorded for every substantive change.
@@ -308,6 +307,7 @@ join; the relationship type is carried inline.
 | `rel_status` | VARCHAR | no | of the *relationship* |
 | `legal_start` / `legal_end` | DATE | yes | |
 | `operational_start` / `operational_end` | DATE | yes | |
+| `trud_release_date` | DATE | no | TRUD distribution release date |
 
 Relationships are directional: `source_code` holds the relationship *to*
 `target_code`. `rel_id` is what lets you tell a continuing relationship from a
@@ -335,6 +335,7 @@ only, as above.
 | `predecessor_code` | VARCHAR | no | the organisation that was superseded |
 | `successor_code` | VARCHAR | no | the organisation that took over |
 | `legal_start` | DATE | no | the date the succession took effect |
+| `trud_release_date` | DATE | no | TRUD distribution release date |
 
 Three details, all verified against the full XML:
 
@@ -393,6 +394,15 @@ knew it in 2019, you need the 2019 release, not a 2019 filter over today's —
 Points 2 and 3 turn into features if you keep the releases. Closures,
 reopenings, renames and reparenting are all recoverable
 [across an archive](./queries.md#across-releases).
+
+## Frictionless Data Package
+
+`datapackage.json` describes this release's tables in the Frictionless Table
+Schema format. The four tables without list columns validate with the
+Frictionless framework; `orgs` and `orgs_all` use native Parquet list columns
+for `role_codes`, `successor_codes` and `predecessor_codes`, which Table Schema's
+flat-cell model does not cover. For querying, the Parquet files are 
+self-describing — use DuckDB, Polars or Arrow directly.
 
 ## Provenance
 

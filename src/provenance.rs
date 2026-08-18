@@ -12,19 +12,24 @@ fn default_type_tag() -> String {
     NDJSON_TYPE_TAG.to_string()
 }
 
-fn default_tool_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrudVerificationSource {
+    TrudApi,
+    // Reserved for 07-pull-index-and-trust-chain; local archive yields Unverified until 07
+    PublishedRelease,
+    Unverified,
 }
 
 /// Unified dataset and build provenance metadata emitted as line 1 of canonical `ods.ndjson`
-/// and saved as `provenance.json` in workspace release directories.
+/// and saved as `_provenance.json` in workspace release directories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OdsProvenance {
     /// Discriminator tag distinguishing provenance header from organisation records
     #[serde(rename = "_type", default = "default_type_tag")]
     pub type_tag: String,
 
-    // --- 1. Official TRUD API Release Metadata ---
+    // --- 1. Official TRUD API Release Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_name: Option<String>,
 
@@ -41,12 +46,9 @@ pub struct OdsProvenance {
     pub trud_release_sha256: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256_verified: Option<bool>,
+    pub trud_release_sha256_verified: Option<TrudVerificationSource>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_url: Option<String>,
-
-    // --- 2. Inner XML Manifest Metadata ---
+    // --- 2. Inner XML Manifest Metadata (publication_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publication_date: Option<String>,
 
@@ -65,27 +67,28 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publication_record_count: Option<usize>,
 
+    // --- 3. Tool Build Info (tool_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_role_scope: Option<Vec<String>>,
-
-    // --- 3. Tool Build Info & Artifact Hashes ---
-    #[serde(default = "default_tool_version")]
-    pub tool_version: String,
+    pub tool_version: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_parquet_version: Option<String>,
+    pub tool_git_sha: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_arrow_version: Option<String>,
+    pub tool_git_dirty: Option<bool>,
+
+    // --- 4. Dataset Identity & Artifact Hashes (dataset_*) ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataset_revision: Option<u32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_zstd_level: Option<i32>,
+    pub dataset_parquet_schema_version: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset_doi: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub derived_artifacts: Option<std::collections::BTreeMap<String, String>>,
+    pub dataset_file_sha256: Option<std::collections::BTreeMap<String, String>>,
 }
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
@@ -100,20 +103,19 @@ impl Default for OdsProvenance {
             trud_release_filesize_bytes: None,
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
-            trud_release_url: None,
             publication_date: None,
             publication_seq_num: None,
             publication_type: None,
             publication_source: None,
             publication_schema_version: None,
             publication_record_count: None,
-            primary_role_scope: None,
-            tool_version: env!("CARGO_PKG_VERSION").to_string(),
-            tool_parquet_version: None,
-            tool_arrow_version: None,
-            tool_zstd_level: None,
+            tool_version: None,
+            tool_git_sha: None,
+            tool_git_dirty: None,
+            dataset_revision: None,
+            dataset_parquet_schema_version: None,
             dataset_doi: None,
-            derived_artifacts: None,
+            dataset_file_sha256: None,
         }
     }
 }
@@ -133,9 +135,6 @@ impl OdsProvenance {
         if let Some(ref s) = self.trud_release_sha256 {
             meta.insert("ods.trud_release_sha256".to_string(), s.clone());
         }
-        if let Some(ref u) = self.trud_release_url {
-            meta.insert("ods.trud_release_url".to_string(), u.clone());
-        }
         if let Some(ref d) = self.publication_date {
             meta.insert("ods.publication_date".to_string(), d.clone());
         }
@@ -148,15 +147,22 @@ impl OdsProvenance {
         if let Some(ref s) = self.publication_source {
             meta.insert("ods.publication_source".to_string(), s.clone());
         }
-        meta.insert("ods.tool_version".to_string(), self.tool_version.clone());
-        if let Some(ref v) = self.tool_parquet_version {
-            meta.insert("ods.tool_parquet_version".to_string(), v.clone());
+        if let Some(ref v) = self.tool_version {
+            meta.insert("ods.tool_version".to_string(), v.clone());
         }
-        if let Some(ref v) = self.tool_arrow_version {
-            meta.insert("ods.tool_arrow_version".to_string(), v.clone());
+        if let Some(ref sha) = self.tool_git_sha {
+            meta.insert("ods.tool_git_sha".to_string(), sha.clone());
         }
-        if let Some(v) = self.tool_zstd_level {
-            meta.insert("ods.tool_zstd_level".to_string(), v.to_string());
+        if let Some(dirty) = self.tool_git_dirty {
+            if dirty {
+                meta.insert("ods.tool_git_dirty".to_string(), "true".to_string());
+            }
+        }
+        if let Some(rev) = self.dataset_revision {
+            meta.insert("ods.dataset_revision".to_string(), rev.to_string());
+        }
+        if let Some(ref ver) = self.dataset_parquet_schema_version {
+            meta.insert("ods.dataset_parquet_schema_version".to_string(), ver.clone());
         }
         if let Some(ref doi) = self.dataset_doi {
             meta.insert("ods.dataset_doi".to_string(), doi.clone());
@@ -183,7 +189,6 @@ impl OdsProvenance {
                                     if prov.trud_release_file.is_none() { prov.trud_release_file = zip_prov.trud_release_file; }
                                     if prov.trud_release_name.is_none() { prov.trud_release_name = zip_prov.trud_release_name; }
                                     if prov.trud_release_sha256.is_none() { prov.trud_release_sha256 = zip_prov.trud_release_sha256; }
-                                    if prov.trud_release_url.is_none() { prov.trud_release_url = zip_prov.trud_release_url; }
                                 }
                             }
                             return Some(prov);
@@ -242,7 +247,7 @@ impl OdsProvenance {
         }
         if let Ok(hash) = compute_file_sha256(&zip_path) {
             prov.trud_release_sha256 = Some(hash);
-            prov.trud_release_sha256_verified = Some(true);
+            prov.trud_release_sha256_verified = Some(TrudVerificationSource::Unverified);
         }
 
         Some(prov)
@@ -261,20 +266,19 @@ impl OdsProvenance {
             trud_release_filesize_bytes: None,
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
-            trud_release_url: None,
             publication_date,
             publication_seq_num: None,
             publication_type: None,
             publication_source: None,
             publication_schema_version: None,
             publication_record_count: None,
-            primary_role_scope: None,
-            tool_version: env!("CARGO_PKG_VERSION").to_string(),
-            tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
-            tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
-            tool_zstd_level: Some(3),
+            tool_version: None,
+            tool_git_sha: None,
+            tool_git_dirty: None,
+            dataset_revision: None,
+            dataset_parquet_schema_version: None,
             dataset_doi: None,
-            derived_artifacts: None,
+            dataset_file_sha256: None,
         }
     }
 
@@ -294,14 +298,13 @@ impl OdsProvenance {
         if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
             anyhow::bail!("Missing trud_release_sha256 in _provenance.json");
         }
-        if self.trud_release_sha256_verified != Some(true) {
-            anyhow::bail!("trud_release_sha256_verified must be true in _provenance.json");
-        }
-
-        // Validate URL is not local file:// or local path
-        if let Some(ref url) = self.trud_release_url {
-            if url.starts_with("file://") || url.starts_with('/') || url.contains("/tmp/") {
-                anyhow::bail!("trud_release_url must be a canonical remote TRUD URL, got: {}", url);
+        match self.trud_release_sha256_verified {
+            Some(TrudVerificationSource::TrudApi) | Some(TrudVerificationSource::PublishedRelease) => {}
+            Some(TrudVerificationSource::Unverified) => {
+                anyhow::bail!("trud_release_sha256_verified is unverified");
+            }
+            None => {
+                anyhow::bail!("Missing trud_release_sha256_verified in _provenance.json");
             }
         }
 
@@ -351,10 +354,7 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
     url.to_string()
 }
 
-pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
-    // Data and opinions alike: `category_rules.json` states where we disagree
-    // with the ODS primary role, so it is hashed like any other artifact. Its
-    // hash is what answers "did the opinion change between these releases?".
+pub fn update_provenance_and_write_sha256sums(output_dir: &Path, revision: Option<u32>) -> Result<()> {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
@@ -363,6 +363,7 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         "relationships.parquet",
         "successions.parquet",
         "category_rules.json",
+        "datapackage.json",
     ];
 
     let mut hashes = std::collections::BTreeMap::new();
@@ -387,7 +388,23 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         OdsProvenance::try_extract_trud_zip_provenance(output_dir).unwrap_or_default()
     };
 
-    // Defect B Fix: freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
+    // Pre-amend verification: Check archive in trud/ matches trud_release_file and trud_release_sha256
+    if let (Some(ref file), Some(ref expected_sha)) = (&prov.trud_release_file, &prov.trud_release_sha256) {
+        let archive_path = output_dir.join("trud").join(file);
+        if archive_path.exists() {
+            let actual_sha = compute_file_sha256(&archive_path)?;
+            if !actual_sha.eq_ignore_ascii_case(expected_sha) {
+                anyhow::bail!(
+                    "✖ Pre-build archive verification mismatch for {}: expected SHA-256 {}, got {}",
+                    file,
+                    expected_sha,
+                    actual_sha
+                );
+            }
+        }
+    }
+
+    // Freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
     if let Ok(header) = crate::commands::ndjson::extract_manifest_header(output_dir) {
         if header.publication_date.is_some() {
             prov.publication_date = header.publication_date;
@@ -407,29 +424,23 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path) -> Result<()> {
         if header.publication_record_count.is_some() {
             prov.publication_record_count = header.publication_record_count;
         }
-        if header.primary_role_scope.is_some() {
-            prov.primary_role_scope = header.primary_role_scope;
-        }
     }
 
     if prov.type_tag.is_empty() {
         prov.type_tag = NDJSON_TYPE_TAG.to_string();
     }
-    if prov.tool_version.is_empty() {
-        prov.tool_version = env!("CARGO_PKG_VERSION").to_string();
-    }
-    if prov.tool_parquet_version.is_none() {
-        prov.tool_parquet_version = Some(env!("ODS_TOOL_PARQUET_VERSION").to_string());
-    }
-    if prov.tool_arrow_version.is_none() {
-        prov.tool_arrow_version = Some(env!("ODS_TOOL_ARROW_VERSION").to_string());
-    }
-    if prov.tool_zstd_level.is_none() {
-        prov.tool_zstd_level = Some(3);
-    }
+    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    prov.tool_git_sha = option_env!("ODS_GIT_SHA").map(|s| s.to_string());
+    prov.tool_git_dirty = if option_env!("ODS_GIT_DIRTY").is_some() {
+        Some(true)
+    } else {
+        None
+    };
 
-    prov.primary_role_scope = None;
-    prov.derived_artifacts = Some(hashes);
+    prov.dataset_revision = Some(revision.unwrap_or(1));
+    prov.dataset_parquet_schema_version = Some(crate::datapackage::schema_version().to_string());
+    prov.dataset_file_sha256 = Some(hashes);
+
     if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
         let _ = std::fs::write(&prov_path, updated_json);
         if let Ok(prov_hash) = compute_file_sha256(&prov_path) {
@@ -464,66 +475,6 @@ mod tests {
 
         let parsed = try_parse_provenance_line(&json).unwrap();
         assert_eq!(parsed.publication_date, Some("2026-07-31".to_string()));
-    }
-
-    /// `build.rs` reads the resolved `parquet` and `arrow` versions out of
-    /// `Cargo.lock`. If it ever fails to find the lock file — a packaged crate,
-    /// a vendored build, an unusual workspace layout — it falls back to
-    /// `"unknown"` and every release would silently start recording that.
-    ///
-    /// These versions exist to explain a byte-level hash after the fact, so an
-    /// absent or stale value defeats the field's whole purpose. Assert both that
-    /// it was derived at all, and that it still matches the lock file.
-    #[test]
-    fn tool_crate_versions_are_derived_from_cargo_lock() {
-        let parquet_ver = env!("ODS_TOOL_PARQUET_VERSION");
-        let arrow_ver = env!("ODS_TOOL_ARROW_VERSION");
-
-        for (name, ver) in [("parquet", parquet_ver), ("arrow", arrow_ver)] {
-            assert_ne!(
-                ver, "unknown",
-                "build.rs could not read Cargo.lock, so the {name} version was not recorded"
-            );
-            assert_eq!(
-                ver.split('.').count(),
-                3,
-                "expected a semver for {name}, got {ver:?}"
-            );
-        }
-
-        // Re-derive independently and compare, so a dependency bump that does
-        // not trigger a rebuild is caught rather than shipped.
-        let lock = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
-        )
-        .expect("Cargo.lock is present in the repo");
-
-        let version_of = |pkg: &str| -> Option<String> {
-            let mut current = String::new();
-            for line in lock.lines().map(str::trim) {
-                if line == "[[package]]" {
-                    current.clear();
-                } else if let Some(v) = line.strip_prefix("name = ") {
-                    current = v.trim_matches('"').to_string();
-                } else if let Some(v) = line.strip_prefix("version = ") {
-                    if current == pkg {
-                        return Some(v.trim_matches('"').to_string());
-                    }
-                }
-            }
-            None
-        };
-
-        assert_eq!(
-            version_of("parquet").as_deref(),
-            Some(parquet_ver),
-            "recorded parquet version has drifted from Cargo.lock"
-        );
-        assert_eq!(
-            version_of("arrow").as_deref(),
-            Some(arrow_ver),
-            "recorded arrow version has drifted from Cargo.lock"
-        );
     }
 
     #[test]

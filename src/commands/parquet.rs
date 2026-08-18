@@ -86,15 +86,6 @@ pub fn run(args: Args) -> Result<()> {
                 .with_context(|| format!("parsing JSON line: {}", trimmed))?;
             recs.push(record);
         }
-        if let Some(ref mut prov) = _prov {
-            if prov.primary_role_scope.is_none() {
-                if let Ok(xml_path) = crate::commands::ndjson::find_xml_file(&args.input) {
-                    if let Ok((xml_prov, _, _)) = crate::commands::ndjson::parse_single_pass(&xml_path) {
-                        prov.primary_role_scope = xml_prov.primary_role_scope;
-                    }
-                }
-            }
-        }
         (_prov, recs)
     } else {
         let archive_info = crate::archive::resolve_trud_archive(&args.input)?;
@@ -149,9 +140,6 @@ pub fn run(args: Args) -> Result<()> {
             if parent.trud_release_filesize_bytes.is_some() {
                 prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
             }
-            if parent.trud_release_url.is_some() {
-                prov.trud_release_url = parent.trud_release_url;
-            }
         } else {
             prov.trud_release_date = Some(archive_info.release_date);
             prov.trud_release_name = Some(archive_info.release_name);
@@ -161,7 +149,7 @@ pub fn run(args: Args) -> Result<()> {
             }
             if let Ok(hash) = crate::provenance::compute_file_sha256(&archive_info.archive_path) {
                 prov.trud_release_sha256 = Some(hash);
-                prov.trud_release_sha256_verified = Some(true);
+                prov.trud_release_sha256_verified = Some(crate::provenance::TrudVerificationSource::TrudApi);
             }
         }
         let resolved = crate::commands::ndjson::resolve_hierarchies(parsed);
@@ -174,6 +162,17 @@ pub fn run(args: Args) -> Result<()> {
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
+    let primary_role_scope = if args.input.extension().is_some_and(|ext| ext == "ndjson") {
+        crate::commands::ndjson::find_xml_file(&args.input)
+            .ok()
+            .and_then(|xml_path| crate::commands::ndjson::extract_manifest_header(&xml_path).ok())
+            .and_then(|h| h.primary_role_scope)
+    } else {
+        crate::commands::ndjson::extract_manifest_header(&args.input)
+            .ok()
+            .and_then(|h| h.primary_role_scope)
+    };
+
     // 1. Export orgs.parquet (Active only)
     export_orgs(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
 
@@ -183,7 +182,7 @@ pub fn run(args: Args) -> Result<()> {
     // 3. Export org_roles.parquet (the org↔role bridge) and roles.parquet
     //    (the vocabulary those rows join to).
     export_org_roles(&args.output, &records, provenance.as_ref())?;
-    export_roles(&args.output, &records, provenance.as_ref())?;
+    export_roles(&args.output, &records, provenance.as_ref(), primary_role_scope.as_deref())?;
 
     // 4. Export relationships.parquet
     export_relationships(&args.output, &records, provenance.as_ref())?;
@@ -191,13 +190,18 @@ pub fn run(args: Args) -> Result<()> {
     // 5. Export successions.parquet
     export_successions(&args.output, &records, provenance.as_ref())?;
 
-    // 6. Ship the category rules alongside the data so the derivation is
+    // 6. Ship the category rules and datapackage.json alongside the data so the derivation is
     //    reproducible from a release alone, without the tool.
     std::fs::write(
         args.output.join("category_rules.json"),
         crate::roles::CATEGORY_RULES_JSON,
     )
     .context("writing category_rules.json")?;
+
+    let release_pkg = crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref());
+    let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
+    std::fs::write(args.output.join("datapackage.json"), pkg_json)
+        .context("writing datapackage.json")?;
 
     // 7. Write updated _provenance.json to output directory
     if let Some(ref p) = provenance {
@@ -220,6 +224,7 @@ pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
         "relationships.parquet",
         "successions.parquet",
         "category_rules.json",
+        "datapackage.json",
         crate::provenance::PROVENANCE_FILENAME,
         "provenance.json",
     ]
@@ -677,7 +682,7 @@ struct RoleRow {
     operational_end: Option<String>,
 }
 
-fn org_roles_schema() -> Schema {
+pub fn org_roles_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("role_code", DataType::Utf8, false),
@@ -797,7 +802,7 @@ pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Op
 // reflects it instead of asserting a stale opinion.
 // ==========================================
 
-fn roles_schema() -> Schema {
+pub fn roles_schema() -> Schema {
     Schema::new(vec![
         Field::new("role_code", DataType::Utf8, false),
         Field::new("role_name", DataType::Utf8, false),
@@ -845,7 +850,12 @@ fn report_category_rule_hits(records: &[OdsRecord]) {
     );
 }
 
-pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_roles(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+    primary_role_scope: Option<&[String]>,
+) -> Result<()> {
     // Observed vocabulary: every role code in the release.
     let mut observed_roles: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut observed_primary: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -859,7 +869,7 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
         }
     }
 
-    let primary_scope_set: std::collections::HashSet<&str> = match provenance.and_then(|p| p.primary_role_scope.as_ref()) {
+    let primary_scope_set: std::collections::HashSet<&str> = match primary_role_scope {
         Some(scope) if !scope.is_empty() => scope.iter().map(|s| s.as_str()).collect(),
         _ => anyhow::bail!("Missing <PrimaryRoleScope> in release manifest"),
     };
@@ -1177,7 +1187,7 @@ pub fn compute_transitive_closures(
     (successor_closures, predecessor_closures)
 }
 
-fn successions_schema() -> Schema {
+pub fn successions_schema() -> Schema {
     Schema::new(vec![
         Field::new("succession_id", DataType::Utf8, false),
         Field::new("predecessor_code", DataType::Utf8, false),
@@ -1559,18 +1569,18 @@ mod tests {
 
         let temp_dir = tempfile::tempdir().unwrap();
 
-        // 1. Must fail without PrimaryRoleScope in provenance
+        // 1. Must fail without PrimaryRoleScope
         let mut prov_no_scope = crate::provenance::OdsProvenance::default();
         prov_no_scope.trud_release_date = Some("2026-07-31".to_string());
-        let err = export_roles(temp_dir.path(), &[record.clone()], Some(&prov_no_scope));
+        let err = export_roles(temp_dir.path(), &[record.clone()], Some(&prov_no_scope), None);
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains("Missing <PrimaryRoleScope>"));
 
-        // 2. Must succeed with PrimaryRoleScope in provenance
+        // 2. Must succeed with PrimaryRoleScope
         let mut prov = crate::provenance::OdsProvenance::default();
         prov.trud_release_date = Some("2026-07-31".to_string());
-        prov.primary_role_scope = Some(vec!["RO177".to_string()]);
-        let res = export_roles(temp_dir.path(), &[record], Some(&prov));
+        let scope = vec!["RO177".to_string()];
+        let res = export_roles(temp_dir.path(), &[record], Some(&prov), Some(&scope));
         assert!(res.is_ok());
     }
 

@@ -117,7 +117,7 @@ pub struct ReleaseOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256_verified: Option<bool>,
+    pub trud_release_sha256_verified: Option<crate::provenance::TrudVerificationSource>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -452,7 +452,7 @@ fn pull_single_release<F: TrudFetcher>(
                     trud_release_file: Some(target_release.archive_file_name.clone()),
                     trud_release_filesize_bytes: Some(target_release.archive_file_size),
                     trud_release_sha256: Some(target_release.archive_file_sha256.clone()),
-                    trud_release_sha256_verified: Some(true),
+                    trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                     status: "cached".to_string(),
                     path: Some(format!("ods_data/releases/{}", target_release.release_date)),
                     error: None,
@@ -555,7 +555,7 @@ fn pull_single_release<F: TrudFetcher>(
             trud_release_file: Some(target_release.archive_file_name.clone()),
             trud_release_filesize_bytes: Some(target_release.archive_file_size),
             trud_release_sha256: Some(local_sha256),
-            trud_release_sha256_verified: Some(true),
+            trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
             status: "downloaded".to_string(),
             path: Some(format!("ods_data/releases/{}", target_release.release_date)),
             error: None,
@@ -642,7 +642,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                     trud_release_file: Some(r.archive_file_name.clone()),
                     trud_release_filesize_bytes: Some(r.archive_file_size),
                     trud_release_sha256: Some(r.archive_file_sha256.clone()),
-                    trud_release_sha256_verified: Some(true),
+                    trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                     status: "cached".to_string(),
                     path: Some(format!("ods_data/releases/{}", r.release_date)),
                     error: None,
@@ -880,7 +880,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         trud_release_file: Some(release.archive_file_name.clone()),
                                         trud_release_filesize_bytes: Some(release.archive_file_size),
                                         trud_release_sha256: Some(local_sha),
-                                        trud_release_sha256_verified: Some(false),
+                                        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
                                         status: "failed".to_string(),
                                         path: None,
                                         error: Some("SHA-256 checksum mismatch".to_string()),
@@ -911,7 +911,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         trud_release_file: Some(release.archive_file_name.clone()),
                                         trud_release_filesize_bytes: Some(release.archive_file_size),
                                         trud_release_sha256: Some(local_sha),
-                                        trud_release_sha256_verified: Some(true),
+                                        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                                         status: "downloaded".to_string(),
                                         path: Some(format!("ods_data/releases/{}", release.release_date)),
                                         error: None,
@@ -946,7 +946,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                 trud_release_file: Some(r.archive_file_name.clone()),
                 trud_release_filesize_bytes: Some(r.archive_file_size),
                 trud_release_sha256: Some(r.archive_file_sha256.clone()),
-                trud_release_sha256_verified: Some(true),
+                trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                 status: "cached".to_string(),
                 path: Some(format!("ods_data/releases/{}", r.release_date)),
                 error: None,
@@ -1037,7 +1037,13 @@ fn write_provenance_json(
     if prov_path.exists() && !force {
         return Ok(());
     }
-    write_provenance_json_with_verification(release_dir, release, sha256, true, progress)
+    write_provenance_json_with_verification(
+        release_dir,
+        release,
+        sha256,
+        crate::provenance::TrudVerificationSource::TrudApi,
+        progress,
+    )
 }
 
 fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
@@ -1172,7 +1178,13 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         download_url: format!("file://{}", zip_file.display()),
     };
 
-    write_provenance_json_with_verification(&dest_dir, &release_item, &local_sha256, false, progress)?;
+    write_provenance_json_with_verification(
+        &dest_dir,
+        &release_item,
+        &local_sha256,
+        crate::provenance::TrudVerificationSource::Unverified,
+        progress,
+    )?;
     let mut pin_moved = false;
     if is_workspace {
         pin_moved = update_active_release_link_if_changed(workspace_root, &release_date)?;
@@ -1197,7 +1209,7 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
             trud_release_file: Some(release_item.archive_file_name),
             trud_release_filesize_bytes: Some(file_size),
             trud_release_sha256: Some(local_sha256),
-            trud_release_sha256_verified: Some(false),
+            trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
             status: "local".to_string(),
             path: Some(dest_dir.display().to_string()),
             error: None,
@@ -1212,7 +1224,7 @@ fn write_provenance_json_with_verification(
     release_dir: &Path,
     release: &TrudReleaseItem,
     _sha256: &str,
-    verified: bool,
+    verified: crate::provenance::TrudVerificationSource,
     _progress: &Progress,
 ) -> Result<()> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
@@ -1223,7 +1235,6 @@ fn write_provenance_json_with_verification(
         type_tag: crate::provenance::NDJSON_TYPE_TAG.to_string(),
         trud_release_name: release.name.clone(),
         trud_release_date: Some(release.release_date.clone()),
-        trud_release_url: Some(release.download_url.clone()),
         trud_release_sha256: Some(release.archive_file_sha256.clone()),
         trud_release_sha256_verified: Some(verified),
         trud_release_file: Some(release.archive_file_name.clone()),
@@ -1234,13 +1245,13 @@ fn write_provenance_json_with_verification(
         publication_source: header.publication_source,
         publication_schema_version: header.publication_schema_version,
         publication_record_count: header.publication_record_count,
-        primary_role_scope: header.primary_role_scope,
-        tool_version: env!("CARGO_PKG_VERSION").to_string(),
-        tool_parquet_version: Some(env!("ODS_TOOL_PARQUET_VERSION").to_string()),
-        tool_arrow_version: Some(env!("ODS_TOOL_ARROW_VERSION").to_string()),
-        tool_zstd_level: Some(3),
+        tool_version: None,
+        tool_git_sha: None,
+        tool_git_dirty: None,
+        dataset_revision: None,
+        dataset_parquet_schema_version: None,
         dataset_doi: None,
-        derived_artifacts: None,
+        dataset_file_sha256: None,
     };
 
     let json = serde_json::to_string_pretty(&prov)?;
