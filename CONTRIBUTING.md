@@ -61,7 +61,7 @@ Verifiable provenance for the data is essential so `ods` manages pulling and ver
 ```text
 TRUD publishes a SHA-256 for the release archive
     │
-    ▼ ods trud pull        pull the date, verify the hash
+    ▼ ods trud pull        pull the data, verify the hash
     │
 _provenance.json
     │

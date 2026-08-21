@@ -1,47 +1,58 @@
-# ods - NHS Organisation Data CLI
+# `ods` - NHS Organisation Data Service CLI
 
 A Rust CLI to make NHS Organisation Data Service (ODS) records easy to query and use by transforming raw TRUD ODS XML into modern, open formats.
 
-## Key Features
+The `ods` project lets use and explore the data in in multiple ways:
 
-- **Easy to query out of the box**: `ods find` gives you fast, local-first search across all NHS orgs and sites. Parent, PCN, ICB, Trust, and Successor relationships are all pre-calculated.
+| I want to...                  | Feature                | Commands |
+|-------------------------------|------------------------|----------|
+| _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM https://ods.fyi/orgs.parquet` |
+| _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` |
+| _**Cite** the data_           | Citation guide         | `ods cite` |
+| _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` `ods make` `ods trud audit` |
+| _What changed this month?_    | Diff trud ods releases | `ods trud diff` |
+
 - **Open formats**: Derived Parquet tables can be queried remotely using `duckdb`, or Python without installing `ods` at all.
+- **Easy to query out of the box**: `ods find` gives you fast, local-first search across all NHS orgs and sites. Parent, PCN, ICB, Trust, and Successor relationships are all pre-calculated.
 - **Reproducible projections**: Built directly from official NHS TRUD XML data with full provenance tracking and SHA-256 hash checks. You can build byte-for-byte identical projections yourself anytime with `ods make`.
 
 A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide a stable, academically citable and easier to interpret source for NHS Org structure info.
 
-The CLI serves three distinct users:
+> **NOTE** this an independent project not commissioned by the NHS. The goal is to provide reliable and useful projections of NHS data, to aid research and to demonstrate the value of open formats and good UX.
 
-| Goal | Need | Commands |
-|---|---|---|
-| **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `pull`, `cite` |
-| **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud pull`, `make`, `trud audit`, `trud verify` |
-| **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud pull`, `make`, `trud diff`, `trud audit` |
+## Query the data
 
-## Quick Example with DuckDB
+Use `duckdb` to query the hosted parquet files. 
 
-Query hosted or local Parquet files directly:
+Use `ods pull` to fetch the dataset to your computer. 
 
-```bash
-# Find active GP Practices
+Use `ods find` to explore the data without SQL.
+
+### Find all active GP practices, and their parent ICB 
+
+```shell
 duckdb -c "
-SELECT name, ods_code, postcode, telephone, pcn, icb
-FROM 'ods_data/current/orgs.parquet'
-WHERE role IN ('Prescribing Cost Centre', 'General Practice')
-ORDER BY postcode;
-"
+  SELECT ods_code, name, postcode, icb_name
+    FROM https://ods.fyi/orgs.parquet
+   WHERE category = 'GP Practice';"
 ```
 
-```sql
--- Find active NHS entities in Sedbergh
-SELECT ods_code, name, role, record_class, postcode
-FROM 'ods_data/current/orgs.parquet'
-WHERE town = 'SEDBERGH';
+Work offline using `ods pull` to fetch the latest dataset to your computer.
+
+```shell
+ods pull
+ods find --category 'GP Practice'
 ```
 
-## Workspace Directory (`ods_data`)
+## ODS Data directory
 
-The `ods` CLI manages a local workspace directory (`ods_data`) containing release snapshots:
+The `ods` CLI manages a local workspace directory called `ods_data` to keep a local copy of each release you use, so you can always access it and refer back to it later.
+
+The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and are published automatically from CI each month.
+
+`ods pull` fetches the parquet files and _provenance.json metadata and verifies the data integrity. 
+
+Each release get's it's own date stamped folder, and symlink is set up to point `ods_data/current` to the last release you pulled.
 
 ```text
 ods_data/
@@ -60,8 +71,6 @@ ods_data/
         │   └── wiki.zip
         └── trud/                      # TRUD zip archives (gitignored)
 ```
-
-`ods pull` (WIP) will fetch the parquet files and provenance.json from the latest github release, and verify the data integrity. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and will be published automatically from CI each month when a new XML source file is published.
 
 See [docs/ods_data.md](file:///Users/oli/Code/olizilla/ods/docs/ods_data.md) for full workspace specification details.
 
@@ -128,32 +137,27 @@ ods make parquet          # Generate Parquet tables from TRUD XML
 ods make md               # Generate OKF Markdown wiki archive from Parquet
 ```
 
-## Getting Started
+## Contributing
 
-Building from source requires Rust:
-
-```bash
-cargo build --release
-```
-
-Run tests:
+Building from source requires Rust
 
 ```bash
+cargo build
 cargo test
 ```
 
-## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
 
-This project priotises:
+Considerate PRs welcome! The priorities for this project are:
 
-1. Correctness & Provenance
-  - we must not introduce data errors, the trud xml is complicated enough
-  - we must track sha256 hashes from NHS TRUD API to derived sources so researchers can cite the derived data.
-2. User experience
-  - the NHS org data xml is hard to work with. We're publishing more a more user-friendly alternative - remotely queryable parquet files, and readable [Open Knowldege Format] compliant markdown.
-  - speed affects user experience. The tool should be fast, and work offline.
+1. **Correctness & Provenance**
+    - We must not introduce data errors, the trud xml is complicated enough
+    - We must track sha256 hashes from NHS TRUD API to derived sources so researchers can trust and cite the derived data.
+2. **User experience**
+    - The NHS org data xml is hard to work with. We're publishing more a more user-friendly alternative - remotely queryable parquet files, and readable [Open Knowldege Format] compliant markdown.
+     - Speed affects user experience. The tool must be fast.
+     - Availability affects accessbility. The data must be available offline and not require a log in.
 
-Considerate PRs welcome!
 
 [Open Knowldege Format]: https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/
 
