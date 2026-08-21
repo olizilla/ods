@@ -301,69 +301,98 @@ pub fn run(args: Args) -> Result<()> {
     let rels_parquet = parquet_dir.join("relationships.parquet");
     let succs_parquet = parquet_dir.join("successions.parquet");
 
-    let total_orgs_parquet = count_records_in_parquet(&orgs_all_parquet).unwrap_or(0);
-    let active_orgs_parquet = count_records_in_parquet(&orgs_parquet).unwrap_or(0);
-    let roles_parquet_cnt = count_records_in_parquet(&roles_parquet).unwrap_or(0);
-    let rels_parquet_cnt = count_records_in_parquet(&rels_parquet).unwrap_or(0);
-    let succs_parquet_cnt = count_records_in_parquet(&succs_parquet).unwrap_or(0);
+    let total_orgs_res = count_records_in_parquet(&orgs_all_parquet);
+    let active_orgs_res = count_records_in_parquet(&orgs_parquet);
+    let roles_res = count_records_in_parquet(&roles_parquet);
+    let rels_res = count_records_in_parquet(&rels_parquet);
+    let succs_res = count_records_in_parquet(&succs_parquet);
 
-    let entities_match = raw_xml_invariants.total_orgs == total_orgs_parquet;
+    let entities_match = total_orgs_res.as_ref().ok() == Some(&raw_xml_invariants.total_orgs);
     if !entities_match {
+        let actual_str = total_orgs_res
+            .as_ref()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|e| format!("Error reading orgs_all.parquet: {:#}", e));
         discrepancies.push(format!(
             "Entity Parity Error: XML orgs count ({}) != orgs_all.parquet ({})",
-            raw_xml_invariants.total_orgs, total_orgs_parquet
+            raw_xml_invariants.total_orgs, actual_str
         ));
     }
 
-    let roles_match = raw_xml_invariants.roles_count == roles_parquet_cnt;
+    let roles_match = roles_res.as_ref().ok() == Some(&raw_xml_invariants.roles_count);
     if !roles_match {
+        let actual_str = roles_res
+            .as_ref()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|e| format!("Error reading org_roles.parquet: {:#}", e));
         discrepancies.push(format!(
             "Role Parity Error: XML roles ({}) != org_roles.parquet ({})",
-            raw_xml_invariants.roles_count, roles_parquet_cnt
+            raw_xml_invariants.roles_count, actual_str
         ));
     }
 
-    let rels_match = raw_xml_invariants.rels_count == rels_parquet_cnt;
+    let rels_match = rels_res.as_ref().ok() == Some(&raw_xml_invariants.rels_count);
     if !rels_match {
+        let actual_str = rels_res
+            .as_ref()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|e| format!("Error reading relationships.parquet: {:#}", e));
         discrepancies.push(format!(
             "Relationship Parity Error: XML relationships ({}) != relationships.parquet ({})",
-            raw_xml_invariants.rels_count, rels_parquet_cnt
+            raw_xml_invariants.rels_count, actual_str
         ));
     }
 
-    let succs_match = raw_xml_invariants.succs_distinct_count == succs_parquet_cnt;
+    let succs_match = succs_res.as_ref().ok() == Some(&raw_xml_invariants.succs_distinct_count);
     if !succs_match {
+        let actual_str = succs_res
+            .as_ref()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|e| format!("Error reading successions.parquet: {:#}", e));
         discrepancies.push(format!(
             "Successions Parity Error: XML distinct successions ({}) != successions.parquet ({})",
-            raw_xml_invariants.succs_distinct_count, succs_parquet_cnt
+            raw_xml_invariants.succs_distinct_count, actual_str
         ));
+    }
+
+    if let Err(ref e) = active_orgs_res {
+        discrepancies.push(format!("Active Orgs Parity Error: Error reading orgs.parquet: {:#}", e));
     }
 
     if !args.json {
         if entities_match {
             println!("     ✓ Entities: {:<27} # XML orgs count matches orgs_all.parquet", raw_xml_invariants.total_orgs);
         } else {
-            println!("     ✖ Entities mismatch: XML {} vs Parquet {}", raw_xml_invariants.total_orgs, total_orgs_parquet);
+            let actual_str = total_orgs_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!("     ✖ Entities mismatch: XML {} vs Parquet {}", raw_xml_invariants.total_orgs, actual_str);
         }
 
         if roles_match {
             println!("     ✓ Roles: {:<30} # XML roles count matches org_roles.parquet", raw_xml_invariants.roles_count);
         } else {
-            println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, roles_parquet_cnt);
+            let actual_str = roles_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, actual_str);
         }
 
         if rels_match {
             println!("     ✓ Relationships: {:<22} # XML rels count matches relationships.parquet", raw_xml_invariants.rels_count);
         } else {
-            println!("     ✖ Relationships mismatch: XML {} vs Parquet {}", raw_xml_invariants.rels_count, rels_parquet_cnt);
+            let actual_str = rels_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!("     ✖ Relationships mismatch: XML {} vs Parquet {}", raw_xml_invariants.rels_count, actual_str);
         }
 
         if succs_match {
-            println!("     ✓ Successors: {:<25} # XML successions count matches successions.parquet", succs_parquet_cnt);
+            println!("     ✓ Successors: {:<25} # XML successions count matches successions.parquet", raw_xml_invariants.succs_distinct_count);
         } else {
-            println!("     ✖ Successors mismatch: XML {} vs Parquet {}", raw_xml_invariants.succs_distinct_count, succs_parquet_cnt);
+            let actual_str = succs_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!("     ✖ Successors mismatch: XML {} vs Parquet {}", raw_xml_invariants.succs_distinct_count, actual_str);
         }
-        println!("     ✓ Active: {:<29} # Active orgs in orgs.parquet", active_orgs_parquet);
+
+        if let Ok(active_cnt) = active_orgs_res {
+            println!("     ✓ Active: {:<29} # Active orgs in orgs.parquet", active_cnt);
+        } else {
+            println!("     ✖ Active: missing/unreadable # Failed to read orgs.parquet");
+        }
         println!();
         println!("  3. Schema & Referential Integrity Constraints:");
     }
@@ -507,15 +536,15 @@ pub fn run(args: Args) -> Result<()> {
         input_date,
         workspace_date,
         total_orgs_xml: raw_xml_invariants.total_orgs,
-        total_orgs_parquet,
+        total_orgs_parquet: total_orgs_res.unwrap_or(0),
         active_orgs_xml: raw_xml_invariants.active_orgs,
-        active_orgs_parquet,
+        active_orgs_parquet: active_orgs_res.unwrap_or(0),
         roles_xml: raw_xml_invariants.roles_count,
-        roles_parquet: roles_parquet_cnt,
+        roles_parquet: roles_res.unwrap_or(0),
         rels_xml: raw_xml_invariants.rels_count,
-        rels_parquet: rels_parquet_cnt,
+        rels_parquet: rels_res.unwrap_or(0),
         succs_xml: raw_xml_invariants.succs_distinct_count,
-        succs_parquet: succs_parquet_cnt,
+        succs_parquet: succs_res.unwrap_or(0),
         sampled_records: raw_xml_invariants.sample_orgs.len(),
         practice_parent_linked: practice_linked,
         practice_parent_total: practice_total,
@@ -707,22 +736,31 @@ fn audit_referential_integrity(
     }
 
     // 1. Check Primary Key Uniqueness on orgs_all.parquet
-    let file = File::open(orgs_all_parquet)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let reader = builder.build()?;
-
     let mut valid_codes = HashSet::new();
     let mut duplicate_codes = 0;
 
-    for batch in reader {
-        let batch = batch?;
-        let ods_code_arr = batch.column(batch.schema().index_of("ods_code")?)
-            .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
-        for i in 0..batch.num_rows() {
-            let code = ods_code_arr.value(i);
-            if !valid_codes.insert(code.to_string()) {
-                duplicate_codes += 1;
+    let file_res = File::open(orgs_all_parquet).and_then(|f| ParquetRecordBatchReaderBuilder::try_new(f).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+    match file_res {
+        Ok(builder) => match builder.build() {
+            Ok(reader) => {
+                for batch in reader {
+                    let batch = batch?;
+                    let ods_code_arr = batch.column(batch.schema().index_of("ods_code")?)
+                        .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
+                    for i in 0..batch.num_rows() {
+                        let code = ods_code_arr.value(i);
+                        if !valid_codes.insert(code.to_string()) {
+                            duplicate_codes += 1;
+                        }
+                    }
+                }
             }
+            Err(e) => {
+                discrepancies.push(format!("Referential Integrity Error: Failed to read orgs_all.parquet: {:#}", e));
+            }
+        },
+        Err(e) => {
+            discrepancies.push(format!("Referential Integrity Error: Failed to open orgs_all.parquet: {:#}", e));
         }
     }
 
@@ -736,21 +774,27 @@ fn audit_referential_integrity(
     let mut orphan_roles = 0;
     // 2. Foreign Key Check: org_roles.parquet ods_code -> orgs_all.parquet
     if roles_parquet.exists() {
-        let rfile = File::open(roles_parquet)?;
-        let rbuilder = ParquetRecordBatchReaderBuilder::try_new(rfile)?;
-        let rreader = rbuilder.build()?;
-
-        for batch in rreader {
-            let batch = batch?;
-            let schema = batch.schema();
-            if let Ok(idx) = schema.index_of("ods_code") {
-                let code_arr = batch.column(idx).as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..batch.num_rows() {
-                    let code = code_arr.value(i);
-                    if !code.is_empty() && !valid_codes.contains(code) {
-                        orphan_roles += 1;
+        if let Ok(rfile) = File::open(roles_parquet) {
+            if let Ok(rbuilder) = ParquetRecordBatchReaderBuilder::try_new(rfile) {
+                if let Ok(rreader) = rbuilder.build() {
+                    for batch in rreader.flatten() {
+                        let schema = batch.schema();
+                        if let Ok(idx) = schema.index_of("ods_code") {
+                            if let Some(code_arr) = batch.column(idx).as_any().downcast_ref::<StringArray>() {
+                                for i in 0..batch.num_rows() {
+                                    let code = code_arr.value(i);
+                                    if !code.is_empty() && !valid_codes.contains(code) {
+                                        orphan_roles += 1;
+                                    }
+                                }
+                            }
+                        }
                     }
+                } else {
+                    discrepancies.push("Referential Integrity Error: Failed to read org_roles.parquet".to_string());
                 }
+            } else {
+                discrepancies.push("Referential Integrity Error: Failed to parse org_roles.parquet".to_string());
             }
         }
 
@@ -765,28 +809,36 @@ fn audit_referential_integrity(
     let mut orphan_rels = 0;
     // 2. Foreign Key Check: relationships.parquet target_code / source_code -> orgs_all.parquet
     if rels_parquet.exists() {
-        let rfile = File::open(rels_parquet)?;
-        let rbuilder = ParquetRecordBatchReaderBuilder::try_new(rfile)?;
-        let rreader = rbuilder.build()?;
+        if let Ok(rfile) = File::open(rels_parquet) {
+            if let Ok(rbuilder) = ParquetRecordBatchReaderBuilder::try_new(rfile) {
+                if let Ok(rreader) = rbuilder.build() {
+                    for batch in rreader.flatten() {
+                        let schema = batch.schema();
+                        let target_idx = schema.index_of("target_code").ok();
+                        let source_idx = schema.index_of("source_code").ok();
 
-        for batch in rreader {
-            let batch = batch?;
-            let schema = batch.schema();
-            let target_idx = schema.index_of("target_code").ok();
-            let source_idx = schema.index_of("source_code").ok();
-
-            if let (Some(t_idx), Some(s_idx)) = (target_idx, source_idx) {
-                let target_arr = batch.column(t_idx).as_any().downcast_ref::<StringArray>().unwrap();
-                let source_arr = batch.column(s_idx).as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..batch.num_rows() {
-                    let target_code = target_arr.value(i);
-                    let source_code = source_arr.value(i);
-                    if (!target_code.is_empty() && !valid_codes.contains(target_code))
-                        || (!source_code.is_empty() && !valid_codes.contains(source_code))
-                    {
-                        orphan_rels += 1;
+                        if let (Some(t_idx), Some(s_idx)) = (target_idx, source_idx) {
+                            if let (Some(target_arr), Some(source_arr)) = (
+                                batch.column(t_idx).as_any().downcast_ref::<StringArray>(),
+                                batch.column(s_idx).as_any().downcast_ref::<StringArray>(),
+                            ) {
+                                for i in 0..batch.num_rows() {
+                                    let target_code = target_arr.value(i);
+                                    let source_code = source_arr.value(i);
+                                    if (!target_code.is_empty() && !valid_codes.contains(target_code))
+                                        || (!source_code.is_empty() && !valid_codes.contains(source_code))
+                                    {
+                                        orphan_rels += 1;
+                                    }
+                                }
+                            }
+                        }
                     }
+                } else {
+                    discrepancies.push("Referential Integrity Error: Failed to read relationships.parquet".to_string());
                 }
+            } else {
+                discrepancies.push("Referential Integrity Error: Failed to parse relationships.parquet".to_string());
             }
         }
 
@@ -801,28 +853,36 @@ fn audit_referential_integrity(
     let mut orphan_succs = 0;
     // 3. Foreign Key Check: successions.parquet predecessor_code / successor_code -> orgs_all.parquet
     if succs_parquet.exists() {
-        let sfile = File::open(succs_parquet)?;
-        let sbuilder = ParquetRecordBatchReaderBuilder::try_new(sfile)?;
-        let sreader = sbuilder.build()?;
+        if let Ok(sfile) = File::open(succs_parquet) {
+            if let Ok(sbuilder) = ParquetRecordBatchReaderBuilder::try_new(sfile) {
+                if let Ok(sreader) = sbuilder.build() {
+                    for batch in sreader.flatten() {
+                        let schema = batch.schema();
+                        let pred_idx = schema.index_of("predecessor_code").ok();
+                        let succ_idx = schema.index_of("successor_code").ok();
 
-        for batch in sreader {
-            let batch = batch?;
-            let schema = batch.schema();
-            let pred_idx = schema.index_of("predecessor_code").ok();
-            let succ_idx = schema.index_of("successor_code").ok();
-
-            if let (Some(p_idx), Some(s_idx)) = (pred_idx, succ_idx) {
-                let pred_arr = batch.column(p_idx).as_any().downcast_ref::<StringArray>().unwrap();
-                let succ_arr = batch.column(s_idx).as_any().downcast_ref::<StringArray>().unwrap();
-                for i in 0..batch.num_rows() {
-                    let pred_code = pred_arr.value(i);
-                    let succ_code = succ_arr.value(i);
-                    if (!pred_code.is_empty() && !valid_codes.contains(pred_code))
-                        || (!succ_code.is_empty() && !valid_codes.contains(succ_code))
-                    {
-                        orphan_succs += 1;
+                        if let (Some(p_idx), Some(s_idx)) = (pred_idx, succ_idx) {
+                            if let (Some(pred_arr), Some(succ_arr)) = (
+                                batch.column(p_idx).as_any().downcast_ref::<StringArray>(),
+                                batch.column(s_idx).as_any().downcast_ref::<StringArray>(),
+                            ) {
+                                for i in 0..batch.num_rows() {
+                                    let pred_code = pred_arr.value(i);
+                                    let succ_code = succ_arr.value(i);
+                                    if (!pred_code.is_empty() && !valid_codes.contains(pred_code))
+                                        || (!succ_code.is_empty() && !valid_codes.contains(succ_code))
+                                    {
+                                        orphan_succs += 1;
+                                    }
+                                }
+                            }
+                        }
                     }
+                } else {
+                    discrepancies.push("Referential Integrity Error: Failed to read successions.parquet".to_string());
                 }
+            } else {
+                discrepancies.push("Referential Integrity Error: Failed to parse successions.parquet".to_string());
             }
         }
 

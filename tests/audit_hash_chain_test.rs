@@ -405,6 +405,35 @@ fn test_audit_icb_hierarchy_check_reports_honest_gp_count_and_fails_on_corrupted
     Ok(())
 }
 
+#[test]
+fn test_audit_fails_on_truncated_or_missing_parquet_file() -> Result<()> {
+    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
+    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+
+    // Truncate successions.parquet to 0 bytes
+    let succs_path = active_dir.join("successions.parquet");
+    fs::write(&succs_path, b"")?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when a parquet file is truncated");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("discrepanc") || err_msg.contains("Succession") || err_msg.contains("SHA-256") || err_msg.contains("Hash"),
+        "error message must describe failure, got: {}",
+        err_msg
+    );
+    Ok(())
+}
+
+
 
 
 
