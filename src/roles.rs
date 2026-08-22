@@ -12,6 +12,7 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 use std::sync::OnceLock;
 
 const ROLE_NAMES_JSON: &str = include_str!("../data/role_names.json");
@@ -77,7 +78,7 @@ pub fn ensure_vocabulary_covers(observed: &HashSet<String>) -> Result<()> {
 
 pub const CATEGORY_RULES_JSON: &str = include_str!("../data/category_rules.json");
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CategoryRule {
     pub when_role: String,
     pub category: String,
@@ -85,13 +86,18 @@ pub struct CategoryRule {
     pub why: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CategoryRules {
     pub version: u32,
     pub rules: Vec<CategoryRule>,
 }
 
 impl CategoryRules {
+    pub fn load_from_path(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let rules: CategoryRules = serde_json::from_str(&content)?;
+        Ok(rules)
+    }
     /// Resolves an entity's category.
     ///
     /// Array order is precedence and the first matching rule wins. Codes with

@@ -131,8 +131,8 @@ During the development of `ods`, we identified several non-obvious structural qu
 
 ### Gotcha 6: Expected Non-100% Parent Linkage (Specialized GP Practices)
 - **The Issue**: Active GP Practices link to ICB commissioners via relationship `RE4` (`is commissioned by`).
-- **Why it matters**: Out of ~12,700 GP practice entries in TRUD XML, ~60 specialized practices (e.g. Armed Forces medical units, overseas practices, prison health services) do not have a parent ICB assigned in official NHS data.
-- **Resolution**: Hierarchy completeness validation in `ods audit` enforces a **>95.0% linkage threshold** rather than 100.0%, correctly accounting for valid non-standard healthcare entities.
+- **Why it matters**: Out of ~12,700 GP practice entries in TRUD XML, ~60 specialized practices (e.g. Armed Forces medical units, overseas practices, prison health services) do not have a parent ICB assigned in official NHS data. Furthermore, ICBs (`RO318`) only exist in releases from July 2022 onwards.
+- **Resolution**: Hierarchy completeness is reported as comparative fill rates in `ods trud diff` rather than a hardcoded expectation in `ods trud audit`, keeping the audit strictly grounded in source-derivable invariants.
 
 ---
 

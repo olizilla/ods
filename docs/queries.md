@@ -539,5 +539,9 @@ SELECT * FROM read_parquet([
 ]);
 ```
 
+**`WHERE operational_end IS NULL` does not equal `status = 'active'`.** Upstream TRUD ODS contains 603 organisations that are `Active` while carrying an `Operational` end date. Anyone filtering `WHERE operational_end IS NULL` to mean "currently open" silently drops those 603 active organisations. Always use `WHERE status = 'active'` to filter currently open organisations.
+
+**Active relationships on inactive organisations.** Upstream TRUD ODS contains 3 relationships marked `Active` associated with `Inactive` organisations.
+
 [parquet.md]: ./parquet.md
 [category_rules.json]: ../data/category_rules.json

@@ -239,7 +239,7 @@ Use `relationships.parquet` if you need the relationship's own dates or status.
 | `legal_start` | DATE | yes | statutory start |
 | `legal_end` | DATE | yes | statutory end; NULL while current |
 | `operational_start` | DATE | yes | when it began operating |
-| `operational_end` | DATE | yes | when it stopped; NULL while current |
+| `operational_end` | DATE | yes | when it stopped (note: 603 active records in source data carry operational end dates; filter by status = 'active' to select active organisations) |
 | `last_changed` | DATE | yes | when ODS last modified this record |
 
 ## `org_roles.parquet`

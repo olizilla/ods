@@ -20,24 +20,29 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
       <un:PrimaryRole id="RO177" displayName="Prescribing Cost Centre" />
     </un:PrimaryRoleScope>
   </un:ManifestHeader>
+  <un:CodeSystems>
+    <un:CodeSystem name="ODS_Role" id="2.16.840.1.113883.2.1.3.2.4.17.507">
+      <un:concept id="RO177" displayName="Prescribing Cost Centre" />
+    </un:CodeSystem>
+  </un:CodeSystems>
   <un:Organisations>
     <un:Organisation>
       <un:Name>PREDECESSOR PRACTICE</un:Name>
       <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A200" />
       <un:Status value="Inactive" />
-      <un:Date type="Legal"><un:Start value="2010-01-01" /></un:Date>
+      <un:Date type="Operational"><un:Start value="2010-01-01" /><un:End value="2020-01-01" /></un:Date>
       <un:OrgRecordClass value="RC1" />
-      <un:PrimaryRoleId id="RO177" uniqueRoleId="2" status="Active" display_name="Prescribing Cost Centre" />
+      <un:Role id="RO177" uniqueRoleId="2" primaryRole="true" status="Active" />
     </un:Organisation>
     <un:Organisation>
       <un:Name>TEST PRACTICE</un:Name>
       <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A100" />
       <un:Status value="Active" />
-      <un:Date type="Legal"><un:Start value="2020-01-01" /></un:Date>
+      <un:Date type="Operational"><un:Start value="2020-01-01" /></un:Date>
       <un:OrgRecordClass value="RC1" />
-      <un:PrimaryRoleId id="RO177" uniqueRoleId="1" status="Active" display_name="Prescribing Cost Centre" />
+      <un:Role id="RO177" uniqueRoleId="1" primaryRole="true" status="Active" />
       <un:Succ uniqueSuccId="100">
-        <Date><Type value="Legal" /><Start value="2020-01-01" /></Date>
+        <Date><Type value="Operational" /><Start value="2020-01-01" /></Date>
         <Type>Predecessor</Type>
         <Target><OrgId extension="A200" /></Target>
       </un:Succ>
@@ -111,6 +116,7 @@ fn test_audit_passes_on_verified_trud_release() -> Result<()> {
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -136,6 +142,7 @@ fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -166,6 +173,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -190,6 +198,7 @@ fn test_audit_runs_full_suite_and_fails_on_tampered_sha256sums_file() -> Result<
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -216,6 +225,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -238,6 +248,7 @@ fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -268,6 +279,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -312,6 +324,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
@@ -341,55 +354,33 @@ fn test_unexpected_files_detection() -> Result<()> {
 }
 
 #[test]
-fn test_audit_icb_hierarchy_check_reports_honest_gp_count_and_fails_on_corrupted_icb() -> Result<()> {
-    let release_parquet = std::path::PathBuf::from("./ods_data/releases/2026-07-31/orgs.parquet");
-    if !release_parquet.exists() {
-        eprintln!("Skipping test: ./ods_data/releases/2026-07-31/orgs.parquet missing");
-        return Ok(());
-    }
-
-    // 1. Verify honest counting on 2026-07-31 dataset
-    let (practice_linked, practice_total, _practice_pct, english_gp_unlinked, trust_linked, trust_total, _trust_pct) =
-        ods::commands::audit::audit_hierarchy_completeness(&release_parquet)?;
-
-    assert_eq!(practice_total, 7577, "Should independently count all active GP practices");
-    assert_eq!(practice_linked, 6236, "Should count English GP practices linked to ICB");
-    assert_eq!(practice_total - practice_linked, 1341, "Missing ICB count must equal 1341 non-English practices");
-    assert_eq!(english_gp_unlinked, 0, "100% of active English GP practices must be linked");
-    assert_eq!(trust_total, 38254, "Should independently count all NHS trust sites");
-    assert_eq!(trust_linked, 38254, "All NHS trust sites must be linked to NHS trust");
-
-    // 2. Verify audit failure when English GP practice ICB is corrupted/missing
+fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
-    // Create an English GP practice with NO ICB code
-    let unlinked_english_gp = ods::commands::ndjson::OdsRecord {
+    // Corrupt the transitive closure by re-exporting orgs with empty closures
+    let record = ods::commands::ndjson::OdsRecord {
         ods_code: "A100".to_string(),
-        name: "UNLINKED ENGLISH GP".to_string(),
+        name: "TEST PRACTICE".to_string(),
         status: "active".to_string(),
         record_class: "org".to_string(),
-        role: "gp practice".to_string(),
-        geo_loc: Some(ods::commands::ndjson::Location {
-            country: Some("ENGLAND".to_string()),
-            ..Default::default()
-        }),
         roles: vec![ods::commands::ndjson::OdsRole {
-            id: "RO76".to_string(),
+            id: "RO177".to_string(),
             code: None,
-            display_name: Some("gp practice".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
             unique_role_id: "1".to_string(),
             primary_role: true,
             status: "active".to_string(),
             dates: vec![],
         }],
-        icb_code: None,
         ..Default::default()
     };
 
     let empty_closures = std::collections::HashMap::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
-    ods::commands::parquet::export_orgs(&active_dir, &[unlinked_english_gp], &empty_closures, &empty_closures, prov.as_ref())?;
+    // Export with empty closures when XML has a predecessor edge
+    ods::commands::parquet::export_orgs(&active_dir, &[record.clone()], &empty_closures, &empty_closures, prov.as_ref())?;
+    ods::commands::parquet::export_orgs_all(&active_dir, &[record], &empty_closures, &empty_closures, prov.as_ref())?;
     ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
@@ -398,42 +389,259 @@ fn test_audit_icb_hierarchy_check_reports_honest_gp_count_and_fails_on_corrupted
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when an active English GP practice lacks an ICB link");
+    assert!(result.is_err(), "audit must fail when successor/predecessor closure does not match ground truth");
     Ok(())
 }
 
 #[test]
-fn test_audit_fails_on_truncated_or_missing_parquet_file() -> Result<()> {
-    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+    let rel_dir = workspace_root.join("releases").join("2026-07-31");
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
 
-    // Truncate successions.parquet to 0 bytes
-    let succs_path = active_dir.join("successions.parquet");
-    fs::write(&succs_path, b"")?;
+    // XML with duplicate uniqueRoleId="1" across two orgs
+    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PublicationType value="Full" />
+    <un:PublicationDate value="2026-07-31" />
+    <un:PublicationSeqNum value="4700" />
+    <un:PrimaryRoleScope>
+      <un:PrimaryRole id="RO177" displayName="Prescribing Cost Centre" />
+    </un:PrimaryRoleScope>
+  </un:ManifestHeader>
+  <un:CodeSystems>
+    <un:CodeSystem name="ODS_Role" id="2.16.840.1.113883.2.1.3.2.4.17.507">
+      <un:concept id="RO177" displayName="Prescribing Cost Centre" />
+    </un:CodeSystem>
+  </un:CodeSystems>
+  <un:Organisations>
+    <un:Organisation>
+      <un:Name>ORG A</un:Name>
+      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A100" />
+      <un:Status value="Active" />
+      <un:Date type="Operational"><un:Start value="2020-01-01" /></un:Date>
+      <un:Role id="RO177" uniqueRoleId="1" primaryRole="true" status="Active" />
+    </un:Organisation>
+    <un:Organisation>
+      <un:Name>ORG B</un:Name>
+      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A200" />
+      <un:Status value="Active" />
+      <un:Date type="Operational"><un:Start value="2020-01-01" /></un:Date>
+      <un:Role id="RO177" uniqueRoleId="1" primaryRole="true" status="Active" />
+    </un:Organisation>
+  </un:Organisations>
+</un:OrganisationManifest>"#;
+
+    let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
+    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    {
+        let outer_file = File::create(&outer_zip_path).unwrap();
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default();
+        outer_zip.start_file("fullfile.zip", options).unwrap();
+        outer_zip.write_all(&inner_zip_bytes).unwrap();
+        outer_zip.finish().unwrap();
+    }
+
+    let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_sha256 = Some(zip_sha256);
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    fs::write(
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    ).unwrap();
+
+    ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
+    ods::commands::parquet::run(ods::commands::parquet::Args {
+        input: rel_dir.clone(),
+        output: rel_dir.clone(),
+    }).unwrap();
+    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
 
     let args = ods::commands::audit::Args {
-        input: Some(zip_path),
+        input: Some(outer_zip_path),
         workspace: Some(workspace_root),
         json: false,
         sample: 50,
         full: true,
+        all: false,
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when a parquet file is truncated");
+    assert!(result.is_err(), "audit must fail when source structural invariant is violated");
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("discrepanc") || err_msg.contains("Succession") || err_msg.contains("SHA-256") || err_msg.contains("Hash"),
-        "error message must describe failure, got: {}",
+        err_msg.contains("duplicate uniqueRoleId") || err_msg.contains("discrepanc"),
+        "error message must describe invariant violation, got: {}",
         err_msg
     );
     Ok(())
 }
 
+#[test]
+fn test_audit_all_skips_unmade_releases() -> Result<()> {
+    let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
 
+    // Create a second release that has trud/ and _provenance.json but NO derived parquet files
+    let unmade_dir = workspace_root.join("releases").join("2020-01-01");
+    fs::create_dir_all(unmade_dir.join("trud")).unwrap();
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2020-01-01".to_string()),
+        ..Default::default()
+    };
+    fs::write(
+        unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    ).unwrap();
 
+    let args = ods::commands::audit::Args {
+        input: None,
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+        all: true,
+    };
 
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_ok(), "audit --all must succeed by skipping unmade release 2020-01-01 when at least one release is audited");
+    Ok(())
+}
+
+#[test]
+fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+
+    // Create 2 releases that both have trud/ and _provenance.json but NO derived parquet files
+    for date in &["2020-01-01", "2020-02-01"] {
+        let unmade_dir = workspace_root.join("releases").join(date);
+        fs::create_dir_all(unmade_dir.join("trud")).unwrap();
+        let prov = ods::provenance::OdsProvenance {
+            trud_release_date: Some(date.to_string()),
+            ..Default::default()
+        };
+        fs::write(
+            unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
+            serde_json::to_string_pretty(&prov).unwrap(),
+        ).unwrap();
+    }
+
+    let args = ods::commands::audit::Args {
+        input: None,
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+        all: true,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit --all must fail with non-zero exit when 100% of releases are skipped");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("nothing to audit"),
+        "error message must describe 'nothing to audit', got: {}",
+        err_msg
+    );
+    Ok(())
+}
+
+#[test]
+fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+    let rel_dir = workspace_root.join("releases").join("2026-07-31");
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+
+    // XML with relationship target pointing to non-existent org "NONEXISTENT_ORG"
+    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PublicationType value="Full" />
+    <un:PublicationDate value="2026-07-31" />
+    <un:PublicationSeqNum value="4700" />
+    <un:PrimaryRoleScope>
+      <un:PrimaryRole id="RO177" displayName="Prescribing Cost Centre" />
+    </un:PrimaryRoleScope>
+  </un:ManifestHeader>
+  <un:CodeSystems>
+    <un:CodeSystem name="ODS_Role" id="2.16.840.1.113883.2.1.3.2.4.17.507">
+      <un:concept id="RO177" displayName="Prescribing Cost Centre" />
+    </un:CodeSystem>
+  </un:CodeSystems>
+  <un:Organisations>
+    <un:Organisation>
+      <un:Name>ORG A</un:Name>
+      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="A100" />
+      <un:Status value="Active" />
+      <un:Date type="Operational"><un:Start value="2020-01-01" /></un:Date>
+      <un:Role id="RO177" uniqueRoleId="1" primaryRole="true" status="Active" />
+      <un:Rel id="RE1" uniqueRelId="100">
+        <Date><Type value="Operational" /><Start value="2020-01-01" /></Date>
+        <Target><OrgId extension="NONEXISTENT_ORG" /></Target>
+      </un:Rel>
+    </un:Organisation>
+  </un:Organisations>
+</un:OrganisationManifest>"#;
+
+    let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
+    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    {
+        let outer_file = File::create(&outer_zip_path).unwrap();
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default();
+        outer_zip.start_file("fullfile.zip", options).unwrap();
+        outer_zip.write_all(&inner_zip_bytes).unwrap();
+        outer_zip.finish().unwrap();
+    }
+
+    let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_sha256 = Some(zip_sha256);
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    fs::write(
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    ).unwrap();
+
+    ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
+    ods::commands::parquet::run(ods::commands::parquet::Args {
+        input: rel_dir.clone(),
+        output: rel_dir.clone(),
+    }).unwrap();
+    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
+
+    let args = ods::commands::audit::Args {
+        input: Some(outer_zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+        all: false,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(result.is_err(), "audit must fail when relationship target is dangling in source XML");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("dangling") || err_msg.contains("discrepanc"),
+        "error message must describe dangling target, got: {}",
+        err_msg
+    );
+    Ok(())
+}
 

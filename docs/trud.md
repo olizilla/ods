@@ -98,10 +98,21 @@ ods trud diff --baseline 2026-06-30 --target 2026-07-31
 
 ## 3. `ods trud audit`
 
-Audit Parquet projections against ground-truth TRUD XML archives to verify completeness and schema alignment.
+Verify that derived workspace artefacts are a faithful, complete, and unmodified projection of the source TRUD archive:
+
+> **The Audit Contract**: Every check must have an expected value derivable from the release's own source archive, or be a fixed structural invariant such as zero.
+
+- **File & Provenance Integrity**: Verifies SHA-256 checksums, `_provenance.json` artifact map, and `datapackage.json` hashes.
+- **Source Invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
+- **Record Parity**: Checks 100% count equality across `orgs_all.parquet`, `orgs.parquet` (active count), `org_roles.parquet`, `relationships.parquet`, and `successions.parquet`.
+- **Field & Derived Column Parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, categories, role codes, normalized addresses).
+- **Workspace Batch Audit (`--all`)**: Audits all release directories in the workspace, skipping unmade releases without failure.
 
 ```bash
-ods trud audit
+ods trud audit                  # Audit active release in workspace
+ods trud audit --all            # Audit all releases in workspace
+ods trud audit --full           # Run 100% row-by-row field comparison
+ods trud audit --json           # Output machine-readable audit report for CI
 ```
 
 ---

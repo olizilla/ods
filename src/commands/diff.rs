@@ -324,6 +324,39 @@ fn load_zip(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRe
     anyhow::bail!("No XML file found inside zip archive {}", path.display())
 }
 
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct HierarchyFillRates {
+    pub gp_practice_total: usize,
+    pub gp_practice_icb_linked: usize,
+    pub trust_site_total: usize,
+    pub trust_site_trust_linked: usize,
+}
+
+pub fn compute_fill_rates(records: &HashMap<String, OdsRecord>) -> HierarchyFillRates {
+    let mut rates = HierarchyFillRates::default();
+    for rec in records.values() {
+        let is_active = rec.status.eq_ignore_ascii_case("active");
+        let is_gp = rec.role.eq_ignore_ascii_case("Prescribing Cost Centre")
+            || rec.role.eq_ignore_ascii_case("General Practice");
+        if is_active && is_gp {
+            rates.gp_practice_total += 1;
+            if rec.icb_code.is_some() {
+                rates.gp_practice_icb_linked += 1;
+            }
+        }
+
+        let r_lower = rec.role.to_lowercase();
+        let is_trust_site = r_lower.contains("site") && (r_lower.contains("trust") || r_lower.contains("hospital"));
+        if is_active && is_trust_site {
+            rates.trust_site_total += 1;
+            if rec.trust_code.is_some() {
+                rates.trust_site_trust_linked += 1;
+            }
+        }
+    }
+    rates
+}
+
 #[derive(Default, Debug)]
 pub struct DiffStats {
     pub status_changes: usize,
@@ -334,6 +367,8 @@ pub struct DiffStats {
     pub trust_changes: usize,
     pub geo_changes: usize,
     pub other_changes: usize,
+    pub old_hierarchy_rates: Option<HierarchyFillRates>,
+    pub new_hierarchy_rates: Option<HierarchyFillRates>,
 }
 
 fn compute_diff(
@@ -346,6 +381,11 @@ fn compute_diff(
     Vec<EntityDiff>,
     DiffStats,
 )> {
+    let mut stats = DiffStats {
+        old_hierarchy_rates: Some(compute_fill_rates(old_records)),
+        new_hierarchy_rates: Some(compute_fill_rates(new_records)),
+        ..Default::default()
+    };
     let old_keys: HashSet<_> = old_records.keys().cloned().collect();
     let new_keys: HashSet<_> = new_records.keys().cloned().collect();
 
@@ -370,7 +410,6 @@ fn compute_diff(
     }
 
     let mut modified = Vec::new();
-    let mut stats = DiffStats::default();
 
     for key in common_keys {
         let old_rec = &old_records[&key];
@@ -576,7 +615,7 @@ fn render_summary_tui(
 
     // Subtitle line with publication dates
     let sub_len = subtitle.len();
-    let sub_pad = if box_width > sub_len { box_width - sub_len } else { 0 };
+    let sub_pad = box_width.saturating_sub(sub_len);
     let sub_l = sub_pad / 2;
     let sub_r = sub_pad - sub_l;
     writeln!(w, "│{}{}{}│", " ".repeat(sub_l), subtitle, " ".repeat(sub_r))?;
@@ -605,6 +644,53 @@ fn render_summary_tui(
     writeln!(w, "    • {:<36} {:>6}", "Address / Geography Changes:", stats.geo_changes)?;
     if stats.other_changes > 0 {
         writeln!(w, "    • {:<36} {:>6}", "Other Property Changes:", stats.other_changes)?;
+    }
+
+    if let (Some(old_rates), Some(new_rates)) = (&stats.old_hierarchy_rates, &stats.new_hierarchy_rates) {
+        writeln!(w, "\n  {}", bold("Hierarchy Linkage Fill Rates:"))?;
+        let old_gp_pct = if old_rates.gp_practice_total > 0 {
+            (old_rates.gp_practice_icb_linked as f64 / old_rates.gp_practice_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let new_gp_pct = if new_rates.gp_practice_total > 0 {
+            (new_rates.gp_practice_icb_linked as f64 / new_rates.gp_practice_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let gp_diff = (new_rates.gp_practice_icb_linked as i64) - (old_rates.gp_practice_icb_linked as i64);
+        let gp_diff_str = if gp_diff >= 0 { format!("+{}", gp_diff) } else { format!("{}", gp_diff) };
+
+        writeln!(
+            w,
+            "    • {:<36} {:.1}% ({}/{}) ➔ {:.1}% ({}/{}) [{}]",
+            "GP Practice ➔ ICB Linkage:",
+            old_gp_pct, old_rates.gp_practice_icb_linked, old_rates.gp_practice_total,
+            new_gp_pct, new_rates.gp_practice_icb_linked, new_rates.gp_practice_total,
+            gp_diff_str
+        )?;
+
+        let old_t_pct = if old_rates.trust_site_total > 0 {
+            (old_rates.trust_site_trust_linked as f64 / old_rates.trust_site_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let new_t_pct = if new_rates.trust_site_total > 0 {
+            (new_rates.trust_site_trust_linked as f64 / new_rates.trust_site_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let t_diff = (new_rates.trust_site_trust_linked as i64) - (old_rates.trust_site_trust_linked as i64);
+        let t_diff_str = if t_diff >= 0 { format!("+{}", t_diff) } else { format!("{}", t_diff) };
+
+        writeln!(
+            w,
+            "    • {:<36} {:.1}% ({}/{}) ➔ {:.1}% ({}/{}) [{}]",
+            "Trust Site ➔ NHS Trust Linkage:",
+            old_t_pct, old_rates.trust_site_trust_linked, old_rates.trust_site_total,
+            new_t_pct, new_rates.trust_site_trust_linked, new_rates.trust_site_total,
+            t_diff_str
+        )?;
     }
 
     if args.verbose {
@@ -819,6 +905,55 @@ fn render_markdown(
         writeln!(w, "| {:<36} | {:>5} |", "Other Property Changes", stats.other_changes)?;
     }
     writeln!(w)?;
+
+    if let (Some(old_rates), Some(new_rates)) = (&stats.old_hierarchy_rates, &stats.new_hierarchy_rates) {
+        let old_gp_pct = if old_rates.gp_practice_total > 0 {
+            (old_rates.gp_practice_icb_linked as f64 / old_rates.gp_practice_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let new_gp_pct = if new_rates.gp_practice_total > 0 {
+            (new_rates.gp_practice_icb_linked as f64 / new_rates.gp_practice_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let gp_diff = (new_rates.gp_practice_icb_linked as i64) - (old_rates.gp_practice_icb_linked as i64);
+        let gp_diff_str = if gp_diff >= 0 { format!("+{}", gp_diff) } else { format!("{}", gp_diff) };
+
+        let old_t_pct = if old_rates.trust_site_total > 0 {
+            (old_rates.trust_site_trust_linked as f64 / old_rates.trust_site_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let new_t_pct = if new_rates.trust_site_total > 0 {
+            (new_rates.trust_site_trust_linked as f64 / new_rates.trust_site_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let t_diff = (new_rates.trust_site_trust_linked as i64) - (old_rates.trust_site_trust_linked as i64);
+        let t_diff_str = if t_diff >= 0 { format!("+{}", t_diff) } else { format!("{}", t_diff) };
+
+        writeln!(w, "### Hierarchy Linkage Fill Rates\n")?;
+        writeln!(w, "| Relationship                           | Baseline Fill Rate | Target Fill Rate | Delta |")?;
+        writeln!(w, "| -------------------------------------- | ------------------ | ---------------- | ----- |")?;
+        writeln!(
+            w,
+            "| {:<38} | {:.1}% ({}/{}) | {:.1}% ({}/{}) | {:>5} |",
+            "GP Practice ➔ ICB Linkage",
+            old_gp_pct, old_rates.gp_practice_icb_linked, old_rates.gp_practice_total,
+            new_gp_pct, new_rates.gp_practice_icb_linked, new_rates.gp_practice_total,
+            gp_diff_str
+        )?;
+        writeln!(
+            w,
+            "| {:<38} | {:.1}% ({}/{}) | {:.1}% ({}/{}) | {:>5} |",
+            "Trust Site ➔ NHS Trust Linkage",
+            old_t_pct, old_rates.trust_site_trust_linked, old_rates.trust_site_total,
+            new_t_pct, new_rates.trust_site_trust_linked, new_rates.trust_site_total,
+            t_diff_str
+        )?;
+        writeln!(w)?;
+    }
 
     Ok(())
 }
