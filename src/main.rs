@@ -15,6 +15,9 @@ enum Command {
     /// Search NHS organisations and sites
     Find(commands::find::Args),
 
+    /// Show full details for a single organisation by ODS code
+    Info(commands::info::Args),
+
     /// Download pre-built dataset releases
     Pull(commands::pull::Args),
 
@@ -32,6 +35,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Find(args) => commands::find::run(args),
+        Command::Info(args) => commands::info::run(args),
         Command::Pull(args) => commands::pull::run(args),
         Command::Cite(args) => commands::cite::run(args),
         Command::Trud(args) => commands::trud::run(args),

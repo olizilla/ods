@@ -3,6 +3,7 @@ pub mod cite;
 pub mod diff;
 pub mod fetch;
 pub mod find;
+pub mod info;
 pub mod make;
 pub mod md;
 pub mod ndjson;

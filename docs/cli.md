@@ -12,7 +12,7 @@ The CLI serves three distinct users:
 
 | Goal | Need | Commands |
 |---|---|---|
-| **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `pull`, `cite` |
+| **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `info`, `pull`, `cite` |
 | **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud pull`, `make`, `trud audit`, `trud verify` |
 | **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud pull`, `make`, `trud diff`, `trud audit` |
 
@@ -26,6 +26,7 @@ Usage: ods <COMMAND>
 
 Commands:
   find  Search NHS organisations and sites
+  info  Show full details for a single organisation by ODS code
   pull  Download pre-built dataset releases
   cite  Show provenance metadata and academic citation
   trud  Build from official NHS source data (requires TRUD API key)
@@ -71,6 +72,16 @@ How to Cite
   TRUD ODS XML. You can verify this by running `ods trud audit` or
   by rebuilding from source with `ods trud pull && ods make`.
 ```
+
+### JSON output is not yet stable
+
+`--format json` is intended for scripts and agents, but its shape is **not
+versioned**. Field names may change between `ods` releases without notice.
+
+The Parquet schema has `dataset_parquet_schema_version` and a
+`datapackage.json` contract; the CLI's JSON output has no equivalent yet. If you
+are building something durable, read the Parquet files directly — they are the
+stable interface, and `datapackage.json` describes them.
 
 ### Reproducibility Guarantee
 

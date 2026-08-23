@@ -13,10 +13,12 @@ fn test_find_table_inactive_successor_display() {
     find::run_with_writer(
         Args {
             query: Some("CLWYD".to_string()),
-            role: None,
+            code: Vec::new(),
+            location: None,
+            role: Vec::new(),
             all: true,
             verbose: false,
-            sort: SortBy::Code,
+            sort: Some(SortBy::Code),
             format: OutputFormat::Table,
             input: parquet_dir.clone(),
         },
@@ -34,54 +36,7 @@ fn test_find_table_inactive_successor_display() {
 }
 
 #[test]
-fn test_find_inspector_hop_by_hop_chain() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            query: Some("0AF".to_string()),
-            role: None,
-            all: true,
-            verbose: false,
-            sort: SortBy::Code,
-            format: OutputFormat::Table,
-            input: parquet_dir.clone(),
-        },
-        &mut out,
-        &parquet_dir,
-    )
-    .expect("find::run_with_writer should succeed");
-
-    let output_str = String::from_utf8(out).expect("valid UTF-8");
-    assert!(
-        output_str.contains("Succession"),
-        "Inspector view of 0AF must have 'Succession' section, got:\n{}",
-        output_str
-    );
-    assert!(
-        output_str.contains("0CE") && output_str.contains("0CY") && output_str.contains("YDDTR"),
-        "Inspector succession chain must list 0CE, 0CY, and YDDTR, got:\n{}",
-        output_str
-    );
-    assert!(
-        output_str.contains("2012-10-01") && output_str.contains("2014-10-01") && output_str.contains("2016-04-01"),
-        "Inspector succession chain must include succession dates, got:\n{}",
-        output_str
-    );
-    assert!(
-        output_str.contains("inactive") && output_str.contains("active"),
-        "Inspector succession chain must show status of each hop, got:\n{}",
-        output_str
-    );
-}
-
-#[test]
-fn test_find_exact_code_match_triggers_inspector() {
+fn test_find_exact_code_matches_as_table() {
     let parquet_dir = PathBuf::from("./ods_data/current");
     if !parquet_dir.join("orgs.parquet").exists() {
         eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
@@ -91,11 +46,13 @@ fn test_find_exact_code_match_triggers_inspector() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            query: Some("A82608".to_string()),
-            role: None,
+            query: None,
+            code: vec!["A82608".to_string()],
+            location: None,
+            role: Vec::new(),
             all: false,
             verbose: false,
-            sort: SortBy::Code,
+            sort: Some(SortBy::Code),
             format: OutputFormat::Table,
             input: parquet_dir.clone(),
         },
@@ -105,16 +62,15 @@ fn test_find_exact_code_match_triggers_inspector() {
     .expect("find::run_with_writer should succeed");
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
-    // Must open the inspector card for A82608
+    // find always returns table with column headers
     assert!(
-        output_str.contains("# SEDBERGH MEDICAL PRACTICE (A82608)"),
-        "Exact match for A82608 must render inspector header, got:\n{}",
+        output_str.contains("ODS Code") && output_str.contains("Name"),
+        "find must render table headers, got:\n{}",
         output_str
     );
-    // Must also mention related prefix-matched site A82608001
     assert!(
-        output_str.contains("A82608001"),
-        "Exact match for A82608 must list related prefix-matched site A82608001, got:\n{}",
+        output_str.contains("A82608") && output_str.contains("SEDBERGH MEDICAL PRACTICE"),
+        "find table must include A82608, got:\n{}",
         output_str
     );
 }
@@ -130,11 +86,13 @@ fn test_find_json_successor_codes_array() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            query: Some("001".to_string()),
-            role: None,
+            query: None,
+            code: vec!["001".to_string()],
+            location: None,
+            role: Vec::new(),
             all: true,
             verbose: false,
-            sort: SortBy::Code,
+            sort: Some(SortBy::Code),
             format: OutputFormat::Json,
             input: parquet_dir.clone(),
         },
@@ -180,11 +138,13 @@ fn test_find_csv_successor_codes_semicolon_list() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            query: Some("001".to_string()),
-            role: None,
+            query: None,
+            code: vec!["001".to_string()],
+            location: None,
+            role: Vec::new(),
             all: true,
             verbose: false,
-            sort: SortBy::Code,
+            sort: Some(SortBy::Code),
             format: OutputFormat::Csv,
             input: parquet_dir.clone(),
         },

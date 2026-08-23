@@ -246,10 +246,12 @@ fn full_pipeline_parquet_and_md() {
     find::run_with_writer(
         find::Args {
             query: Some("Mock".to_string()),
-            role: None,
+            code: Vec::new(),
+            location: None,
+            role: Vec::new(),
             all: false,
             verbose: false,
-            sort: find::SortBy::Code,
+            sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Json,
             input: parquet_dir.clone(),
         },

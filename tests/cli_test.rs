@@ -19,6 +19,7 @@ fn test_cli_help_displays_subcommands() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("find"));
+    assert!(stdout.contains("info"));
     assert!(stdout.contains("pull"));
     assert!(stdout.contains("cite"));
     assert!(stdout.contains("trud"));

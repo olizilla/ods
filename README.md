@@ -8,6 +8,7 @@ The `ods` project lets use and explore the data in in multiple ways:
 |-------------------------------|------------------------|----------|
 | _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM https://ods.fyi/orgs.parquet` |
 | _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` |
+| _**Inspect** an NHS org_      | Detail inspector       | `ods info <ODS_CODE>` |
 | _**Cite** the data_           | Citation guide         | `ods cite` |
 | _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` `ods make` `ods trud audit` |
 | _What changed this month?_    | Diff trud ods releases | `ods trud diff` |
@@ -34,14 +35,14 @@ Use `ods find` to explore the data without SQL.
 duckdb -c "
   SELECT ods_code, name, postcode, icb_name
     FROM https://ods.fyi/orgs.parquet
-   WHERE category = 'GP Practice';"
+   WHERE list_contains(role_names, 'GP Practice');"
 ```
 
 Work offline using `ods pull` to fetch the latest dataset to your computer.
 
 ```shell
 ods pull
-ods find --category 'GP Practice'
+ods find --role 'GP Practice'
 ```
 
 ## ODS Data directory
@@ -63,10 +64,11 @@ ods_data/
         ├── _provenance.json           # Source TRUD metadata & SHA-256 derived hashes
         ├── orgs.parquet               # Active orgs & sites (Primary analytical table)
         ├── orgs_all.parquet           # All orgs (active + inactive)
-        ├── rels.parquet               # Target relationship links (ICB, Trust, PCN)
-        ├── roles.parquet              # Primary & secondary roles
+        ├── relationships.parquet      # Target relationship links (ICB, Trust, PCN)
+        ├── roles.parquet              # Primary & secondary roles (Holdings table)
+        ├── successions.parquet        # Entity successor chains
+        ├── datapackage.json           # Frictionless Data Package descriptor
         ├── SHA256SUMS                 # Flat verification manifest for _provenance.json and *.parquet
-        ├── successors.parquet         # Entity successor chains
         ├── markdown/                  # Open Knowledge Format (OKF) wiki archive
         │   └── wiki.zip
         └── trud/                      # TRUD zip archives (gitignored)
@@ -81,6 +83,7 @@ Usage: ods <COMMAND>
 
 Commands:
   find  Search NHS organisations and sites
+  info  Show full details for a single organisation by ODS code
   pull  Download pre-built dataset releases
   cite  Show provenance metadata and academic citation
   trud  Build from official NHS source data (requires TRUD API key)
@@ -91,11 +94,20 @@ Commands:
 
 ### find
 
-Searches for organisations or sites in the Parquet tables by name, ODS code, or postcode. Automatically initialises `./ods_data/` with pre-compiled Parquet files if no workspace exists.
+Searches for organisations or sites in the Parquet tables by name, ODS code, or postcode.
 
 ```bash
 ods find "Royal Free"
-ods find --role "General Practice" "SW9" --format csv
+ods find --role 'GP Practice' --format csv
+```
+
+### info
+
+Shows full details for a single organisation by exact ODS code, including primary and secondary roles, contact details, hierarchy relationships, and resolved succession paths.
+
+```bash
+ods info A82608
+ods info 0AF --format json
 ```
 
 ### pull

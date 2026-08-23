@@ -77,7 +77,7 @@ opaque: nobody mistakes `RO177` for a description.
 
 It would also be the least useful label available. The primary roles that occur
 most often are `Social Care Site` (31,694), `Prescribing Cost Centre` (12,841)
-and `Registered under Part 2, Care Standards Act 2000` (5,477) — registers and
+and `Registered under Care Standards Act 2000` (5,477) — registers and
 regulatory registrations rather than descriptions of the organisation.
 
 Because `role_names` is positionally aligned with `role_codes`, ODS's own label

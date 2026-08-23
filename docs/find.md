@@ -1,102 +1,67 @@
-# `ods find` Command Design & Guiding Principles
+# ods find
 
-This document defines the Developer Experience (DX) guiding principles, query model, output formats, and schema parity specifications for `ods find`.
+Search NHS organisations and sites across names, codes, locations, and roles.
 
----
+`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to CSV and JSON.
 
-## 1. Guiding Principle & Value Proposition
+## Usage
 
-> **"`ods find` is the instant, zero-friction, domain-aware inspector for NHS Organisation Data."**
-
-### Key Guiding Rules
-1. **Single Source of Truth**: `ods find` queries `orgs.parquet`, `orgs_all.parquet`, `successors.parquet`, and `roles.parquet`.
-2. **Schema Parity Across Formats**: `ods find --format json` and `ods find --format csv` reuse the exact field names and sequence of `orgs.parquet` with zero truncation, placing enriching properties in logical concept groups.
-3. **Verbose Inspector Mode (`--verbose`) & Wiki Generator (`ods md`)**: Share a unified inspector rendering engine (`render_inspector_markdown`). Formats compact range intervals (`Operational: <start> to present` / `<start> to <end>`), `Other Roles`, `Last Modified` timestamp, contact details, and complete hierarchy relationship links (`PCN`, `Trust`, `ICB`, `Region`, `Commissioned By`, `Parent Org`, `Succeeded By`).
-
----
-
-## 2. Full Machine Readable Formats (`--format json` & `--format csv`)
-
-Every entity returned by `ods find --format json` and `ods find --format csv` exports the complete 34-field schema:
-
-```
-ods_code,record_class,status,role,role_code,secondary_roles,name,address,town,county,postcode,country,uprn,telephone,website,commissioner,commissioner_code,parent,parent_code,pcn,pcn_code,trust,trust_code,icb,icb_code,region,region_code,successor_code,successor,legal_start,legal_end,operational_start,operational_end,last_change_date
+```text
+ods find [QUERY] [OPTIONS]
 ```
 
-### JSON Structure (`--format json`)
-```json
-{
-  "ods_code": "A82608",
-  "record_class": "org",
-  "status": "active",
-  "role": "prescribing cost centre",
-  "role_code": "RO177",
-  "secondary_roles": ["gp practice (RO76)"],
-  "name": "SEDBERGH MEDICAL PRACTICE",
-  "address": "STATION ROAD, SEDBERGH, LA10 5DL",
-  "town": "SEDBERGH",
-  "county": "CUMBRIA",
-  "postcode": "LA10 5DL",
-  "country": "ENGLAND",
-  "uprn": "10003970417",
-  "telephone": "01539 718191",
-  "website": null,
-  "commissioner": "NHS LANCASHIRE AND SOUTH CUMBRIA INTEGRATED CARE BOARD",
-  "commissioner_code": "QE1",
-  "parent": "NHS LANCASHIRE AND SOUTH CUMBRIA ICB - 01K",
-  "parent_code": "01K",
-  "pcn": "WESTERN DALES PCN",
-  "pcn_code": "U59980",
-  "trust": null,
-  "trust_code": null,
-  "icb": "NHS LANCASHIRE AND SOUTH CUMBRIA INTEGRATED CARE BOARD",
-  "icb_code": "QE1",
-  "region": null,
-  "region_code": null,
-  "successor_code": null,
-  "successor": null,
-  "legal_start": null,
-  "legal_end": null,
-  "operational_start": "1987-04-01",
-  "operational_end": null,
-  "last_change_date": "2023-08-22"
-}
+### Options
+
+| Option | Description |
+| :--- | :--- |
+| `[QUERY]` | Positional query matching organisation **name only** with relevance ranking |
+| `--code <CODES>` | Filter by exact ODS code (repeatable and comma-separated, e.g. `--code A82608,RJZ`) |
+| `--in <PLACE>` | Filter by location across `country` ➔ `county` ➔ `town` ➔ `postcode` (minimum 3 characters) |
+| `-r, --role <ROLES>` | Filter by role codes (e.g. `RO76`) or curated names (repeatable and comma-separated) |
+| `-a, --all` | Search all organisations (including inactive/closed history in `orgs_all.parquet`) |
+| `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
+| `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
+| `-f, --format <FORMAT>` | Output format: `table` (default), `csv`, or `json` |
+| `-i, --input <DIR>` | Directory containing Parquet files (defaults to active release) |
+
+## Search Model & Ranking
+
+### 1. Positional Name Matching & Relevance Ranking
+The positional argument matches the organisation `name` column exclusively. When a query is provided without an explicit `--sort` flag, results are ranked in 4 tiers:
+
+1. **Exact Match**: Normalised name equals query.
+2. **Prefix Match**: Normalised name starts with query.
+3. **Word Boundary Match**: A word in normalised name starts with query.
+4. **Substring Match**: Normalised name contains query.
+
+If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes precedence over ranking.
+
+### 2. Location Filtering (`--in <place>`)
+`--in` evaluates four geographic columns using broad-to-narrow precedence:
+
+`country` ➔ `county` ➔ `town` ➔ `postcode`
+
+The first level with any match wins and returns only that level's rows. Postcodes are whitespace-stripped during comparison so `--in LA105DL` and `--in "LA10 5DL"` work identically.
+
+### 3. Role Filtering (`--role <roles>`)
+`--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
+
+```text
+✖ No role named 'General Practice'
+  Did you mean: GP Practice · Scottish GP Practice · Northern Ireland GP Practice
+  Or use codes: ods find --role RO76,RO227,RO315
 ```
 
----
+### 4. Role Set Display & De-emphasis
+In tabular output, `find` displays descriptive roles first and tucks low-signal container/regulatory roles (`Prescribing Cost Centre`, `Social Care Site`, `Registered under Care Standards Act 2000`, `ePACT System`, `Foundation Trust`) behind a `+N` count:
 
-## 3. Extended Inspector Mode (`--verbose` & `ods md`)
-
-When invoked with `--verbose` (or when a single entity is matched in table format), `ods find` outputs an ANSI-colored Markdown summary via the shared `formatting::render_inspector_markdown` renderer:
-
-```markdown
-# SEDBERGH MEDICAL PRACTICE (A82608)
-
-- Class: org
-- Status: active
-- Primary Role: prescribing cost centre (RO177)
-- Other Roles: gp practice (RO76)
-- Operational: 1987-04-01 to present
-- Last Modified: 2023-08-22
-
-## Contact Details
-- Address: STATION ROAD, SEDBERGH, LA10 5DL
-- Country: ENGLAND
-- UPRN: 10003970417
-- Telephone: 01539 718191
-
-## Relationships
-- PCN: WESTERN DALES PCN (U59980)
-- ICB: NHS LANCASHIRE AND SOUTH CUMBRIA INTEGRATED CARE BOARD (QE1)
-- Commissioned By: NHS LANCASHIRE AND SOUTH CUMBRIA INTEGRATED CARE BOARD (QE1)
-- Parent Org: NHS LANCASHIRE AND SOUTH CUMBRIA ICB - 01K (01K)
+```text
+| ODS Code   | Name                                          | Postcode  | Roles                     | Class
+| A82608     | SEDBERGH MEDICAL PRACTICE                     | LA10 5DL  | GP Practice +1            | org
+| RJZ        | KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST  | SE5 9RS   | NHS Trust, Hospice +1     | org
 ```
 
----
+Pass `-v, --verbose` to view the full role set in stored order. `--format json` and `--format csv` always export the complete `role_codes` and `role_names` lists in stored order.
 
-## 4. Dynamic Parquet $\leftrightarrow$ JSON & CSV Schema Parity Tests
-
-To guarantee schema parity across formats, `src/commands/find.rs` includes two dynamic tests:
-- `test_find_json_schema_matches_parquet_schema`: Verifies key sequence parity with `orgs.parquet`.
-- `test_find_csv_schema_matches_json_schema`: Verifies that CSV headers match JSON keys line-for-line.
-
+### 5. Normalisation
+Matching folds case, strips apostrophes, replaces symbols with spaces, and collapses whitespace. All displayed table headers, JSON fields, and CSV rows retain original source casing and punctuation verbatim.

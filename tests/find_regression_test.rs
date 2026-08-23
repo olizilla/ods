@@ -12,11 +12,13 @@ fn test_find_sedbergh_output_matches_good_binary() {
     let mut out = Vec::new();
     find::run_with_writer(
         find::Args {
-            query: Some("sedbergh".to_string()),
-            role: None,
+            query: None,
+            code: Vec::new(),
+            location: Some("sedbergh".to_string()),
+            role: Vec::new(),
             all: false,
             verbose: false,
-            sort: find::SortBy::Code,
+            sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Table,
             input: parquet_dir.clone(),
         },
@@ -35,17 +37,17 @@ fn test_find_sedbergh_output_matches_good_binary() {
         output_str
     );
 
-    // 2. Verify all 15 active records matching 'sedbergh' are found
+    // 2. Verify all 14 active records matching town 'sedbergh' are found
     assert!(
-        lines.iter().any(|l| l.contains("Found 15 matching active records")),
-        "Expected 'Found 15 matching active records', got:\n{}",
+        lines.iter().any(|l| l.contains("Found 14 matching active records")),
+        "Expected 'Found 14 matching active records', got:\n{}",
         output_str
     );
 
-    // 3. Verify specific known records are present in output
+    // 3. Verify specific known records in town Sedbergh are present in output
     let expected_codes = vec![
         "8GJ58", "A82608", "A82608001", "D2E8H", "EE112233", "EE112331",
-        "EE112445", "EE112451", "EE137269", "FLG02", "RNN88", "RW5OX",
+        "EE112451", "EE137269", "FLG02", "RNN88", "RW5OX",
         "RX796", "V25604", "VN6C2"
     ];
 

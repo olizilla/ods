@@ -77,10 +77,12 @@ fn test_workspace_full_lifecycle() {
     find::run_with_writer(
         find::Args {
             query: Some("Mock".to_string()),
-            role: None,
+            code: Vec::new(),
+            location: None,
+            role: Vec::new(),
             all: false,
             verbose: false,
-            sort: find::SortBy::Code,
+            sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Json,
             input: discovered_parquet.clone(),
         },

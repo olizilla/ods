@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "low_signal": {
+    "RO177": {
+      "name": "Prescribing Cost Centre",
+      "why": "Container role for prescribing budgets; paired with a specific practice or cost centre subtype."
+    },
+    "RO101": {
+      "name": "Social Care Site",
+      "why": "Generic container role for social care locations; paired with primary service role."
+    },
+    "RO15": {
+      "name": "Registered under Care Standards Act 2000",
+      "why": "Regulatory registration flag; paired with care provider or nursing home role."
+    },
+    "RO31": {
+      "name": "ePACT System",
+      "why": "System identifier flag; paired with primary site or trust role."
+    },
+    "RO57": {
+      "name": "Foundation Trust",
+      "why": "Subtype flag paired with NHS Trust."
+    }
+  }
+}

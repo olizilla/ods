@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arrow::array::{Array, Date32Array, StringArray};
 use clap::{Parser, ValueEnum};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -22,24 +22,32 @@ pub enum SortBy {
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Query string (searches ODS code, Name, Postcode, Town, Commissioner, Parent, or Role). Omit to launch interactive TUI.
+    /// Search query matching organisation name only. Omit to launch interactive TUI.
     pub query: Option<String>,
 
-    /// Optional primary role filter
-    #[arg(long, short)]
-    pub role: Option<String>,
+    /// Filter by exact ODS code (repeatable and comma-separated, e.g. A82608,RJZ)
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    pub code: Vec<String>,
+
+    /// Filter by location: country -> county -> town -> postcode (minimum 3 characters)
+    #[arg(long = "in")]
+    pub location: Option<String>,
+
+    /// Filter by role code (e.g. RO76) or curated role name (repeatable and comma-separated). Codes never change; use codes for durable queries and scripts.
+    #[arg(short, long, value_delimiter = ',', num_args = 1..)]
+    pub role: Vec<String>,
 
     /// Query the complete historical database (orgs_all.parquet) including inactive/closed entities
     #[arg(long, short)]
     pub all: bool,
 
-    /// Enable detailed OKF Markdown inspector view for matching records
+    /// Show full role set in stored order without +N de-emphasis
     #[arg(long, short)]
     pub verbose: bool,
 
-    /// Sort order: code, name, postcode
-    #[arg(long, short, value_enum, default_value_t = SortBy::Code)]
-    pub sort: SortBy,
+    /// Explicit sort order (overrides default relevance ranking)
+    #[arg(long, short, value_enum)]
+    pub sort: Option<SortBy>,
 
     /// Output format: table, csv, json
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
@@ -48,6 +56,75 @@ pub struct Args {
     /// Input directory containing Parquet files (orgs.parquet, etc.)
     #[arg(long, short, default_value = ".")]
     pub input: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LocationLevel {
+    Country = 1,
+    County = 2,
+    Town = 3,
+    Postcode = 4,
+}
+
+impl LocationLevel {
+    pub fn name(&self) -> &'static str {
+        match self {
+            LocationLevel::Country => "country",
+            LocationLevel::County => "county",
+            LocationLevel::Town => "town",
+            LocationLevel::Postcode => "postcode",
+        }
+    }
+}
+
+pub fn normalize_for_matching(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut last_was_space = false;
+
+    for c in s.chars() {
+        if c == '\'' || c == '’' || c == '‘' {
+            continue;
+        } else if c.is_alphanumeric() {
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+            last_was_space = false;
+        } else {
+            if !last_was_space && !result.is_empty() {
+                result.push(' ');
+                last_was_space = true;
+            }
+        }
+    }
+
+    if result.ends_with(' ') {
+        result.pop();
+    }
+    result
+}
+
+pub fn normalize_postcode(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+pub fn compute_name_rank(norm_name: &str, norm_query: &str) -> Option<u8> {
+    if norm_query.is_empty() {
+        return Some(4);
+    }
+    if norm_name == norm_query {
+        Some(1)
+    } else if norm_name.starts_with(norm_query) {
+        Some(2)
+    } else if norm_name.split_whitespace().any(|w| w.starts_with(norm_query)) || norm_name.contains(&format!(" {norm_query}")) {
+        Some(3)
+    } else if norm_name.contains(norm_query) {
+        Some(4)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +167,8 @@ struct MatchedRecord {
     legal_end: Option<String>,
     last_changed: Option<String>,
     trud_release_date: Option<String>,
-    is_exact_code_match: bool,
+    rank: u8,
+    loc_level: Option<LocationLevel>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +183,7 @@ pub struct SuccessionGraph {
     pub reverse: HashMap<String, Vec<SuccessionEdge>>,
 }
 
-fn load_succession_graph(parquet_dir: &Path) -> SuccessionGraph {
+pub fn load_succession_graph(parquet_dir: &Path) -> SuccessionGraph {
     let mut graph = SuccessionGraph::default();
     let path = parquet_dir.join("successions.parquet");
     if !path.exists() {
@@ -160,7 +238,7 @@ fn load_succession_graph(parquet_dir: &Path) -> SuccessionGraph {
     graph
 }
 
-fn load_org_metadata(parquet_dir: &Path) -> HashMap<String, (String, String)> {
+pub fn load_org_metadata(parquet_dir: &Path) -> HashMap<String, (String, String)> {
     let mut map = HashMap::new();
     let path = if parquet_dir.join("orgs_all.parquet").exists() {
         parquet_dir.join("orgs_all.parquet")
@@ -300,45 +378,14 @@ pub fn resolve_table_successor_display(
     }
 }
 
-
-fn load_role_vocabulary(parquet_dir: &Path) -> HashMap<String, String> {
-    let mut map: HashMap<String, String> = HashMap::new();
-    let path = parquet_dir.join("roles.parquet");
-
-    if let Ok(file) = File::open(&path) {
-        if let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) {
-            if let Ok(reader) = builder.build() {
-                for batch in reader.flatten() {
-                    let schema = batch.schema();
-                    let (Ok(code_idx), Ok(name_idx)) =
-                        (schema.index_of("role_code"), schema.index_of("role_name")) else { continue };
-                    let code_arr = batch.column(code_idx).as_any().downcast_ref::<StringArray>();
-                    let name_arr = batch.column(name_idx).as_any().downcast_ref::<StringArray>();
-                    let (Some(code_arr), Some(name_arr)) = (code_arr, name_arr) else { continue };
-                    for i in 0..batch.num_rows() {
-                        map.insert(code_arr.value(i).to_string(), name_arr.value(i).to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    if map.is_empty() {
-        let vocab = crate::roles::role_names();
-        for (code, name) in &vocab.names {
-            map.insert(code.clone(), name.clone());
-        }
-    }
-    map
+struct ParsedLocation {
+    norm: String,
+    norm_postcode: String,
 }
 
-/// `RO76` -> `GP Practice (RO76)`, falling back to the bare code when the
-/// vocabulary does not know it.
-fn role_display(vocab: &HashMap<String, String>, code: &str) -> String {
-    match vocab.get(code) {
-        Some(name) => format!("{name} ({code})"),
-        None => code.to_string(),
-    }
+struct ParsedRoleFilter {
+    codes: Vec<String>,
+    names: Vec<String>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -349,7 +396,7 @@ pub fn run(args: Args) -> Result<()> {
     };
     let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
 
-    if args.query.is_none() {
+    if args.query.is_none() && args.code.is_empty() && args.location.is_none() && args.role.is_empty() {
         let mut tui_args = args;
         tui_args.input = resolved_input;
         return crate::tui::run(tui_args);
@@ -380,20 +427,71 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         );
     }
 
+    // 1. Validate --in location filter
+    let parsed_location = if let Some(ref loc) = args.location {
+        let trimmed = loc.trim();
+        if trimmed.chars().count() < 3 {
+            bail!("✖ Location query '{}' is too short (minimum 3 characters)", trimmed);
+        }
+        Some(ParsedLocation {
+            norm: normalize_for_matching(trimmed),
+            norm_postcode: normalize_postcode(trimmed),
+        })
+    } else {
+        None
+    };
+
+    // 2. Validate --role filter (codes or curated names)
+    let parsed_roles = if !args.role.is_empty() {
+        let vocab = crate::roles::role_names();
+        let mut codes = Vec::new();
+        let mut names = Vec::new();
+
+        for r_input in &args.role {
+            let trimmed = r_input.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let is_code = (trimmed.starts_with("RO") || trimmed.starts_with("ro"))
+                && trimmed[2..].chars().all(|c| c.is_ascii_digit());
+            if is_code {
+                let code_upper = trimmed.to_uppercase();
+                if !vocab.names.contains_key(&code_upper) {
+                    bail!("✖ Unknown role code '{}'\n  Check known role codes with `ods role`", trimmed);
+                }
+                codes.push(code_upper);
+            } else {
+                let norm_input = normalize_for_matching(trimmed);
+                let matched_entry = vocab.names.iter().find(|(_, vn)| normalize_for_matching(vn) == norm_input);
+                if let Some((code, valid_name)) = matched_entry {
+                    codes.push(code.clone());
+                    names.push(valid_name.clone());
+                } else {
+                    let suggestions = crate::roles::find_role_suggestions(trimmed);
+                    let mut msg = format!("✖ No role named '{}'\n", trimmed);
+                    if !suggestions.is_empty() {
+                        let names_str = suggestions.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" · ");
+                        let codes_str = suggestions.iter().map(|(_, c)| *c).collect::<Vec<_>>().join(",");
+                        msg.push_str(&format!("  Did you mean: {}\n  Or use codes: ods find --role {}", names_str, codes_str));
+                    }
+                    bail!("{}", msg);
+                }
+            }
+        }
+        Some(ParsedRoleFilter { codes, names })
+    } else {
+        None
+    };
+
+    // 3. Normalised name query
+    let norm_query = args.query.as_deref().map(normalize_for_matching).unwrap_or_default();
+
     let file = File::open(&path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
 
-    let query_str = args.query.as_deref().unwrap_or_default();
-let query_lower = query_str.to_lowercase();
-    let query_words: Vec<String> = query_lower
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-    let role_filter_lower = args.role.map(|r| r.to_lowercase());
     let successions_graph = load_succession_graph(parquet_dir);
     let org_metadata = load_org_metadata(parquet_dir);
-    let role_vocab = load_role_vocabulary(parquet_dir);
 
     let mut matches: Vec<MatchedRecord> = Vec::new();
 
@@ -460,7 +558,115 @@ let query_lower = query_str.to_lowercase();
 
         for i in 0..num_rows {
             let ods_code = ods_code_arr.value(i);
+
+            // Filter by exact ODS code if --code specified
+            if !args.code.is_empty() {
+                let matches_code = args.code.iter().any(|c| c.eq_ignore_ascii_case(ods_code));
+                if !matches_code {
+                    continue;
+                }
+            }
+
             let name = name_arr.value(i);
+            let norm_name = normalize_for_matching(name);
+
+            // Match name against positional query
+            let rank = if args.query.is_some() {
+                if let Some(r) = compute_name_rank(&norm_name, &norm_query) {
+                    r
+                } else {
+                    continue;
+                }
+            } else {
+                4
+            };
+
+            let primary_role = primary_role_arr.value(i);
+
+            // Extract all role codes
+            let role_codes: Vec<String> = if roles_arr.is_valid(i) {
+                let value_arr = roles_arr.value(i);
+                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
+                if let Some(str_arr) = str_arr {
+                    (0..str_arr.len())
+                        .filter(|j| str_arr.is_valid(*j))
+                        .map(|j| str_arr.value(j).to_string())
+                        .collect()
+                } else {
+                    vec![primary_role.to_string()]
+                }
+            } else {
+                vec![primary_role.to_string()]
+            };
+
+            // Extract all role names
+            let role_names: Vec<String> = if role_names_arr.is_valid(i) {
+                let value_arr = role_names_arr.value(i);
+                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
+                if let Some(str_arr) = str_arr {
+                    (0..str_arr.len())
+                        .filter(|j| str_arr.is_valid(*j))
+                        .map(|j| str_arr.value(j).to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            // Filter by --role if specified
+            if let Some(ref rf) = parsed_roles {
+                let matches_code = rf.codes.iter().any(|c| role_codes.iter().any(|rc| rc.eq_ignore_ascii_case(c)));
+                let matches_name = rf.names.iter().any(|n| role_names.iter().any(|rn| rn.eq_ignore_ascii_case(n)));
+                if !matches_code && !matches_name {
+                    continue;
+                }
+            }
+
+            let postcode = postcode_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let town = town_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let county = county_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let country = country_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+
+            // Evaluate location matching level
+            let loc_level: Option<LocationLevel> = if let Some(ref loc_info) = parsed_location {
+                let norm_country = normalize_for_matching(country);
+                let norm_county = normalize_for_matching(county);
+                let norm_town = normalize_for_matching(town);
+                let norm_post = normalize_postcode(postcode);
+
+                if norm_country.starts_with(&loc_info.norm) || norm_country == loc_info.norm {
+                    Some(LocationLevel::Country)
+                } else if norm_county.starts_with(&loc_info.norm) || norm_county == loc_info.norm {
+                    Some(LocationLevel::County)
+                } else if norm_town.starts_with(&loc_info.norm) || norm_town == loc_info.norm {
+                    Some(LocationLevel::Town)
+                } else if !loc_info.norm_postcode.is_empty() && norm_post.starts_with(&loc_info.norm_postcode) {
+                    Some(LocationLevel::Postcode)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if parsed_location.is_some() && loc_level.is_none() {
+                continue;
+            }
+
             let commissioner = commissioner_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
@@ -501,22 +707,6 @@ let query_lower = query_str.to_lowercase();
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
             }).unwrap_or_default();
-            let postcode = postcode_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let town = town_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let county = county_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let country = country_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
             let uprn = uprn_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
@@ -537,151 +727,94 @@ let query_lower = query_str.to_lowercase();
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
-            let primary_role = primary_role_arr.value(i);
 
-            // Extract all role codes from the list
-            let role_codes: Vec<String> = if roles_arr.is_valid(i) {
-                let value_arr = roles_arr.value(i);
-                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
-                if let Some(str_arr) = str_arr {
-                    (0..str_arr.len())
-                        .filter(|j| str_arr.is_valid(*j))
-                        .map(|j| str_arr.value(j).to_string())
-                        .collect()
-                } else {
-                    vec![primary_role.to_string()]
-                }
-            } else {
-                vec![primary_role.to_string()]
-            };
+            let address = address_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
 
-            let role_names: Vec<String> = if role_names_arr.is_valid(i) {
-                let value_arr = role_names_arr.value(i);
-                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
-                if let Some(str_arr) = str_arr {
-                    (0..str_arr.len())
-                        .filter(|j| str_arr.is_valid(*j))
-                        .map(|j| str_arr.value(j).to_string())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
+            let op_start = extract_date(&batch, op_start_idx, i);
+            let op_end = extract_date(&batch, op_end_idx, i);
+            let leg_start = extract_date(&batch, leg_start_idx, i);
+            let leg_end = extract_date(&batch, leg_end_idx, i);
+            let last_change_date = extract_date(&batch, last_change_idx, i);
+            let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
 
-            // Apply optional role filter
-            if let Some(ref rf) = role_filter_lower {
-                let matches_role = primary_role.to_lowercase() == *rf
-                    || role_codes.iter().any(|c| {
-                        c.to_lowercase() == *rf
-                            || role_vocab.get(c).is_some_and(|n| n.to_lowercase().contains(rf))
-                    })
-                    || role_names.iter().any(|n| n.to_lowercase().contains(rf))
-                    || role_vocab.get(primary_role).is_some_and(|n| n.to_lowercase().contains(rf));
-                if !matches_role {
-                    continue;
-                }
-            }
+            let primary_role_idx = role_codes.iter().position(|c| c == primary_role);
+            let role_name = primary_role_idx
+                .and_then(|idx| role_names.get(idx))
+                .cloned()
+                .unwrap_or_else(|| primary_role.to_string());
 
-            let matches_query = if query_words.is_empty() {
-                true
-            } else {
-                let mut search_target = format!(
-                    "{} {} {} {} {} {} {} {} {} {} {} {}",
-                    ods_code,
-                    name,
-                    postcode,
-                    town,
-                    county,
-                    commissioner,
-                    commissioner_code,
-                    parent,
-                    parent_code,
-                    pcn,
-                    trust,
-                    primary_role
-                ).to_lowercase();
-
-                for rc in &role_codes {
-                    search_target.push(' ');
-                    search_target.push_str(&rc.to_lowercase());
-                }
-                for rn in &role_names {
-                    search_target.push(' ');
-                    search_target.push_str(&rn.to_lowercase());
-                }
-
-                query_words.iter().all(|word| search_target.contains(word))
-            };
-
-            if matches_query {
-                let address = address_idx.and_then(|idx| {
-                    let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                    if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-                }).unwrap_or_default();
-
-                let op_start = extract_date(&batch, op_start_idx, i);
-                let op_end = extract_date(&batch, op_end_idx, i);
-                let leg_start = extract_date(&batch, leg_start_idx, i);
-                let leg_end = extract_date(&batch, leg_end_idx, i);
-                let last_change_date = extract_date(&batch, last_change_idx, i);
-                let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
-
-                let is_exact_code = ods_code.eq_ignore_ascii_case(query_str);
-                let role_name = role_names.first().cloned().unwrap_or_else(|| {
-                    role_vocab.get(primary_role).cloned().unwrap_or_else(|| primary_role.to_string())
-                });
-
-                matches.push(MatchedRecord {
-                    ods_code: ods_code.to_string(),
-                    name: name.to_string(),
-                    entity_type: record_class_arr.value(i).to_string(),
-                    status: status_arr.value(i).to_string(),
-                    primary_role_code: primary_role.to_string(),
-                    role_codes,
-                    role_names,
-                    role_name,
-                    address,
-                    town: town.to_string(),
-                    county: county.to_string(),
-                    postcode: postcode.to_string(),
-                    country: country.to_string(),
-                    uprn: uprn.to_string(),
-                    telephone: telephone.to_string(),
-                    website: website.to_string(),
-                    commissioner_name: commissioner,
-                    commissioner_code,
-                    parent_name: parent,
-                    parent_code,
-                    pcn_name: pcn.to_string(),
-                    pcn_code: pcn_code.to_string(),
-                    trust_name: trust.to_string(),
-                    trust_code: trust_code.to_string(),
-                    icb_name: icb.to_string(),
-                    icb_code: icb_code.to_string(),
-                    region_name: region.to_string(),
-                    region_code: region_code.to_string(),
-                    operational_start: op_start,
-                    operational_end: op_end,
-                    legal_start: leg_start,
-                    legal_end: leg_end,
-                    last_changed: last_change_date,
-                    trud_release_date,
-                    is_exact_code_match: is_exact_code,
-                });
-            }
+            matches.push(MatchedRecord {
+                ods_code: ods_code.to_string(),
+                name: name.to_string(),
+                entity_type: record_class_arr.value(i).to_string(),
+                status: status_arr.value(i).to_string(),
+                primary_role_code: primary_role.to_string(),
+                role_codes,
+                role_names,
+                role_name,
+                address,
+                town: town.to_string(),
+                county: county.to_string(),
+                postcode: postcode.to_string(),
+                country: country.to_string(),
+                uprn: uprn.to_string(),
+                telephone: telephone.to_string(),
+                website: website.to_string(),
+                commissioner_name: commissioner,
+                commissioner_code,
+                parent_name: parent,
+                parent_code,
+                pcn_name: pcn.to_string(),
+                pcn_code: pcn_code.to_string(),
+                trust_name: trust.to_string(),
+                trust_code: trust_code.to_string(),
+                icb_name: icb.to_string(),
+                icb_code: icb_code.to_string(),
+                region_name: region.to_string(),
+                region_code: region_code.to_string(),
+                operational_start: op_start,
+                operational_end: op_end,
+                legal_start: leg_start,
+                legal_end: leg_end,
+                last_changed: last_change_date,
+                trud_release_date,
+                rank,
+                loc_level,
+            });
         }
     }
 
-    matches.sort_by(|a, b| {
-        if b.is_exact_code_match != a.is_exact_code_match {
-            return b.is_exact_code_match.cmp(&a.is_exact_code_match);
+    // 4. Broad-to-narrow location filtering (retain only winning level)
+    let matched_loc_level = if let Some(ref loc) = args.location {
+        let min_level = matches.iter().filter_map(|m| m.loc_level).min();
+        match min_level {
+            Some(lvl) => {
+                matches.retain(|m| m.loc_level == Some(lvl));
+                Some(lvl)
+            }
+            None => {
+                bail!("✖ No organisation found in '{}'\n  --in matches country, county, town or postcode.", loc.trim());
+            }
         }
-        match args.sort {
-            SortBy::Code => a.ods_code.cmp(&b.ods_code),
-            SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortBy::Postcode => a.postcode.to_lowercase().cmp(&b.postcode.to_lowercase()),
+    } else {
+        None
+    };
+
+    // 5. Sorting
+    matches.sort_by(|a, b| {
+        if let Some(sort_by) = args.sort {
+            match sort_by {
+                SortBy::Code => a.ods_code.cmp(&b.ods_code),
+                SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortBy::Postcode => a.postcode.to_lowercase().cmp(&b.postcode.to_lowercase()),
+            }
+        } else if args.query.is_some() {
+            a.rank.cmp(&b.rank).then_with(|| a.ods_code.cmp(&b.ods_code))
+        } else {
+            a.ods_code.cmp(&b.ods_code)
         }
     });
 
@@ -830,119 +963,69 @@ let query_lower = query_str.to_lowercase();
             }
         }
         OutputFormat::Table => {
-            let has_exact_code_match = matches.iter().any(|r| r.is_exact_code_match);
-            use std::io::IsTerminal;
-            let use_color = std::io::stdout().is_terminal();
+            // Padded Markdown Table layout
+            if args.all {
+                writeln!(
+                    writer,
+                    "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
+                    "ODS Code", "Name", "Postcode", "Roles", "Class", "Status"
+                )?;
+                writeln!(
+                    writer,
+                    "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<7}|{:-<10}|",
+                    "", "", "", "", "", ""
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
+                    "ODS Code", "Name", "Postcode", "Roles", "Class"
+                )?;
+                writeln!(
+                    writer,
+                    "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<5}",
+                    "", "", "", "", ""
+                )?;
+            }
 
-            if args.verbose || matched_count == 1 || has_exact_code_match {
-                if !args.verbose && matched_count > 1 && has_exact_code_match {
-                    let exact_matches: Vec<&MatchedRecord> = matches.iter().filter(|r| r.is_exact_code_match).collect();
-                    let related_matches: Vec<&MatchedRecord> = matches.iter().filter(|r| !r.is_exact_code_match).collect();
-
-                    for r in &exact_matches {
-                        render_inspector_for_record(
-                            r,
-                            &role_vocab,
-                            &successions_graph,
-                            &org_metadata,
-                            use_color,
-                            writer,
-                        )?;
-                        writeln!(writer, "\n─────────────────────────────────────────────────────────────────────────────\n")?;
-                    }
-
-                    if !related_matches.is_empty() {
-                        writeln!(writer, "Related Records ({})\n", related_matches.len())?;
-                        writeln!(
-                            writer,
-                            "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                            "ODS Code", "Name", "Postcode", "Roles", "Class"
-                        )?;
-                        writeln!(
-                            writer,
-                            "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<5}",
-                            "", "", "", "", ""
-                        )?;
-                        for r in &related_matches {
-                            let name_display = truncate_str(&r.name, 45);
-                            let role_display = truncate_str(&r.role_names.join(", "), 25);
-
-                            writeln!(
-                                writer,
-                                "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                                r.ods_code, name_display, r.postcode, role_display, r.entity_type
-                            )?;
-                        }
-                        writeln!(writer)?;
+            for r in &matches {
+                let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
+                    let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
+                    if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
+                        format!("{} → {}", r.name, live_succ)
+                    } else {
+                        r.name.clone()
                     }
                 } else {
-                    for r in &matches {
-                        render_inspector_for_record(
-                            r,
-                            &role_vocab,
-                            &successions_graph,
-                            &org_metadata,
-                            use_color,
-                            writer,
-                        )?;
-                        writeln!(writer, "\n─────────────────────────────────────────────────────────────────────────────\n")?;
-                    }
-                }
-            } else {
-                // Padded Markdown Table layout
+                    r.name.clone()
+                };
+
+                let name_display = truncate_str(&full_name, 45);
+                let formatted_roles = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
+                let role_display = truncate_str(&formatted_roles, 25);
+
                 if args.all {
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
-                        "ODS Code", "Name", "Postcode", "Roles", "Class", "Status"
-                    )?;
-                    writeln!(
-                        writer,
-                        "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<7}|{:-<10}|",
-                        "", "", "", "", "", ""
+                        r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status
                     )?;
                 } else {
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                        "ODS Code", "Name", "Postcode", "Roles", "Class"
-                    )?;
-                    writeln!(
-                        writer,
-                        "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<5}",
-                        "", "", "", "", ""
+                        r.ods_code, name_display, r.postcode, role_display, r.entity_type
                     )?;
                 }
+            }
 
-                for r in &matches {
-                    let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
-                        let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
-                        if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
-                            format!("{} → {}", r.name, live_succ)
-                        } else {
-                            r.name.clone()
-                        }
-                    } else {
-                        r.name.clone()
-                    };
-
-                    let name_display = truncate_str(&full_name, 45);
-                    let role_display = truncate_str(&r.role_names.join(", "), 25);
-
-                    if args.all {
-                        writeln!(
-                            writer,
-                            "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
-                            r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status
-                        )?;
-                    } else {
-                        writeln!(
-                            writer,
-                            "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                            r.ods_code, name_display, r.postcode, role_display, r.entity_type
-                        )?;
-                    }
-                }
+            if let Some(lvl) = matched_loc_level {
+                writeln!(
+                    writer,
+                    "\n* matched {} — {} organisations",
+                    lvl.name(),
+                    matched_count
+                )?;
             }
 
             if args.all {
@@ -961,6 +1044,16 @@ let query_lower = query_str.to_lowercase();
         }
     }
 
+    // Print ODS code hint if query happens to be a valid ODS code in the dataset
+    if args.format == OutputFormat::Table {
+        if let Some(ref q) = args.query {
+            let q_clean = q.trim().to_uppercase();
+            if org_metadata.contains_key(&q_clean) {
+                writeln!(writer, "\n* '{}' is also an ODS code — ods info {}", q_clean, q_clean)?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -975,97 +1068,10 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn render_inspector_for_record<W: std::io::Write + ?Sized>(
-    r: &MatchedRecord,
-    role_vocab: &HashMap<String, String>,
-    successions_graph: &SuccessionGraph,
-    org_metadata: &HashMap<String, (String, String)>,
-    use_color: bool,
-    writer: &mut W,
-) -> Result<()> {
-    let sec_roles: Vec<String> = r
-        .role_codes
-        .iter()
-        .filter(|c| **c != r.primary_role_code)
-        .map(|c| role_display(role_vocab, c))
-        .collect();
-
-    let succ_hops = walk_succession_chain(&r.ods_code, successions_graph, org_metadata);
-    let pred_hops = get_predecessors(&r.ods_code, successions_graph, org_metadata);
-
-    let succ_hop_links: Vec<crate::formatting::SuccessionHopLink> = succ_hops
-        .iter()
-        .map(|h| crate::formatting::SuccessionHopLink {
-            depth: h.depth,
-            date: h.date.as_deref(),
-            code: &h.code,
-            name: &h.name,
-            status: &h.status,
-        })
-        .collect();
-
-    let pred_hop_links: Vec<crate::formatting::SuccessionHopLink> = pred_hops
-        .iter()
-        .map(|h| crate::formatting::SuccessionHopLink {
-            depth: h.depth,
-            date: h.date.as_deref(),
-            code: &h.code,
-            name: &h.name,
-            status: &h.status,
-        })
-        .collect();
-
-    let inspector = crate::formatting::InspectorRecord {
-        ods_code: &r.ods_code,
-        name: &r.name,
-        record_class: &r.entity_type,
-        status: &r.status,
-        role: &r.role_name,
-        role_code: &r.primary_role_code,
-        other_roles: &sec_roles,
-        address: &r.address,
-        country: &r.country,
-        uprn: &r.uprn,
-        telephone: &r.telephone,
-        website: &r.website,
-        commissioner: &r.commissioner_name,
-        commissioner_code: &r.commissioner_code,
-        parent: &r.parent_name,
-        parent_code: &r.parent_code,
-        pcn: &r.pcn_name,
-        pcn_code: &r.pcn_code,
-        trust: &r.trust_name,
-        trust_code: &r.trust_code,
-        icb: &r.icb_name,
-        icb_code: &r.icb_code,
-        region: &r.region_name,
-        region_code: &r.region_code,
-        succession: &succ_hop_links,
-        predecessors: &pred_hop_links,
-        operational_start: r.operational_start.as_deref(),
-        operational_end: r.operational_end.as_deref(),
-        legal_start: r.legal_start.as_deref(),
-        legal_end: r.legal_end.as_deref(),
-        last_change_date: r.last_changed.as_deref(),
-    };
-
-    crate::formatting::render_inspector_markdown(&inspector, use_color, writer)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn test_load_role_vocabulary_falls_back_to_compiled_in() {
-        let dir = tempdir().unwrap();
-        // No roles.parquet present: fall back to the vocabulary compiled
-        // into the binary rather than rendering bare RO codes.
-        let vocab = load_role_vocabulary(dir.path());
-        assert_eq!(vocab.get("RO76").map(|s| s.as_str()), Some("GP Practice"));
-    }
 
     #[test]
     fn test_load_succession_graph_nonexistent() {
@@ -1182,10 +1188,12 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                role: None,
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
             },
@@ -1202,10 +1210,12 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                role: Some("gp practice".to_string()),
+                code: Vec::new(),
+                location: None,
+                role: vec!["gp practice".to_string()],
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
             },
@@ -1220,10 +1230,12 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Beta".to_string()),
-                role: None,
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: true,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
             },
@@ -1234,15 +1246,17 @@ mod tests {
         assert!(s.contains("B202"));
         assert!(s.contains("A101") || s.contains("Alpha Health Centre")); // Successor
 
-        // Test 4: --verbose inspector mode
+        // Test 4: find output is table, and ods info provides detail inspector
         let mut out = Vec::new();
         run_with_writer(
             Args {
-                query: Some("A101".to_string()),
-                role: None,
+                query: Some("Alpha".to_string()),
+                code: vec!["A101".to_string()],
+                location: None,
+                role: Vec::new(),
                 all: false,
-                verbose: true,
-                sort: SortBy::Code,
+                verbose: false,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
             },
@@ -1250,21 +1264,36 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("# Alpha Health Centre (A101)"));
-        assert!(s.contains("## Contact Details"));
-        assert!(s.contains("## Relationships"));
-        assert!(s.contains("Other Roles"));
-        assert!(s.contains("GP Practice (RO76)"), "expected curated role name\n{s}");
+        assert!(s.contains("ODS Code") && s.contains("A101"));
+
+        let mut info_out = Vec::new();
+        crate::commands::info::run_with_writer(
+            crate::commands::info::Args {
+                ods_code: "A101".to_string(),
+                format: crate::commands::info::OutputFormat::Markdown,
+                input: Some(parquet_dir.clone()),
+            },
+            &mut info_out,
+            &parquet_dir,
+        ).unwrap();
+        let info_s = String::from_utf8(info_out).unwrap();
+        assert!(info_s.contains("# Alpha Health Centre (A101)"));
+        assert!(info_s.contains("## Contact Details"));
+        assert!(info_s.contains("## Relationships"));
+        assert!(info_s.contains("Other Roles"));
+        assert!(info_s.contains("GP Practice (RO76)"), "expected curated role name\n{info_s}");
 
         // Test 5: CSV output
         let mut out = Vec::new();
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                role: None,
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
                 input: parquet_dir.clone(),
             },
@@ -1280,10 +1309,12 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                role: None,
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
                 input: parquet_dir.clone(),
             },
@@ -1347,7 +1378,8 @@ mod tests {
             legal_end: None,
             last_changed: Some("2023-01-01".to_string()),
             trud_release_date: Some("2026-07-31".to_string()),
-            is_exact_code_match: true,
+            rank: 1,
+            loc_level: None,
         };
 
         let json_val = serde_json::json!({
@@ -1439,11 +1471,13 @@ mod tests {
         let mut json_out = Vec::new();
         run_with_writer(
             Args {
-                query: Some("A101".to_string()),
-                role: None,
+                query: Some("Alpha".to_string()),
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
                 input: parquet_dir.clone(),
             },
@@ -1457,11 +1491,13 @@ mod tests {
         let mut csv_out = Vec::new();
         run_with_writer(
             Args {
-                query: Some("A101".to_string()),
-                role: None,
+                query: Some("Alpha".to_string()),
+                code: Vec::new(),
+                location: None,
+                role: Vec::new(),
                 all: false,
                 verbose: false,
-                sort: SortBy::Code,
+                sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
                 input: parquet_dir.clone(),
             },

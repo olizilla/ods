@@ -42,8 +42,7 @@ Other things worth knowing before you query:
   GP practices as `RO177 Prescribing Cost Centre`, an administrative bucket rather than its function.
   `role_names` contains the curated, readable names for every role held.
 - **Use `role_codes` joined with `roles.parquet`** to find all the official buckets an entity is in. 
-- **You can filter on `country` if you need to.** ODS covers the UK. 941 of the GP
-  practices are in Scotland and 400 in Wales.
+- **You can filter on `country` if you need to.** ODS covers the UK and dependencies, containing six distinct country values: `ENGLAND` (209,347), `WALES` (5,753), `SCOTLAND` (1,178), `NORTHERN IRELAND` (354), `ISLE OF MAN` (200), and `CHANNEL ISLANDS` (54).
 - **Expect a list of successors, not one.** ODS code `001` has five. Following just
   the first is a dead end, and unresolved mergers are a leading source of error in
   longitudinal analysis of NHS data.
