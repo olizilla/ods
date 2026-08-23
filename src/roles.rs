@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 const ROLE_NAMES_JSON: &str = include_str!("../data/role_names.json");
 const ROLE_DISPLAY_JSON: &str = include_str!("../data/role_display.json");
+const ROLE_ALIAS_JSON: &str = include_str!("../data/role_alias.json");
 
 #[derive(Debug, Deserialize)]
 pub struct LowSignalRoleEntry {
@@ -27,6 +28,19 @@ pub struct LowSignalRoleEntry {
 pub struct RoleDisplayConfig {
     pub version: u32,
     pub low_signal: BTreeMap<String, LowSignalRoleEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RoleAliasEntry {
+    pub codes: Vec<String>,
+    pub name: String,
+    pub why: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RoleAliasConfig {
+    pub version: u32,
+    pub aliases: BTreeMap<String, RoleAliasEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,9 +102,27 @@ pub fn role_display_config() -> &'static RoleDisplayConfig {
     })
 }
 
+/// Parsed once and reused; curated alias flags for role sets (e.g. --gp, --dentist).
+pub fn role_aliases() -> &'static RoleAliasConfig {
+    static CACHE: OnceLock<RoleAliasConfig> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        serde_json::from_str(ROLE_ALIAS_JSON)
+            .expect("data/role_alias.json is compiled in and must always parse")
+    })
+}
+
 /// Returns true if a role code is defined as a low-signal container or subtype modifier.
 pub fn is_low_signal_role(code: &str) -> bool {
     role_display_config().low_signal.contains_key(code)
+}
+
+/// Escapes a CSV field if it contains commas, quotes, semicolons, or newlines according to RFC 4180.
+pub fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains(';') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// Formats a list of role codes and their corresponding role names for CLI display.
@@ -307,4 +339,49 @@ mod tests {
         assert!(rn.missing(["RO76", "RO318"]).is_empty());
         assert_eq!(rn.missing(["RO76", "RO9999"]), vec!["RO9999".to_string()]);
     }
+
+    #[test]
+    fn role_aliases_parse_and_reference_valid_codes() {
+        let alias_cfg = role_aliases();
+        assert_eq!(alias_cfg.version, 1);
+        assert!(!alias_cfg.aliases.is_empty());
+
+        let rn = role_names();
+        for (name, entry) in &alias_cfg.aliases {
+            assert!(!entry.codes.is_empty(), "alias {name} must have at least one code");
+            assert!(!entry.why.is_empty(), "alias {name} must have why explanation");
+            assert!(!entry.name.is_empty(), "alias {name} must have name");
+            for code in &entry.codes {
+                assert!(
+                    rn.names.contains_key(code),
+                    "alias {name} references unknown role code {code}"
+                );
+            }
+        }
+
+        assert!(alias_cfg.aliases.contains_key("gp"), "must have gp alias");
+        assert!(alias_cfg.aliases.contains_key("dentist"), "must have dentist alias");
+    }
+
+    #[test]
+    fn test_escape_csv_formatting() {
+        assert_eq!(escape_csv("GP Practice"), "GP Practice");
+        assert_eq!(
+            escape_csv("Registered under Part 2, Care Standards Act 2000"),
+            "\"Registered under Part 2, Care Standards Act 2000\""
+        );
+        assert_eq!(
+            escape_csv("He said \"Hello\""),
+            "\"He said \"\"Hello\"\"\""
+        );
+        assert_eq!(
+            escape_csv("Line 1\nLine 2"),
+            "\"Line 1\nLine 2\""
+        );
+        assert_eq!(
+            escape_csv("RO76; RO227"),
+            "\"RO76; RO227\""
+        );
+    }
 }
+

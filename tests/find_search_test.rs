@@ -17,14 +17,8 @@ fn test_find_searches_name_only() {
     find::run_with_writer(
         Args {
             query: Some("Sedbergh".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -47,15 +41,9 @@ fn test_find_in_location_precedence_county_over_town() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("Surrey".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -81,15 +69,9 @@ fn test_find_in_postcode_stripping_spaces() {
     let mut out_spaced = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("LA10 5DL".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_spaced,
         &parquet_dir,
@@ -99,15 +81,9 @@ fn test_find_in_postcode_stripping_spaces() {
     let mut out_unspaced = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("LA105DL".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_unspaced,
         &parquet_dir,
@@ -133,15 +109,9 @@ fn test_find_in_rejects_under_3_chars() {
     let mut out = Vec::new();
     let result = find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("M".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -163,15 +133,9 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     let mut out_ely = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("ELY".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_ely,
         &parquet_dir,
@@ -184,15 +148,9 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     let mut out_ayr = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("AYR".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_ayr,
         &parquet_dir,
@@ -219,15 +177,9 @@ fn test_find_in_unknown_place_errors() {
     let mut out = Vec::new();
     let result = find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
             location: Some("Narnia".to_string()),
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -253,15 +205,9 @@ fn test_find_code_flag_exact_lists() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
             code: vec!["A82608".to_string(), "RJZ".to_string()],
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -287,14 +233,8 @@ fn test_find_normalization_apostrophes_and_punctuation() {
     find::run_with_writer(
         Args {
             query: Some("kings college".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_plain,
         &parquet_dir,
@@ -305,14 +245,8 @@ fn test_find_normalization_apostrophes_and_punctuation() {
     find::run_with_writer(
         Args {
             query: Some("king's college".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_apostrophe,
         &parquet_dir,
@@ -337,14 +271,9 @@ fn test_find_ranking_exact_prefix_word_substring() {
     find::run_with_writer(
         Args {
             query: Some("royal free".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
             format: OutputFormat::Markdown,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -374,14 +303,10 @@ fn test_find_explicit_sort_overrides_ranking() {
     find::run_with_writer(
         Args {
             query: Some("royal free".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
             sort: Some(SortBy::Code),
             format: OutputFormat::Markdown,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -408,15 +333,9 @@ fn test_find_role_flag_codes_and_names() {
     let mut out_code = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
-            location: None,
             role: vec!["RO76".to_string(), "RO227".to_string()],
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_code,
         &parquet_dir,
@@ -429,15 +348,9 @@ fn test_find_role_flag_codes_and_names() {
     let mut out_name = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
-            location: None,
             role: vec!["GP Practice".to_string()],
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_name,
         &parquet_dir,
@@ -459,15 +372,9 @@ fn test_find_role_typo_gives_suggestions() {
     let mut out = Vec::new();
     let result = find::run_with_writer(
         Args {
-            query: None,
-            code: Vec::new(),
-            location: None,
             role: vec!["General Practice".to_string()],
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -493,14 +400,8 @@ fn test_find_code_hint_for_inactive_code() {
     find::run_with_writer(
         Args {
             query: Some("FAH".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -598,14 +499,8 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     find::run_with_writer(
         Args {
             query: Some("SEDBERGH MEDICAL PRACTICE".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_default,
         &parquet_dir,
@@ -622,14 +517,9 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     find::run_with_writer(
         Args {
             query: Some("SEDBERGH MEDICAL PRACTICE".to_string()),
-            code: Vec::new(),
-            location: None,
-            role: Vec::new(),
-            all: false,
             verbose: true,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_verbose,
         &parquet_dir,
@@ -645,15 +535,9 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     let mut out_rjz = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
             code: vec!["RJZ".to_string()],
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_rjz,
         &parquet_dir,
@@ -678,15 +562,9 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
     let mut out_table = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
             code: vec!["A85619".to_string()],
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
-            format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_table,
         &parquet_dir,
@@ -702,15 +580,10 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
     let mut out_md = Vec::new();
     find::run_with_writer(
         Args {
-            query: None,
             code: vec!["A85619".to_string()],
-            location: None,
-            role: Vec::new(),
-            all: false,
-            verbose: false,
-            sort: None,
             format: OutputFormat::Markdown,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out_md,
         &parquet_dir,
@@ -727,5 +600,95 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
         s_md
     );
 }
+
+#[test]
+fn test_find_alias_gp_expands_to_three_national_codes() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    let mut out = Vec::new();
+    find::run_with_writer(
+        Args {
+            gp: true,
+            location: Some("sedbergh".to_string()),
+            input: parquet_dir.clone(),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("find --gp should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    assert!(
+        s.contains("* --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice"),
+        "Runtime notice for --gp missing, got:\n{}",
+        s
+    );
+    assert!(s.contains("SEDBERGH MEDICAL PRACTICE"));
+}
+
+#[test]
+fn test_find_alias_dentist_expands_to_dental_codes() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    let mut out = Vec::new();
+    find::run_with_writer(
+        Args {
+            dentist: true,
+            location: Some("sedbergh".to_string()),
+            input: parquet_dir.clone(),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("find --dentist should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    assert!(
+        s.contains("* --dentist: RO110, RO65 — General Dental Practice, Private Dental Practice"),
+        "Runtime notice for --dentist missing, got:\n{}",
+        s
+    );
+    assert!(s.contains("MAIN STREET DENTAL SURGERY"));
+}
+
+#[test]
+fn test_find_alias_and_role_merge_with_or_semantics() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    // --gp --role RO110 matches GP practices OR Dental practices
+    let mut out = Vec::new();
+    find::run_with_writer(
+        Args {
+            gp: true,
+            role: vec!["RO110".to_string()],
+            location: Some("sedbergh".to_string()),
+            input: parquet_dir.clone(),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("find --gp --role RO110 should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    // Must contain both Sedbergh Medical Practice (GP) and Main Street Dental Surgery (RO110 Dentist)
+    assert!(s.contains("SEDBERGH MEDICAL PRACTICE"), "Must match GP practice under OR semantics");
+    assert!(s.contains("MAIN STREET DENTAL SURGERY"), "Must match Dental practice under OR semantics");
+}
+
 
 

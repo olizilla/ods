@@ -9,4 +9,5 @@ pub mod md;
 pub mod ndjson;
 pub mod parquet;
 pub mod pull;
+pub mod role;
 pub mod trud;

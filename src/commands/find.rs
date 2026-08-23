@@ -38,6 +38,14 @@ pub struct Args {
     #[arg(short, long, value_delimiter = ',', num_args = 1..)]
     pub role: Vec<String>,
 
+    /// GP practices — RO76, RO227, RO315
+    #[arg(long, help_heading = "Role Shortcuts")]
+    pub gp: bool,
+
+    /// Dental practices — RO110, RO65
+    #[arg(long, help_heading = "Role Shortcuts")]
+    pub dentist: bool,
+
     /// Query the complete historical database (orgs_all.parquet) including inactive/closed entities
     #[arg(long, short)]
     pub all: bool,
@@ -54,9 +62,27 @@ pub struct Args {
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 
-    /// Input directory containing Parquet files (orgs.parquet, etc.)
+    /// Input directory containing Parquet files (defaults to active release)
     #[arg(long, short, default_value = ".")]
     pub input: PathBuf,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            query: None,
+            code: Vec::new(),
+            location: None,
+            role: Vec::new(),
+            gp: false,
+            dentist: false,
+            all: false,
+            verbose: false,
+            sort: None,
+            format: OutputFormat::Table,
+            input: PathBuf::from("."),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -397,7 +423,13 @@ pub fn run(args: Args) -> Result<()> {
     };
     let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
 
-    if args.query.is_none() && args.code.is_empty() && args.location.is_none() && args.role.is_empty() {
+    if args.query.is_none()
+        && args.code.is_empty()
+        && args.location.is_none()
+        && args.role.is_empty()
+        && !args.gp
+        && !args.dentist
+    {
         let mut tui_args = args;
         tui_args.input = resolved_input;
         return crate::tui::run(tui_args);
@@ -428,6 +460,42 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         );
     }
 
+    // Expand alias flags (--gp, --dentist) into role filters with OR semantics
+    let mut effective_roles = args.role.clone();
+    let mut alias_notices: Vec<String> = Vec::new();
+
+    if args.gp {
+        if let Some(alias) = crate::roles::role_aliases().aliases.get("gp") {
+            effective_roles.extend(alias.codes.clone());
+            let names: Vec<&str> = alias
+                .codes
+                .iter()
+                .filter_map(|c| crate::roles::role_names().name(c))
+                .collect();
+            alias_notices.push(format!(
+                "* --gp: {} — {}",
+                alias.codes.join(", "),
+                names.join(", ")
+            ));
+        }
+    }
+
+    if args.dentist {
+        if let Some(alias) = crate::roles::role_aliases().aliases.get("dentist") {
+            effective_roles.extend(alias.codes.clone());
+            let names: Vec<&str> = alias
+                .codes
+                .iter()
+                .filter_map(|c| crate::roles::role_names().name(c))
+                .collect();
+            alias_notices.push(format!(
+                "* --dentist: {} — {}",
+                alias.codes.join(", "),
+                names.join(", ")
+            ));
+        }
+    }
+
     // 1. Validate --in location filter
     let parsed_location = if let Some(ref loc) = args.location {
         let trimmed = loc.trim();
@@ -443,12 +511,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     };
 
     // 2. Validate --role filter (codes or curated names)
-    let parsed_roles = if !args.role.is_empty() {
+    let parsed_roles = if !effective_roles.is_empty() {
         let vocab = crate::roles::role_names();
         let mut codes = Vec::new();
         let mut names = Vec::new();
 
-        for r_input in &args.role {
+        for r_input in &effective_roles {
             let trimmed = r_input.trim();
             if trimmed.is_empty() {
                 continue;
@@ -897,13 +965,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         }
         OutputFormat::Csv => {
             writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
-            let escape_csv = |s: &str| -> String {
-                if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains(';') {
-                    format!("\"{}\"", s.replace('"', "\"\""))
-                } else {
-                    s.to_string()
-                }
-            };
+            use crate::roles::escape_csv;
             for r in &matches {
                 let roles_str = r.role_codes.join("; ");
                 let role_names_str = r.role_names.join("; ");
@@ -1022,6 +1084,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                         &r.entity_type,
                     ]);
                 }
+            }
+
+            for notice in &alias_notices {
+                writeln!(writer, "{}", notice)?;
             }
 
             writeln!(writer, "{}", table)?;
@@ -1184,14 +1250,10 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1206,14 +1268,11 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
                 role: vec!["gp practice".to_string()],
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1226,14 +1285,11 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Beta".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
                 all: true,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1248,13 +1304,10 @@ mod tests {
             Args {
                 query: Some("Alpha".to_string()),
                 code: vec!["A101".to_string()],
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1284,14 +1337,10 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1305,14 +1354,10 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut out,
             &parquet_dir,
@@ -1468,14 +1513,10 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut json_out,
             &parquet_dir,
@@ -1488,14 +1529,10 @@ mod tests {
         run_with_writer(
             Args {
                 query: Some("Alpha".to_string()),
-                code: Vec::new(),
-                location: None,
-                role: Vec::new(),
-                all: false,
-                verbose: false,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
                 input: parquet_dir.clone(),
+                ..Default::default()
             },
             &mut csv_out,
             &parquet_dir,

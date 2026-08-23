@@ -254,6 +254,7 @@ fn full_pipeline_parquet_and_md() {
             sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Json,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut find_out,
         &parquet_dir,

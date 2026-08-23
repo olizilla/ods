@@ -21,6 +21,7 @@ fn test_find_table_inactive_successor_display() {
             sort: Some(SortBy::Code),
             format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -55,6 +56,7 @@ fn test_find_exact_code_matches_as_table() {
             sort: Some(SortBy::Code),
             format: OutputFormat::Table,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -95,6 +97,7 @@ fn test_find_json_successor_codes_array() {
             sort: Some(SortBy::Code),
             format: OutputFormat::Json,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -147,6 +150,7 @@ fn test_find_csv_successor_codes_semicolon_list() {
             sort: Some(SortBy::Code),
             format: OutputFormat::Csv,
             input: parquet_dir.clone(),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,

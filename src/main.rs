@@ -18,6 +18,9 @@ enum Command {
     /// Show full details for a single organisation by ODS code
     Info(commands::info::Args),
 
+    /// Search and list role codes and names with holder counts
+    Role(commands::role::Args),
+
     /// Download pre-built dataset releases
     Pull(commands::pull::Args),
 
@@ -36,6 +39,7 @@ fn main() -> Result<()> {
     let result = match cli.command {
         Command::Find(args) => commands::find::run(args),
         Command::Info(args) => commands::info::run(args),
+        Command::Role(args) => commands::role::run(args),
         Command::Pull(args) => commands::pull::run(args),
         Command::Cite(args) => commands::cite::run(args),
         Command::Trud(args) => commands::trud::run(args),

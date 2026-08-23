@@ -12,7 +12,7 @@ The CLI serves three distinct users:
 
 | Goal | Need | Commands |
 |---|---|---|
-| **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `info`, `pull`, `cite` |
+| **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `info`, `role`, `pull`, `cite` |
 | **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud pull`, `make`, `trud audit`, `trud verify` |
 | **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud pull`, `make`, `trud diff`, `trud audit` |
 
@@ -27,6 +27,7 @@ Usage: ods <COMMAND>
 Commands:
   find  Search NHS organisations and sites
   info  Show full details for a single organisation by ODS code
+  role  Search and list role codes and names with holder counts
   pull  Download pre-built dataset releases
   cite  Show provenance metadata and academic citation
   trud  Build from official NHS source data (requires TRUD API key)

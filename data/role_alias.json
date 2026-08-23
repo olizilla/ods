@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "aliases": {
+    "gp": {
+      "codes": ["RO76", "RO227", "RO315"],
+      "name": "GP practices",
+      "why": "England, Scotland and Northern Ireland register GP practices separately. Shorthand for all three."
+    },
+    "dentist": {
+      "codes": ["RO110", "RO65"],
+      "name": "Dental practices",
+      "why": "Shorthand for the two dental practice roles, general and private."
+    }
+  }
+}

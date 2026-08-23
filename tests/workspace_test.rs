@@ -85,6 +85,7 @@ fn test_workspace_full_lifecycle() {
             sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Json,
             input: discovered_parquet.clone(),
+            ..Default::default()
         },
         &mut find_out,
         &discovered_parquet,

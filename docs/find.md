@@ -18,6 +18,8 @@ ods find [QUERY] [OPTIONS]
 | `--code <CODES>` | Filter by exact ODS code (repeatable and comma-separated, e.g. `--code A82608,RJZ`) |
 | `--in <PLACE>` | Filter by location across `country` ➔ `county` ➔ `town` ➔ `postcode` (minimum 3 characters) |
 | `-r, --role <ROLES>` | Filter by role codes (e.g. `RO76`) or curated names (repeatable and comma-separated) |
+| `--gp` | Shortcut for GP practices (`RO76,RO227,RO315`) |
+| `--dentist` | Shortcut for dental practices (`RO110,RO65`) |
 | `-a, --all` | Search all organisations (including inactive/closed history in `orgs_all.parquet`) |
 | `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
@@ -52,7 +54,14 @@ The first level with any match wins and returns only that level's rows. Postcode
   Or use codes: ods find --role RO76,RO227,RO315
 ```
 
-### 4. Role Set Display & De-emphasis
+Discover role codes and holder counts using `ods role [QUERY]`.
+
+### 4. Role Shortcuts (`--gp`, `--dentist`)
+Convenience flags expand directly into `--role` with OR semantics:
+- `--gp`: Expands to England, Scotland, and Northern Ireland GP registers (`RO76,RO227,RO315`).
+- `--dentist`: Expands to general and private dental practices (`RO110,RO65`).
+
+### 5. Role Set Display & De-emphasis
 In tabular output, `find` displays descriptive roles first and tucks low-signal container/regulatory roles (`Prescribing Cost Centre`, `Social Care Site`, `Registered under Care Standards Act 2000`, `ePACT System`, `Foundation Trust`) behind a `+N` count:
 
 ```text
@@ -63,5 +72,6 @@ In tabular output, `find` displays descriptive roles first and tucks low-signal 
 
 Pass `-v, --verbose` to view the full role set in stored order. `--format json` and `--format csv` always export the complete `role_codes` and `role_names` lists in stored order.
 
-### 5. Normalisation
+### 6. Normalisation
 Matching folds case, strips apostrophes, replaces symbols with spaces, and collapses whitespace. All displayed table headers, JSON fields, and CSV rows retain original source casing and punctuation verbatim.
+
