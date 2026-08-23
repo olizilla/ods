@@ -23,6 +23,11 @@ pub struct SuccessionHopLink<'a> {
     pub status: &'a str,
 }
 
+pub struct OperatedEntityLink<'a> {
+    pub code: &'a str,
+    pub name: &'a str,
+}
+
 pub struct InspectorRecord<'a> {
     pub ods_code: &'a str,
     pub name: &'a str,
@@ -48,6 +53,7 @@ pub struct InspectorRecord<'a> {
     pub icb_code: &'a str,
     pub region: &'a str,
     pub region_code: &'a str,
+    pub operates: &'a [OperatedEntityLink<'a>],
     pub succession: &'a [SuccessionHopLink<'a>],
     pub predecessors: &'a [SuccessionHopLink<'a>],
     pub operational_start: Option<&'a str>,
@@ -197,6 +203,18 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
         writeln!(writer, "\n{}", h("## Relationships"))?;
         for item in rel_items {
             writeln!(writer, "{}", item)?;
+        }
+    }
+
+    if !r.operates.is_empty() {
+        writeln!(writer, "\n{}", h("## Operates"))?;
+        for op in r.operates {
+            writeln!(
+                writer,
+                "  {:<10}  {}",
+                op.code,
+                op.name
+            )?;
         }
     }
 

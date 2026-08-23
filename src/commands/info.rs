@@ -43,6 +43,12 @@ pub struct HierarchyEntityJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OperatedEntityJson {
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct InfoRecordJson {
     pub ods_code: String,
     pub name: String,
@@ -73,6 +79,7 @@ pub struct InfoRecordJson {
     pub icb: Option<HierarchyEntityJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<HierarchyEntityJson>,
+    pub operates: Vec<OperatedEntityJson>,
     pub succession: Vec<SuccessionHopJson>,
     pub predecessors: Vec<SuccessionHopJson>,
     pub legal_start: Option<String>,
@@ -319,6 +326,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
 
     let succ_hops = crate::commands::find::walk_succession_chain(&rec.ods_code, &successions_graph, &org_metadata);
     let pred_hops = crate::commands::find::get_predecessors(&rec.ods_code, &successions_graph, &org_metadata);
+    let operates_list = load_operated_entities(parquet_dir, &rec.ods_code, &org_metadata);
 
     // Primary role name and secondary roles
     let mut primary_role_name = String::new();
@@ -388,6 +396,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 trust: opt_entity(rec.trust_code, rec.trust_name),
                 icb: opt_entity(rec.icb_code, rec.icb_name),
                 region: opt_entity(rec.region_code, rec.region_name),
+                operates: operates_list,
                 succession: succ_json,
                 predecessors: pred_json,
                 legal_start: rec.legal_start,
@@ -426,6 +435,14 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 })
                 .collect();
 
+            let operates_links: Vec<crate::formatting::OperatedEntityLink> = operates_list
+                .iter()
+                .map(|op| crate::formatting::OperatedEntityLink {
+                    code: &op.code,
+                    name: &op.name,
+                })
+                .collect();
+
             let inspector = crate::formatting::InspectorRecord {
                 ods_code: &rec.ods_code,
                 name: &rec.name,
@@ -451,6 +468,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 icb_code: &rec.icb_code,
                 region: &rec.region_name,
                 region_code: &rec.region_code,
+                operates: &operates_links,
                 succession: &succ_hop_links,
                 predecessors: &pred_hop_links,
                 operational_start: rec.operational_start.as_deref(),
@@ -465,4 +483,65 @@ pub fn run_with_writer<W: Write + ?Sized>(
     }
 
     Ok(())
+}
+
+pub fn load_operated_entities(
+    parquet_dir: &Path,
+    target_code: &str,
+    org_meta: &std::collections::HashMap<String, (String, String)>,
+) -> Vec<OperatedEntityJson> {
+    let mut map: std::collections::HashMap<String, OperatedEntityJson> = std::collections::HashMap::new();
+    let path = parquet_dir.join("relationships.parquet");
+    let Ok(file) = File::open(&path) else { return Vec::new() };
+    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return Vec::new() };
+    let Ok(reader) = builder.build() else { return Vec::new() };
+
+    for batch in reader.flatten() {
+        let schema = batch.schema();
+        let (Ok(src_idx), Ok(tgt_idx), Ok(type_idx), Ok(status_idx)) = (
+            schema.index_of("source_code"),
+            schema.index_of("target_code"),
+            schema.index_of("rel_type_code"),
+            schema.index_of("rel_status"),
+        ) else {
+            continue;
+        };
+
+        let src_arr = batch.column(src_idx).as_any().downcast_ref::<StringArray>();
+        let tgt_arr = batch.column(tgt_idx).as_any().downcast_ref::<StringArray>();
+        let type_arr = batch.column(type_idx).as_any().downcast_ref::<StringArray>();
+        let status_arr = batch.column(status_idx).as_any().downcast_ref::<StringArray>();
+
+        let (Some(src_arr), Some(tgt_arr), Some(type_arr), Some(status_arr)) = (src_arr, tgt_arr, type_arr, status_arr) else {
+            continue;
+        };
+
+        for i in 0..batch.num_rows() {
+            if tgt_arr.is_valid(i) && tgt_arr.value(i).eq_ignore_ascii_case(target_code) {
+                if type_arr.is_valid(i) && type_arr.value(i) == "RE6" {
+                    if src_arr.is_valid(i) {
+                        let child_code = src_arr.value(i).to_string();
+                        let (name, is_active) = if let Some((n, s)) = org_meta.get(&child_code) {
+                            (n.clone(), s.eq_ignore_ascii_case("active"))
+                        } else {
+                            let s = if status_arr.is_valid(i) { status_arr.value(i) } else { "active" };
+                            (String::new(), s.eq_ignore_ascii_case("active"))
+                        };
+
+                        if is_active {
+                            map.entry(child_code.clone())
+                                .or_insert_with(|| OperatedEntityJson {
+                                    code: child_code,
+                                    name,
+                                });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<OperatedEntityJson> = map.into_values().collect();
+    result.sort_by(|a, b| a.code.cmp(&b.code));
+    result
 }

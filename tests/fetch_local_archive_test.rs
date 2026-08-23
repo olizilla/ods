@@ -39,8 +39,11 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     };
 
     // Set current dir or pass workspace context
+    let orig_dir = std::env::current_dir()?;
     std::env::set_current_dir(temp_dir.path())?;
-    ods::commands::fetch::run(args)?;
+    let run_res = ods::commands::fetch::run(args);
+    let _ = std::env::set_current_dir(orig_dir);
+    run_res?;
 
     // 4. Assert 2025 release dir contains 2025 zip
     let rel_2025 = workspace_root.join("releases").join("2025-05-01");

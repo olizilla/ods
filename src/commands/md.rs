@@ -373,6 +373,7 @@ pub fn run(args: Args) -> Result<()> {
                 icb_code: org.icb_code.as_deref().unwrap_or(""),
                 region: org.region.as_deref().unwrap_or(""),
                 region_code: org.region_code.as_deref().unwrap_or(""),
+                operates: &[],
                 succession: &successors_vec,
                 predecessors: &[],
                 operational_start: org.operational_start.as_deref(),
