@@ -41,7 +41,10 @@ Other things worth knowing before you query:
 - **Use `role_names` to find out what something is.** The `primary_role_code` describes 
   GP practices as `RO177 Prescribing Cost Centre`, an administrative bucket rather than its function.
   `role_names` contains the curated, readable names for every role held.
-- **Use `role_codes` joined with `roles.parquet`** to find all the official buckets an entity is in. 
+- **Use `role_codes` to find all the official buckets an entity is in.** It's already the
+  current, deduplicated set — no join needed. Reach for `roles.parquet` only for a
+  holding's *history* (dates, status), and see [why joining it to filter on a role
+  can double-count](#filtering-on-a-role-without-duplicating-rows).
 - **You can filter on `country` if you need to.** ODS covers the UK and dependencies, containing six distinct country values: `ENGLAND` (209,347), `WALES` (5,753), `SCOTLAND` (1,178), `NORTHERN IRELAND` (354), `ISLE OF MAN` (200), and `CHANNEL ISLANDS` (54).
 - **Expect a list of successors, not one.** ODS code `001` has five. Following just
   the first is a dead end, and unresolved mergers are a leading source of error in
@@ -108,6 +111,64 @@ FROM 'ods_data/current/orgs.parquet' GROUP BY 1 ORDER BY 1;
 │     4 │        3 │
 └───────┴──────────┘
 ```
+
+## ODS has no hospital concept
+
+A hospital building, its A&E and its fertility unit are all the same role,
+`RO198 NHS Trust Site` — there's no `Hospital` role to filter on.
+
+```sql
+SELECT count(*) AS all_sites,
+       count(*) FILTER (WHERE name LIKE '%HOSPITAL%') AS named_hospital
+FROM 'ods_data/current/orgs.parquet' WHERE list_contains(role_codes, 'RO198');
+-- 38254 | 3681
+```
+
+Only 1 in 10 sites has "hospital" in its name. To find a hospital's whole
+estate, find its trust and search that trust's sites — `trust_code` on
+`orgs.parquet` gets you there directly, no `relationships.parquet` needed.
+
+## RO177 is England's prescribing register, not the UK's
+
+```sql
+SELECT count(*) AS scottish_gp_practices,
+       count(*) FILTER (WHERE list_contains(role_codes, 'RO177')) AS also_ro177
+FROM 'ods_data/current/orgs.parquet' WHERE list_contains(role_codes, 'RO227');
+-- 1011 | 0
+```
+
+Not one of the 1,011 Scottish GP practices (`RO227`) holds `RO177 Prescribing
+Cost Centre` — Scotland runs its own register. 70 of them hold `RO72 Other
+Prescribing Cost Centre` instead. So `role_codes` containing `RO177` means
+"English prescribing cost centre", not "prescribes medicine" — a UK-wide
+question needs `RO177 ∪ RO227 ∪ RO315` (Northern Ireland's register), the set
+`ods find --gp` expands to.
+
+## Filtering on a role without duplicating rows
+
+`roles.parquet` is one row per organisation *per role holding*, and a handful
+of organisations hold the same role twice over — the role lapsed and was
+re-added, so both an `inactive` and an `active` row exist for it. Join and
+filter on `role_code` alone and you'll count some organisations twice:
+
+```sql
+-- wrong: pulls in the inactive holding alongside the active one
+SELECT count(*) AS rows, count(DISTINCT o.ods_code) AS orgs
+FROM 'ods_data/current/orgs.parquet' o
+JOIN 'ods_data/current/roles.parquet' r ON o.ods_code = r.ods_code
+WHERE r.role_code = 'RO270';
+-- 16726 rows | 16157 orgs
+
+-- right: role_codes is already the current, deduplicated answer
+SELECT count(*) FROM 'ods_data/current/orgs.parquet'
+WHERE list_contains(role_codes, 'RO270');
+-- 15977
+```
+
+Add `role_status = 'active'` to the join and the count lands on 15977 too — but
+you don't need the join at all. `role_codes` (and `role_names` beside it)
+already carries what an organisation currently is. `roles.parquet` is for the
+history of a holding, not the current fact.
 
 ## Where things are
 
@@ -489,6 +550,34 @@ incomplete for anything recent.
 `orgs.parquet` _and_ `orgs_all.parquet` in every directory: 1,563,826 rows where
 there are really 649,867. `orgs` is a subset of `orgs_all` by design. Name the
 file you actually want.
+
+**Join `relationships.parquet` through `orgs_all`, not `orgs`, unless you mean
+to drop inactive endpoints.** A relationship can point at an organisation that's
+since closed, even while the relationship itself is current. Joining through
+`orgs` (active-only) silently loses 22% of the table:
+
+```sql
+SELECT count(*) FROM 'ods_data/current/relationships.parquet' rel
+JOIN 'ods_data/current/orgs.parquet' o ON rel.source_code = o.ods_code;
+-- 515049
+
+SELECT count(*) FROM 'ods_data/current/relationships.parquet' rel
+JOIN 'ods_data/current/orgs_all.parquet' o ON rel.source_code = o.ods_code;
+-- 662558
+```
+
+This is the worst trap here. It looks like it worked either way — both queries
+return a large, plausible, non-empty result. Nothing tells you a fifth of the
+graph went missing.
+
+**Filter `rel_status = 'active'` on `relationships.parquet`, or count the past
+as the present.** More than half the table is history:
+
+```sql
+SELECT rel_status, count(*) FROM 'ods_data/current/relationships.parquet' GROUP BY 1;
+-- inactive | 359912
+-- active   | 302646
+```
 
 **Group by `trud_release_date` for release identity.** It aligns with the directory
 names and TRUD release distributions (e.g. `2026-05-29`, `2026-06-26`, `2026-07-31`).
