@@ -321,11 +321,9 @@ fn test_sha256sums_and_dataset_file_sha256_are_uppercase_and_match() -> Result<(
     let files = [
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
         "datapackage.json",
     ];
     for f in &files {
@@ -457,7 +455,6 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
     let files = [
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",

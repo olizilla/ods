@@ -358,11 +358,9 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path, revision: Optio
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
         "datapackage.json",
     ];
 

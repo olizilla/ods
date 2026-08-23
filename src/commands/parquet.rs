@@ -162,27 +162,14 @@ pub fn run(args: Args) -> Result<()> {
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
-    let primary_role_scope = if args.input.extension().is_some_and(|ext| ext == "ndjson") {
-        crate::commands::ndjson::find_xml_file(&args.input)
-            .ok()
-            .and_then(|xml_path| crate::commands::ndjson::extract_manifest_header(&xml_path).ok())
-            .and_then(|h| h.primary_role_scope)
-    } else {
-        crate::commands::ndjson::extract_manifest_header(&args.input)
-            .ok()
-            .and_then(|h| h.primary_role_scope)
-    };
-
     // 1. Export orgs.parquet (Active only)
     export_orgs(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
 
     // 2. Export orgs_all.parquet (All records)
     export_orgs_all(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
 
-    // 3. Export org_roles.parquet (the org↔role bridge) and roles.parquet
-    //    (the vocabulary those rows join to).
-    export_org_roles(&args.output, &records, provenance.as_ref())?;
-    export_roles(&args.output, &records, provenance.as_ref(), primary_role_scope.as_deref())?;
+    // 3. Export roles.parquet (one per organisation per role holding)
+    export_roles(&args.output, &records, provenance.as_ref())?;
 
     // 4. Export relationships.parquet
     export_relationships(&args.output, &records, provenance.as_ref())?;
@@ -190,14 +177,8 @@ pub fn run(args: Args) -> Result<()> {
     // 5. Export successions.parquet
     export_successions(&args.output, &records, provenance.as_ref())?;
 
-    // 6. Ship the category rules and datapackage.json alongside the data so the derivation is
-    //    reproducible from a release alone, without the tool.
-    std::fs::write(
-        args.output.join("category_rules.json"),
-        crate::roles::CATEGORY_RULES_JSON,
-    )
-    .context("writing category_rules.json")?;
-
+    // 6. Ship the datapackage.json alongside the data so the schema and metadata
+    //    are reproducible from a release alone, without the tool.
     let release_pkg = crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref());
     let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
     std::fs::write(args.output.join("datapackage.json"), pkg_json)
@@ -219,11 +200,9 @@ pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
     let known_files: HashSet<&str> = [
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
         "datapackage.json",
         crate::provenance::PROVENANCE_FILENAME,
         "provenance.json",
@@ -324,14 +303,20 @@ fn extract_dates(dates: &[crate::commands::ndjson::OdsDate]) -> (Option<String>,
 pub fn orgs_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
         Field::new("entity_type", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
-        Field::new("primary_role_code", DataType::Utf8, false),
         Field::new(
             "role_codes",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
+        Field::new(
+            "role_names",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("primary_role_code", DataType::Utf8, false),
         Field::new(
             "successor_codes",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
@@ -342,8 +327,6 @@ pub fn orgs_schema() -> Schema {
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
-        Field::new("category", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
         Field::new("address", DataType::Utf8, true),
         Field::new("town", DataType::Utf8, true),
         Field::new("county", DataType::Utf8, true),
@@ -381,14 +364,14 @@ fn build_orgs_batch(
     release_days: i32,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
+    let mut name = StringBuilder::new();
     let mut record_class = StringBuilder::new();
     let mut status = StringBuilder::new();
-    let mut primary_role = StringBuilder::new();
     let mut roles_list = ListBuilder::new(StringBuilder::new());
+    let mut role_names_list = ListBuilder::new(StringBuilder::new());
+    let mut primary_role = StringBuilder::new();
     let mut successor_codes_list = ListBuilder::new(StringBuilder::new());
     let mut predecessor_codes_list = ListBuilder::new(StringBuilder::new());
-    let mut category = StringBuilder::new();
-    let mut name = StringBuilder::new();
     let mut address = StringBuilder::new();
     let mut town = StringBuilder::new();
     let mut county = StringBuilder::new();
@@ -420,9 +403,9 @@ fn build_orgs_batch(
 
     for r in records {
         ods_code.append_value(&r.ods_code);
+        name.append_value(&r.name);
         record_class.append_value(&r.record_class);
         status.append_value(&r.status);
-        name.append_value(&r.name);
 
         let org_is_active = r.status.eq_ignore_ascii_case("active");
         let mut codes: Vec<&str> = r
@@ -433,11 +416,19 @@ fn build_orgs_batch(
             .collect();
         codes.sort_unstable();
         codes.dedup();
-        let owned_codes: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
-        for code in codes {
+        for code in &codes {
             roles_list.values().append_value(code);
+            let r_name = crate::roles::role_names().role_name(code)?;
+            role_names_list.values().append_value(r_name);
         }
         roles_list.append(true);
+        role_names_list.append(true);
+
+        let primary_role_id = r.roles.iter()
+            .find(|role| role.primary_role)
+            .map(|role| role.id.as_str())
+            .unwrap_or("");
+        primary_role.append_value(primary_role_id);
 
         let succs = successor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
         for s in succs {
@@ -450,14 +441,6 @@ fn build_orgs_batch(
             predecessor_codes_list.values().append_value(p);
         }
         predecessor_codes_list.append(true);
-
-        let primary_role_id = r.roles.iter()
-            .find(|role| role.primary_role)
-            .map(|role| role.id.as_str())
-            .unwrap_or("");
-        category.append_value(
-            crate::roles::category_rules().categorise(primary_role_id, &owned_codes),
-        );
 
         if let Some(ref loc) = r.geo_loc {
             let mut parts = Vec::new();
@@ -525,12 +508,6 @@ fn build_orgs_batch(
         append_opt(&mut region, r.region.as_deref());
         append_opt(&mut region_code, r.region_code.as_deref());
 
-        let primary_role_id = r.roles.iter()
-            .find(|role| role.primary_role)
-            .map(|role| role.id.as_str())
-            .unwrap_or("");
-        primary_role.append_value(primary_role_id);
-
         let (l_start, l_end, o_start, o_end) = extract_dates(&r.dates);
         append_date(&mut legal_start, l_start.as_deref());
         append_date(&mut legal_end, l_end.as_deref());
@@ -544,14 +521,14 @@ fn build_orgs_batch(
         schema.clone(),
         vec![
             Arc::new(ods_code.finish()) as ArrayRef,
+            Arc::new(name.finish()) as ArrayRef,
             Arc::new(record_class.finish()) as ArrayRef,
             Arc::new(status.finish()) as ArrayRef,
-            Arc::new(primary_role.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
+            Arc::new(role_names_list.finish()) as ArrayRef,
+            Arc::new(primary_role.finish()) as ArrayRef,
             Arc::new(successor_codes_list.finish()) as ArrayRef,
             Arc::new(predecessor_codes_list.finish()) as ArrayRef,
-            Arc::new(category.finish()) as ArrayRef,
-            Arc::new(name.finish()) as ArrayRef,
             Arc::new(address.finish()) as ArrayRef,
             Arc::new(town.finish()) as ArrayRef,
             Arc::new(county.finish()) as ArrayRef,
@@ -615,7 +592,7 @@ pub fn export_orgs(
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
-    println!("Exported {} active records to orgs.parquet.", active_records.len());
+    println!("Exported {} records to orgs.parquet.", active_records.len());
     Ok(())
 }
 
@@ -626,15 +603,8 @@ pub fn export_orgs_all(
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<()> {
-    let mut sorted_records: Vec<&OdsRecord> = records.iter().collect();
-    sorted_records.sort_by(|a, b| {
-        let a_active = a.status == "active";
-        let b_active = b.status == "active";
-        match b_active.cmp(&a_active) {
-            std::cmp::Ordering::Equal => a.ods_code.cmp(&b.ods_code),
-            other => other,
-        }
-    });
+    let mut all_records: Vec<&OdsRecord> = records.iter().collect();
+    all_records.sort_by_key(|r| &r.ods_code);
 
     let release_date_str = provenance
         .and_then(|p| p.trud_release_date.as_deref())
@@ -649,30 +619,24 @@ pub fn export_orgs_all(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs_all ArrowWriter")?;
 
-    for chunk in sorted_records.chunks(BATCH_SIZE) {
+    for chunk in all_records.chunks(BATCH_SIZE) {
         let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures, release_days)?;
         writer.write(&batch).context("writing orgs_all batch")?;
     }
     writer.close().context("finalising orgs_all writer")?;
-    println!("Exported {} historical records to orgs_all.parquet.", sorted_records.len());
+    println!("Exported {} records to orgs_all.parquet.", all_records.len());
     Ok(())
 }
 
 // ==========================================
-// org_roles.parquet — the organisation↔role bridge.
-//
-// Grain is one row per role *instance*: `role_code` says which kind of role
-// (RO76 is shared by thousands of organisations) and `role_id` says which
-// assignment of it. The same code can be held more than once over
-// non-overlapping periods, so `role_id` is what makes rows identifiable.
-//
-// Role display names live in roles.parquet, one join away.
+// roles.parquet — one per organisation per role holding.
 // ==========================================
 
 #[derive(Clone)]
 struct RoleRow {
     ods_code: String,
     role_code: String,
+    role_name: String,
     role_id: String,
     is_primary: bool,
     status: String,
@@ -682,10 +646,11 @@ struct RoleRow {
     operational_end: Option<String>,
 }
 
-pub fn org_roles_schema() -> Schema {
+pub fn roles_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("role_code", DataType::Utf8, false),
+        Field::new("role_name", DataType::Utf8, false),
         Field::new("role_id", DataType::Utf8, false),
         Field::new("is_primary", DataType::Boolean, false),
         Field::new("role_status", DataType::Utf8, false),
@@ -697,9 +662,10 @@ pub fn org_roles_schema() -> Schema {
     ])
 }
 
-fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i32) -> Result<RecordBatch> {
+fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i32) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut role_code = StringBuilder::new();
+    let mut role_name = StringBuilder::new();
     let mut role_id = StringBuilder::new();
     let mut is_primary = BooleanBuilder::new();
     let mut status = StringBuilder::new();
@@ -712,6 +678,7 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i
     for r in rows {
         ods_code.append_value(&r.ods_code);
         role_code.append_value(&r.role_code);
+        role_name.append_value(&r.role_name);
         role_id.append_value(&r.role_id);
         is_primary.append_value(r.is_primary);
         status.append_value(&r.status);
@@ -727,6 +694,7 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i
         vec![
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(role_code.finish()) as ArrayRef,
+            Arc::new(role_name.finish()) as ArrayRef,
             Arc::new(role_id.finish()) as ArrayRef,
             Arc::new(is_primary.finish()) as ArrayRef,
             Arc::new(status.finish()) as ArrayRef,
@@ -737,20 +705,22 @@ fn build_org_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i
             Arc::new(trud_release_date.finish()) as ArrayRef,
         ],
     )
-    .context("building Arrow org_roles batch")?;
+    .context("building Arrow roles batch")?;
 
     Ok(batch)
 }
 
-pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
     let mut rows = Vec::new();
     for r in records {
         for role_record in &r.roles {
             let (l_start, l_end, o_start, o_end) = extract_dates(&role_record.dates);
+            let r_name = crate::roles::role_names().role_name(&role_record.id)?;
 
             rows.push(RoleRow {
                 ods_code: r.ods_code.clone(),
                 role_code: role_record.id.clone(),
+                role_name: r_name.to_string(),
                 role_id: role_record.unique_role_id.clone(),
                 is_primary: role_record.primary_role,
                 status: role_record.status.clone(),
@@ -777,161 +747,19 @@ pub fn export_org_roles(output_dir: &Path, records: &[OdsRecord], provenance: Op
     let release_days = parse_date_to_days(release_date_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
-    let schema = embed_metadata(&org_roles_schema(), provenance);
-    let output_file = File::create(output_dir.join("org_roles.parquet"))
-        .context("creating org_roles.parquet")?;
-    let props = writer_properties(provenance);
-    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
-        .context("creating org_roles ArrowWriter")?;
-
-    for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_org_roles_batch(&schema, chunk, release_days)?;
-        writer.write(&batch).context("writing org_roles batch")?;
-    }
-    writer.close().context("finalising org_roles writer")?;
-    println!("Exported {} records to org_roles.parquet.", rows.len());
-    Ok(())
-}
-
-// ==========================================
-// roles.parquet — the role vocabulary.
-//
-// One row per role code in this release. `can_be_primary` is computed from the
-// data rather than curated: the register/function split is an observed property
-// of the release, so if ODS ever moves a code across that boundary this table
-// reflects it instead of asserting a stale opinion.
-// ==========================================
-
-pub fn roles_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("role_code", DataType::Utf8, false),
-        Field::new("role_name", DataType::Utf8, false),
-        Field::new("can_be_primary", DataType::Boolean, false),
-        Field::new("trud_release_date", DataType::Date32, false),
-    ])
-}
-
-/// Prints how many entities each category rule claimed.
-///
-/// A rule quietly falling to zero is the signal that ODS changed something
-/// underneath us, so the counts are surfaced on every build rather than kept
-/// for a report nobody runs.
-fn report_category_rule_hits(records: &[OdsRecord]) {
-    let rules = crate::roles::category_rules();
-    let mut hits = vec![0usize; rules.rules.len()];
-    let mut defaulted = 0usize;
-
-    for r in records {
-        let org_is_active = r.status.eq_ignore_ascii_case("active");
-        let codes: Vec<String> = r
-            .roles
-            .iter()
-            .filter(|role| !org_is_active || role.status.eq_ignore_ascii_case("active"))
-            .map(|role| role.id.clone())
-            .collect();
-
-        match rules.matched_rule(&codes) {
-            Some(idx) => hits[idx] += 1,
-            None => defaulted += 1,
-        }
-    }
-
-    println!("Category rules (v{}):", rules.version);
-    for (rule, count) in rules.rules.iter().zip(&hits) {
-        let flag = if *count == 0 { "  ⚠ no longer fires" } else { "" };
-        println!(
-            "  {:<6} → {:<54} {:>7}{}",
-            rule.when_role, rule.category, count, flag
-        );
-    }
-    println!(
-        "  {:<6}   {:<54} {:>7}",
-        "", "(default: curated name of primary role)", defaulted
-    );
-}
-
-pub fn export_roles(
-    output_dir: &Path,
-    records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
-    primary_role_scope: Option<&[String]>,
-) -> Result<()> {
-    // Observed vocabulary: every role code in the release.
-    let mut observed_roles: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut observed_primary: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for r in records {
-        for role in &r.roles {
-            observed_roles.insert(role.id.clone());
-            if role.primary_role {
-                observed_primary.insert(role.id.clone());
-            }
-        }
-    }
-
-    let primary_scope_set: std::collections::HashSet<&str> = match primary_role_scope {
-        Some(scope) if !scope.is_empty() => scope.iter().map(|s| s.as_str()).collect(),
-        _ => anyhow::bail!("Missing <PrimaryRoleScope> in release manifest"),
-    };
-
-    // A role code with no curated name is a build failure, not a blank cell.
-    let observed: std::collections::HashSet<String> = observed_roles.iter().cloned().collect();
-    crate::roles::ensure_vocabulary_covers(&observed)?;
-    crate::roles::ensure_rules_reference_known_roles()?;
-    report_category_rule_hits(records);
-
-    let release_date_str = provenance
-        .and_then(|p| p.trud_release_date.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
-
-    let vocab = crate::roles::role_names();
-    let mut role_code = StringBuilder::new();
-    let mut name = StringBuilder::new();
-    let mut primary_flag = BooleanBuilder::new();
-    let mut trud_release_date = Date32Builder::new();
-
-    let mut primary_count = 0usize;
-
-    for code in &observed_roles {
-        let is_primary_capable = primary_scope_set.contains(code.as_str());
-
-        if is_primary_capable {
-            primary_count += 1;
-        }
-
-        role_code.append_value(code);
-        name.append_value(vocab.name(code).unwrap_or(code));
-        primary_flag.append_value(is_primary_capable);
-        trud_release_date.append_value(release_days);
-    }
-
     let schema = embed_metadata(&roles_schema(), provenance);
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(role_code.finish()) as ArrayRef,
-            Arc::new(name.finish()) as ArrayRef,
-            Arc::new(primary_flag.finish()) as ArrayRef,
-            Arc::new(trud_release_date.finish()) as ArrayRef,
-        ],
-    )
-    .context("building Arrow roles batch")?;
-
     let output_file = File::create(output_dir.join("roles.parquet"))
         .context("creating roles.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating roles ArrowWriter")?;
-    writer.write(&batch).context("writing roles batch")?;
-    writer.close().context("finalising roles writer")?;
 
-    println!(
-        "Exported {} role definitions to roles.parquet ({} can be primary).",
-        observed_roles.len(),
-        primary_count
-    );
+    for chunk in rows.chunks(BATCH_SIZE) {
+        let batch = build_roles_batch(&schema, chunk, release_days)?;
+        writer.write(&batch).context("writing roles batch")?;
+    }
+    writer.close().context("finalising roles writer")?;
+    println!("Exported {} records to roles.parquet.", rows.len());
     Ok(())
 }
 
@@ -1551,45 +1379,12 @@ mod tests {
     }
 
     #[test]
-    fn test_export_roles_requires_primary_role_scope() {
-        let record = OdsRecord {
-            ods_code: "A100".to_string(),
-            name: "Test Practice".to_string(),
-            roles: vec![crate::commands::ndjson::OdsRole {
-                id: "RO177".to_string(),
-                code: None,
-                unique_role_id: "1".to_string(),
-                primary_role: true,
-                status: "active".to_string(),
-                dates: vec![],
-                display_name: None,
-            }],
-            ..Default::default()
-        };
-
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        // 1. Must fail without PrimaryRoleScope
-        let mut prov_no_scope = crate::provenance::OdsProvenance::default();
-        prov_no_scope.trud_release_date = Some("2026-07-31".to_string());
-        let err = export_roles(temp_dir.path(), &[record.clone()], Some(&prov_no_scope), None);
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Missing <PrimaryRoleScope>"));
-
-        // 2. Must succeed with PrimaryRoleScope
-        let mut prov = crate::provenance::OdsProvenance::default();
-        prov.trud_release_date = Some("2026-07-31".to_string());
-        let scope = vec!["RO177".to_string()];
-        let res = export_roles(temp_dir.path(), &[record], Some(&prov), Some(&scope));
-        assert!(res.is_ok());
-    }
-
-    #[test]
     fn test_task_6_column_renames() {
         let orgs_s = orgs_schema();
         assert!(orgs_s.column_with_name("entity_type").is_some());
         assert!(orgs_s.column_with_name("primary_role_code").is_some());
         assert!(orgs_s.column_with_name("role_codes").is_some());
+        assert!(orgs_s.column_with_name("role_names").is_some());
         assert!(orgs_s.column_with_name("last_changed").is_some());
         assert!(orgs_s.column_with_name("commissioner_name").is_some());
         assert!(orgs_s.column_with_name("parent_name").is_some());
@@ -1610,26 +1405,24 @@ mod tests {
         assert!(orgs_s.column_with_name("region").is_none());
 
         let roles_s = roles_schema();
+        assert!(roles_s.column_with_name("ods_code").is_some());
         assert!(roles_s.column_with_name("role_code").is_some());
         assert!(roles_s.column_with_name("role_name").is_some());
-        assert!(roles_s.column_with_name("can_be_primary").is_some());
-        assert!(roles_s.column_with_name("name").is_none());
-
-        let org_roles_s = org_roles_schema();
-        assert!(org_roles_s.column_with_name("role_status").is_some());
-        assert!(org_roles_s.column_with_name("status").is_none());
+        assert!(roles_s.column_with_name("role_id").is_some());
+        assert!(roles_s.column_with_name("is_primary").is_some());
+        assert!(roles_s.column_with_name("role_status").is_some());
+        assert!(roles_s.column_with_name("status").is_none());
+        assert!(roles_s.column_with_name("can_be_primary").is_none());
     }
 
     #[test]
     fn test_task_7_trud_release_date_on_all_tables() {
         assert!(orgs_schema().column_with_name("trud_release_date").is_some());
-        assert!(org_roles_schema().column_with_name("trud_release_date").is_some());
         assert!(roles_schema().column_with_name("trud_release_date").is_some());
         assert!(relationships_schema().column_with_name("trud_release_date").is_some());
         assert!(successions_schema().column_with_name("trud_release_date").is_some());
 
         assert!(orgs_schema().column_with_name("publication_date").is_none());
-        assert!(org_roles_schema().column_with_name("publication_date").is_none());
         assert!(roles_schema().column_with_name("publication_date").is_none());
         assert!(relationships_schema().column_with_name("publication_date").is_none());
         assert!(successions_schema().column_with_name("publication_date").is_none());

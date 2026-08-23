@@ -62,8 +62,8 @@ struct MatchedRecord {
     role_name: String,
     /// Every active role code held, including the primary one.
     role_codes: Vec<String>,
-    /// What this entity actually is, per data/category_rules.json.
-    category: String,
+    /// Curated role names positionally aligned with role_codes.
+    role_names: Vec<String>,
     address: String,
     town: String,
     county: String,
@@ -414,8 +414,8 @@ let query_lower = query_str.to_lowercase();
             .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
         let roles_arr = batch.column(schema.index_of("role_codes")?)
             .as_any().downcast_ref::<arrow::array::ListArray>().context("role_codes ListArray")?;
-        let category_arr = batch.column(schema.index_of("category")?)
-            .as_any().downcast_ref::<StringArray>().context("category StringArray")?;
+        let role_names_arr = batch.column(schema.index_of("role_names")?)
+            .as_any().downcast_ref::<arrow::array::ListArray>().context("role_names ListArray")?;
 
         let address_idx = schema.index_of("address").ok();
         let town_idx = schema.index_of("town").ok();
@@ -461,34 +461,6 @@ let query_lower = query_str.to_lowercase();
         for i in 0..num_rows {
             let ods_code = ods_code_arr.value(i);
             let name = name_arr.value(i);
-            let postcode = postcode_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let town = town_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let county = county_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let country = country_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let uprn = uprn_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let telephone = telephone_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let website = website_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
             let commissioner = commissioner_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
@@ -519,13 +491,41 @@ let query_lower = query_str.to_lowercase();
             }).unwrap_or("");
             let trust_code = trust_code_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
             let icb = icb_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let icb_code = icb_code_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
+            }).unwrap_or_default();
+            let postcode = postcode_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
-            let icb_code = icb_code_idx.and_then(|idx| {
+            let town = town_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let county = county_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let country = country_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let uprn = uprn_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let telephone = telephone_idx.and_then(|idx| {
+                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
+            }).unwrap_or("");
+            let website = website_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
@@ -538,7 +538,6 @@ let query_lower = query_str.to_lowercase();
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
             let primary_role = primary_role_arr.value(i);
-            let category = category_arr.value(i).to_string();
 
             // Extract all role codes from the list
             let role_codes: Vec<String> = if roles_arr.is_valid(i) {
@@ -556,6 +555,21 @@ let query_lower = query_str.to_lowercase();
                 vec![primary_role.to_string()]
             };
 
+            let role_names: Vec<String> = if role_names_arr.is_valid(i) {
+                let value_arr = role_names_arr.value(i);
+                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
+                if let Some(str_arr) = str_arr {
+                    (0..str_arr.len())
+                        .filter(|j| str_arr.is_valid(*j))
+                        .map(|j| str_arr.value(j).to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
             // Apply optional role filter
             if let Some(ref rf) = role_filter_lower {
                 let matches_role = primary_role.to_lowercase() == *rf
@@ -563,6 +577,7 @@ let query_lower = query_str.to_lowercase();
                         c.to_lowercase() == *rf
                             || role_vocab.get(c).is_some_and(|n| n.to_lowercase().contains(rf))
                     })
+                    || role_names.iter().any(|n| n.to_lowercase().contains(rf))
                     || role_vocab.get(primary_role).is_some_and(|n| n.to_lowercase().contains(rf));
                 if !matches_role {
                     continue;
@@ -573,7 +588,7 @@ let query_lower = query_str.to_lowercase();
                 true
             } else {
                 let mut search_target = format!(
-                    "{} {} {} {} {} {} {} {} {} {} {} {} {}",
+                    "{} {} {} {} {} {} {} {} {} {} {} {}",
                     ods_code,
                     name,
                     postcode,
@@ -585,17 +600,16 @@ let query_lower = query_str.to_lowercase();
                     parent_code,
                     pcn,
                     trust,
-                    primary_role,
-                    category
+                    primary_role
                 ).to_lowercase();
 
                 for rc in &role_codes {
                     search_target.push(' ');
                     search_target.push_str(&rc.to_lowercase());
-                    if let Some(rname) = role_vocab.get(rc) {
-                        search_target.push(' ');
-                        search_target.push_str(&rname.to_lowercase());
-                    }
+                }
+                for rn in &role_names {
+                    search_target.push(' ');
+                    search_target.push_str(&rn.to_lowercase());
                 }
 
                 query_words.iter().all(|word| search_target.contains(word))
@@ -615,7 +629,9 @@ let query_lower = query_str.to_lowercase();
                 let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
 
                 let is_exact_code = ods_code.eq_ignore_ascii_case(query_str);
-                let role_name = role_vocab.get(primary_role).cloned().unwrap_or_else(|| primary_role.to_string());
+                let role_name = role_names.first().cloned().unwrap_or_else(|| {
+                    role_vocab.get(primary_role).cloned().unwrap_or_else(|| primary_role.to_string())
+                });
 
                 matches.push(MatchedRecord {
                     ods_code: ods_code.to_string(),
@@ -624,7 +640,7 @@ let query_lower = query_str.to_lowercase();
                     status: status_arr.value(i).to_string(),
                     primary_role_code: primary_role.to_string(),
                     role_codes,
-                    category,
+                    role_names,
                     role_name,
                     address,
                     town: town.to_string(),
@@ -708,7 +724,7 @@ let query_lower = query_str.to_lowercase();
                     "status": r.status,
                     "primary_role_code": r.primary_role_code,
                     "role_codes": r.role_codes,
-                    "category": r.category,
+                    "role_names": r.role_names,
                     "role_name": r.role_name,
                     "name": r.name,
                     "address": if r.address.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.address.clone()) },
@@ -746,7 +762,7 @@ let query_lower = query_str.to_lowercase();
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
+            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
             let escape_csv = |s: &str| -> String {
                 if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains(';') {
                     format!("\"{}\"", s.replace('"', "\"\""))
@@ -756,6 +772,7 @@ let query_lower = query_str.to_lowercase();
             };
             for r in &matches {
                 let roles_str = r.role_codes.join("; ");
+                let role_names_str = r.role_names.join("; ");
                 let succ_codes: Vec<String> = if let Some(edges) = successions_graph.forward.get(&r.ods_code) {
                     edges.iter().map(|e| e.target_code.clone()).collect()
                 } else {
@@ -775,7 +792,7 @@ let query_lower = query_str.to_lowercase();
                     r.status.as_str(),
                     r.primary_role_code.as_str(),
                     &escape_csv(&roles_str),
-                    &escape_csv(&r.category),
+                    &escape_csv(&role_names_str),
                     &escape_csv(&r.role_name),
                     &escape_csv(&r.name),
                     &escape_csv(&r.address),
@@ -839,7 +856,7 @@ let query_lower = query_str.to_lowercase();
                         writeln!(
                             writer,
                             "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                            "ODS Code", "Name", "Postcode", "Category", "Class"
+                            "ODS Code", "Name", "Postcode", "Roles", "Class"
                         )?;
                         writeln!(
                             writer,
@@ -848,7 +865,7 @@ let query_lower = query_str.to_lowercase();
                         )?;
                         for r in &related_matches {
                             let name_display = truncate_str(&r.name, 45);
-                            let role_display = truncate_str(&r.category, 25);
+                            let role_display = truncate_str(&r.role_names.join(", "), 25);
 
                             writeln!(
                                 writer,
@@ -877,7 +894,7 @@ let query_lower = query_str.to_lowercase();
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
-                        "ODS Code", "Name", "Postcode", "Category", "Class", "Status"
+                        "ODS Code", "Name", "Postcode", "Roles", "Class", "Status"
                     )?;
                     writeln!(
                         writer,
@@ -888,7 +905,7 @@ let query_lower = query_str.to_lowercase();
                     writeln!(
                         writer,
                         "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                        "ODS Code", "Name", "Postcode", "Category", "Class"
+                        "ODS Code", "Name", "Postcode", "Roles", "Class"
                     )?;
                     writeln!(
                         writer,
@@ -910,7 +927,7 @@ let query_lower = query_str.to_lowercase();
                     };
 
                     let name_display = truncate_str(&full_name, 45);
-                    let role_display = truncate_str(&r.category, 25);
+                    let role_display = truncate_str(&r.role_names.join(", "), 25);
 
                     if args.all {
                         writeln!(
@@ -1146,21 +1163,10 @@ mod tests {
 
         let mut prov = crate::provenance::OdsProvenance::default();
         prov.trud_release_date = Some("2026-07-31".to_string());
-        let scope = vec![
-            "RO177".to_string(),
-            "RO261".to_string(),
-            "RO198".to_string(),
-            "RO180".to_string(),
-            "RO76".to_string(),
-            "RO318".to_string(),
-            "RO7".to_string(),
-            "RO269".to_string(),
-            "RO270".to_string(),
-        ];
 
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
         crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov), Some(&scope)).unwrap();
+        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
         crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
         crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
 
@@ -1266,7 +1272,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,category,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
+        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1314,7 +1320,7 @@ mod tests {
             primary_role_code: "RO177".to_string(),
             role_name: "Prescribing Cost Centre".to_string(),
             role_codes: vec!["RO76".to_string(), "RO177".to_string()],
-            category: "GP Practice".to_string(),
+            role_names: vec!["GP Practice".to_string(), "Prescribing Cost Centre".to_string()],
             address: "1 Main St".to_string(),
             town: "Town".to_string(),
             county: "County".to_string(),
@@ -1350,7 +1356,7 @@ mod tests {
             "status": record.status,
             "primary_role_code": record.primary_role_code,
             "role_codes": record.role_codes,
-            "category": record.category,
+            "role_names": record.role_names,
             "role_name": record.role_name,
             "name": record.name,
             "address": record.address,
@@ -1414,7 +1420,7 @@ mod tests {
         assert_eq!(json_keys_vec[2], "status");
         assert_eq!(json_keys_vec[3], "primary_role_code");
         assert_eq!(json_keys_vec[4], "role_codes");
-        assert_eq!(json_keys_vec[5], "category");
+        assert_eq!(json_keys_vec[5], "role_names");
         assert_eq!(json_keys_vec[6], "role_name");
         assert_eq!(json_keys_vec[7], "name");
         assert_eq!(json_keys_vec[28], "successor_codes");

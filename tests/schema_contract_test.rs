@@ -85,10 +85,6 @@ fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, BTreeSet<Stri
             result.entry("orgs".to_string()).or_default();
             result.entry("orgs_all".to_string()).or_default();
             continue;
-        } else if trimmed.starts_with("## `org_roles.parquet`") {
-            current_table = Some("org_roles".to_string());
-            result.entry("org_roles".to_string()).or_default();
-            continue;
         } else if trimmed.starts_with("## `roles.parquet`") {
             current_table = Some("roles".to_string());
             result.entry("roles".to_string()).or_default();

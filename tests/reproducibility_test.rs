@@ -66,11 +66,9 @@ fn test_synthetic_parquet_hash_stability() {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
     ];
 
     for file_name in parquet_files {
@@ -122,11 +120,9 @@ fn test_real_trud_parquet_hash_stability() {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
     ];
 
     for file_name in parquet_files {

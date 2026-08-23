@@ -174,7 +174,7 @@ fn load_rels(path: &Path) -> Result<HashMap<String, Vec<RelRow>>> {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let roles_path = args.input.join("org_roles.parquet");
+    let roles_path = args.input.join("roles.parquet");
     let rels_path = if args.input.join("relationships.parquet").exists() {
         args.input.join("relationships.parquet")
     } else {
@@ -187,7 +187,7 @@ pub fn run(args: Args) -> Result<()> {
         anyhow::bail!("Missing 'orgs.parquet' in input directory: {}", args.input.display());
     }
     if !roles_path.exists() {
-        anyhow::bail!("Missing 'org_roles.parquet' in input directory: {}", args.input.display());
+        anyhow::bail!("Missing 'roles.parquet' in input directory: {}", args.input.display());
     }
     if !rels_path.exists() {
         anyhow::bail!("Missing 'relationships.parquet' in input directory: {}", args.input.display());

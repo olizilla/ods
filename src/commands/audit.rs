@@ -366,11 +366,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let parquet_files = [
         "orgs.parquet",
         "orgs_all.parquet",
-        "org_roles.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
-        "category_rules.json",
         "datapackage.json",
     ];
     let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
@@ -526,7 +524,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     let orgs_all_parquet = parquet_dir.join("orgs_all.parquet");
     let orgs_parquet = parquet_dir.join("orgs.parquet");
-    let roles_parquet = parquet_dir.join("org_roles.parquet");
+    let roles_parquet = parquet_dir.join("roles.parquet");
     let rels_parquet = parquet_dir.join("relationships.parquet");
     let succs_parquet = parquet_dir.join("successions.parquet");
 
@@ -553,9 +551,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         let actual_str = roles_res
             .as_ref()
             .map(|c| c.to_string())
-            .unwrap_or_else(|e| format!("Error reading org_roles.parquet: {:#}", e));
+            .unwrap_or_else(|e| format!("Error reading roles.parquet: {:#}", e));
         discrepancies.push(format!(
-            "Role Parity Error: XML roles ({}) != org_roles.parquet ({})",
+            "Role Parity Error: XML roles ({}) != roles.parquet ({})",
             raw_xml_invariants.roles_count, actual_str
         ));
     }
@@ -605,7 +603,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
 
         if roles_match {
-            println!("     ✓ Roles: {:<30} # XML roles count matches org_roles.parquet", raw_xml_invariants.roles_count);
+            println!("     ✓ Roles: {:<30} # XML roles count matches roles.parquet", raw_xml_invariants.roles_count);
         } else {
             let actual_str = roles_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
             println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, actual_str);
@@ -729,7 +727,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
 
         if derived_parity_passed {
-            println!("     ✓ Derived Column Parity: {:<16} # Closures, hierarchies, categories & role codes verified", format!("{}/{}", sample_len, sample_len));
+            println!("     ✓ Derived Column Parity: {:<16} # Closures, hierarchies, role codes & role names verified", format!("{}/{}", sample_len, sample_len));
         } else {
             println!("     ✖ Derived Column Parity failed");
         }
@@ -1379,36 +1377,63 @@ fn audit_referential_integrity(
     }
 
     let mut orphan_roles = 0;
-    // 2. Foreign Key Check: org_roles.parquet ods_code -> orgs_all.parquet
+    let mut uncurated_roles = 0;
+    // 2. Foreign Key Check: roles.parquet ods_code -> orgs_all.parquet & role_name check
     if roles_parquet.exists() {
         if let Ok(rfile) = File::open(roles_parquet) {
             if let Ok(rbuilder) = ParquetRecordBatchReaderBuilder::try_new(rfile) {
                 if let Ok(rreader) = rbuilder.build() {
                     for batch in rreader.flatten() {
                         let schema = batch.schema();
-                        if let Ok(idx) = schema.index_of("ods_code") {
-                            if let Some(code_arr) = batch.column(idx).as_any().downcast_ref::<StringArray>() {
-                                for i in 0..batch.num_rows() {
-                                    let code = code_arr.value(i);
-                                    if !code.is_empty() && !valid_codes.contains(code) {
-                                        orphan_roles += 1;
+                        let code_idx = schema.index_of("ods_code").ok();
+                        let role_code_idx = schema.index_of("role_code").ok();
+                        let role_name_idx = schema.index_of("role_name").ok();
+
+                        let code_arr = code_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
+                        let role_code_arr = role_code_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
+                        let role_name_arr = role_name_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
+
+                        for i in 0..batch.num_rows() {
+                            if let Some(arr) = code_arr {
+                                let code = arr.value(i);
+                                if !code.is_empty() && !valid_codes.contains(code) {
+                                    orphan_roles += 1;
+                                }
+                            }
+                            if let (Some(rc_arr), Some(rn_arr)) = (role_code_arr, role_name_arr) {
+                                let rc = rc_arr.value(i);
+                                let rn = rn_arr.value(i);
+                                match roles::role_names().role_name(rc) {
+                                    Ok(expected_rn) => {
+                                        if rn != expected_rn {
+                                            uncurated_roles += 1;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        uncurated_roles += 1;
                                     }
                                 }
                             }
                         }
                     }
                 } else {
-                    discrepancies.push("Referential Integrity Error: Failed to read org_roles.parquet".to_string());
+                    discrepancies.push("Referential Integrity Error: Failed to read roles.parquet".to_string());
                 }
             } else {
-                discrepancies.push("Referential Integrity Error: Failed to parse org_roles.parquet".to_string());
+                discrepancies.push("Referential Integrity Error: Failed to parse roles.parquet".to_string());
             }
         }
 
         if orphan_roles > 0 {
             discrepancies.push(format!(
-                "Referential Integrity Violation: Found {} orphan ods_code links in org_roles.parquet",
+                "Referential Integrity Violation: Found {} orphan ods_code links in roles.parquet",
                 orphan_roles
+            ));
+        }
+        if uncurated_roles > 0 {
+            discrepancies.push(format!(
+                "Referential Integrity Violation: Found {} invalid/uncurated role_name values in roles.parquet",
+                uncurated_roles
             ));
         }
     }
@@ -1571,7 +1596,7 @@ fn audit_sample_and_derived_parity(
     orgs_all_parquet: &Path,
     sample_orgs: &HashMap<String, XmlSampleOrgRecord>,
     succession_edges: &[(String, String)],
-    parquet_dir: &Path,
+    _parquet_dir: &Path,
     _trud_release_date: &str,
     discrepancies: &mut Vec<String>,
 ) -> Result<(bool, bool)> {
@@ -1583,14 +1608,6 @@ fn audit_sample_and_derived_parity(
 
     // 1. Compute 100% full graph closures
     let (succ_closures, pred_closures) = compute_full_closures(succession_edges);
-
-    // 2. Load category rules
-    let rules_file = parquet_dir.join("category_rules.json");
-    let rules = if rules_file.exists() {
-        roles::CategoryRules::load_from_path(&rules_file).unwrap_or_else(|_| roles::category_rules().clone())
-    } else {
-        roles::category_rules().clone()
-    };
 
     let file = File::open(orgs_all_parquet)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -1614,11 +1631,11 @@ fn audit_sample_and_derived_parity(
             .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
         let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
             .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
-        let category_arr = batch.column(schema.index_of("category")?)
-            .as_any().downcast_ref::<StringArray>().context("category StringArray")?;
 
         let role_codes_arr = batch.column(schema.index_of("role_codes")?)
             .as_any().downcast_ref::<ListArray>().context("role_codes ListArray")?;
+        let role_names_arr = batch.column(schema.index_of("role_names")?)
+            .as_any().downcast_ref::<ListArray>().context("role_names ListArray")?;
         let succ_codes_arr = batch.column(schema.index_of("successor_codes")?)
             .as_any().downcast_ref::<ListArray>().context("successor_codes ListArray")?;
         let pred_codes_arr = batch.column(schema.index_of("predecessor_codes")?)
@@ -1739,14 +1756,6 @@ fn audit_sample_and_derived_parity(
                     }
                 }
 
-                // Category derivation
-                let p_cat = category_arr.value(i);
-                let expected_cat = rules.categorise(&xml_sample.primary_role_code, &xml_sample.role_codes);
-                if !p_cat.eq_ignore_ascii_case(&expected_cat) {
-                    derived_failures += 1;
-                    discrepancies.push(format!("Category Derivation Mismatch ({code}): Expected '{}' vs Parquet '{}'", expected_cat, p_cat));
-                }
-
                 // Role codes list check
                 let r_values = role_codes_arr.value(i);
                 let r_str_arr = r_values.as_any().downcast_ref::<StringArray>().unwrap();
@@ -1759,6 +1768,39 @@ fn audit_sample_and_derived_parity(
                 if parquet_roles != xml_roles {
                     derived_failures += 1;
                     discrepancies.push(format!("Role Codes Set Union Mismatch ({code}): XML={:?} vs Parquet={:?}", xml_roles, parquet_roles));
+                }
+
+                // Role names positional alignment & curation check
+                let rn_values = role_names_arr.value(i);
+                let rn_str_arr = rn_values.as_any().downcast_ref::<StringArray>().unwrap();
+                if r_str_arr.len() != rn_str_arr.len() {
+                    derived_failures += 1;
+                    discrepancies.push(format!(
+                        "Role Names Positional Alignment Mismatch ({code}): role_codes len={} != role_names len={}",
+                        r_str_arr.len(),
+                        rn_str_arr.len()
+                    ));
+                } else {
+                    for j in 0..r_str_arr.len() {
+                        let c = r_str_arr.value(j);
+                        let n = rn_str_arr.value(j);
+                        match roles::role_names().role_name(c) {
+                            Ok(expected_n) => {
+                                if n != expected_n {
+                                    derived_failures += 1;
+                                    discrepancies.push(format!(
+                                        "Role Name Curation Mismatch ({code}): code '{c}' has name '{n}' in Parquet != expected '{expected_n}'"
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                derived_failures += 1;
+                                discrepancies.push(format!(
+                                    "Uncurated Role Code in Parquet ({code}): code '{c}' error: {e}"
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 // Transitive Closures Check

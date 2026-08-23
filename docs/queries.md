@@ -5,25 +5,25 @@ Some interesting queries with real output. The schema and the reasoning behind i
 You can point `duckdb` at the parquet files and go. Local-first! All examples here show the output given from the `2026-07-31` release.
 
 ```console
-$ duckdb -c "SELECT ods_code, name, category FROM 'ods_data/current/orgs.parquet' WHERE town = 'SEDBERGH' ORDER BY category"
-┌───────────┬──────────────────────────────────────────┬─────────────────────────┐
-│ ods_code  │                   name                   │        category         │
-├───────────┼──────────────────────────────────────────┼─────────────────────────┤
-│ A82608001 │ DR LUMB W & PARTNER                      │ Branch Surgery          │
-│ VN6C2     │ PRIVATE PERSONAL ASSISTANCE LIMITED      │ Domiciliary Care        │
-│ A82608    │ SEDBERGH MEDICAL PRACTICE                │ GP Practice             │
-│ V25604    │ MAIN STREET DENTAL SURGERY               │ General Dental Practice │
-│ RNN88     │ SEDBERGH HEALTH CENTRE                   │ NHS Trust Site          │
-│ RW5OX     │ SEDBURGH MEDICAL CENTRE                  │ NHS Trust Site          │
-│ RX796     │ SEDBURGH AMBULANCE STATION               │ NHS Trust Site          │
-│ 8GJ58     │ PARKER M JUNE (ACUPUNCURIST)             │ Non-NHS Organisation    │
-│ FLG02     │ ALLIED PHARMACY SEDBERGH                 │ Pharmacy                │
-│ D2E8H     │ AP SD THIRTEEN LIMITED                   │ Pharmacy Headquarter    │
-│ EE137269  │ SETTLEBECK SCHOOL                        │ School                  │
-│ EE112233  │ SEDBERGH PRIMARY SCHOOL                  │ School                  │
-│ EE112331  │ DENT COFE VOLUNTARY AIDED PRIMARY SCHOOL │ School                  │
-│ EE112451  │ SEDBERGH SCHOOL                          │ School                  │
-└───────────┴──────────────────────────────────────────┴─────────────────────────┘
+$ duckdb -c "SELECT ods_code, name, role_names FROM 'ods_data/current/orgs.parquet' WHERE town = 'SEDBERGH'"
+┌───────────┬──────────────────────────────────────────┬────────────────────────────────────────┐
+│ ods_code  │                   name                   │               role_names               │
+├───────────┼──────────────────────────────────────────┼────────────────────────────────────────┤
+│ A82608001 │ DR LUMB W & PARTNER                      │ [Branch Surgery]                       │
+│ VN6C2     │ PRIVATE PERSONAL ASSISTANCE LIMITED      │ [Domiciliary Care]                     │
+│ A82608    │ SEDBERGH MEDICAL PRACTICE                │ [GP Practice, Prescribing Cost Centre] │
+│ V25604    │ MAIN STREET DENTAL SURGERY               │ [General Dental Practice]              │
+│ RNN88     │ SEDBERGH HEALTH CENTRE                   │ [NHS Trust Site]                       │
+│ RW5OX     │ SEDBURGH MEDICAL CENTRE                  │ [NHS Trust Site]                       │
+│ RX796     │ SEDBURGH AMBULANCE STATION               │ [NHS Trust Site]                       │
+│ 8GJ58     │ PARKER M JUNE (ACUPUNCURIST)             │ [Non-NHS Organisation]                 │
+│ FLG02     │ ALLIED PHARMACY SEDBERGH                 │ [Pharmacy]                             │
+│ D2E8H     │ AP SD THIRTEEN LIMITED                   │ [Pharmacy Headquarter]                 │
+│ EE137269  │ SETTLEBECK SCHOOL                        │ [School]                               │
+│ EE112233  │ SEDBERGH PRIMARY SCHOOL                  │ [School]                               │
+│ EE112331  │ DENT COFE VOLUNTARY AIDED PRIMARY SCHOOL │ [School]                               │
+│ EE112451  │ SEDBERGH SCHOOL                          │ [School]                               │
+└───────────┴──────────────────────────────────────────┴────────────────────────────────────────┘
 ```
 
 The numbers here come from the release `current` points at, `2026-07-31`. Yours
@@ -38,8 +38,9 @@ If you find more errors, open issues so we can report them upstream.
 
 Other things worth knowing before you query:
 
-- **Use `category` to find out what something is.** The `primary role code` describes 
+- **Use `role_names` to find out what something is.** The `primary_role_code` describes 
   GP practices as `RO177 Prescribing Cost Centre`, an administrative bucket rather than its function.
+  `role_names` contains the curated, readable names for every role held.
 - **Use `role_codes` joined with `roles.parquet`** to find all the official buckets an entity is in. 
 - **You can filter on `country` if you need to.** ODS covers the UK. 941 of the GP
   practices are in Scotland and 400 in Wales.
@@ -58,13 +59,13 @@ Other things worth knowing before you query:
 ## What kind of thing is it
 
 ```sql
-SELECT category, count(*) AS n
+SELECT unnest(role_names) AS role, count(*) AS n
 FROM 'ods_data/current/orgs.parquet'
 WHERE entity_type = 'org' GROUP BY 1 ORDER BY n DESC LIMIT 8;
 ```
 ```
 ┌─────────────────────────┬───────┐
-│        category         │   n   │
+│          role           │   n   │
 │         varchar         │ int64 │
 ├─────────────────────────┼───────┤
 │ School                  │ 25187 │
@@ -72,18 +73,26 @@ WHERE entity_type = 'org' GROUP BY 1 ORDER BY n DESC LIMIT 8;
 │ Non-NHS Organisation    │ 17142 │
 │ Care Home               │ 16024 │
 │ Domiciliary Care        │ 15670 │
+│ Prescribing Cost Centre │ 12841 │
 │ Pharmacy                │ 11177 │
 │ General Dental Practice │  9789 │
-│ GP Practice             │  7577 │
 └─────────────────────────┴───────┘
+```
+
+Because `role_names` is positionally aligned with `role_codes`, you can derive
+the primary role name without a join:
+
+```sql
+SELECT name, role_names[list_position(role_codes, primary_role_code)] AS primary_role_name
+FROM 'ods_data/current/orgs.parquet'
+LIMIT 5;
 ```
 
 Most of ODS isn't what you'd picture as the NHS. Schools and care homes
 outnumber NHS sites, because ODS registers everyone who exchanges data with the
 NHS, not just the bits the NHS owns.
 
-For anything finer than `category`, filter on `role_codes` and join
-`roles.parquet` for the name. >92k active entities have more than one role:
+Filter on `role_names` or `role_codes`. >92k active entities have more than one role:
 
 ```sql
 SELECT len(role_codes) AS roles, count(*) AS entities
@@ -109,7 +118,7 @@ You can group things by `town`.
 -- Most GPs per town
 SELECT town, count(*) AS GPs
 FROM 'ods_data/current/orgs.parquet'
-WHERE category = 'GP Practice'
+WHERE list_contains(role_names, 'GP Practice')
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 ```
@@ -129,28 +138,9 @@ GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 
 ```sql
 -- find active GPs in SW9
-SELECT ods_code, name, category, postcode
+SELECT ods_code, name, role_names, postcode
 FROM 'ods_data/current/orgs.parquet'
-WHERE postcode LIKE 'SW9 %' AND category = 'GP Practice' ORDER BY category;
-```
-```
-┌──────────┬──────────────────────────────┬─────────────┬──────────┐
-│ ods_code │             name             │  category   │ postcode │
-│ varchar  │           varchar            │   varchar   │ varchar  │
-├──────────┼──────────────────────────────┼─────────────┼──────────┤
-│ Y00020   │ THE GRANTHAM PRACTICE        │ GP Practice │ SW9 9BH  │
-│ Y03063   │ HETHERINGTON AT THE PAVILION │ GP Practice │ SW9 8DJ  │
-│ Y05161   │ FIVEWAYS PCN EA HUB          │ GP Practice │ SW9 6AF  │
-│ Y05163   │ LARC CLINIC (LA)             │ GP Practice │ SW9 8DJ  │
-│ G85028   │ STOCKWELL GROUP PRACTICE     │ GP Practice │ SW9 9TJ  │
-│ G85054   │ LAMBETH WALK GROUP PRACTICE  │ GP Practice │ SW9 6AF  │
-│ G85073   │ VASSALL MEDICAL CENTRE       │ GP Practice │ SW9 6NA  │
-│ G85100   │ BECKETT HOUSE PRACTICE       │ GP Practice │ SW9 9DL  │
-│ G85135   │ MINET GREEN HEALTH PRACTICE  │ GP Practice │ SW9 6AF  │
-│ G85695   │ AKERMAN MEDICAL PRACTICE     │ GP Practice │ SW9 6AF  │
-├──────────┴──────────────────────────────┴─────────────┴──────────┤
-│ 10 rows                                                4 columns │
-└──────────────────────────────────────────────────────────────────┘
+WHERE postcode LIKE 'SW9 %' AND list_contains(role_names, 'GP Practice');
 ```
 
 ## Who's in charge of it
@@ -160,7 +150,7 @@ The derived hierarchy columns save you a trip through `relationships.parquet`.
 ```sql
 SELECT icb_name, count(*) AS practices
 FROM 'ods_data/current/orgs.parquet'
-WHERE category = 'GP Practice' AND icb_name IS NOT NULL
+WHERE list_contains(role_names, 'GP Practice') AND icb_name IS NOT NULL
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
@@ -223,7 +213,7 @@ which drops those 603.
 statute, and useless for everyone else, because a GP partnership or a corner shop
 pharmacy has an opening day but no Act of Parliament. It shows in the fill rate:
 
-| category | rows | has `legal_start` |
+| role | rows | has `legal_start` |
 | :--- | ---: | ---: |
 | Local Authority Site - Legacy | 222 | 100% |
 | CCG | 344 | 96.8% |
@@ -494,22 +484,6 @@ GROUP BY 1 ORDER BY 1;
 The paperwork lands after the merger, so a mapping built from one release can be
 incomplete for anything recent.
 
-## Drift in `category` might be us, not ODS
-
-`category` changed on 1 row in June and 2 in July. It's our opinion though, not
-ODS data, so check the rules didn't move before you report it as change in the
-NHS:
-
-```console
-$ shasum -a 256 ods_data/releases/*/category_rules.json
-397842a288c028917e1741d73a961c68bfd6f2d9b7fc1e5858c0a71535c3e884  ods_data/releases/2026-05-29/category_rules.json
-397842a288c028917e1741d73a961c68bfd6f2d9b7fc1e5858c0a71535c3e884  ods_data/releases/2026-06-26/category_rules.json
-397842a288c028917e1741d73a961c68bfd6f2d9b7fc1e5858c0a71535c3e884  ods_data/releases/2026-07-31/category_rules.json
-```
-
-Same hash, so the classification held still and the change came from upstream.
-That's why [category_rules.json] ships inside every release.
-
 ## Traps
 
 **`releases/*/orgs*.parquet` counts everything twice.** The glob matches
@@ -544,4 +518,3 @@ SELECT * FROM read_parquet([
 **Active relationships on inactive organisations.** Upstream TRUD ODS contains 3 relationships marked `Active` associated with `Inactive` organisations.
 
 [parquet.md]: ./parquet.md
-[category_rules.json]: ../data/category_rules.json

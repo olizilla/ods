@@ -46,35 +46,17 @@ fn schema_to_table_schema(
 
 pub fn generate_datapackage() -> Value {
     let orgs_schema = crate::commands::parquet::orgs_schema();
-    let org_roles_schema = crate::commands::parquet::org_roles_schema();
     let roles_schema = crate::commands::parquet::roles_schema();
     let relationships_schema = crate::commands::parquet::relationships_schema();
     let successions_schema = crate::commands::parquet::successions_schema();
 
-    let orgs_fk = vec![json!({
-        "fields": "primary_role_code",
+    let roles_fk = vec![json!({
+        "fields": "ods_code",
         "reference": {
-            "resource": "roles",
-            "fields": "role_code"
+            "resource": "orgs_all",
+            "fields": "ods_code"
         }
     })];
-
-    let org_roles_fk = vec![
-        json!({
-            "fields": "ods_code",
-            "reference": {
-                "resource": "orgs_all",
-                "fields": "ods_code"
-            }
-        }),
-        json!({
-            "fields": "role_code",
-            "reference": {
-                "resource": "roles",
-                "fields": "role_code"
-            }
-        }),
-    ];
 
     let relationships_fk = vec![
         json!({
@@ -116,28 +98,21 @@ pub fn generate_datapackage() -> Value {
             "path": "orgs.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
-            "schema": schema_to_table_schema(&orgs_schema, "ods_code", orgs_fk.clone())
+            "schema": schema_to_table_schema(&orgs_schema, "ods_code", vec![])
         }),
         json!({
             "name": "orgs_all",
             "path": "orgs_all.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
-            "schema": schema_to_table_schema(&orgs_schema, "ods_code", orgs_fk)
-        }),
-        json!({
-            "name": "org_roles",
-            "path": "org_roles.parquet",
-            "format": "parquet",
-            "mediatype": "application/vnd.apache.parquet",
-            "schema": schema_to_table_schema(&org_roles_schema, "role_id", org_roles_fk)
+            "schema": schema_to_table_schema(&orgs_schema, "ods_code", vec![])
         }),
         json!({
             "name": "roles",
             "path": "roles.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
-            "schema": schema_to_table_schema(&roles_schema, "role_code", vec![])
+            "schema": schema_to_table_schema(&roles_schema, "role_id", roles_fk)
         }),
         json!({
             "name": "relationships",

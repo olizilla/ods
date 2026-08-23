@@ -12,18 +12,36 @@ examples, including how to query several releases at once, are in
 | :--- | :--- | ---: | :--- |
 | `orgs.parquet` | one per active organisation or site | 216,886 | the main analytical table |
 | `orgs_all.parquet` | one per organisation or site, active **and** inactive | 305,541 | historical work |
-| `org_roles.parquet` | one per organisation per role | 442,251 | which roles an entity holds, and when |
-| `roles.parquet` | one per role code | 205 | the role vocabulary |
+| `roles.parquet` | one per organisation per role | 442,251 | which roles an entity holds, and when |
 | `relationships.parquet` | one per relationship | 662,558 | how entities relate |
 | `successions.parquet` | one per succession | 11,568 | mergers, splits, renames |
 
-`orgs` and `orgs_all` share an identical schema. `orgs` is
-`orgs_all WHERE status = 'active'`, and exists so the common case needs no
-filter and the naive query is the correct one.
+`orgs` answers nearly everything about the NHS as it is today. The other three
+are for deeper work and are designed to be joined against `orgs_all` rather than
+read alone.
 
-`orgs` answers nearly everything about the NHS as it is today.
-`relationships` and `successions` are for deeper work and are designed to be
-joined against `orgs_all` rather than read alone.
+**Three tables of the same shape.** `roles`, `relationships` and `successions`
+each hold one row per *thing that happened between an organisation and something
+else*, each carrying its type inline rather than in a companion lookup table:
+
+```
+roles          one per organisation per role   role_code, role_name, dates, status
+relationships  one per relationship            rel_type_code, rel_type_name, dates, status
+successions    one per succession              dates
+```
+
+There is deliberately **no role vocabulary table**. `roles.parquet` carries
+`role_name` inline, so the vocabulary is one query — and every role ODS declares
+is held by someone, verified across nine releases from 2018 to 2026:
+
+```sql
+SELECT DISTINCT role_code, role_name FROM 'roles.parquet';   -- all 205
+```
+
+`orgs` and `orgs_all` share an identical schema, and that duplication is
+deliberate: `orgs` is `orgs_all WHERE status = 'active'`, and exists so the
+common case needs no filter and the naive query is the correct one. Parquet has
+no views, so the alternative is every query carrying the filter.
 
 ## Naming
 
@@ -41,24 +59,42 @@ role_codes  = ['RO177','RO76']                         (a list of references)
 vocabulary entry. `role_id` is the ODS `uniqueRoleId` for one organisation's
 holding of one role; `succession_id` identifies one succession.
 
-Four columns carry no suffix because they reference nothing — they're values in
-their own right: `name` (the row's own label, paired with `ods_code`), `status`,
-`entity_type` and `category`.
+Three columns carry no suffix because they reference nothing — they're values in
+their own right: `name` (the row's own label, paired with `ods_code`), `status`
+and `entity_type`.
 
 ### Decisions this settles
 
-**Everything is suffixed, even where a name column doesn't exist.**
-`primary_role_code` has no `primary_role_name` beside it, and is still
-suffixed. Consistency is worth more than brevity here: you can guess any column
-name in this schema without looking it up.
+**A `_name` exists only where the label is worth carrying.** `_code` always
+means a reference; it does not oblige a `_name` beside it.
 
-**There is deliberately no `primary_role_name`.** `category` exists *because*
-the primary role name misleads — 9,372 GP practices are registered as
-`RO177 Prescribing Cost Centre`, which is accurate and useless. Two readable
-classification columns side by side would give no signal about which to trust.
-`primary_role_code` is safe next to `category` precisely because it's opaque:
-nobody mistakes `RO177` for a description. Join `roles.parquet` if you
-specifically want ODS's own label.
+**There is deliberately no `primary_role_name`.** The readable classification in
+this schema is `role_names` — plural, and honest that an organisation does
+several things. A singular readable column beside it would look like *the*
+answer, and would be read as one, which is the failure this schema exists to
+avoid. `primary_role_code` is safe next to `role_names` precisely because it is
+opaque: nobody mistakes `RO177` for a description.
+
+It would also be the least useful label available. The primary roles that occur
+most often are `Social Care Site` (31,694), `Prescribing Cost Centre` (12,841)
+and `Registered under Part 2, Care Standards Act 2000` (5,477) — registers and
+regulatory registrations rather than descriptions of the organisation.
+
+Because `role_names` is positionally aligned with `role_codes`, ODS's own label
+for the primary role is one expression away, with no join:
+
+```sql
+SELECT name, role_names[list_position(role_codes, primary_role_code)] AS primary_role_name
+FROM 'orgs.parquet';
+```
+
+**There is no `category`.** It was a derived column that picked one role per
+entity by a fixed precedence and copied its curated name. It added no vocabulary
+— every value it could produce was already a `role_name` — and the precedence
+was wrong wherever an entity genuinely does two things. `KING'S COLLEGE HOSPITAL
+NHS FOUNDATION TRUST` was categorised `Hospice`, along with 74 other NHS trusts
+that run hospice services. Filter on `role_names` instead; an organisation can be
+more than one thing.
 
 **`entity_type`, not `record_class`.** ODS calls it `orgRecordClass` with values
 `RC1` and `RC2`, but "class" of what, and "record" describes the data model
@@ -74,6 +110,11 @@ were 54% of `relationships.parquet` by size, and if you are joining `orgs_all`
 you usually want other fields from it anyway — so they went, and every code
 resolves there with no exceptions.
 
+`role_name` on `roles` is the same test read the other way: 205 values across
+442,251 rows, dictionary-encoded, costing 96 KB — 3.8% of the file — so that
+"which organisations hold this role" needs no join, and no separate vocabulary
+table has to exist. `role_names` on `orgs` costs 0.9% for the same reason.
+
 `rel_type_name` stays inline by the same test: nine values costing 0.06 MB under
 dictionary encoding, and the name is the *only* thing a lookup would hold, so a
 separate table would be a join for no gain. The names are carried **verbatim
@@ -82,7 +123,22 @@ considered lowercasing them so they read as predicates in a sentence, and droppe
 it: the shouty form is harmless, and it is one less transformation to justify.
 
 **`relationships`, not `rels`.** It differed from `roles` by one letter, which
-is a hazard when both appear in the same query.
+is a hazard when both appear in the same query. `org_roles` was renamed to
+`roles` for the mirror of that reason: with a separate vocabulary table gone,
+`roles` and `org_roles` would have been two nearly-identical names for the only
+remaining role table.
+
+**There is no `can_be_primary`.** It came from `<PrimaryRoleScope>` in the
+manifest — ODS declaring which roles *their register* permits in the primary
+slot. That is an artefact of the system of record, not a fact about NHS
+organisations. It was also nearly redundant: no active organisation uses a
+primary role outside the declared scope, so the only content it added was seven
+roles ODS still declares but nothing active uses — all defunct structures like
+`Primary Care Group`, abolished in 2002. For what is actually in use:
+
+```sql
+SELECT DISTINCT primary_role_code FROM 'orgs_all.parquet';
+```
 
 **`successions.parquet` is plural**, like every other table.
 
@@ -102,22 +158,39 @@ see [Point-in-time queries](#point-in-time-queries).
 | `name` | VARCHAR | no | `"SEDBERGH MEDICAL PRACTICE"` |
 | `entity_type` | VARCHAR | no | `"org"` or `"site"` |
 | `status` | VARCHAR | no | `"active"` or `"inactive"` |
-| `primary_role_code` | VARCHAR | no | `"RO177"` — joins to `roles.role_code` |
 | `role_codes` | VARCHAR[] | no | every role held, sorted and deduplicated — `['RO177','RO76']` |
-| `category` | VARCHAR | no | derived, opinionated — `"GP Practice"` |
+| `role_names` | VARCHAR[] | no | the same roles, curated — `['Prescribing Cost Centre','GP Practice']` |
+| `primary_role_code` | VARCHAR | no | `"RO177"` — the role ODS marks primary |
 
-`category` is the one column that isn't ODS data. The ODS primary role sometimes
-describes the *register* rather than the entity. Five rules cover the cases where
-it actively misleads; everything else falls back to the curated name of the
-primary role. The rules and their justifications ship in `category_rules.json`
-with every release, hashed like everything else, so you can disagree and
-recompute.
+`role_names` is **positionally aligned** with `role_codes` — same length, same
+order, each name the curated label for the code at that index. It is derived from
+`role_codes`, so the two cannot disagree.
 
-For anything more precise than `category`, filter on `role_codes`:
+The order follows the *codes*, and the sort is **lexical on the code string, not
+numeric** — so `RO197` sorts before `RO57` before `RO7`, and `RO177` before
+`RO76`. That is why `RJZ` reads `['NHS Trust','Foundation Trust','Hospice']`
+rather than by role number. The order carries no meaning: do not read
+`role_names[1]` as the organisation's kind.
+
+Filter on it to find organisations by what they do, with no join and no code
+lookup:
 
 ```sql
-SELECT * FROM 'orgs.parquet' WHERE list_contains(role_codes, 'RO76');
+SELECT ods_code, name, postcode FROM 'orgs.parquet'
+WHERE list_contains(role_names, 'GP Practice');
 ```
+
+An organisation can be several things at once, and this is the column that says
+so. `RJZ` KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST carries
+`['NHS Trust','Foundation Trust','Hospice']` — it is a trust *and* runs a
+hospice. Narrow when you need to:
+
+```sql
+WHERE list_contains(role_names,'Hospice') AND NOT list_contains(role_names,'NHS Trust')
+```
+
+Use `role_codes` where you want a stable identifier rather than a label — codes
+never change, curated names occasionally do.
 
 ### Succession
 
@@ -242,15 +315,17 @@ Use `relationships.parquet` if you need the relationship's own dates or status.
 | `operational_end` | DATE | yes | when it stopped (note: 603 active records in source data carry operational end dates; filter by status = 'active' to select active organisations) |
 | `last_changed` | DATE | yes | when ODS last modified this record |
 
-## `org_roles.parquet`
+## `roles.parquet`
 
 One row per organisation per role, including **inactive** roles, which is what
-makes role history reconstructable from a single release.
+makes role history reconstructable from a single release. This is the role table;
+there is no separate vocabulary table.
 
 | column | type | null | description |
 | :--- | :--- | :--- | :--- |
 | `ods_code` | VARCHAR | no | joins to `orgs.ods_code` |
-| `role_code` | VARCHAR | no | joins to `roles.role_code` |
+| `role_code` | VARCHAR | no | `"RO76"` |
+| `role_name` | VARCHAR | no | curated — `"GP Practice"` |
 | `role_id` | VARCHAR | no | ODS `uniqueRoleId` — identifies this holding |
 | `is_primary` | BOOLEAN | no | is this the entity's primary role |
 | `role_status` | VARCHAR | no | of the *role holding*, not the organisation |
@@ -262,35 +337,43 @@ All 131,871 inactive rows carry an `operational_end` and every row carries a
 start, so "which roles did this organisation hold on date D?" is answerable from
 this table alone.
 
-## `roles.parquet`
+**One organisation can hold the same role more than once** — 663 pairs do, as
+separate holdings with their own dates. So a filtered join against this table
+returns duplicate organisations unless you deduplicate: filtering on
+`role_name = 'Domiciliary Care'` yields 16,726 rows for 16,157 organisations. Use
+`orgs.role_names` when you want organisations, and this table when you want
+holdings and their dates.
 
-The role vocabulary. 205 rows, of which 97 can be a primary role.
+### The role vocabulary
 
-| column | type | null | description |
-| :--- | :--- | :--- | :--- |
-| `role_code` | VARCHAR | no | `"RO177"` |
-| `role_name` | VARCHAR | no | curated — `"Prescribing Cost Centre"` |
-| `can_be_primary` | BOOLEAN | no | whether ODS declares it primary-capable |
-| `trud_release_date` | DATE | no | TRUD distribution release date |
-
-Names are curated: typos fixed, abbreviations expanded, casing normalised, with a
-justification recorded for every substantive change.
-
-`can_be_primary` comes from the `<PrimaryRoleScope>` declaration in the release
-manifest, so it's ODS's own statement rather than something inferred from usage.
-That matters: 4 roles are used as primary by exactly one organisation, so a
-computed version would flip to `false` the month that organisation closed,
-without anything about the role changing.
-
-**90 roles are declared, and 97 appear as primary in the data.** The extra 7 —
-`RO106`, `RO109`, `RO111`, `RO114`, `RO144`, `RO149`, `RO171` — are used only by
-*inactive* organisations. They're historical, and ODS has since dropped them from
-the current scope. So for historical work, take the roles actually in use rather
-than filtering on this column:
+205 role codes, all of them held by at least one organisation:
 
 ```sql
-SELECT DISTINCT primary_role_code FROM 'orgs_all.parquet';
+SELECT DISTINCT role_code, role_name FROM 'roles.parquet' ORDER BY role_name;
 ```
+
+Names are curated: typos fixed, abbreviations expanded, casing normalised, with a
+justification recorded for every substantive change. 186 of the 205 differ from
+the source only by case; 19 differ substantively, and those repair real defects —
+`RO258` is truncated at 50 characters in the source, `RO215` misspells
+`MANAGEMENT`.
+
+This is a deliberate exception to carrying values verbatim, and the reason is
+what the column is for: **`name` and `rel_type_name` are labels you read;
+`role_name` is a key you type.** `role_names` is the documented query interface,
+and a controlled vocabulary that users type has different requirements from a
+label that is only displayed. It is also why the curation trends terser — `ICB`,
+`PCN` — rather than prettier.
+
+The exact mapping, and the justification for every substantive change, are in
+`data/role_names.json` at the commit recorded as `tool_git_sha` in
+`_provenance.json`. The file is not shipped in the release because the commit
+already pins it — the same reasoning that keeps library versions out of
+provenance.
+
+**A file that transforms the data ships with the release and is hashed, unless
+the recorded commit already pins it. A file that is a display opinion stays in
+the binary and never ships.**
 
 ## `relationships.parquet`
 
@@ -398,18 +481,18 @@ reopenings, renames and reparenting are all recoverable
 ## Frictionless Data Package
 
 `datapackage.json` describes this release's tables in the Frictionless Table
-Schema format. The four tables without list columns validate with the
-Frictionless framework; `orgs` and `orgs_all` use native Parquet list columns
-for `role_codes`, `successor_codes` and `predecessor_codes`, which Table Schema's
-flat-cell model does not cover. For querying, the Parquet files are 
-self-describing — use DuckDB, Polars or Arrow directly.
+Schema format. The three tables without list columns validate with the
+Frictionless framework; `orgs` and `orgs_all` use native Parquet list columns for
+`role_codes`, `role_names`, `successor_codes` and `predecessor_codes`, which
+Table Schema's flat-cell model does not cover. For querying, the Parquet files
+are self-describing — use DuckDB, Polars or Arrow directly.
 
 ## Provenance
 
 Every release ships `_provenance.json` and `SHA256SUMS`, recording the TRUD
 archive it derives from, its verified SHA-256, the ODS publication date and
-sequence number, and the tool and library versions used — enough to rebuild
-byte-identical output. Hashes are uppercase throughout, matching how TRUD
+sequence number, and the commit that built it (`tool_git_sha`) — enough to
+rebuild byte-identical output. Hashes are uppercase throughout, matching how TRUD
 publishes theirs. `ods cite` renders it as a citation.
 
 Parquet key-value metadata carries the same facts, so a file separated from its

@@ -84,7 +84,6 @@ Every release folder contains a `_provenance.json` file recording the integrity,
   "dataset_revision": 1,
   "dataset_parquet_schema_version": "0.1.0",
   "dataset_file_sha256": {
-    "category_rules.json": "73B1DFB2A70F19B86FA3AC3EFA61DF5FDCD2CDAE061D864F655AE4B7DC11ACFD",
     "datapackage.json": "A97DF19890FA3E8D0911739D1C78D24E6FDF4C767D6F18DB6A7DA9FEF53702BC",
     "org_roles.parquet": "748888DDC8B943A5D4468EAF28DC86E5CA4BC0E6B65D4EE0612086AF764BBF16",
     "orgs.parquet": "BCB99933EF266184C428EA85B17DFE034177FBC80BAEC5CA78EAA088CD6DF328",
