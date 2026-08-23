@@ -343,7 +343,7 @@ fn test_find_ranking_exact_prefix_word_substring() {
             all: false,
             verbose: false,
             sort: None,
-            format: OutputFormat::Table,
+            format: OutputFormat::Markdown,
             input: parquet_dir.clone(),
         },
         &mut out,
@@ -380,7 +380,7 @@ fn test_find_explicit_sort_overrides_ranking() {
             all: false,
             verbose: false,
             sort: Some(SortBy::Code),
-            format: OutputFormat::Table,
+            format: OutputFormat::Markdown,
             input: parquet_dir.clone(),
         },
         &mut out,
@@ -636,7 +636,7 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     ).unwrap();
     let s_verbose = String::from_utf8(out_verbose).unwrap();
     assert!(
-        s_verbose.contains("Prescribing Cost Centr..."),
+        s_verbose.contains("Prescribing Cost Centre, GP Practice"),
         "Verbose view must show stored order with Prescribing Cost Centre first, got:\n{}",
         s_verbose
     );
@@ -665,4 +665,67 @@ fn test_find_roles_display_deemphasis_and_verbose() {
         s_rjz
     );
 }
+
+#[test]
+fn test_find_table_preserves_plus_n_suffix_without_truncation() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    // 1. Default table mode for A85619: must show "Other Prescribing Cost Centre +1" intact
+    let mut out_table = Vec::new();
+    find::run_with_writer(
+        Args {
+            query: None,
+            code: vec!["A85619".to_string()],
+            location: None,
+            role: Vec::new(),
+            all: false,
+            verbose: false,
+            sort: None,
+            format: OutputFormat::Table,
+            input: parquet_dir.clone(),
+        },
+        &mut out_table,
+        &parquet_dir,
+    ).unwrap();
+    let s_table = String::from_utf8(out_table).unwrap();
+    assert!(
+        s_table.contains("Other Prescribing Cost Centre +1"),
+        "Default table mode must preserve '+1' suffix intact without right truncation, got:\n{}",
+        s_table
+    );
+
+    // 2. Markdown mode for A85619: must also show "Other Prescribing Cost Centre +1" in GFM pipe table
+    let mut out_md = Vec::new();
+    find::run_with_writer(
+        Args {
+            query: None,
+            code: vec!["A85619".to_string()],
+            location: None,
+            role: Vec::new(),
+            all: false,
+            verbose: false,
+            sort: None,
+            format: OutputFormat::Markdown,
+            input: parquet_dir.clone(),
+        },
+        &mut out_md,
+        &parquet_dir,
+    ).unwrap();
+    let s_md = String::from_utf8(out_md).unwrap();
+    assert!(
+        s_md.contains("Other Prescribing Cost Centre +1"),
+        "Markdown mode must preserve '+1' suffix intact, got:\n{}",
+        s_md
+    );
+    assert!(
+        s_md.lines().any(|l| l.contains("ODS Code") && l.contains("Name") && l.contains("Postcode") && l.contains("Roles") && l.contains("Class")),
+        "Markdown mode must render standard markdown table header, got:\n{}",
+        s_md
+    );
+}
+
 

@@ -21,7 +21,7 @@ ods find [QUERY] [OPTIONS]
 | `-a, --all` | Search all organisations (including inactive/closed history in `orgs_all.parquet`) |
 | `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
-| `-f, --format <FORMAT>` | Output format: `table` (default), `csv`, or `json` |
+| `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, or `json` |
 | `-i, --input <DIR>` | Directory containing Parquet files (defaults to active release) |
 
 ## Search Model & Ranking

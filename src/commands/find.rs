@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Table,
+    Markdown,
     Csv,
     Json,
 }
@@ -49,7 +50,7 @@ pub struct Args {
     #[arg(long, short, value_enum)]
     pub sort: Option<SortBy>,
 
-    /// Output format: table, csv, json
+    /// Output format: table, markdown, csv, json
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 
@@ -962,30 +963,31 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 writeln!(writer, "{}", fields.join(","))?;
             }
         }
-        OutputFormat::Table => {
-            // Padded Markdown Table layout
-            if args.all {
-                writeln!(
-                    writer,
-                    "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
-                    "ODS Code", "Name", "Postcode", "Roles", "Class", "Status"
-                )?;
-                writeln!(
-                    writer,
-                    "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<7}|{:-<10}|",
-                    "", "", "", "", "", ""
-                )?;
+        OutputFormat::Table | OutputFormat::Markdown => {
+            use std::io::IsTerminal;
+            use comfy_table::{Table, ContentArrangement, presets};
+
+            let mut table = Table::new();
+
+            if args.format == OutputFormat::Markdown {
+                table.load_preset(presets::ASCII_MARKDOWN);
+                table.set_content_arrangement(ContentArrangement::Disabled);
             } else {
-                writeln!(
-                    writer,
-                    "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                    "ODS Code", "Name", "Postcode", "Roles", "Class"
-                )?;
-                writeln!(
-                    writer,
-                    "|{:-<12}|{:-<47}|{:-<11}|{:-<27}|{:-<5}",
-                    "", "", "", "", ""
-                )?;
+                table.load_preset(presets::UTF8_FULL_CONDENSED);
+                table.set_content_arrangement(ContentArrangement::Dynamic);
+                if std::io::stdout().is_terminal() {
+                    if let Ok((cols, _)) = crossterm::terminal::size() {
+                        table.set_width(cols);
+                    }
+                } else {
+                    table.set_width(120);
+                }
+            }
+
+            if args.all {
+                table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Status"]);
+            } else {
+                table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
             }
 
             for r in &matches {
@@ -1000,24 +1002,29 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.name.clone()
                 };
 
-                let name_display = truncate_str(&full_name, 45);
-                let formatted_roles = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
-                let role_display = truncate_str(&formatted_roles, 25);
+                let role_display = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
 
                 if args.all {
-                    writeln!(
-                        writer,
-                        "| {:<10} | {:<45} | {:<9} | {:<25} | {:<5} | {:<8} |",
-                        r.ods_code, name_display, r.postcode, role_display, r.entity_type, r.status
-                    )?;
+                    table.add_row(vec![
+                        &r.ods_code,
+                        &full_name,
+                        &r.postcode,
+                        &role_display,
+                        &r.entity_type,
+                        &r.status,
+                    ]);
                 } else {
-                    writeln!(
-                        writer,
-                        "| {:<10} | {:<45} | {:<9} | {:<25} | {}",
-                        r.ods_code, name_display, r.postcode, role_display, r.entity_type
-                    )?;
+                    table.add_row(vec![
+                        &r.ods_code,
+                        &full_name,
+                        &r.postcode,
+                        &role_display,
+                        &r.entity_type,
+                    ]);
                 }
             }
+
+            writeln!(writer, "{}", table)?;
 
             if let Some(lvl) = matched_loc_level {
                 writeln!(
@@ -1045,7 +1052,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     }
 
     // Print ODS code hint if query happens to be a valid ODS code in the dataset
-    if args.format == OutputFormat::Table {
+    if args.format == OutputFormat::Table || args.format == OutputFormat::Markdown {
         if let Some(ref q) = args.query {
             let q_clean = q.trim().to_uppercase();
             if org_metadata.contains_key(&q_clean) {
@@ -1055,17 +1062,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     }
 
     Ok(())
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count > max_chars {
-        let mut truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        truncated.push_str("...");
-        truncated
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]
