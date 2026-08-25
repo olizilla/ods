@@ -211,38 +211,52 @@ WHERE postcode LIKE 'SW9 %' AND list_contains(role_names, 'GP Practice');
 
 ## Who's in charge of it
 
-The derived hierarchy columns save you a trip through `relationships.parquet`.
+There's no derived hierarchy column for this — join `relationships.parquet` on
+`RE4 IS COMMISSIONED BY` to find who commissions something:
 
 ```sql
-SELECT icb_name, count(*) AS practices
-FROM 'ods_data/current/orgs.parquet'
-WHERE list_contains(role_names, 'GP Practice') AND icb_name IS NOT NULL
+SELECT icb.name AS icb_name, count(*) AS practices
+FROM 'ods_data/current/relationships.parquet' rel
+JOIN 'ods_data/current/orgs.parquet' gp ON rel.source_code = gp.ods_code
+JOIN 'ods_data/current/orgs_all.parquet' icb ON rel.target_code = icb.ods_code
+WHERE rel.rel_code = 'RE4' AND rel.rel_status = 'active'
+  AND list_contains(gp.role_names, 'GP Practice')
 GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
 | icb_name | practices |
 | :--- | ---: |
-| NHS WEST AND NORTH LONDON INTEGRATED CARE BOARD | 521 |
-| NHS GREATER MANCHESTER INTEGRATED CARE BOARD | 409 |
-| NHS NORTH EAST AND NORTH CUMBRIA INTEGRATED CARE BOARD | 339 |
-| NHS CHESHIRE AND MERSEYSIDE INTEGRATED CARE BOARD | 338 |
-| NHS CENTRAL EAST INTEGRATED CARE BOARD | 271 |
+| NHS WEST AND NORTH LONDON ICB - W2U3Z | 341 |
+| NHS NORTH EAST LONDON ICB - A3A8R | 264 |
+| NHS SOUTH EAST LONDON ICB - 72Q | 197 |
+| NHS WEST AND NORTH LONDON ICB - 93C | 180 |
+| NHS BIRMINGHAM AND SOLIHULL ICB - 15E | 177 |
 
-Same shape, counting buildings instead of practices:
+ICBs commission through locality-level sub-codes (the `- W2U3Z` suffix), so the
+same ICB name can show up more than once here — `RE4`'s target is the exact
+commissioning body ODS recorded, not a rolled-up parent.
+
+Same shape, counting buildings instead of practices — swap `RE4 IS COMMISSIONED
+BY` for `RE6 IS OPERATED BY`:
 
 ```sql
-SELECT trust_name, count(*) AS sites
-FROM 'ods_data/current/orgs.parquet'
-WHERE record_class = 'site' AND trust_name IS NOT NULL
+SELECT trust.name AS trust_name, count(*) AS sites
+FROM 'ods_data/current/relationships.parquet' rel
+JOIN 'ods_data/current/orgs.parquet' s ON rel.source_code = s.ods_code
+JOIN 'ods_data/current/orgs_all.parquet' trust ON rel.target_code = trust.ods_code
+WHERE rel.rel_code = 'RE6' AND rel.rel_status = 'active' AND s.record_class = 'site'
 GROUP BY 1 ORDER BY 2 DESC LIMIT 3;
--- TEES, ESK AND WEAR VALLEYS NHS FOUNDATION TRUST             1121
--- MIDLANDS PARTNERSHIP UNIVERSITY NHS FOUNDATION TRUST        930
--- HAMPSHIRE AND ISLE OF WIGHT HEALTHCARE NHS FOUNDATION TRUST 812
+-- TEES, ESK AND WEAR VALLEYS NHS FOUNDATION TRUST      1121
+-- MIDLANDS PARTNERSHIP UNIVERSITY NHS FOUNDATION TRUST 930
+-- SPECSAVERS HEARCARE GROUP LTD                        915
 ```
 
-A NULL means ODS records no such relationship, not that we failed to resolve it.
-Go to `relationships.parquet` when you need the relationship's own dates or
-status.
+`RE6`'s target isn't always an NHS trust — any operator counts, private
+providers included. Same lesson as [ODS has no hospital
+concept](#ods-has-no-hospital-concept): the register doesn't have a role for
+"is a hospital", and it doesn't have one for "is an NHS trust" either. Joining
+through `orgs_all.parquet` rather than `orgs.parquet` matters here too — see
+[the trap below](#traps) for why the active-only table silently drops rows.
 
 ## What did this become
 

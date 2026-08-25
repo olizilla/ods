@@ -177,18 +177,6 @@ struct MatchedRecord {
     uprn: String,
     telephone: String,
     website: String,
-    commissioner_name: String,
-    commissioner_code: String,
-    parent_name: String,
-    parent_code: String,
-    pcn_name: String,
-    pcn_code: String,
-    trust_name: String,
-    trust_code: String,
-    icb_name: String,
-    icb_code: String,
-    region_name: String,
-    region_code: String,
     operational_start: Option<String>,
     operational_end: Option<String>,
     legal_start: Option<String>,
@@ -596,18 +584,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         let uprn_idx = schema.index_of("uprn").ok();
         let telephone_idx = schema.index_of("telephone").ok();
         let website_idx = schema.index_of("website").ok();
-        let commissioner_idx = schema.index_of("commissioner_name").ok();
-        let commissioner_code_idx = schema.index_of("commissioner_code").ok();
-        let parent_idx = schema.index_of("parent_name").ok();
-        let parent_code_idx = schema.index_of("parent_code").ok();
-        let pcn_idx = schema.index_of("pcn_name").ok();
-        let pcn_code_idx = schema.index_of("pcn_code").ok();
-        let trust_idx = schema.index_of("trust_name").ok();
-        let trust_code_idx = schema.index_of("trust_code").ok();
-        let icb_idx = schema.index_of("icb_name").ok();
-        let icb_code_idx = schema.index_of("icb_code").ok();
-        let region_idx = schema.index_of("region_name").ok();
-        let region_code_idx = schema.index_of("region_code").ok();
 
         let op_start_idx = schema.index_of("operational_start").ok();
         let op_end_idx = schema.index_of("operational_end").ok();
@@ -740,46 +716,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 continue;
             }
 
-            let commissioner = commissioner_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let commissioner_code = commissioner_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let parent = parent_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let parent_code = parent_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let pcn = pcn_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let pcn_code = pcn_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let trust = trust_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let trust_code = trust_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let icb = icb_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
-            let icb_code = icb_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
             let uprn = uprn_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
@@ -789,14 +725,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
             let website = website_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let region = region_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let region_code = region_code_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i)) } else { None }
             }).unwrap_or("");
@@ -836,18 +764,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 uprn: uprn.to_string(),
                 telephone: telephone.to_string(),
                 website: website.to_string(),
-                commissioner_name: commissioner,
-                commissioner_code,
-                parent_name: parent,
-                parent_code,
-                pcn_name: pcn.to_string(),
-                pcn_code: pcn_code.to_string(),
-                trust_name: trust.to_string(),
-                trust_code: trust_code.to_string(),
-                icb_name: icb.to_string(),
-                icb_code: icb_code.to_string(),
-                region_name: region.to_string(),
-                region_code: region_code.to_string(),
                 operational_start: op_start,
                 operational_end: op_end,
                 legal_start: leg_start,
@@ -941,18 +857,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     "uprn": if r.uprn.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.uprn.clone()) },
                     "telephone": if r.telephone.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.telephone.clone()) },
                     "website": if r.website.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.website.clone()) },
-                    "commissioner_name": if r.commissioner_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.commissioner_name.clone()) },
-                    "commissioner_code": if r.commissioner_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.commissioner_code.clone()) },
-                    "parent_name": if r.parent_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.parent_name.clone()) },
-                    "parent_code": if r.parent_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.parent_code.clone()) },
-                    "pcn_name": if r.pcn_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.pcn_name.clone()) },
-                    "pcn_code": if r.pcn_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.pcn_code.clone()) },
-                    "trust_name": if r.trust_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.trust_name.clone()) },
-                    "trust_code": if r.trust_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.trust_code.clone()) },
-                    "icb_name": if r.icb_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb_name.clone()) },
-                    "icb_code": if r.icb_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.icb_code.clone()) },
-                    "region_name": if r.region_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_name.clone()) },
-                    "region_code": if r.region_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.region_code.clone()) },
                     "successor_codes": succ_codes,
                     "predecessor_codes": pred_codes,
                     "successors": successors_json,
@@ -968,7 +872,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
+            writeln!(writer, "ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
             use crate::roles::escape_csv;
             for r in &matches {
                 let roles_str = r.role_codes.join("; ");
@@ -1003,18 +907,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     r.uprn.as_str(),
                     r.telephone.as_str(),
                     &escape_csv(&r.website),
-                    &escape_csv(&r.commissioner_name),
-                    r.commissioner_code.as_str(),
-                    &escape_csv(&r.parent_name),
-                    r.parent_code.as_str(),
-                    &escape_csv(&r.pcn_name),
-                    r.pcn_code.as_str(),
-                    &escape_csv(&r.trust_name),
-                    r.trust_code.as_str(),
-                    &escape_csv(&r.icb_name),
-                    r.icb_code.as_str(),
-                    &escape_csv(&r.region_name),
-                    r.region_code.as_str(),
                     &escape_csv(&succ_codes_str),
                     &escape_csv(&pred_codes_str),
                     &escape_csv(&succ_codes_str),
@@ -1399,7 +1291,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
+        assert!(s.starts_with("ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1454,18 +1346,6 @@ mod tests {
             uprn: "100".to_string(),
             telephone: "0123".to_string(),
             website: "http://test".to_string(),
-            commissioner_name: "Comm".to_string(),
-            commissioner_code: "C1".to_string(),
-            parent_name: "Parent".to_string(),
-            parent_code: "P1".to_string(),
-            pcn_name: "PCN".to_string(),
-            pcn_code: "PCN1".to_string(),
-            trust_name: "Trust".to_string(),
-            trust_code: "T1".to_string(),
-            icb_name: "ICB".to_string(),
-            icb_code: "I1".to_string(),
-            region_name: "Region".to_string(),
-            region_code: "R1".to_string(),
             operational_start: Some("2020-01-01".to_string()),
             operational_end: None,
             legal_start: Some("2020-01-01".to_string()),
@@ -1493,18 +1373,6 @@ mod tests {
             "uprn": record.uprn,
             "telephone": record.telephone,
             "website": record.website,
-            "commissioner_name": record.commissioner_name,
-            "commissioner_code": record.commissioner_code,
-            "parent_name": record.parent_code,
-            "parent_code": record.parent_code,
-            "pcn_name": record.pcn_name,
-            "pcn_code": record.pcn_code,
-            "trust_name": record.trust_name,
-            "trust_code": record.trust_code,
-            "icb_name": record.icb_name,
-            "icb_code": record.icb_code,
-            "region_name": record.region_name,
-            "region_code": record.region_code,
             "successor_codes": vec!["SUCC1".to_string()],
             "predecessor_codes": Vec::<String>::new(),
             "successors": vec![serde_json::json!({"code": "SUCC1", "name": "Successor Org", "status": "active", "date": null})],
@@ -1549,12 +1417,12 @@ mod tests {
         assert_eq!(json_keys_vec[5], "role_names");
         assert_eq!(json_keys_vec[6], "role_name");
         assert_eq!(json_keys_vec[7], "name");
-        assert_eq!(json_keys_vec[28], "successor_codes");
-        assert_eq!(json_keys_vec[29], "predecessor_codes");
-        assert_eq!(json_keys_vec[30], "successors");
-        assert_eq!(json_keys_vec[31], "predecessors");
-        assert_eq!(json_keys_vec[36], "last_changed");
-        assert_eq!(json_keys_vec[37], "trud_release_date");
+        assert_eq!(json_keys_vec[16], "successor_codes");
+        assert_eq!(json_keys_vec[17], "predecessor_codes");
+        assert_eq!(json_keys_vec[18], "successors");
+        assert_eq!(json_keys_vec[19], "predecessors");
+        assert_eq!(json_keys_vec[24], "last_changed");
+        assert_eq!(json_keys_vec[25], "trud_release_date");
     }
 
     #[test]

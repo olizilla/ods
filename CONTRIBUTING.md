@@ -87,6 +87,11 @@ that is rebuilding it: `tool_git_sha` and the TRUD hash in `_provenance.json`
 are there so you can, and `ods trud audit` compares the result. If you do and
 we disagree, please open an issue.
 
+**Correctness depends on TRUD staying reachable.** Rebuilding needs the source
+archive, and only NHS England distributes it. If TRUD is withdrawn, nobody can
+re-run the derivation and our source hashes become claims you'd have to take on
+trust. We keep a copy of every source archive to garud against that possibility.
+
 Three audiences, wanting different things:
 
 | Audience | Wants | Path |
