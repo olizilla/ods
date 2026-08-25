@@ -64,7 +64,7 @@ pub struct RelationshipItemJson {
 pub struct InfoRecordJson {
     pub ods_code: String,
     pub name: String,
-    pub entity_type: String,
+    pub record_class: String,
     pub status: String,
     pub primary_role_code: String,
     pub primary_role_name: String,
@@ -155,7 +155,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
     struct FoundRecord {
         ods_code: String,
         name: String,
-        entity_type: String,
+        record_class: String,
         status: String,
         primary_role_code: String,
         role_codes: Vec<String>,
@@ -220,10 +220,10 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                 .downcast_ref::<StringArray>()
                 .context("name StringArray")?;
             let record_class_arr = batch
-                .column(schema.index_of("entity_type")?)
+                .column(schema.index_of("record_class")?)
                 .as_any()
                 .downcast_ref::<StringArray>()
-                .context("entity_type StringArray")?;
+                .context("record_class StringArray")?;
             let status_arr = batch
                 .column(schema.index_of("status")?)
                 .as_any()
@@ -302,7 +302,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
             found = Some(FoundRecord {
                 ods_code: ods_code_arr.value(i).to_string(),
                 name: name_arr.value(i).to_string(),
-                entity_type: record_class_arr.value(i).to_string(),
+                record_class: record_class_arr.value(i).to_string(),
                 status: status_arr.value(i).to_string(),
                 primary_role_code: primary_role_arr.value(i).to_string(),
                 role_codes,
@@ -397,7 +397,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
             let info_json = InfoRecordJson {
                 ods_code: rec.ods_code,
                 name: rec.name,
-                entity_type: rec.entity_type,
+                record_class: rec.record_class,
                 status: rec.status,
                 primary_role_code: rec.primary_role_code,
                 primary_role_name,
@@ -491,7 +491,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
             let inspector = crate::formatting::InspectorRecord {
                 ods_code: &rec.ods_code,
                 name: &rec.name,
-                record_class: &rec.entity_type,
+                record_class: &rec.record_class,
                 status: &rec.status,
                 role: &primary_role_name,
                 role_code: &rec.primary_role_code,

@@ -83,7 +83,7 @@ pub struct XmlSampleOrgRecord {
     pub ods_code: String,
     pub name: String,
     pub status: String,
-    pub entity_type: String,
+    pub record_class: String,
     pub primary_role_code: String,
     pub role_codes: Vec<String>,
     pub operational_start: Option<String>,
@@ -1108,7 +1108,7 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                                         "RC2" => "site".to_string(),
                                         other => other.to_string(),
                                     };
-                                    current_record.entity_type = et;
+                                    current_record.record_class = et;
                                 }
                             }
                         }
@@ -1856,8 +1856,8 @@ fn audit_sample_and_derived_parity(
             .as_any()
             .downcast_ref::<StringArray>()
             .context("status StringArray")?;
-        let entity_type_arr = schema
-            .index_of("entity_type")
+        let record_class_arr = schema
+            .index_of("record_class")
             .ok()
             .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
         let primary_role_arr = batch
@@ -1942,15 +1942,15 @@ fn audit_sample_and_derived_parity(
                     ));
                 }
 
-                if let Some(et_arr) = entity_type_arr {
-                    let p_et = et_arr.value(i);
-                    if !xml_sample.entity_type.is_empty()
-                        && !p_et.eq_ignore_ascii_case(&xml_sample.entity_type)
+                if let Some(rc_arr) = record_class_arr {
+                    let p_rc = rc_arr.value(i);
+                    if !xml_sample.record_class.is_empty()
+                        && !p_rc.eq_ignore_ascii_case(&xml_sample.record_class)
                     {
                         verbatim_failures += 1;
                         discrepancies.push(format!(
-                            "Verbatim Field Mismatch ({code}): EntityType XML='{}' vs Parquet='{}'",
-                            xml_sample.entity_type, p_et
+                            "Verbatim Field Mismatch ({code}): RecordClass XML='{}' vs Parquet='{}'",
+                            xml_sample.record_class, p_rc
                         ));
                     }
                 }

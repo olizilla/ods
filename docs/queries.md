@@ -63,7 +63,7 @@ Other things worth knowing before you query:
 ```sql
 SELECT unnest(role_names) AS role, count(*) AS n
 FROM 'ods_data/current/orgs.parquet'
-WHERE entity_type = 'org' GROUP BY 1 ORDER BY n DESC LIMIT 8;
+WHERE record_class = 'org' GROUP BY 1 ORDER BY n DESC LIMIT 8;
 ```
 ```
 ┌─────────────────────────┬───────┐
@@ -233,7 +233,7 @@ Same shape, counting buildings instead of practices:
 ```sql
 SELECT trust_name, count(*) AS sites
 FROM 'ods_data/current/orgs.parquet'
-WHERE entity_type = 'site' AND trust_name IS NOT NULL
+WHERE record_class = 'site' AND trust_name IS NOT NULL
 GROUP BY 1 ORDER BY 2 DESC LIMIT 3;
 -- TEES, ESK AND WEAR VALLEYS NHS FOUNDATION TRUST             1121
 -- MIDLANDS PARTNERSHIP UNIVERSITY NHS FOUNDATION TRUST        930

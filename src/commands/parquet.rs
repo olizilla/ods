@@ -340,7 +340,7 @@ pub fn orgs_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
-        Field::new("entity_type", DataType::Utf8, false),
+        Field::new("record_class", DataType::Utf8, false),
         Field::new(
             "role_codes",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
@@ -389,7 +389,7 @@ fn build_orgs_batch(
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut name = StringBuilder::new();
-    let mut entity_type = StringBuilder::new();
+    let mut record_class = StringBuilder::new();
     let mut roles_list = ListBuilder::new(StringBuilder::new());
     let mut role_names_list = ListBuilder::new(StringBuilder::new());
     let mut primary_role = StringBuilder::new();
@@ -416,7 +416,7 @@ fn build_orgs_batch(
     for r in records {
         ods_code.append_value(&r.ods_code);
         name.append_value(&r.name);
-        entity_type.append_value(&r.record_class);
+        record_class.append_value(&r.record_class);
 
         let org_is_active = r.status.eq_ignore_ascii_case("active");
         let mut codes: Vec<&str> = r
@@ -532,7 +532,7 @@ fn build_orgs_batch(
         vec![
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
-            Arc::new(entity_type.finish()) as ArrayRef,
+            Arc::new(record_class.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
             Arc::new(role_names_list.finish()) as ArrayRef,
             Arc::new(primary_role.finish()) as ArrayRef,
@@ -1194,8 +1194,8 @@ mod tests {
         assert!(schema.column_with_name("address").is_some());
         assert!(schema.column_with_name("address_line_1").is_none());
 
-        // 2. Verify entity_type field
-        assert!(schema.column_with_name("entity_type").is_some());
+        // 2. Verify record_class field
+        assert!(schema.column_with_name("record_class").is_some());
 
         // 3. Verify hierarchy fields are dropped
         assert!(schema.column_with_name("commissioner_name").is_none());
@@ -1419,7 +1419,7 @@ mod tests {
     #[test]
     fn test_task_6_column_renames() {
         let orgs_s = orgs_schema();
-        assert!(orgs_s.column_with_name("entity_type").is_some());
+        assert!(orgs_s.column_with_name("record_class").is_some());
         assert!(orgs_s.column_with_name("primary_role_code").is_some());
         assert!(orgs_s.column_with_name("role_codes").is_some());
         assert!(orgs_s.column_with_name("role_names").is_some());
@@ -1431,7 +1431,6 @@ mod tests {
         assert!(orgs_s.column_with_name("icb_name").is_none());
         assert!(orgs_s.column_with_name("region_name").is_none());
 
-        assert!(orgs_s.column_with_name("record_class").is_none());
         assert!(orgs_s.column_with_name("primary_role").is_none());
         assert!(orgs_s.column_with_name("roles").is_none());
         assert!(orgs_s.column_with_name("last_change_date").is_none());

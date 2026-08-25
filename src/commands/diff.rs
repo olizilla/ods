@@ -175,7 +175,7 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
         // curated name so changelogs stay readable.
         let role_arr = batch.column(schema.index_of("primary_role_code")?)
             .as_any().downcast_ref::<arrow::array::StringArray>().context("primary_role_code StringArray")?;
-        let record_class_idx = schema.index_of("entity_type").ok();
+        let record_class_idx = schema.index_of("record_class").ok();
         let town_idx = schema.index_of("town").ok();
         let postcode_idx = schema.index_of("postcode").ok();
 

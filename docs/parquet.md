@@ -76,7 +76,7 @@ Identical schemas. One row per organisation or site.
 | :--- | :--- | :--- | :--- |
 | `ods_code` | `VARCHAR` | no | The ODS code. Join on this. |
 | `name` | `VARCHAR` | no | Verbatim from ODS, which publishes in upper case |
-| `entity_type` | `VARCHAR` | no | `org` or `site` |
+| `record_class` | `VARCHAR` | no | `org` or `site` |
 | `role_codes` | `VARCHAR[]` | no | Every role held, sorted and deduplicated |
 | `role_names` | `VARCHAR[]` | no | Curated names, aligned position-for-position with `role_codes` |
 | `primary_role_code` | `VARCHAR` | no | The role ODS designates primary |
@@ -101,6 +101,8 @@ Identical schemas. One row per organisation or site.
 `role_names` is the column you want for _what is this thing_. `primary_role_code`
 is often administrative rather than descriptive — it files most GP practices under
 `RO177 Prescribing Cost Centre`.
+
+`record_class` uses readable values `org` and `site` instead of ODS's internal `RC1`/`RC2` codes. They are not join keys, and the readable form is the useful one.
 
 ## `roles.parquet`
 

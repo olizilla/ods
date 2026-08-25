@@ -63,7 +63,7 @@ Output:
 {
   "ods_code": "0AF",
   "name": "NORTH WEST REGIONAL HEALTH AUTHORITY",
-  "entity_type": "org",
+  "record_class": "org",
   "status": "inactive",
   "primary_role_code": "RO137",
   "primary_role_name": "Regional Health Authority",

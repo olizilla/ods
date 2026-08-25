@@ -159,7 +159,7 @@ pub fn compute_name_rank(norm_name: &str, norm_query: &str) -> Option<u8> {
 struct MatchedRecord {
     ods_code: String,
     name: String,
-    entity_type: String,
+    record_class: String,
     status: String,
     /// The ODS primary role *code* (e.g. RO177).
     primary_role_code: String,
@@ -577,8 +577,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
         let name_arr = batch.column(schema.index_of("name")?)
             .as_any().downcast_ref::<StringArray>().context("name StringArray")?;
-        let record_class_arr = batch.column(schema.index_of("entity_type")?)
-            .as_any().downcast_ref::<StringArray>().context("entity_type StringArray")?;
+        let record_class_arr = batch.column(schema.index_of("record_class")?)
+            .as_any().downcast_ref::<StringArray>().context("record_class StringArray")?;
         let status_arr = batch.column(schema.index_of("status")?)
             .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
         let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
@@ -822,7 +822,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             matches.push(MatchedRecord {
                 ods_code: ods_code.to_string(),
                 name: name.to_string(),
-                entity_type: record_class_arr.value(i).to_string(),
+                record_class: record_class_arr.value(i).to_string(),
                 status: status_arr.value(i).to_string(),
                 primary_role_code: primary_role.to_string(),
                 role_codes,
@@ -926,7 +926,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
                 let json = serde_json::json!({
                     "ods_code": r.ods_code,
-                    "entity_type": r.entity_type,
+                    "record_class": r.record_class,
                     "status": r.status,
                     "primary_role_code": r.primary_role_code,
                     "role_codes": r.role_codes,
@@ -968,7 +968,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,entity_type,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
+            writeln!(writer, "ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
             use crate::roles::escape_csv;
             for r in &matches {
                 let roles_str = r.role_codes.join("; ");
@@ -988,7 +988,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
                 let fields = [
                     r.ods_code.as_str(),
-                    r.entity_type.as_str(),
+                    r.record_class.as_str(),
                     r.status.as_str(),
                     r.primary_role_code.as_str(),
                     &escape_csv(&roles_str),
@@ -1035,7 +1035,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 full_name: String,
                 postcode: &'a str,
                 role_display: String,
-                entity_type: &'a str,
+                record_class: &'a str,
                 status: &'a str,
             }
 
@@ -1060,7 +1060,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                         full_name,
                         postcode: &r.postcode,
                         role_display,
-                        entity_type: &r.entity_type,
+                        record_class: &r.record_class,
                         status: &r.status,
                     }
                 })
@@ -1072,13 +1072,13 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                         writeln!(
                             writer,
                             "{}\t{}\t{}\t{}\t{}\t{}",
-                            row.ods_code, row.full_name, row.postcode, row.role_display, row.entity_type, row.status
+                            row.ods_code, row.full_name, row.postcode, row.role_display, row.record_class, row.status
                         )?;
                     } else {
                         writeln!(
                             writer,
                             "{}\t{}\t{}\t{}\t{}",
-                            row.ods_code, row.full_name, row.postcode, row.role_display, row.entity_type
+                            row.ods_code, row.full_name, row.postcode, row.role_display, row.record_class
                         )?;
                     }
                 }
@@ -1116,7 +1116,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                             &row.full_name,
                             row.postcode,
                             &row.role_display,
-                            row.entity_type,
+                            row.record_class,
                             row.status,
                         ]);
                     } else {
@@ -1125,7 +1125,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                             &row.full_name,
                             row.postcode,
                             &row.role_display,
-                            row.entity_type,
+                            row.record_class,
                         ]);
                     }
                 }
@@ -1399,7 +1399,7 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,entity_type,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
+        assert!(s.starts_with("ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,commissioner_name,commissioner_code,parent_name,parent_code,pcn_name,pcn_code,trust_name,trust_code,icb_name,icb_code,region_name,region_code,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
         assert!(s.contains("A101,org,active"));
 
         // Test 6: JSON output
@@ -1440,7 +1440,7 @@ mod tests {
         let record = MatchedRecord {
             ods_code: "TEST1".to_string(),
             name: "Test Org".to_string(),
-            entity_type: "org".to_string(),
+            record_class: "org".to_string(),
             status: "active".to_string(),
             primary_role_code: "RO177".to_string(),
             role_name: "Prescribing Cost Centre".to_string(),
@@ -1478,7 +1478,7 @@ mod tests {
 
         let json_val = serde_json::json!({
             "ods_code": record.ods_code,
-            "entity_type": record.entity_type,
+            "record_class": record.record_class,
             "status": record.status,
             "primary_role_code": record.primary_role_code,
             "role_codes": record.role_codes,
@@ -1542,7 +1542,7 @@ mod tests {
 
         // 3. Assert property ordering matches Parquet schema order with grouped enriching properties
         assert_eq!(json_keys_vec[0], "ods_code");
-        assert_eq!(json_keys_vec[1], "entity_type");
+        assert_eq!(json_keys_vec[1], "record_class");
         assert_eq!(json_keys_vec[2], "status");
         assert_eq!(json_keys_vec[3], "primary_role_code");
         assert_eq!(json_keys_vec[4], "role_codes");
