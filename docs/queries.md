@@ -125,8 +125,14 @@ FROM 'ods_data/current/orgs.parquet' WHERE list_contains(role_codes, 'RO198');
 ```
 
 Only 1 in 10 sites has "hospital" in its name. To find a hospital's whole
-estate, find its trust and search that trust's sites — `trust_code` on
-`orgs.parquet` gets you there directly, no `relationships.parquet` needed.
+estate, find its trust and search that trust's sites via `relationships.parquet`:
+
+```sql
+SELECT s.ods_code, s.name
+FROM 'ods_data/current/relationships.parquet' r
+JOIN 'ods_data/current/orgs.parquet' s ON r.source_code = s.ods_code
+WHERE r.target_code = 'RRV' AND r.rel_code = 'RE6' AND r.rel_status = 'active';
+```
 
 ## RO177 is England's prescribing register, not the UK's
 
@@ -462,33 +468,29 @@ churn — things opening and closing — rather than ODS rewriting the past.
 _(Records that were already closed rarely change: 1 of them in June and 7 in
 July.)_
 
-## Reparenting
+## Relationship churn over time
 
-Care is needed when aggregating over things like ICB membership over time.
-ICB membership changes over a year. PCN membership barely budges. The `parent` column changes a lot.
+Care is needed when aggregating over relationships over time.
+Commissioning links (`RE4`) and operational links (`RE6`) change across monthly releases.
 
 ```sql
-WITH s AS (
-  SELECT ods_code, trud_release_date,
-         parent_code, icb_code, trust_code, pcn_code,
-         lag(parent_code) OVER w AS p_parent, lag(icb_code) OVER w AS p_icb,
-         lag(trust_code)  OVER w AS p_trust,  lag(pcn_code) OVER w AS p_pcn
-  FROM read_parquet('ods_data/releases/*/orgs_all.parquet')
-  WINDOW w AS (PARTITION BY ods_code ORDER BY trud_release_date)
+WITH rel_history AS (
+  SELECT source_code, rel_code, target_code, trud_release_date,
+         lag(target_code) OVER (PARTITION BY source_code, rel_code ORDER BY trud_release_date) AS prev_target
+  FROM read_parquet('ods_data/releases/*/relationships.parquet')
+  WHERE rel_status = 'active'
 )
 SELECT trud_release_date,
-  count(*) FILTER (WHERE parent_code IS DISTINCT FROM p_parent) AS parent_changed,
-  count(*) FILTER (WHERE trust_code  IS DISTINCT FROM p_trust)  AS trust_changed,
-  count(*) FILTER (WHERE icb_code    IS DISTINCT FROM p_icb)    AS icb_changed,
-  count(*) FILTER (WHERE pcn_code    IS DISTINCT FROM p_pcn)    AS pcn_changed
-FROM s WHERE trud_release_date > DATE '2026-05-29'
+  count(*) FILTER (WHERE rel_code = 'RE4' AND target_code IS DISTINCT FROM prev_target) AS commissioner_changed,
+  count(*) FILTER (WHERE rel_code = 'RE6' AND target_code IS DISTINCT FROM prev_target) AS operated_by_changed
+FROM rel_history WHERE trud_release_date > DATE '2026-05-29'
 GROUP BY 1 ORDER BY 1;
 ```
 
-| trud_release_date | parent | trust | icb | pcn |
-| :--- | ---: | ---: | ---: | ---: |
-| 2026-06-26 | 1542 | 406 | 253 | 6 |
-| 2026-07-31 | 1275 | 541 | 281 | 6 |
+| trud_release_date | commissioner_changed | operated_by_changed |
+| :--- | ---: | ---: |
+| 2026-06-26 | 253 | 406 |
+| 2026-07-31 | 281 | 541 |
 
 ## Is `last_changed` honest?
 

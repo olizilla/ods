@@ -1,17 +1,11 @@
-use ods::commands::find::{self, Args, OutputFormat, SortBy};
-use std::path::PathBuf;
+mod common;
 
-fn get_parquet_dir() -> PathBuf {
-    PathBuf::from("./ods_data/current")
-}
+use common::setup_find_test_workspace;
+use ods::commands::find::{self, Args, OutputFormat, SortBy};
 
 #[test]
 fn test_find_searches_name_only() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -32,11 +26,7 @@ fn test_find_searches_name_only() {
 
 #[test]
 fn test_find_in_location_precedence_county_over_town() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -60,11 +50,7 @@ fn test_find_in_location_precedence_county_over_town() {
 
 #[test]
 fn test_find_in_postcode_stripping_spaces() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out_spaced = Vec::new();
     find::run_with_writer(
@@ -95,16 +81,15 @@ fn test_find_in_postcode_stripping_spaces() {
 
     assert!(s1.contains("SEDBERGH MEDICAL PRACTICE"));
     assert!(s2.contains("SEDBERGH MEDICAL PRACTICE"));
-    assert_eq!(s1, s2, "Spaced and unspaced postcode queries must produce identical results");
+    assert_eq!(
+        s1, s2,
+        "Spaced and unspaced postcode queries must produce identical results"
+    );
 }
 
 #[test]
 fn test_find_in_rejects_under_3_chars() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     let result = find::run_with_writer(
@@ -119,16 +104,16 @@ fn test_find_in_rejects_under_3_chars() {
 
     assert!(result.is_err(), "Expected error for --in with < 3 chars");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("too short"), "Expected 'too short' in error: {}", err);
+    assert!(
+        err.contains("too short"),
+        "Expected 'too short' in error: {}",
+        err
+    );
 }
 
 #[test]
 fn test_find_in_three_char_towns_ely_and_ayr() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out_ely = Vec::new();
     find::run_with_writer(
@@ -143,7 +128,11 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     .expect("find --in ELY should succeed");
 
     let s_ely = String::from_utf8(out_ely).unwrap();
-    assert!(s_ely.contains("matched town"), "Expected ELY to match town, got:\n{}", s_ely);
+    assert!(
+        s_ely.contains("matched town"),
+        "Expected ELY to match town, got:\n{}",
+        s_ely
+    );
 
     let mut out_ayr = Vec::new();
     find::run_with_writer(
@@ -168,11 +157,7 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
 
 #[test]
 fn test_find_in_unknown_place_errors() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     let result = find::run_with_writer(
@@ -185,7 +170,10 @@ fn test_find_in_unknown_place_errors() {
         &parquet_dir,
     );
 
-    assert!(result.is_err(), "Expected error for unknown location --in Narnia");
+    assert!(
+        result.is_err(),
+        "Expected error for unknown location --in Narnia"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("No organisation found in 'Narnia'"),
@@ -196,11 +184,7 @@ fn test_find_in_unknown_place_errors() {
 
 #[test]
 fn test_find_code_flag_exact_lists() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -218,16 +202,15 @@ fn test_find_code_flag_exact_lists() {
     assert!(s.contains("A82608"));
     assert!(s.contains("RJZ"));
     // Prefix A82608001 must NOT match exact --code A82608
-    assert!(!s.contains("A82608001"), "Exact code search must not prefix-match A82608001");
+    assert!(
+        !s.contains("A82608001"),
+        "Exact code search must not prefix-match A82608001"
+    );
 }
 
 #[test]
 fn test_find_normalization_apostrophes_and_punctuation() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out_plain = Vec::new();
     find::run_with_writer(
@@ -256,16 +239,29 @@ fn test_find_normalization_apostrophes_and_punctuation() {
     let s1 = String::from_utf8(out_plain).unwrap();
     let s2 = String::from_utf8(out_apostrophe).unwrap();
 
-    assert_eq!(s1, s2, "kings college and king's college queries must produce identical results");
+    assert!(
+        !s1.trim().is_empty(),
+        "Query 'kings college' must return non-empty output"
+    );
+    assert!(
+        s1.contains("KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST"),
+        "Output must match KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST, got:\n{}",
+        s1
+    );
+    assert!(
+        s1.contains("RJZ"),
+        "Output must contain code RJZ, got:\n{}",
+        s1
+    );
+    assert_eq!(
+        s1, s2,
+        "kings college and king's college queries must produce identical results"
+    );
 }
 
 #[test]
 fn test_find_ranking_exact_prefix_word_substring() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -281,7 +277,10 @@ fn test_find_ranking_exact_prefix_word_substring() {
     .expect("royal free query should succeed");
 
     let s = String::from_utf8(out).unwrap();
-    let lines: Vec<&str> = s.lines().filter(|l| l.starts_with('|') && !l.contains("ODS Code") && !l.contains("---")).collect();
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|l| l.starts_with('|') && !l.contains("ODS Code") && !l.contains("---"))
+        .collect();
     assert!(!lines.is_empty(), "Expected results for royal free");
     // The top line should be a prefix/exact match like ROYAL FREE ...
     assert!(
@@ -293,11 +292,7 @@ fn test_find_ranking_exact_prefix_word_substring() {
 
 #[test]
 fn test_find_explicit_sort_overrides_ranking() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -314,21 +309,25 @@ fn test_find_explicit_sort_overrides_ranking() {
     .expect("query with explicit --sort code should succeed");
 
     let s = String::from_utf8(out).unwrap();
-    let lines: Vec<&str> = s.lines().filter(|l| l.starts_with('|') && !l.contains("ODS Code") && !l.contains("---")).collect();
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|l| l.starts_with('|') && !l.contains("ODS Code") && !l.contains("---"))
+        .collect();
     assert!(lines.len() >= 2);
     // When sorted strictly by code, first column codes must be monotonically increasing
     let code1 = lines[0].split('|').nth(1).unwrap().trim();
     let code2 = lines[1].split('|').nth(1).unwrap().trim();
-    assert!(code1 <= code2, "Expected code order {} <= {}", code1, code2);
+    assert!(
+        code1 <= code2,
+        "Expected code order {} <= {}",
+        code1,
+        code2
+    );
 }
 
 #[test]
 fn test_find_role_flag_codes_and_names() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out_code = Vec::new();
     find::run_with_writer(
@@ -343,7 +342,16 @@ fn test_find_role_flag_codes_and_names() {
     .expect("--role with codes should succeed");
 
     let s_code = String::from_utf8(out_code).unwrap();
-    assert!(s_code.contains("GP Practice") || s_code.contains("SURGERY") || s_code.contains("MEDICAL"));
+    assert!(
+        s_code.contains("SEDBERGH MEDICAL PRACTICE"),
+        "RO76 match must contain SEDBERGH MEDICAL PRACTICE, got:\n{}",
+        s_code
+    );
+    assert!(
+        s_code.contains("SCOTTISH PRACTICE 01"),
+        "RO227 match must contain SCOTTISH PRACTICE 01, got:\n{}",
+        s_code
+    );
 
     let mut out_name = Vec::new();
     find::run_with_writer(
@@ -358,16 +366,21 @@ fn test_find_role_flag_codes_and_names() {
     .expect("--role with name should succeed");
 
     let s_name = String::from_utf8(out_name).unwrap();
-    assert!(s_name.contains("GP Practice") || s_name.contains("SURGERY") || s_name.contains("MEDICAL"));
+    assert!(
+        s_name.contains("SEDBERGH MEDICAL PRACTICE"),
+        "'GP Practice' name match must contain SEDBERGH MEDICAL PRACTICE, got:\n{}",
+        s_name
+    );
+    assert!(
+        s_name.contains("GP Practice"),
+        "'GP Practice' name match must display 'GP Practice', got:\n{}",
+        s_name
+    );
 }
 
 #[test]
 fn test_find_role_typo_gives_suggestions() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     let result = find::run_with_writer(
@@ -380,21 +393,36 @@ fn test_find_role_typo_gives_suggestions() {
         &parquet_dir,
     );
 
-    assert!(result.is_err(), "Expected error for invalid role name 'General Practice'");
+    assert!(
+        result.is_err(),
+        "Expected error for invalid role name 'General Practice'"
+    );
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("No role named 'General Practice'"), "Error must contain 'No role named': {}", err);
-    assert!(err.contains("Did you mean:"), "Error must contain suggestions: {}", err);
-    assert!(err.contains("GP Practice"), "Suggestions must include GP Practice: {}", err);
-    assert!(err.contains("Or use codes:"), "Error must contain code suggestion: {}", err);
+    assert!(
+        err.contains("No role named 'General Practice'"),
+        "Error must contain 'No role named': {}",
+        err
+    );
+    assert!(
+        err.contains("Did you mean:"),
+        "Error must contain suggestions: {}",
+        err
+    );
+    assert!(
+        err.contains("GP Practice"),
+        "Suggestions must include GP Practice: {}",
+        err
+    );
+    assert!(
+        err.contains("Or use codes:"),
+        "Error must contain code suggestion: {}",
+        err
+    );
 }
 
 #[test]
 fn test_find_code_hint_for_inactive_code() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -418,14 +446,10 @@ fn test_find_code_hint_for_inactive_code() {
 
 #[test]
 fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use arrow::array::{Array, ListArray, StringArray};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::fs::File;
 
     let file = File::open(parquet_dir.join("orgs_all.parquet")).unwrap();
@@ -433,11 +457,16 @@ fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
     let reader = builder.build().unwrap();
 
     let cfg = ods::roles::role_display_config();
-    let low_signal_set: std::collections::HashSet<&str> = cfg.low_signal.keys().map(|s| s.as_str()).collect();
+    let low_signal_set: std::collections::HashSet<&str> =
+        cfg.low_signal.keys().map(|s| s.as_str()).collect();
 
     // Verify each low-signal entry has a reason
     for (code, entry) in &cfg.low_signal {
-        assert!(!entry.why.is_empty(), "low-signal role {} must have a recorded reason", code);
+        assert!(
+            !entry.why.is_empty(),
+            "low-signal role {} must have a recorded reason",
+            code
+        );
     }
 
     let mut all_low_signal_multi_role_count = 0;
@@ -446,8 +475,16 @@ fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
     for batch in reader {
         let batch = batch.unwrap();
         let schema = batch.schema();
-        let status_arr = batch.column(schema.index_of("status").unwrap()).as_any().downcast_ref::<StringArray>().unwrap();
-        let role_codes_arr = batch.column(schema.index_of("role_codes").unwrap()).as_any().downcast_ref::<ListArray>().unwrap();
+        let status_arr = batch
+            .column(schema.index_of("status").unwrap())
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let role_codes_arr = batch
+            .column(schema.index_of("role_codes").unwrap())
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
 
         for i in 0..batch.num_rows() {
             let status = status_arr.value(i);
@@ -463,7 +500,10 @@ fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
                 }
             }
 
-            let is_all_low_signal = !role_codes.is_empty() && role_codes.iter().all(|c| low_signal_set.contains(c.as_str()));
+            let is_all_low_signal = !role_codes.is_empty()
+                && role_codes
+                    .iter()
+                    .all(|c| low_signal_set.contains(c.as_str()));
 
             if is_all_low_signal {
                 if role_codes.len() > 1 {
@@ -488,11 +528,7 @@ fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
 
 #[test]
 fn test_find_roles_display_deemphasis_and_verbose() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // 1. Default non-verbose: GP Practice +1 for Sedbergh (RO177 + RO76)
     let mut out_default = Vec::new();
@@ -504,7 +540,8 @@ fn test_find_roles_display_deemphasis_and_verbose() {
         },
         &mut out_default,
         &parquet_dir,
-    ).unwrap();
+    )
+    .unwrap();
     let s_default = String::from_utf8(out_default).unwrap();
     assert!(
         s_default.contains("GP Practice +1"),
@@ -523,7 +560,8 @@ fn test_find_roles_display_deemphasis_and_verbose() {
         },
         &mut out_verbose,
         &parquet_dir,
-    ).unwrap();
+    )
+    .unwrap();
     let s_verbose = String::from_utf8(out_verbose).unwrap();
     assert!(
         s_verbose.contains("Prescribing Cost Centre, GP Practice"),
@@ -541,7 +579,8 @@ fn test_find_roles_display_deemphasis_and_verbose() {
         },
         &mut out_rjz,
         &parquet_dir,
-    ).unwrap();
+    )
+    .unwrap();
     let s_rjz = String::from_utf8(out_rjz).unwrap();
     assert!(
         s_rjz.contains("NHS Trust, Hospice +1"),
@@ -552,11 +591,7 @@ fn test_find_roles_display_deemphasis_and_verbose() {
 
 #[test]
 fn test_find_table_preserves_plus_n_suffix_without_truncation() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // 1. Default table mode for A85619: must show "Other Prescribing Cost Centre +1" intact
     let mut out_table = Vec::new();
@@ -568,7 +603,8 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
         },
         &mut out_table,
         &parquet_dir,
-    ).unwrap();
+    )
+    .unwrap();
     let s_table = String::from_utf8(out_table).unwrap();
     assert!(
         s_table.contains("Other Prescribing Cost Centre +1"),
@@ -587,7 +623,8 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
         },
         &mut out_md,
         &parquet_dir,
-    ).unwrap();
+    )
+    .unwrap();
     let s_md = String::from_utf8(out_md).unwrap();
     assert!(
         s_md.contains("Other Prescribing Cost Centre +1"),
@@ -595,7 +632,11 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
         s_md
     );
     assert!(
-        s_md.lines().any(|l| l.contains("ODS Code") && l.contains("Name") && l.contains("Postcode") && l.contains("Roles") && l.contains("Class")),
+        s_md.lines().any(|l| l.contains("ODS Code")
+            && l.contains("Name")
+            && l.contains("Postcode")
+            && l.contains("Roles")
+            && l.contains("Class")),
         "Markdown mode must render standard markdown table header, got:\n{}",
         s_md
     );
@@ -603,11 +644,7 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
 
 #[test]
 fn test_find_alias_gp_expands_to_three_national_codes() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -633,11 +670,7 @@ fn test_find_alias_gp_expands_to_three_national_codes() {
 
 #[test]
 fn test_find_alias_dentist_expands_to_dental_codes() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -654,7 +687,9 @@ fn test_find_alias_dentist_expands_to_dental_codes() {
 
     let s = String::from_utf8(out).unwrap();
     assert!(
-        s.contains("* --dentist: RO110, RO65 — General Dental Practice, Private Dental Practice"),
+        s.contains(
+            "* --dentist: RO110, RO65 — General Dental Practice, Private Dental Practice"
+        ),
         "Runtime notice for --dentist missing, got:\n{}",
         s
     );
@@ -663,11 +698,7 @@ fn test_find_alias_dentist_expands_to_dental_codes() {
 
 #[test]
 fn test_find_alias_and_role_merge_with_or_semantics() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // --gp --role RO110 matches GP practices OR Dental practices
     let mut out = Vec::new();
@@ -686,17 +717,19 @@ fn test_find_alias_and_role_merge_with_or_semantics() {
 
     let s = String::from_utf8(out).unwrap();
     // Must contain both Sedbergh Medical Practice (GP) and Main Street Dental Surgery (RO110 Dentist)
-    assert!(s.contains("SEDBERGH MEDICAL PRACTICE"), "Must match GP practice under OR semantics");
-    assert!(s.contains("MAIN STREET DENTAL SURGERY"), "Must match Dental practice under OR semantics");
+    assert!(
+        s.contains("SEDBERGH MEDICAL PRACTICE"),
+        "Must match GP practice under OR semantics"
+    );
+    assert!(
+        s.contains("MAIN STREET DENTAL SURGERY"),
+        "Must match Dental practice under OR semantics"
+    );
 }
 
 #[test]
 fn test_find_tsv_format_without_all() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -720,7 +753,12 @@ fn test_find_tsv_format_without_all() {
 
     for line in lines {
         let cols: Vec<&str> = line.split('\t').collect();
-        assert_eq!(cols.len(), 5, "Expected 5 tab-separated columns without --all, got: {:?}", cols);
+        assert_eq!(
+            cols.len(),
+            5,
+            "Expected 5 tab-separated columns without --all, got: {:?}",
+            cols
+        );
         assert!(!cols[0].is_empty(), "ODS code must not be empty");
         assert!(!cols[1].is_empty(), "Name must not be empty");
         assert!(!cols[2].is_empty(), "Postcode must not be empty");
@@ -731,11 +769,7 @@ fn test_find_tsv_format_without_all() {
 
 #[test]
 fn test_find_tsv_format_with_all() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -756,7 +790,12 @@ fn test_find_tsv_format_with_all() {
     assert_eq!(lines.len(), 1);
 
     let cols: Vec<&str> = lines[0].split('\t').collect();
-    assert_eq!(cols.len(), 6, "Expected 6 tab-separated columns with --all, got: {:?}", cols);
+    assert_eq!(
+        cols.len(),
+        6,
+        "Expected 6 tab-separated columns with --all, got: {:?}",
+        cols
+    );
     assert_eq!(cols[0], "A82608");
     assert_eq!(cols[5], "active");
 }
@@ -766,8 +805,8 @@ fn test_find_no_filters_guidance_returns_ok() {
     // Calling run() with default args (no query, no filters, default Table format)
     // outputs advice to stderr and returns Ok(()) without requiring any workspace/parquet dataset.
     let result = find::run(Args::default());
-    assert!(result.is_ok(), "find with no filters should return Ok(()) without requiring a dataset");
+    assert!(
+        result.is_ok(),
+        "find with no filters should return Ok(()) without requiring a dataset"
+    );
 }
-
-
-

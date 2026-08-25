@@ -1,13 +1,490 @@
 use ods::commands::info::{self, Args, OutputFormat};
+use ods::commands::ndjson::{
+    Location, OdsContact, OdsDate, OdsRecord, OdsRelationship, OdsRelationshipTarget, OdsRole,
+    OdsSuccessor,
+};
+use ods::commands::parquet::{
+    export_orgs, export_orgs_all, export_relationships, export_roles, export_successions,
+};
+use ods::provenance::OdsProvenance;
 use std::path::PathBuf;
+use tempfile::TempDir;
+
+#[allow(clippy::vec_init_then_push)]
+fn setup_test_workspace() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().expect("create temp dir");
+    let dir = tmp.path().to_path_buf();
+
+    let mut records = Vec::new();
+
+    // 1. A82608 - GP Practice with outbound RE4 (is commissioned by 01K)
+    records.push(OdsRecord {
+        ods_code: "A82608".to_string(),
+        name: "SEDBERGH MEDICAL PRACTICE".to_string(),
+        status: "active".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: Some("2026-01-01".to_string()),
+        dates: vec![OdsDate {
+            date_type: "Operational".to_string(),
+            start: Some("1974-04-01".to_string()),
+            end: None,
+        }],
+        geo_loc: Some(Location {
+            address_lines: vec![
+                "SEDBERGH HEALTH CENTRE".to_string(),
+                "LOFTUS HILL".to_string(),
+            ],
+            town: Some("SEDBERGH".to_string()),
+            county: Some("CUMBRIA".to_string()),
+            postcode: Some("LA10 5DL".to_string()),
+            country: Some("ENGLAND".to_string()),
+            uprn: Some("100052020933".to_string()),
+        }),
+        contacts: vec![
+            OdsContact {
+                contact_type: "tel".to_string(),
+                value: "015396 20218".to_string(),
+            },
+            OdsContact {
+                contact_type: "http".to_string(),
+                value: "https://www.sedberghmp.nhs.uk".to_string(),
+            },
+        ],
+        roles: vec![
+            OdsRole {
+                id: "RO177".to_string(),
+                code: Some("RO177".to_string()),
+                display_name: Some("Prescribing Cost Centre".to_string()),
+                unique_role_id: "1001".to_string(),
+                primary_role: true,
+                status: "active".to_string(),
+                dates: vec![OdsDate {
+                    date_type: "Operational".to_string(),
+                    start: Some("1974-04-01".to_string()),
+                    end: None,
+                }],
+            },
+            OdsRole {
+                id: "RO76".to_string(),
+                code: Some("RO76".to_string()),
+                display_name: Some("GP Practice".to_string()),
+                unique_role_id: "1002".to_string(),
+                primary_role: false,
+                status: "active".to_string(),
+                dates: vec![],
+            },
+        ],
+        relationships: vec![OdsRelationship {
+            id: "RE4".to_string(),
+            display_name: Some("IS COMMISSIONED BY".to_string()),
+            unique_rel_id: "5001".to_string(),
+            status: "active".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Operational".to_string(),
+                start: Some("2013-04-01".to_string()),
+                end: None,
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "01K".to_string(),
+                name: Some("NHS MORECAMBE BAY CCG".to_string()),
+                ..Default::default()
+            },
+        }],
+        successors: vec![],
+    });
+
+    // 2. 01K - CCG
+    records.push(OdsRecord {
+        ods_code: "01K".to_string(),
+        name: "NHS MORECAMBE BAY CCG".to_string(),
+        status: "active".to_string(),
+        role: "Clinical Commissioning Group".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO98".to_string(),
+            code: Some("RO98".to_string()),
+            display_name: Some("Clinical Commissioning Group".to_string()),
+            unique_role_id: "2001".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![],
+    });
+
+    // 3. A82608001 - Branch surgery with outbound RE6 (is operated by A82608)
+    records.push(OdsRecord {
+        ods_code: "A82608001".to_string(),
+        name: "DR LUMB W & PARTNER".to_string(),
+        status: "active".to_string(),
+        role: "Branch Surgery".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "site".to_string(),
+        last_change_date: None,
+        dates: vec![OdsDate {
+            date_type: "Operational".to_string(),
+            start: Some("2010-01-01".to_string()),
+            end: None,
+        }],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO180".to_string(),
+            code: Some("RO180".to_string()),
+            display_name: Some("Branch Surgery".to_string()),
+            unique_role_id: "3001".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![OdsRelationship {
+            id: "RE6".to_string(),
+            display_name: Some("IS OPERATED BY".to_string()),
+            unique_rel_id: "6001".to_string(),
+            status: "active".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Operational".to_string(),
+                start: Some("2010-01-01".to_string()),
+                end: None,
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "A82608".to_string(),
+                name: Some("SEDBERGH MEDICAL PRACTICE".to_string()),
+                ..Default::default()
+            },
+        }],
+        successors: vec![],
+    });
+
+    // 4. 0AF -> 0CE -> 0CY -> YDDTR succession chain
+    records.push(OdsRecord {
+        ods_code: "0AF".to_string(),
+        name: "LEGACY ORG 0AF".to_string(),
+        status: "inactive".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO177".to_string(),
+            code: Some("RO177".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
+            unique_role_id: "4001".to_string(),
+            primary_role: true,
+            status: "inactive".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![OdsSuccessor {
+            unique_succ_id: "succ1".to_string(),
+            succ_type: "Successor".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Legal".to_string(),
+                start: Some("2012-10-01".to_string()),
+                end: None,
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "0CE".to_string(),
+                name: Some("LEGACY ORG 0CE".to_string()),
+                ..Default::default()
+            },
+        }],
+    });
+
+    records.push(OdsRecord {
+        ods_code: "0CE".to_string(),
+        name: "LEGACY ORG 0CE".to_string(),
+        status: "inactive".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO177".to_string(),
+            code: Some("RO177".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
+            unique_role_id: "4002".to_string(),
+            primary_role: true,
+            status: "inactive".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![OdsSuccessor {
+            unique_succ_id: "succ2".to_string(),
+            succ_type: "Successor".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Legal".to_string(),
+                start: Some("2014-10-01".to_string()),
+                end: None,
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "0CY".to_string(),
+                name: Some("LEGACY ORG 0CY".to_string()),
+                ..Default::default()
+            },
+        }],
+    });
+
+    records.push(OdsRecord {
+        ods_code: "0CY".to_string(),
+        name: "LEGACY ORG 0CY".to_string(),
+        status: "inactive".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO177".to_string(),
+            code: Some("RO177".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
+            unique_role_id: "4003".to_string(),
+            primary_role: true,
+            status: "inactive".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![OdsSuccessor {
+            unique_succ_id: "succ3".to_string(),
+            succ_type: "Successor".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Legal".to_string(),
+                start: Some("2016-04-01".to_string()),
+                end: None,
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "YDDTR".to_string(),
+                name: Some("LEGACY ORG YDDTR".to_string()),
+                ..Default::default()
+            },
+        }],
+    });
+
+    records.push(OdsRecord {
+        ods_code: "YDDTR".to_string(),
+        name: "LEGACY ORG YDDTR".to_string(),
+        status: "active".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO177".to_string(),
+            code: Some("RO177".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
+            unique_role_id: "4004".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![],
+    });
+
+    // 5. Trust RJZ with 12 active operated sites and 1 inactive operated site
+    records.push(OdsRecord {
+        ods_code: "RJZ".to_string(),
+        name: "KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST".to_string(),
+        status: "active".to_string(),
+        role: "NHS Trust".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO197".to_string(),
+            code: Some("RO197".to_string()),
+            display_name: Some("NHS Trust".to_string()),
+            unique_role_id: "5000".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![],
+    });
+
+    for i in 1..=12 {
+        let site_code = format!("RJZ{:02}", i);
+        let site_name = format!("KINGS HOSPITAL SITE {:02}", i);
+        records.push(OdsRecord {
+            ods_code: site_code.clone(),
+            name: site_name,
+            status: "active".to_string(),
+            role: "NHS Trust Site".to_string(),
+            parent_organisation: None,
+            region_code: None,
+            root: None,
+            assigning_authority_name: None,
+            record_class: "site".to_string(),
+            last_change_date: None,
+            dates: vec![],
+            geo_loc: None,
+            contacts: vec![],
+            roles: vec![OdsRole {
+                id: "RO198".to_string(),
+                code: Some("RO198".to_string()),
+                display_name: Some("NHS Trust Site".to_string()),
+                unique_role_id: format!("51{:02}", i),
+                primary_role: true,
+                status: "active".to_string(),
+                dates: vec![],
+            }],
+            relationships: vec![OdsRelationship {
+                id: "RE6".to_string(),
+                display_name: Some("IS OPERATED BY".to_string()),
+                unique_rel_id: format!("70{:02}", i),
+                status: "active".to_string(),
+                dates: vec![OdsDate {
+                    date_type: "Operational".to_string(),
+                    start: Some("2020-01-01".to_string()),
+                    end: None,
+                }],
+                target: OdsRelationshipTarget {
+                    ods_code: "RJZ".to_string(),
+                    name: Some("KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST".to_string()),
+                    ..Default::default()
+                },
+            }],
+            successors: vec![],
+        });
+    }
+
+    // Inactive site RJZ99 with inactive RE6 to RJZ
+    records.push(OdsRecord {
+        ods_code: "RJZ99".to_string(),
+        name: "CLOSED CLINIC 99".to_string(),
+        status: "inactive".to_string(),
+        role: "NHS Trust Site".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "site".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO198".to_string(),
+            code: Some("RO198".to_string()),
+            display_name: Some("NHS Trust Site".to_string()),
+            unique_role_id: "5199".to_string(),
+            primary_role: true,
+            status: "inactive".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![OdsRelationship {
+            id: "RE6".to_string(),
+            display_name: Some("IS OPERATED BY".to_string()),
+            unique_rel_id: "7099".to_string(),
+            status: "inactive".to_string(),
+            dates: vec![OdsDate {
+                date_type: "Operational".to_string(),
+                start: Some("2010-01-01".to_string()),
+                end: Some("2020-01-01".to_string()),
+            }],
+            target: OdsRelationshipTarget {
+                ods_code: "RJZ".to_string(),
+                name: Some("KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST".to_string()),
+                ..Default::default()
+            },
+        }],
+        successors: vec![],
+    });
+
+    // 6. Isolated org with no relationships
+    records.push(OdsRecord {
+        ods_code: "ISOLATED".to_string(),
+        name: "ISOLATED ORGANISATION".to_string(),
+        status: "active".to_string(),
+        role: "Prescribing Cost Centre".to_string(),
+        parent_organisation: None,
+        region_code: None,
+        root: None,
+        assigning_authority_name: None,
+        record_class: "org".to_string(),
+        last_change_date: None,
+        dates: vec![],
+        geo_loc: None,
+        contacts: vec![],
+        roles: vec![OdsRole {
+            id: "RO177".to_string(),
+            code: Some("RO177".to_string()),
+            display_name: Some("Prescribing Cost Centre".to_string()),
+            unique_role_id: "6000".to_string(),
+            primary_role: true,
+            status: "active".to_string(),
+            dates: vec![],
+        }],
+        relationships: vec![],
+        successors: vec![],
+    });
+
+    let mut prov = OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+
+    let edges = ods::commands::parquet::build_succession_edges(&records);
+    let (succ_closures, pred_closures) =
+        ods::commands::parquet::compute_transitive_closures(&records, &edges);
+    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
+    export_orgs_all(&dir, &records, &succ_closures, &pred_closures, Some(&prov))
+        .expect("export orgs_all");
+    export_roles(&dir, &records, Some(&prov)).expect("export roles");
+    export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
+    export_successions(&dir, &records, Some(&prov)).expect("export successions");
+
+    (tmp, dir)
+}
 
 #[test]
 fn test_info_renders_full_detail_for_exact_code() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -33,17 +510,21 @@ fn test_info_renders_full_detail_for_exact_code() {
         output_str
     );
     assert!(
-        output_str.contains("Status:") && output_str.contains("active"),
+        output_str.contains("Status:") && output_str.to_lowercase().contains("active"),
         "Expected 'Status: active', got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Primary Role:") && output_str.contains("Prescribing Cost Centre") && output_str.contains("RO177"),
+        output_str.contains("Primary Role:")
+            && output_str.contains("Prescribing Cost Centre")
+            && output_str.contains("RO177"),
         "Expected Primary Role with RO177, got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Other Roles:") && output_str.contains("GP Practice") && output_str.contains("RO76"),
+        output_str.contains("Other Roles:")
+            && output_str.contains("GP Practice")
+            && output_str.contains("RO76"),
         "Expected Other Roles with GP Practice (RO76), got:\n{}",
         output_str
     );
@@ -52,15 +533,16 @@ fn test_info_renders_full_detail_for_exact_code() {
         "Expected postcode LA10 5DL, got:\n{}",
         output_str
     );
+    assert!(
+        output_str.contains("https://www.sedberghmp.nhs.uk"),
+        "Expected website in output, got:\n{}",
+        output_str
+    );
 }
 
 #[test]
 fn test_info_json_format_and_succession_chain() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -80,8 +562,15 @@ fn test_info_json_format_and_succession_chain() {
     assert_eq!(json["ods_code"], "0AF");
     assert_eq!(json["status"], "inactive");
 
-    let succ = json["succession"].as_array().expect("succession must be array");
-    assert_eq!(succ.len(), 3, "Expected 3 succession hops for 0AF, got: {:?}", succ);
+    let succ = json["succession"]
+        .as_array()
+        .expect("succession must be array");
+    assert_eq!(
+        succ.len(),
+        3,
+        "Expected 3 succession hops for 0AF, got: {:?}",
+        succ
+    );
 
     assert_eq!(succ[0]["code"], "0CE");
     assert_eq!(succ[0]["depth"], 1);
@@ -98,11 +587,7 @@ fn test_info_json_format_and_succession_chain() {
 
 #[test]
 fn test_info_case_insensitive() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -126,11 +611,7 @@ fn test_info_case_insensitive() {
 
 #[test]
 fn test_info_nonexistent_code_fails() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     let result = info::run_with_writer(
@@ -153,12 +634,8 @@ fn test_info_nonexistent_code_fails() {
 }
 
 #[test]
-fn test_info_operates_section_in_markdown() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+fn test_info_relationships_section_shows_outbound_and_inbound_with_dates() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -174,24 +651,37 @@ fn test_info_operates_section_in_markdown() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("## Operates"),
-        "Expected '## Operates' section in Markdown output, got:\n{}",
+        output_str.contains("## Relationships"),
+        "Expected '## Relationships' section in Markdown output, got:\n{}",
+        output_str
+    );
+    // Outbound commissioning link
+    assert!(
+        output_str.contains("IS COMMISSIONED BY"),
+        "Expected 'IS COMMISSIONED BY' relationship group, got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("01K") && output_str.contains("NHS MORECAMBE BAY CCG"),
+        "Expected commissioner code 01K and name in relationships, got:\n{}",
+        output_str
+    );
+    // Inbound operation link (Dr Lumb W & Partner operates under A82608)
+    assert!(
+        output_str.contains("IS OPERATED BY (Inbound)"),
+        "Expected 'IS OPERATED BY (Inbound)' group, got:\n{}",
         output_str
     );
     assert!(
         output_str.contains("A82608001") && output_str.contains("DR LUMB W & PARTNER"),
-        "Expected 'A82608001 DR LUMB W & PARTNER' in Operates, got:\n{}",
+        "Expected inbound operated site A82608001 in relationships, got:\n{}",
         output_str
     );
 }
 
 #[test]
-fn test_info_operates_array_in_json() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+fn test_info_relationships_in_json() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -208,20 +698,70 @@ fn test_info_operates_array_in_json() {
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     let json: serde_json::Value = serde_json::from_str(&output_str).expect("valid JSON");
 
-    let operates = json["operates"].as_array().expect("operates must be an array");
-    assert_eq!(operates.len(), 1);
-    assert_eq!(operates[0]["code"], "A82608001");
-    assert_eq!(operates[0]["name"], "DR LUMB W & PARTNER");
-    assert!(operates[0].get("status").is_none(), "status field must be omitted from OperatedEntityJson");
+    let rels = json["relationships"]
+        .as_array()
+        .expect("relationships must be an array");
+    assert!(!rels.is_empty(), "A82608 must have relationships");
+
+    let has_comm = rels
+        .iter()
+        .any(|r| r["code"] == "01K" && r["direction"] == "outbound" && r["rel_code"] == "RE4");
+    assert!(
+        has_comm,
+        "A82608 must have outbound RE4 relationship to 01K"
+    );
+
+    let has_inbound_site = rels
+        .iter()
+        .any(|r| r["code"] == "A82608001" && r["direction"] == "inbound" && r["rel_code"] == "RE6");
+    assert!(
+        has_inbound_site,
+        "A82608 must have inbound RE6 relationship from A82608001"
+    );
 }
 
 #[test]
-fn test_info_trust_operates_multiple_entities() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+fn test_info_trust_inbound_relationships_and_truncation() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
+
+    let mut out = Vec::new();
+    info::run_with_writer(
+        Args {
+            ods_code: "RJZ".to_string(),
+            format: OutputFormat::Markdown,
+            input: Some(parquet_dir.clone()),
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("info::run_with_writer should succeed for RJZ in Markdown");
+
+    let output_str = String::from_utf8(out).expect("valid UTF-8");
+    assert!(
+        output_str.contains("## Relationships"),
+        "RJZ must have '## Relationships' section, got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("IS OPERATED BY (Inbound)"),
+        "RJZ must have 'IS OPERATED BY (Inbound)' group, got:\n{}",
+        output_str
+    );
+    // 12 active + 1 inactive = 13 total inbound RE6. First 10 shown, remaining truncated.
+    assert!(
+        output_str.contains("... and 3 more (use --format json for all)"),
+        "Expected truncation pointer '... and 3 more (use --format json for all)', got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("RJZ01"),
+        "First site RJZ01 must be shown"
+    );
+}
+
+#[test]
+fn test_info_trust_relationships_in_json() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -238,24 +778,32 @@ fn test_info_trust_operates_multiple_entities() {
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     let json: serde_json::Value = serde_json::from_str(&output_str).expect("valid JSON");
 
-    let operates = json["operates"].as_array().expect("operates must be an array");
-    // Count is active-only (filtering out closed COVID clinics and retired sites)
-    assert!(
-        operates.len() >= 10,
-        "RJZ must operate multiple active hospital sites and clinics (active only), got: {}",
-        operates.len()
+    let rels = json["relationships"]
+        .as_array()
+        .expect("relationships must be an array");
+    // All 13 inbound relationships present in JSON without truncation
+    let inbound_re6: Vec<_> = rels
+        .iter()
+        .filter(|r| r["rel_code"] == "RE6" && r["direction"] == "inbound")
+        .collect();
+    assert_eq!(
+        inbound_re6.len(),
+        13,
+        "Expected 13 inbound RE6 relationships in JSON, got: {}",
+        inbound_re6.len()
     );
-    assert!(operates.iter().any(|e| e["code"] == "RJZ01"), "Active hospital site RJZ01 must be present");
-    assert!(!operates.iter().any(|e| e["code"] == "RJZ06"), "Inactive site RJZ06 must be filtered out");
+
+    assert!(inbound_re6
+        .iter()
+        .any(|r| r["code"] == "RJZ01" && r["status"] == "active"));
+    assert!(inbound_re6
+        .iter()
+        .any(|r| r["code"] == "RJZ99" && r["status"] == "inactive"));
 }
 
 #[test]
-fn test_info_entity_without_operates_omits_section() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
-        return;
-    }
+fn test_info_leaf_operates_under_parent() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
@@ -271,10 +819,42 @@ fn test_info_entity_without_operates_omits_section() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        !output_str.contains("## Operates"),
-        "Leaf entity A82608001 must not have '## Operates' section, got:\n{}",
+        output_str.contains("## Relationships"),
+        "Leaf entity A82608001 must have '## Relationships' for its outbound link, got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("IS OPERATED BY"),
+        "Leaf entity must show outbound 'IS OPERATED BY', got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("A82608") && output_str.contains("SEDBERGH MEDICAL PRACTICE"),
+        "Leaf entity must name parent A82608, got:\n{}",
         output_str
     );
 }
 
+#[test]
+fn test_info_entity_without_relationships_omits_section() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
 
+    let mut out = Vec::new();
+    info::run_with_writer(
+        Args {
+            ods_code: "ISOLATED".to_string(),
+            format: OutputFormat::Markdown,
+            input: Some(parquet_dir.clone()),
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("info::run_with_writer should succeed for ISOLATED");
+
+    let output_str = String::from_utf8(out).expect("valid UTF-8");
+    assert!(
+        !output_str.contains("## Relationships"),
+        "Isolated entity must not have '## Relationships' section, got:\n{}",
+        output_str
+    );
+}

@@ -71,10 +71,7 @@ Here is a typical compiled organisation record from `ods.ndjson`:
         "primary_role_unique_role_id": "100941"
       }
     }
-  ],
-  "trust_name": "HUMBER TEACHING NHS FOUNDATION TRUST",
-  "trust_code": "RV9",
-  "start_date": "2026-01-08"
+  ]
 }
 ```
 
@@ -99,10 +96,8 @@ These fields directly mirror the structures in the source NHS TRUD XML schema (`
 These fields are not present in the XML in this form. We introduced them to flatten the schema and optimize downstream Parquet queries:
 
 *   **`role` (at root level)**: In the XML, there are no text role names; organisations only reference role IDs (like `RO198`). We look this up dynamically in the Concept Map parsed from `<CodeSystems>` at the top of the XML and denormalize the human-readable string directly to the root for ease of use.
-*   **`start_date` & `end_date` (at root level)**: Flattened from the nested `dates` list. This promotes date-based filtering to the root level so analysts don't have to query nested arrays.
-*   **Hierarchy fields (`parent`, `pcn`, `trust`, `icb` and their `*_code` equivalents)**: These are resolved recursively by walking the graph relationships (`RE4`/`RE6`) and the immediate parent ODS code attribute. The XML is flat-relational (no hierarchical nesting); denormalizing this parent metadata directly onto each record enables zero-join queries in Parquet.
 *   **Renaming `post_code` to `postcode`**: Replaced the two-word database convention (`post_code`) with the standard UK spelling (`postcode`).
-*   **Contacts Filtering**: ODS XML elements contain a flat list of `<Contact>` nodes. We filter and extract the primary `tel` and `http` values, omitting deprecated contacts like `fax`.
+*   **Contacts Filtering & Normalisation**: ODS XML elements contain a flat list of `<Contact>` nodes. We extract `tel` and lower-case `http` (website) values, omitting deprecated contacts like `fax`.
 
 ---
 

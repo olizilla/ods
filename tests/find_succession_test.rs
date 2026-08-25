@@ -1,13 +1,11 @@
+mod common;
+
+use common::setup_find_test_workspace;
 use ods::commands::find::{self, Args, OutputFormat, SortBy};
-use std::path::PathBuf;
 
 #[test]
 fn test_find_table_inactive_successor_display() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -38,11 +36,7 @@ fn test_find_table_inactive_successor_display() {
 
 #[test]
 fn test_find_exact_code_matches_as_table() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -79,11 +73,7 @@ fn test_find_exact_code_matches_as_table() {
 
 #[test]
 fn test_find_json_successor_codes_array() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -113,7 +103,9 @@ fn test_find_json_successor_codes_array() {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line.trim()) {
             if json["ods_code"] == "001" {
                 found = true;
-                let successor_codes = json["successor_codes"].as_array().expect("successor_codes must be an array");
+                let successor_codes = json["successor_codes"]
+                    .as_array()
+                    .expect("successor_codes must be an array");
                 assert_eq!(
                     successor_codes.len(),
                     5,
@@ -122,7 +114,8 @@ fn test_find_json_successor_codes_array() {
                 );
 
                 let expected_codes = vec!["016", "018", "020", "022", "024"];
-                let actual_codes: Vec<&str> = successor_codes.iter().filter_map(|v| v.as_str()).collect();
+                let actual_codes: Vec<&str> =
+                    successor_codes.iter().filter_map(|v| v.as_str()).collect();
                 assert_eq!(actual_codes, expected_codes);
             }
         }
@@ -132,11 +125,7 @@ fn test_find_json_successor_codes_array() {
 
 #[test]
 fn test_find_csv_successor_codes_semicolon_list() {
-    let parquet_dir = PathBuf::from("./ods_data/current");
-    if !parquet_dir.join("orgs_all.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs_all.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     find::run_with_writer(
@@ -169,6 +158,9 @@ fn test_find_csv_successor_codes_semicolon_list() {
             );
         }
     }
-    assert!(found, "Record 001 row not found in CSV output:\n{}", output_str);
+    assert!(
+        found,
+        "Record 001 row not found in CSV output:\n{}",
+        output_str
+    );
 }
-

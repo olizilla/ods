@@ -26,7 +26,10 @@ pub struct Args {
     pub output: PathBuf,
 }
 
-fn embed_metadata(schema: &Schema, _prov: Option<&crate::provenance::OdsProvenance>) -> Arc<Schema> {
+fn embed_metadata(
+    schema: &Schema,
+    _prov: Option<&crate::provenance::OdsProvenance>,
+) -> Arc<Schema> {
     Arc::new(schema.clone())
 }
 
@@ -64,7 +67,11 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let (provenance, records): (Option<crate::provenance::OdsProvenance>, Vec<OdsRecord>) = if args.input.extension().is_some_and(|ext| ext == "ndjson") {
+    let (provenance, records): (Option<crate::provenance::OdsProvenance>, Vec<OdsRecord>) = if args
+        .input
+        .extension()
+        .is_some_and(|ext| ext == "ndjson")
+    {
         let input_file = File::open(&args.input)
             .with_context(|| format!("opening NDJSON input: {}", args.input.display()))?;
         let reader = std::io::BufReader::new(input_file);
@@ -92,7 +99,11 @@ pub fn run(args: Args) -> Result<()> {
 
         let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
             .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
-            .or_else(|| crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(&archive_info.archive_path));
+            .or_else(|| {
+                crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
+                    &archive_info.archive_path,
+                )
+            });
 
         if args.input.is_dir() {
             if let Some(ref prov) = parent_prov {
@@ -105,7 +116,8 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         let xml_path = crate::commands::ndjson::find_xml_file(&archive_info.archive_path)?;
-        let (mut prov, _concept_map, parsed) = crate::commands::ndjson::parse_single_pass(&xml_path)?;
+        let (mut prov, _concept_map, parsed) =
+            crate::commands::ndjson::parse_single_pass(&xml_path)?;
 
         let actual_parsed_count = parsed.len();
         if let Some(declared_count) = prov.publication_record_count {
@@ -149,10 +161,11 @@ pub fn run(args: Args) -> Result<()> {
             }
             if let Ok(hash) = crate::provenance::compute_file_sha256(&archive_info.archive_path) {
                 prov.trud_release_sha256 = Some(hash);
-                prov.trud_release_sha256_verified = Some(crate::provenance::TrudVerificationSource::TrudApi);
+                prov.trud_release_sha256_verified =
+                    Some(crate::provenance::TrudVerificationSource::TrudApi);
             }
         }
-        let resolved = crate::commands::ndjson::resolve_hierarchies(parsed);
+        let resolved = crate::commands::ndjson::convert_parsed_orgs(parsed);
         (Some(prov), resolved.into_values().collect())
     };
 
@@ -163,10 +176,22 @@ pub fn run(args: Args) -> Result<()> {
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
     // 1. Export orgs.parquet (Active only)
-    export_orgs(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
+    export_orgs(
+        &args.output,
+        &records,
+        &successor_closures,
+        &predecessor_closures,
+        provenance.as_ref(),
+    )?;
 
     // 2. Export orgs_all.parquet (All records)
-    export_orgs_all(&args.output, &records, &successor_closures, &predecessor_closures, provenance.as_ref())?;
+    export_orgs_all(
+        &args.output,
+        &records,
+        &successor_closures,
+        &predecessor_closures,
+        provenance.as_ref(),
+    )?;
 
     // 3. Export roles.parquet (one per organisation per role holding)
     export_roles(&args.output, &records, provenance.as_ref())?;
@@ -179,7 +204,8 @@ pub fn run(args: Args) -> Result<()> {
 
     // 6. Ship the datapackage.json alongside the data so the schema and metadata
     //    are reproducible from a release alone, without the tool.
-    let release_pkg = crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref());
+    let release_pkg =
+        crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref());
     let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
     std::fs::write(args.output.join("datapackage.json"), pkg_json)
         .context("writing datapackage.json")?;
@@ -187,7 +213,10 @@ pub fn run(args: Args) -> Result<()> {
     // 7. Write updated _provenance.json to output directory
     if let Some(ref p) = provenance {
         if let Ok(prov_json) = serde_json::to_string_pretty(p) {
-            let _ = std::fs::write(args.output.join(crate::provenance::PROVENANCE_FILENAME), prov_json);
+            let _ = std::fs::write(
+                args.output.join(crate::provenance::PROVENANCE_FILENAME),
+                prov_json,
+            );
         }
     }
 
@@ -277,7 +306,14 @@ fn append_date(builder: &mut Date32Builder, val: Option<&str>) {
     }
 }
 
-fn extract_dates(dates: &[crate::commands::ndjson::OdsDate]) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+fn extract_dates(
+    dates: &[crate::commands::ndjson::OdsDate],
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let mut legal_start = None;
     let mut legal_end = None;
     let mut operational_start = None;
@@ -305,7 +341,6 @@ pub fn orgs_schema() -> Schema {
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
         Field::new("entity_type", DataType::Utf8, false),
-        Field::new("status", DataType::Utf8, false),
         Field::new(
             "role_codes",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
@@ -317,16 +352,6 @@ pub fn orgs_schema() -> Schema {
             false,
         ),
         Field::new("primary_role_code", DataType::Utf8, false),
-        Field::new(
-            "successor_codes",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-            false,
-        ),
-        Field::new(
-            "predecessor_codes",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-            false,
-        ),
         Field::new("address", DataType::Utf8, true),
         Field::new("town", DataType::Utf8, true),
         Field::new("county", DataType::Utf8, true),
@@ -335,18 +360,17 @@ pub fn orgs_schema() -> Schema {
         Field::new("uprn", DataType::Utf8, true),
         Field::new("telephone", DataType::Utf8, true),
         Field::new("website", DataType::Utf8, true),
-        Field::new("commissioner_name", DataType::Utf8, true),
-        Field::new("commissioner_code", DataType::Utf8, true),
-        Field::new("parent_name", DataType::Utf8, true),
-        Field::new("parent_code", DataType::Utf8, true),
-        Field::new("pcn_name", DataType::Utf8, true),
-        Field::new("pcn_code", DataType::Utf8, true),
-        Field::new("trust_name", DataType::Utf8, true),
-        Field::new("trust_code", DataType::Utf8, true),
-        Field::new("icb_name", DataType::Utf8, true),
-        Field::new("icb_code", DataType::Utf8, true),
-        Field::new("region_name", DataType::Utf8, true),
-        Field::new("region_code", DataType::Utf8, true),
+        Field::new(
+            "predecessor_codes",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "successor_codes",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
@@ -365,13 +389,10 @@ fn build_orgs_batch(
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut name = StringBuilder::new();
-    let mut record_class = StringBuilder::new();
-    let mut status = StringBuilder::new();
+    let mut entity_type = StringBuilder::new();
     let mut roles_list = ListBuilder::new(StringBuilder::new());
     let mut role_names_list = ListBuilder::new(StringBuilder::new());
     let mut primary_role = StringBuilder::new();
-    let mut successor_codes_list = ListBuilder::new(StringBuilder::new());
-    let mut predecessor_codes_list = ListBuilder::new(StringBuilder::new());
     let mut address = StringBuilder::new();
     let mut town = StringBuilder::new();
     let mut county = StringBuilder::new();
@@ -380,18 +401,9 @@ fn build_orgs_batch(
     let mut uprn = StringBuilder::new();
     let mut telephone = StringBuilder::new();
     let mut website = StringBuilder::new();
-    let mut commissioner = StringBuilder::new();
-    let mut commissioner_code = StringBuilder::new();
-    let mut parent = StringBuilder::new();
-    let mut parent_code = StringBuilder::new();
-    let mut pcn = StringBuilder::new();
-    let mut pcn_code = StringBuilder::new();
-    let mut trust = StringBuilder::new();
-    let mut trust_code = StringBuilder::new();
-    let mut icb = StringBuilder::new();
-    let mut icb_code = StringBuilder::new();
-    let mut region = StringBuilder::new();
-    let mut region_code = StringBuilder::new();
+    let mut predecessor_codes_list = ListBuilder::new(StringBuilder::new());
+    let mut successor_codes_list = ListBuilder::new(StringBuilder::new());
+    let mut status = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
@@ -404,8 +416,7 @@ fn build_orgs_batch(
     for r in records {
         ods_code.append_value(&r.ods_code);
         name.append_value(&r.name);
-        record_class.append_value(&r.record_class);
-        status.append_value(&r.status);
+        entity_type.append_value(&r.record_class);
 
         let org_is_active = r.status.eq_ignore_ascii_case("active");
         let mut codes: Vec<&str> = r
@@ -424,23 +435,13 @@ fn build_orgs_batch(
         roles_list.append(true);
         role_names_list.append(true);
 
-        let primary_role_id = r.roles.iter()
+        let primary_role_id = r
+            .roles
+            .iter()
             .find(|role| role.primary_role)
             .map(|role| role.id.as_str())
             .unwrap_or("");
         primary_role.append_value(primary_role_id);
-
-        let succs = successor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
-        for s in succs {
-            successor_codes_list.values().append_value(s);
-        }
-        successor_codes_list.append(true);
-
-        let preds = predecessor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
-        for p in preds {
-            predecessor_codes_list.values().append_value(p);
-        }
-        predecessor_codes_list.append(true);
 
         if let Some(ref loc) = r.geo_loc {
             let mut parts = Vec::new();
@@ -487,26 +488,35 @@ fn build_orgs_batch(
         let mut http_val = None;
         for c in &r.contacts {
             match c.contact_type.as_str() {
-                "tel" => { if tel_val.is_none() { tel_val = Some(&c.value); } }
-                "http" => { if http_val.is_none() { http_val = Some(&c.value); } }
+                "tel" => {
+                    if tel_val.is_none() {
+                        tel_val = Some(&c.value);
+                    }
+                }
+                "http" => {
+                    if http_val.is_none() {
+                        http_val = Some(&c.value);
+                    }
+                }
                 _ => {}
             }
         }
         append_opt(&mut telephone, tel_val.map(|s| s.as_str()));
         append_opt(&mut website, http_val.map(|s| s.as_str()));
 
-        append_opt(&mut commissioner, r.commissioner.as_deref());
-        append_opt(&mut commissioner_code, r.commissioner_code.as_deref());
-        append_opt(&mut parent, r.parent.as_deref());
-        append_opt(&mut parent_code, r.parent_code.as_deref());
-        append_opt(&mut pcn, r.pcn.as_deref());
-        append_opt(&mut pcn_code, r.pcn_code.as_deref());
-        append_opt(&mut trust, r.trust.as_deref());
-        append_opt(&mut trust_code, r.trust_code.as_deref());
-        append_opt(&mut icb, r.icb.as_deref());
-        append_opt(&mut icb_code, r.icb_code.as_deref());
-        append_opt(&mut region, r.region.as_deref());
-        append_opt(&mut region_code, r.region_code.as_deref());
+        let preds = predecessor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
+        for p in preds {
+            predecessor_codes_list.values().append_value(p);
+        }
+        predecessor_codes_list.append(true);
+
+        let succs = successor_closures.get(&r.ods_code).unwrap_or(&empty_vec);
+        for s in succs {
+            successor_codes_list.values().append_value(s);
+        }
+        successor_codes_list.append(true);
+
+        status.append_value(&r.status);
 
         let (l_start, l_end, o_start, o_end) = extract_dates(&r.dates);
         append_date(&mut legal_start, l_start.as_deref());
@@ -522,13 +532,10 @@ fn build_orgs_batch(
         vec![
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
-            Arc::new(record_class.finish()) as ArrayRef,
-            Arc::new(status.finish()) as ArrayRef,
+            Arc::new(entity_type.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
             Arc::new(role_names_list.finish()) as ArrayRef,
             Arc::new(primary_role.finish()) as ArrayRef,
-            Arc::new(successor_codes_list.finish()) as ArrayRef,
-            Arc::new(predecessor_codes_list.finish()) as ArrayRef,
             Arc::new(address.finish()) as ArrayRef,
             Arc::new(town.finish()) as ArrayRef,
             Arc::new(county.finish()) as ArrayRef,
@@ -537,18 +544,9 @@ fn build_orgs_batch(
             Arc::new(uprn.finish()) as ArrayRef,
             Arc::new(telephone.finish()) as ArrayRef,
             Arc::new(website.finish()) as ArrayRef,
-            Arc::new(commissioner.finish()) as ArrayRef,
-            Arc::new(commissioner_code.finish()) as ArrayRef,
-            Arc::new(parent.finish()) as ArrayRef,
-            Arc::new(parent_code.finish()) as ArrayRef,
-            Arc::new(pcn.finish()) as ArrayRef,
-            Arc::new(pcn_code.finish()) as ArrayRef,
-            Arc::new(trust.finish()) as ArrayRef,
-            Arc::new(trust_code.finish()) as ArrayRef,
-            Arc::new(icb.finish()) as ArrayRef,
-            Arc::new(icb_code.finish()) as ArrayRef,
-            Arc::new(region.finish()) as ArrayRef,
-            Arc::new(region_code.finish()) as ArrayRef,
+            Arc::new(predecessor_codes_list.finish()) as ArrayRef,
+            Arc::new(successor_codes_list.finish()) as ArrayRef,
+            Arc::new(status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
@@ -569,9 +567,8 @@ pub fn export_orgs(
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<()> {
-    let mut active_records: Vec<&OdsRecord> = records.iter()
-        .filter(|r| r.status == "active")
-        .collect();
+    let mut active_records: Vec<&OdsRecord> =
+        records.iter().filter(|r| r.status == "active").collect();
     active_records.sort_by_key(|r| &r.ods_code);
 
     let release_date_str = provenance
@@ -581,14 +578,20 @@ pub fn export_orgs(
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
     let schema = embed_metadata(&orgs_schema(), provenance);
-    let output_file = File::create(output_dir.join("orgs.parquet"))
-        .context("creating orgs.parquet")?;
+    let output_file =
+        File::create(output_dir.join("orgs.parquet")).context("creating orgs.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs ArrowWriter")?;
 
     for chunk in active_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures, release_days)?;
+        let batch = build_orgs_batch(
+            &schema,
+            chunk,
+            successor_closures,
+            predecessor_closures,
+            release_days,
+        )?;
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
@@ -613,18 +616,27 @@ pub fn export_orgs_all(
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
     let schema = embed_metadata(&orgs_schema(), provenance);
-    let output_file = File::create(output_dir.join("orgs_all.parquet"))
-        .context("creating orgs_all.parquet")?;
+    let output_file =
+        File::create(output_dir.join("orgs_all.parquet")).context("creating orgs_all.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs_all ArrowWriter")?;
 
     for chunk in all_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(&schema, chunk, successor_closures, predecessor_closures, release_days)?;
+        let batch = build_orgs_batch(
+            &schema,
+            chunk,
+            successor_closures,
+            predecessor_closures,
+            release_days,
+        )?;
         writer.write(&batch).context("writing orgs_all batch")?;
     }
     writer.close().context("finalising orgs_all writer")?;
-    println!("Exported {} records to orgs_all.parquet.", all_records.len());
+    println!(
+        "Exported {} records to orgs_all.parquet.",
+        all_records.len()
+    );
     Ok(())
 }
 
@@ -651,41 +663,45 @@ pub fn roles_schema() -> Schema {
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("role_code", DataType::Utf8, false),
         Field::new("role_name", DataType::Utf8, false),
-        Field::new("role_id", DataType::Utf8, false),
         Field::new("is_primary", DataType::Boolean, false),
         Field::new("role_status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
+        Field::new("role_id", DataType::Utf8, false),
         Field::new("trud_release_date", DataType::Date32, false),
     ])
 }
 
-fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i32) -> Result<RecordBatch> {
+fn build_roles_batch(
+    schema: &Arc<Schema>,
+    rows: &[RoleRow],
+    release_days: i32,
+) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut role_code = StringBuilder::new();
     let mut role_name = StringBuilder::new();
-    let mut role_id = StringBuilder::new();
     let mut is_primary = BooleanBuilder::new();
     let mut status = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
+    let mut role_id = StringBuilder::new();
     let mut trud_release_date = Date32Builder::new();
 
     for r in rows {
         ods_code.append_value(&r.ods_code);
         role_code.append_value(&r.role_code);
         role_name.append_value(&r.role_name);
-        role_id.append_value(&r.role_id);
         is_primary.append_value(r.is_primary);
         status.append_value(&r.status);
         append_date(&mut legal_start, r.legal_start.as_deref());
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
         append_date(&mut operational_end, r.operational_end.as_deref());
+        role_id.append_value(&r.role_id);
         trud_release_date.append_value(release_days);
     }
 
@@ -695,13 +711,13 @@ fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i32) 
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(role_code.finish()) as ArrayRef,
             Arc::new(role_name.finish()) as ArrayRef,
-            Arc::new(role_id.finish()) as ArrayRef,
             Arc::new(is_primary.finish()) as ArrayRef,
             Arc::new(status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
+            Arc::new(role_id.finish()) as ArrayRef,
             Arc::new(trud_release_date.finish()) as ArrayRef,
         ],
     )
@@ -710,7 +726,11 @@ fn build_roles_batch(schema: &Arc<Schema>, rows: &[RoleRow], release_days: i32) 
     Ok(batch)
 }
 
-pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option<&crate::provenance::OdsProvenance>) -> Result<()> {
+pub fn export_roles(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+) -> Result<()> {
     let mut rows = Vec::new();
     for r in records {
         for role_record in &r.roles {
@@ -748,8 +768,8 @@ pub fn export_roles(output_dir: &Path, records: &[OdsRecord], provenance: Option
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
     let schema = embed_metadata(&roles_schema(), provenance);
-    let output_file = File::create(output_dir.join("roles.parquet"))
-        .context("creating roles.parquet")?;
+    let output_file =
+        File::create(output_dir.join("roles.parquet")).context("creating roles.parquet")?;
     let props = writer_properties(provenance);
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating roles ArrowWriter")?;
@@ -772,8 +792,8 @@ struct RelationshipRow {
     rel_id: String,
     source_code: String,
     target_code: String,
-    rel_type_code: String,
-    rel_type_name: String,
+    rel_code: String,
+    rel_name: String,
     rel_status: String,
     legal_start: Option<String>,
     legal_end: Option<String>,
@@ -783,60 +803,64 @@ struct RelationshipRow {
 
 pub fn relationships_schema() -> Schema {
     Schema::new(vec![
-        Field::new("rel_id", DataType::Utf8, false),
         Field::new("source_code", DataType::Utf8, false),
         Field::new("target_code", DataType::Utf8, false),
-        Field::new("rel_type_code", DataType::Utf8, false),
-        Field::new("rel_type_name", DataType::Utf8, false),
+        Field::new("rel_code", DataType::Utf8, false),
+        Field::new("rel_name", DataType::Utf8, false),
         Field::new("rel_status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
+        Field::new("rel_id", DataType::Utf8, false),
         Field::new("trud_release_date", DataType::Date32, false),
     ])
 }
 
-fn build_relationships_batch(schema: &Arc<Schema>, rows: &[RelationshipRow], release_days: i32) -> Result<RecordBatch> {
-    let mut rel_id = StringBuilder::new();
+fn build_relationships_batch(
+    schema: &Arc<Schema>,
+    rows: &[RelationshipRow],
+    release_days: i32,
+) -> Result<RecordBatch> {
     let mut source_code = StringBuilder::new();
     let mut target_code = StringBuilder::new();
-    let mut rel_type_code = StringBuilder::new();
-    let mut rel_type_name = StringBuilder::new();
+    let mut rel_code = StringBuilder::new();
+    let mut rel_name = StringBuilder::new();
     let mut rel_status = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut legal_end = Date32Builder::new();
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
+    let mut rel_id = StringBuilder::new();
     let mut trud_release_date = Date32Builder::new();
 
     for r in rows {
-        rel_id.append_value(&r.rel_id);
         source_code.append_value(&r.source_code);
         target_code.append_value(&r.target_code);
-        rel_type_code.append_value(&r.rel_type_code);
-        rel_type_name.append_value(&r.rel_type_name);
+        rel_code.append_value(&r.rel_code);
+        rel_name.append_value(&r.rel_name);
         rel_status.append_value(&r.rel_status);
         append_date(&mut legal_start, r.legal_start.as_deref());
         append_date(&mut legal_end, r.legal_end.as_deref());
         append_date(&mut operational_start, r.operational_start.as_deref());
         append_date(&mut operational_end, r.operational_end.as_deref());
+        rel_id.append_value(&r.rel_id);
         trud_release_date.append_value(release_days);
     }
 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(rel_id.finish()) as ArrayRef,
             Arc::new(source_code.finish()) as ArrayRef,
             Arc::new(target_code.finish()) as ArrayRef,
-            Arc::new(rel_type_code.finish()) as ArrayRef,
-            Arc::new(rel_type_name.finish()) as ArrayRef,
+            Arc::new(rel_code.finish()) as ArrayRef,
+            Arc::new(rel_name.finish()) as ArrayRef,
             Arc::new(rel_status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
+            Arc::new(rel_id.finish()) as ArrayRef,
             Arc::new(trud_release_date.finish()) as ArrayRef,
         ],
     )
@@ -859,8 +883,8 @@ pub fn export_relationships(
                 rel_id: rel.unique_rel_id.clone(),
                 source_code: r.ods_code.clone(),
                 target_code: rel.target.ods_code.clone(),
-                rel_type_code: rel.id.clone(),
-                rel_type_name: rel.display_name.clone().unwrap_or_else(|| rel.id.clone()),
+                rel_code: rel.id.clone(),
+                rel_name: rel.display_name.clone().unwrap_or_else(|| rel.id.clone()),
                 rel_status: rel.status.clone(),
                 legal_start: l_start,
                 legal_end: l_end,
@@ -870,12 +894,12 @@ pub fn export_relationships(
         }
     }
 
-    // Sort: source_code ASC, target_code ASC, rel_type_code ASC, rel_id ASC
+    // Sort: source_code ASC, target_code ASC, rel_code ASC, rel_id ASC
     rows.sort_by(|a, b| {
         a.source_code
             .cmp(&b.source_code)
             .then_with(|| a.target_code.cmp(&b.target_code))
-            .then_with(|| a.rel_type_code.cmp(&b.rel_type_code))
+            .then_with(|| a.rel_code.cmp(&b.rel_code))
             .then_with(|| a.rel_id.cmp(&b.rel_id))
     });
 
@@ -894,7 +918,9 @@ pub fn export_relationships(
 
     for chunk in rows.chunks(BATCH_SIZE) {
         let batch = build_relationships_batch(&schema, chunk, release_days)?;
-        writer.write(&batch).context("writing relationships batch")?;
+        writer
+            .write(&batch)
+            .context("writing relationships batch")?;
     }
     writer.close().context("finalising relationships writer")?;
     println!("Exported {} records to relationships.parquet.", rows.len());
@@ -978,10 +1004,10 @@ pub fn compute_transitive_closures(
         visited.insert(r.ods_code.clone());
 
         while let Some(curr) = queue.pop_front() {
-            if let Some(nexts) = fwd_adj.get(&curr) {
-                for next_code in nexts {
-                    if visited.insert(next_code.clone()) {
-                        queue.push_back(next_code.clone());
+            if let Some(succs) = fwd_adj.get(&curr) {
+                for s in succs {
+                    if visited.insert(s.clone()) {
+                        queue.push_back(s.clone());
                     }
                 }
             }
@@ -998,10 +1024,10 @@ pub fn compute_transitive_closures(
         rev_visited.insert(r.ods_code.clone());
 
         while let Some(curr) = rev_queue.pop_front() {
-            if let Some(prevs) = rev_adj.get(&curr) {
-                for prev_code in prevs {
-                    if rev_visited.insert(prev_code.clone()) {
-                        rev_queue.push_back(prev_code.clone());
+            if let Some(preds) = rev_adj.get(&curr) {
+                for p in preds {
+                    if rev_visited.insert(p.clone()) {
+                        rev_queue.push_back(p.clone());
                     }
                 }
             }
@@ -1017,36 +1043,40 @@ pub fn compute_transitive_closures(
 
 pub fn successions_schema() -> Schema {
     Schema::new(vec![
-        Field::new("succession_id", DataType::Utf8, false),
         Field::new("predecessor_code", DataType::Utf8, false),
         Field::new("successor_code", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
+        Field::new("succession_id", DataType::Utf8, false),
         Field::new("trud_release_date", DataType::Date32, false),
     ])
 }
 
-fn build_successions_batch(schema: &Arc<Schema>, edges: &[SuccessionEdge], release_days: i32) -> Result<RecordBatch> {
-    let mut succession_id = StringBuilder::new();
+fn build_successions_batch(
+    schema: &Arc<Schema>,
+    edges: &[SuccessionEdge],
+    release_days: i32,
+) -> Result<RecordBatch> {
     let mut predecessor_code = StringBuilder::new();
     let mut successor_code = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
+    let mut succession_id = StringBuilder::new();
     let mut trud_release_date = Date32Builder::new();
 
     for edge in edges {
-        succession_id.append_value(&edge.succession_id);
         predecessor_code.append_value(&edge.predecessor_code);
         successor_code.append_value(&edge.successor_code);
         append_date(&mut legal_start, edge.legal_start.as_deref());
+        succession_id.append_value(&edge.succession_id);
         trud_release_date.append_value(release_days);
     }
 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(succession_id.finish()) as ArrayRef,
             Arc::new(predecessor_code.finish()) as ArrayRef,
             Arc::new(successor_code.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
+            Arc::new(succession_id.finish()) as ArrayRef,
             Arc::new(trud_release_date.finish()) as ArrayRef,
         ],
     )
@@ -1128,42 +1158,37 @@ mod tests {
             contacts: vec![],
             roles: vec![],
             relationships: vec![],
-            successors: vec![
-                crate::commands::ndjson::OdsSuccessor {
-                    unique_succ_id: "777".to_string(),
-                    succ_type: "Predecessor".to_string(),
-                    dates: vec![
-                        crate::commands::ndjson::OdsDate {
-                            date_type: "Legal".to_string(),
-                            start: Some("2006-10-01".to_string()),
-                            end: None,
-                        }
-                    ],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
-                        ods_code: "5FD51".to_string(),
-                        name: Some("NHS Predecessor Org".to_string()),
-                        root: None,
-                        assigning_authority_name: None,
-                        primary_role_id: None,
-                        primary_role_display_name: None,
-                        primary_role_unique_role_id: None,
-                    }
-                }
-            ],
-            commissioner: None,
-            commissioner_code: None,
-            parent: None,
-            parent_code: None,
-            legal_start: None,
-            legal_end: None,
-            operational_start: None,
-            operational_end: None,
+            successors: vec![crate::commands::ndjson::OdsSuccessor {
+                unique_succ_id: "777".to_string(),
+                succ_type: "Predecessor".to_string(),
+                dates: vec![crate::commands::ndjson::OdsDate {
+                    date_type: "Legal".to_string(),
+                    start: Some("2006-10-01".to_string()),
+                    end: None,
+                }],
+                target: crate::commands::ndjson::OdsRelationshipTarget {
+                    ods_code: "5FD51".to_string(),
+                    name: Some("NHS Predecessor Org".to_string()),
+                    root: None,
+                    assigning_authority_name: None,
+                    primary_role_id: None,
+                    primary_role_display_name: None,
+                    primary_role_unique_role_id: None,
+                },
+            }],
             ..Default::default()
         };
 
         let schema = Arc::new(orgs_schema());
         let release_days = parse_date_to_days("2026-07-31").unwrap();
-        let batch = build_orgs_batch(&schema, &[&record], &HashMap::new(), &HashMap::new(), release_days).unwrap();
+        let batch = build_orgs_batch(
+            &schema,
+            &[&record],
+            &HashMap::new(),
+            &HashMap::new(),
+            release_days,
+        )
+        .unwrap();
 
         // 1. Verify schema has "address" and does not have "address_line_1/2/3"
         assert!(schema.column_with_name("address").is_some());
@@ -1172,28 +1197,28 @@ mod tests {
         // 2. Verify entity_type field
         assert!(schema.column_with_name("entity_type").is_some());
 
-        // 3. Verify commissioner / parent field presence
-        assert!(schema.column_with_name("commissioner_name").is_some());
-        assert!(schema.column_with_name("commissioner_code").is_some());
-        assert!(schema.column_with_name("parent_name").is_some());
-        assert!(schema.column_with_name("parent_code").is_some());
+        // 3. Verify hierarchy fields are dropped
+        assert!(schema.column_with_name("commissioner_name").is_none());
+        assert!(schema.column_with_name("commissioner_code").is_none());
+        assert!(schema.column_with_name("parent_name").is_none());
+        assert!(schema.column_with_name("parent_code").is_none());
+        assert!(schema.column_with_name("pcn_name").is_none());
+        assert!(schema.column_with_name("pcn_code").is_none());
+        assert!(schema.column_with_name("trust_name").is_none());
+        assert!(schema.column_with_name("trust_code").is_none());
+        assert!(schema.column_with_name("icb_name").is_none());
+        assert!(schema.column_with_name("icb_code").is_none());
+        assert!(schema.column_with_name("region_name").is_none());
+        assert!(schema.column_with_name("region_code").is_none());
 
-        // 4. Verify PCN/Trust/ICB hierarchy fields are present
-        assert!(schema.column_with_name("pcn_name").is_some());
-        assert!(schema.column_with_name("pcn_code").is_some());
-        assert!(schema.column_with_name("trust_name").is_some());
-        assert!(schema.column_with_name("trust_code").is_some());
-        assert!(schema.column_with_name("icb_name").is_some());
-        assert!(schema.column_with_name("icb_code").is_some());
-
-        // 5. Verify postcode renamed
+        // 4. Verify postcode renamed
         assert!(schema.column_with_name("postcode").is_some());
 
-        // 6. Verify successor_codes and predecessor_codes present
+        // 5. Verify successor_codes and predecessor_codes present
         assert!(schema.column_with_name("successor_codes").is_some());
         assert!(schema.column_with_name("predecessor_codes").is_some());
 
-        // 7. Verify the value of "address" field
+        // 6. Verify the value of "address" field
         let address_col = batch
             .column(schema.index_of("address").unwrap())
             .as_any()
@@ -1205,9 +1230,13 @@ mod tests {
             "Suite 4, Albert House, 12 Gresham Road, London, SW9 7AY"
         );
 
-        // 8. Verify new date columns exist
+        // 7. Verify date columns exist
         assert!(schema.column_with_name("legal_start").is_some());
         assert!(schema.column_with_name("legal_end").is_some());
+        assert!(schema.column_with_name("operational_start").is_some());
+        assert!(schema.column_with_name("operational_end").is_some());
+        assert!(schema.column_with_name("last_changed").is_some());
+        assert!(schema.column_with_name("trud_release_date").is_some());
     }
 
     #[test]
@@ -1319,17 +1348,26 @@ mod tests {
 
         let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
 
-        assert_eq!(succ_closures.get("0AF").unwrap(), &vec!["0CE", "0CY", "YDDTR"]);
+        assert_eq!(
+            succ_closures.get("0AF").unwrap(),
+            &vec!["0CE", "0CY", "YDDTR"]
+        );
         assert_eq!(pred_closures.get("0AF").unwrap(), &Vec::<String>::new());
 
         assert_eq!(succ_closures.get("0CE").unwrap(), &vec!["0CY", "YDDTR"]);
         assert_eq!(pred_closures.get("0CE").unwrap(), &vec!["0AF", "0AN"]);
 
         assert_eq!(succ_closures.get("0CY").unwrap(), &vec!["YDDTR"]);
-        assert_eq!(pred_closures.get("0CY").unwrap(), &vec!["0AF", "0AJ", "0AN", "0CE"]);
+        assert_eq!(
+            pred_closures.get("0CY").unwrap(),
+            &vec!["0AF", "0AJ", "0AN", "0CE"]
+        );
 
         assert_eq!(succ_closures.get("YDDTR").unwrap(), &Vec::<String>::new());
-        assert_eq!(pred_closures.get("YDDTR").unwrap(), &vec!["0AF", "0AJ", "0AN", "0CE", "0CY"]);
+        assert_eq!(
+            pred_closures.get("YDDTR").unwrap(),
+            &vec!["0AF", "0AJ", "0AN", "0CE", "0CY"]
+        );
     }
 
     #[test]
@@ -1338,13 +1376,15 @@ mod tests {
         assert!(schema.column_with_name("rel_id").is_some());
         assert!(schema.column_with_name("source_code").is_some());
         assert!(schema.column_with_name("target_code").is_some());
-        assert!(schema.column_with_name("rel_type_code").is_some());
-        assert!(schema.column_with_name("rel_type_name").is_some());
+        assert!(schema.column_with_name("rel_code").is_some());
+        assert!(schema.column_with_name("rel_name").is_some());
         assert!(schema.column_with_name("rel_status").is_some());
         assert!(schema.column_with_name("legal_start").is_some());
         assert!(schema.column_with_name("trud_release_date").is_some());
 
         // Assert dropped columns do not exist
+        assert!(schema.column_with_name("rel_type_code").is_none());
+        assert!(schema.column_with_name("rel_type_name").is_none());
         assert!(schema.column_with_name("source").is_none());
         assert!(schema.column_with_name("target").is_none());
         assert!(schema.column_with_name("rel_type").is_none());
@@ -1354,19 +1394,17 @@ mod tests {
         let record = OdsRecord {
             ods_code: "0AF".to_string(),
             name: "Bury HA".to_string(),
-            relationships: vec![
-                crate::commands::ndjson::OdsRelationship {
-                    id: "RE4".to_string(),
-                    display_name: Some("IS COMMISSIONED BY".to_string()),
-                    unique_rel_id: "999".to_string(),
-                    status: "active".to_string(),
-                    dates: vec![],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
-                        ods_code: "QE1".to_string(),
-                        ..Default::default()
-                    },
-                }
-            ],
+            relationships: vec![crate::commands::ndjson::OdsRelationship {
+                id: "RE4".to_string(),
+                display_name: Some("IS COMMISSIONED BY".to_string()),
+                unique_rel_id: "999".to_string(),
+                status: "active".to_string(),
+                dates: vec![],
+                target: crate::commands::ndjson::OdsRelationshipTarget {
+                    ods_code: "QE1".to_string(),
+                    ..Default::default()
+                },
+            }],
             ..Default::default()
         };
 
@@ -1386,12 +1424,12 @@ mod tests {
         assert!(orgs_s.column_with_name("role_codes").is_some());
         assert!(orgs_s.column_with_name("role_names").is_some());
         assert!(orgs_s.column_with_name("last_changed").is_some());
-        assert!(orgs_s.column_with_name("commissioner_name").is_some());
-        assert!(orgs_s.column_with_name("parent_name").is_some());
-        assert!(orgs_s.column_with_name("pcn_name").is_some());
-        assert!(orgs_s.column_with_name("trust_name").is_some());
-        assert!(orgs_s.column_with_name("icb_name").is_some());
-        assert!(orgs_s.column_with_name("region_name").is_some());
+        assert!(orgs_s.column_with_name("commissioner_name").is_none());
+        assert!(orgs_s.column_with_name("parent_name").is_none());
+        assert!(orgs_s.column_with_name("pcn_name").is_none());
+        assert!(orgs_s.column_with_name("trust_name").is_none());
+        assert!(orgs_s.column_with_name("icb_name").is_none());
+        assert!(orgs_s.column_with_name("region_name").is_none());
 
         assert!(orgs_s.column_with_name("record_class").is_none());
         assert!(orgs_s.column_with_name("primary_role").is_none());
@@ -1417,14 +1455,28 @@ mod tests {
 
     #[test]
     fn test_task_7_trud_release_date_on_all_tables() {
-        assert!(orgs_schema().column_with_name("trud_release_date").is_some());
-        assert!(roles_schema().column_with_name("trud_release_date").is_some());
-        assert!(relationships_schema().column_with_name("trud_release_date").is_some());
-        assert!(successions_schema().column_with_name("trud_release_date").is_some());
+        assert!(orgs_schema()
+            .column_with_name("trud_release_date")
+            .is_some());
+        assert!(roles_schema()
+            .column_with_name("trud_release_date")
+            .is_some());
+        assert!(relationships_schema()
+            .column_with_name("trud_release_date")
+            .is_some());
+        assert!(successions_schema()
+            .column_with_name("trud_release_date")
+            .is_some());
 
         assert!(orgs_schema().column_with_name("publication_date").is_none());
-        assert!(roles_schema().column_with_name("publication_date").is_none());
-        assert!(relationships_schema().column_with_name("publication_date").is_none());
-        assert!(successions_schema().column_with_name("publication_date").is_none());
+        assert!(roles_schema()
+            .column_with_name("publication_date")
+            .is_none());
+        assert!(relationships_schema()
+            .column_with_name("publication_date")
+            .is_none());
+        assert!(successions_schema()
+            .column_with_name("publication_date")
+            .is_none());
     }
 }

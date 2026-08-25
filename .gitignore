@@ -3,6 +3,7 @@
 .DS_Store
 /.*
 !/.gitignore
+!/.github/
 /ods_data*
 /target
 /trud-releases.json

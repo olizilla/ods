@@ -8,27 +8,15 @@ echo "==========================================================================
 # 1. Clean workspace
 echo "* Cleaning workspace..."
 rm -rf ods_data/
+TMP_FIXTURE_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_FIXTURE_DIR"' EXIT
+zip -j -q "$TMP_FIXTURE_DIR/hscorgrefdataxml_data_7.0.0_20260731000001.zip" tests/fixtures/mock_hscorgrefdata.xml
 
-# 2. Run offline trud pull using canned fixture archive
-echo "* Running 'ods trud pull --local-archive .local/fixtures/trud'..."
-ods trud pull --local-archive .local/fixtures/trud
+# 2. Run 'ods make parquet' to generate all target projections from mock fixture
+echo "* Running 'ods make parquet' from committed mock fixture..."
+cargo run -- make parquet --input "$TMP_FIXTURE_DIR/hscorgrefdataxml_data_7.0.0_20260731000001.zip" --output ods_data/current
 
-# 3. Verify workspace release directory structure
-if [ ! -d "ods_data/current/trud" ]; then
-  echo "✖ Missing ods_data/current/trud"
-  exit 1
-fi
-if [ ! -f "ods_data/current/_provenance.json" ]; then
-  echo "✖ Missing ods_data/current/_provenance.json"
-  exit 1
-fi
-echo "✓ Workspace initialized & provenance written successfully."
-
-# 4. Run 'ods make' to generate all target projections
-echo "* Running 'ods make'..."
-ods make
-
-# 5. Assert all output artifacts exist and are non-empty
+# 3. Assert all output artifacts exist and are non-empty
 echo "* Verifying generated target projections..."
 test -s "ods_data/current/orgs.parquet"
 test -s "ods_data/current/orgs_all.parquet"

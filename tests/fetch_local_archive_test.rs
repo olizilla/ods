@@ -32,18 +32,14 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     let local_zip = local_archive_dir.join("hscorgrefdataxml_data_6.5.0_20250501000001.zip");
     create_mock_zip(&local_zip, "2025-05-01")?;
 
-    // 3. Execute fetch with local_archive without explicit output (targeting workspace_root)
+    // 3. Execute fetch with local_archive targeting workspace_root
     let args = ods::commands::fetch::Args {
         local_archive: Some(local_zip.clone()),
+        workspace: Some(workspace_root.clone()),
         ..Default::default()
     };
 
-    // Set current dir or pass workspace context
-    let orig_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
-    let run_res = ods::commands::fetch::run(args);
-    let _ = std::env::set_current_dir(orig_dir);
-    run_res?;
+    ods::commands::fetch::run(args)?;
 
     // 4. Assert 2025 release dir contains 2025 zip
     let rel_2025 = workspace_root.join("releases").join("2025-05-01");

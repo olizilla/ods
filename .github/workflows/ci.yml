@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test Suite & Reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Test Suite
+        run: |
+          OUTPUT=$(cargo test -- --nocapture 2>&1 | tee /dev/stderr)
+          if echo "$OUTPUT" | grep -q "Skipping test"; then
+            echo "✖ Error: Tests contain silent skip guards!"
+            exit 1
+          fi
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Test SHA256SUMS against ubuntu-latest sha256sum
+        run: |
+          TMP_ZIP=$(mktemp -d)/hscorgrefdataxml_data_7.0.0_20260731000001.zip
+          zip -j -q "$TMP_ZIP" tests/fixtures/mock_hscorgrefdata.xml
+          ./target/release/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
+          cd ods_data/releases/2026-07-31 && sha256sum -c SHA256SUMS

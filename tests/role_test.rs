@@ -1,17 +1,11 @@
-use ods::commands::role::{self, Args, OutputFormat};
-use std::path::PathBuf;
+mod common;
 
-fn get_parquet_dir() -> PathBuf {
-    PathBuf::from("./ods_data/current")
-}
+use common::setup_find_test_workspace;
+use ods::commands::role::{self, Args, OutputFormat};
 
 #[test]
 fn test_role_lists_all_205_sorted_by_holders_desc() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     role::run_with_writer(
@@ -31,7 +25,11 @@ fn test_role_lists_all_205_sorted_by_holders_desc() {
 
     let expected_count = ods::roles::role_names().names.len();
     assert_eq!(lines[0], "role_code,role_name,holders");
-    assert_eq!(lines.len(), expected_count + 1, "ods role must list all curated roles");
+    assert_eq!(
+        lines.len(),
+        expected_count + 1,
+        "ods role must list all curated roles"
+    );
 
     // Verify descending order of holder counts
     let mut prev_count = usize::MAX;
@@ -49,11 +47,7 @@ fn test_role_lists_all_205_sorted_by_holders_desc() {
 
 #[test]
 fn test_role_search_substring_filter() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     role::run_with_writer(
@@ -80,11 +74,7 @@ fn test_role_search_substring_filter() {
 
 #[test]
 fn test_role_codes_flag_outputs_comma_separated() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // 1. Search term 'dental' with --codes
     let mut out = Vec::new();
@@ -118,16 +108,16 @@ fn test_role_codes_flag_outputs_comma_separated() {
     .expect("ods role dental --codes --format json should succeed");
 
     let s_json = String::from_utf8(out_json).unwrap();
-    assert_eq!(s_json.trim(), "RO110,RO65", "--codes must win over --format json");
+    assert_eq!(
+        s_json.trim(),
+        "RO110,RO65",
+        "--codes must win over --format json"
+    );
 }
 
 #[test]
 fn test_role_codes_all_when_no_query() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     role::run_with_writer(
@@ -145,16 +135,16 @@ fn test_role_codes_all_when_no_query() {
     let s = String::from_utf8(out).unwrap();
     let codes: Vec<&str> = s.trim().split(',').collect();
     let expected_count = ods::roles::role_names().names.len();
-    assert_eq!(codes.len(), expected_count, "ods role --codes without query must emit all curated role codes");
+    assert_eq!(
+        codes.len(),
+        expected_count,
+        "ods role --codes without query must emit all curated role codes"
+    );
 }
 
 #[test]
 fn test_role_formats_table_markdown_csv_json() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // 1. Table format (default)
     let mut out_table = Vec::new();
@@ -190,7 +180,9 @@ fn test_role_formats_table_markdown_csv_json() {
     )
     .unwrap();
     let s_md = String::from_utf8(out_md).unwrap();
-    assert!(s_md.lines().any(|l| l.contains("Code") && l.contains("Name") && l.contains("Holders")));
+    assert!(s_md
+        .lines()
+        .any(|l| l.contains("Code") && l.contains("Name") && l.contains("Holders")));
     assert!(s_md.contains("RO110"));
     assert!(s_md.contains("General Dental Practice"));
 
@@ -217,11 +209,7 @@ fn test_role_formats_table_markdown_csv_json() {
 
 #[test]
 fn test_role_zero_match_suggestions() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();
     let err = role::run_with_writer(
@@ -244,11 +232,7 @@ fn test_role_zero_match_suggestions() {
 
 #[test]
 fn test_role_csv_escaping_guards() {
-    let parquet_dir = get_parquet_dir();
-    if !parquet_dir.join("orgs.parquet").exists() {
-        eprintln!("Skipping test: ./ods_data/current/orgs.parquet missing");
-        return;
-    }
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out_csv = Vec::new();
     role::run_with_writer(
@@ -272,11 +256,15 @@ fn test_role_csv_escaping_guards() {
 
     for line in &lines[1..] {
         // Must start with RO
-        assert!(line.starts_with("RO"), "CSV row must start with role code: {line}");
+        assert!(
+            line.starts_with("RO"),
+            "CSV row must start with role code: {line}"
+        );
         // Must end with a parseable integer holders count
-        let last_comma = line.rfind(',').expect("CSV line must contain at least one comma");
+        let last_comma = line
+            .rfind(',')
+            .expect("CSV line must contain at least one comma");
         let holders_str = &line[last_comma + 1..];
         let _: usize = holders_str.parse().expect("holders must be integer");
     }
 }
-

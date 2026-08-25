@@ -24,7 +24,7 @@ const FIXTURE_XML: &str = concat!(
 
 fn parse_fixture() -> Vec<ndjson::OdsRecord> {
     let (_prov, _cmap, parsed) = ndjson::parse_single_pass(Path::new(FIXTURE_XML)).expect("parse_single_pass should succeed");
-    let resolved = ndjson::resolve_hierarchies(parsed);
+    let resolved = ndjson::convert_parsed_orgs(parsed);
     resolved.into_values().collect()
 }
 

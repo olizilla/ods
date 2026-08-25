@@ -16,27 +16,42 @@ fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
 }
 
-const FIXTURE_ZIP: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/.local/fixtures/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip"
-);
+fn create_mock_trud_zip_with_manifest(dir: &std::path::Path) -> std::path::PathBuf {
+    let zip_path = dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PublicationType value="Full" />
+    <un:PublicationDate value="2026-07-28" />
+    <un:PublicationSeqNum value="4700" />
+    <un:PublicationSource value="HSCIC" />
+    <un:RecordCount value="305541" />
+  </un:ManifestHeader>
+</un:OrganisationManifest>"#;
 
-fn get_fixture_zip_path() -> std::path::PathBuf {
-    let fixture = std::path::PathBuf::from(FIXTURE_ZIP);
-    if fixture.exists() {
-        fixture
-    } else {
-        std::path::PathBuf::from("ods_data/releases/2026-07-31/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip")
+    let mut inner_bytes = Vec::new();
+    {
+        let mut inner_zip = zip::ZipWriter::new(std::io::Cursor::new(&mut inner_bytes));
+        let options = zip::write::SimpleFileOptions::default();
+        inner_zip.start_file("HSCOrgRefData_Full_20260731.xml", options).unwrap();
+        inner_zip.write_all(xml_content.as_bytes()).unwrap();
+        inner_zip.finish().unwrap();
     }
+
+    let file = fs::File::create(&zip_path).unwrap();
+    let mut outer_zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    outer_zip.start_file("fullfile.zip", options).unwrap();
+    outer_zip.write_all(&inner_bytes).unwrap();
+    outer_zip.finish().unwrap();
+
+    zip_path
 }
 
 #[test]
 fn test_trud_pull_stdout_is_empty_on_default_run() {
-    let fixture_zip = get_fixture_zip_path();
-    if !fixture_zip.exists() {
-        eprintln!("Skipping test: fixture zip not found at {}", fixture_zip.display());
-        return;
-    }
+    let tmp = TempDir::new().unwrap();
+    let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
 
     let tmp = TempDir::new().unwrap();
     let out_dir = tmp.path().join("releases").join("2026-07-31");
@@ -67,13 +82,8 @@ fn test_trud_pull_stdout_is_empty_on_default_run() {
 
 #[test]
 fn test_trud_pull_local_archive_claims_honest_no_trud_checksum() {
-    let fixture_zip = get_fixture_zip_path();
-    if !fixture_zip.exists() {
-        eprintln!("Skipping test: fixture zip not found at {}", fixture_zip.display());
-        return;
-    }
-
     let tmp = TempDir::new().unwrap();
+    let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
@@ -486,11 +496,8 @@ fn test_in_flight_rendering_on_tty() {
 
 #[test]
 fn test_extract_manifest_header_from_nested_real_trud_fixture() {
-    let fixture_zip = get_fixture_zip_path();
-    if !fixture_zip.exists() {
-        eprintln!("Skipping test: fixture zip not found at {}", fixture_zip.display());
-        return;
-    }
+    let tmp = TempDir::new().unwrap();
+    let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
 
     let header = ods::commands::ndjson::extract_manifest_header(&fixture_zip)
         .expect("extract_manifest_header must succeed on real TRUD zip-of-zips fixture");
@@ -521,13 +528,8 @@ fn test_extract_manifest_header_fails_on_archive_without_xml() {
 
 #[test]
 fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
-    let fixture_zip = get_fixture_zip_path();
-    if !fixture_zip.exists() {
-        eprintln!("Skipping test: fixture zip not found at {}", fixture_zip.display());
-        return;
-    }
-
     let tmp = TempDir::new().unwrap();
+    let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()

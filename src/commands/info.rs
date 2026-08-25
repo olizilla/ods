@@ -43,9 +43,21 @@ pub struct HierarchyEntityJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OperatedEntityJson {
+pub struct RelationshipItemJson {
+    pub rel_code: String,
+    pub rel_name: String,
+    pub direction: String,
     pub code: String,
     pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operational_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operational_end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legal_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legal_end: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,19 +79,7 @@ pub struct InfoRecordJson {
     pub uprn: Option<String>,
     pub telephone: Option<String>,
     pub website: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commissioner: Option<HierarchyEntityJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<HierarchyEntityJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcn: Option<HierarchyEntityJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust: Option<HierarchyEntityJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icb: Option<HierarchyEntityJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<HierarchyEntityJson>,
-    pub operates: Vec<OperatedEntityJson>,
+    pub relationships: Vec<RelationshipItemJson>,
     pub succession: Vec<SuccessionHopJson>,
     pub predecessors: Vec<SuccessionHopJson>,
     pub legal_start: Option<String>,
@@ -91,8 +91,10 @@ pub struct InfoRecordJson {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    use std::io::IsTerminal;
+    let use_color = std::io::stdout().is_terminal();
     let resolved_input = crate::workspace::discover_parquet_dir(args.input.as_deref())?;
-    if let Err(e) = run_with_writer(args, &mut std::io::stdout(), &resolved_input) {
+    if let Err(e) = run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, use_color) {
         if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
             if io_err.kind() == std::io::ErrorKind::BrokenPipe {
                 return Ok(());
@@ -108,6 +110,15 @@ pub fn run_with_writer<W: Write + ?Sized>(
     writer: &mut W,
     parquet_dir: &Path,
 ) -> Result<()> {
+    run_with_writer_color(args, writer, parquet_dir, false)
+}
+
+pub fn run_with_writer_color<W: Write + ?Sized>(
+    args: Args,
+    writer: &mut W,
+    parquet_dir: &Path,
+    use_color: bool,
+) -> Result<()> {
     let path = if parquet_dir.join("orgs_all.parquet").exists() {
         parquet_dir.join("orgs_all.parquet")
     } else if parquet_dir.join("orgs.parquet").exists() {
@@ -117,7 +128,11 @@ pub fn run_with_writer<W: Write + ?Sized>(
             let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
             if !releases.is_empty() {
                 let n = releases.len();
-                let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
+                let count_str = if n == 1 {
+                    "1 release".to_string()
+                } else {
+                    format!("{} releases", n)
+                };
                 let newest_date = &releases[0].date;
                 anyhow::bail!(
                     "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
@@ -153,18 +168,6 @@ pub fn run_with_writer<W: Write + ?Sized>(
         uprn: Option<String>,
         telephone: Option<String>,
         website: Option<String>,
-        commissioner_name: String,
-        commissioner_code: String,
-        parent_name: String,
-        parent_code: String,
-        pcn_name: String,
-        pcn_code: String,
-        trust_name: String,
-        trust_code: String,
-        icb_name: String,
-        icb_code: String,
-        region_name: String,
-        region_code: String,
         legal_start: Option<String>,
         legal_end: Option<String>,
         operational_start: Option<String>,
@@ -175,7 +178,10 @@ pub fn run_with_writer<W: Write + ?Sized>(
 
     let mut found: Option<FoundRecord> = None;
 
-    let extract_date = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
+    let extract_date = |batch: &arrow::record_batch::RecordBatch,
+                        idx: Option<usize>,
+                        row: usize|
+     -> Option<String> {
         let idx = idx?;
         let arr = batch.column(idx).as_any().downcast_ref::<Date32Array>()?;
         if arr.is_valid(row) {
@@ -208,12 +214,36 @@ pub fn run_with_writer<W: Write + ?Sized>(
         }
 
         if let Some(i) = match_idx {
-            let name_arr = batch.column(schema.index_of("name")?).as_any().downcast_ref::<StringArray>().context("name StringArray")?;
-            let record_class_arr = batch.column(schema.index_of("entity_type")?).as_any().downcast_ref::<StringArray>().context("entity_type StringArray")?;
-            let status_arr = batch.column(schema.index_of("status")?).as_any().downcast_ref::<StringArray>().context("status StringArray")?;
-            let primary_role_arr = batch.column(schema.index_of("primary_role_code")?).as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
-            let roles_arr = batch.column(schema.index_of("role_codes")?).as_any().downcast_ref::<ListArray>().context("role_codes ListArray")?;
-            let role_names_arr = batch.column(schema.index_of("role_names")?).as_any().downcast_ref::<ListArray>().context("role_names ListArray")?;
+            let name_arr = batch
+                .column(schema.index_of("name")?)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("name StringArray")?;
+            let record_class_arr = batch
+                .column(schema.index_of("entity_type")?)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("entity_type StringArray")?;
+            let status_arr = batch
+                .column(schema.index_of("status")?)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("status StringArray")?;
+            let primary_role_arr = batch
+                .column(schema.index_of("primary_role_code")?)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("primary_role_code StringArray")?;
+            let roles_arr = batch
+                .column(schema.index_of("role_codes")?)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .context("role_codes ListArray")?;
+            let role_names_arr = batch
+                .column(schema.index_of("role_names")?)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .context("role_names ListArray")?;
 
             let address_idx = schema.index_of("address").ok();
             let town_idx = schema.index_of("town").ok();
@@ -223,19 +253,6 @@ pub fn run_with_writer<W: Write + ?Sized>(
             let uprn_idx = schema.index_of("uprn").ok();
             let telephone_idx = schema.index_of("telephone").ok();
             let website_idx = schema.index_of("website").ok();
-            let commissioner_idx = schema.index_of("commissioner_name").ok();
-            let commissioner_code_idx = schema.index_of("commissioner_code").ok();
-            let parent_idx = schema.index_of("parent_name").ok();
-            let parent_code_idx = schema.index_of("parent_code").ok();
-            let pcn_idx = schema.index_of("pcn_name").ok();
-            let pcn_code_idx = schema.index_of("pcn_code").ok();
-            let trust_idx = schema.index_of("trust_name").ok();
-            let trust_code_idx = schema.index_of("trust_code").ok();
-            let icb_idx = schema.index_of("icb_name").ok();
-            let icb_code_idx = schema.index_of("icb_code").ok();
-            let region_idx = schema.index_of("region_name").ok();
-            let region_code_idx = schema.index_of("region_code").ok();
-
             let op_start_idx = schema.index_of("operational_start").ok();
             let op_end_idx = schema.index_of("operational_end").ok();
             let leg_start_idx = schema.index_of("legal_start").ok();
@@ -244,14 +261,20 @@ pub fn run_with_writer<W: Write + ?Sized>(
             let trud_release_date_idx = schema.index_of("trud_release_date").ok();
 
             let roles_list_val = roles_arr.value(i);
-            let roles_str_arr = roles_list_val.as_any().downcast_ref::<StringArray>().context("roles_list StringArray")?;
+            let roles_str_arr = roles_list_val
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("roles_list StringArray")?;
             let mut role_codes = Vec::with_capacity(roles_str_arr.len());
             for j in 0..roles_str_arr.len() {
                 role_codes.push(roles_str_arr.value(j).to_string());
             }
 
             let role_names_list_val = role_names_arr.value(i);
-            let role_names_str_arr = role_names_list_val.as_any().downcast_ref::<StringArray>().context("role_names_list StringArray")?;
+            let role_names_str_arr = role_names_list_val
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("role_names_list StringArray")?;
             let mut role_names = Vec::with_capacity(role_names_str_arr.len());
             for j in 0..role_names_str_arr.len() {
                 role_names.push(role_names_str_arr.value(j).to_string());
@@ -272,9 +295,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 }
             };
 
-            let col_str = |idx: Option<usize>| -> String {
-                col_opt(idx).unwrap_or_default()
-            };
+            let col_str = |idx: Option<usize>| -> String { col_opt(idx).unwrap_or_default() };
 
             let trud_date = extract_date(&batch, trud_release_date_idx, i).unwrap_or_default();
 
@@ -294,18 +315,6 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 uprn: col_opt(uprn_idx),
                 telephone: col_opt(telephone_idx),
                 website: col_opt(website_idx),
-                commissioner_name: col_str(commissioner_idx),
-                commissioner_code: col_str(commissioner_code_idx),
-                parent_name: col_str(parent_idx),
-                parent_code: col_str(parent_code_idx),
-                pcn_name: col_str(pcn_idx),
-                pcn_code: col_str(pcn_code_idx),
-                trust_name: col_str(trust_idx),
-                trust_code: col_str(trust_code_idx),
-                icb_name: col_str(icb_idx),
-                icb_code: col_str(icb_code_idx),
-                region_name: col_str(region_idx),
-                region_code: col_str(region_code_idx),
                 legal_start: extract_date(&batch, leg_start_idx, i),
                 legal_end: extract_date(&batch, leg_end_idx, i),
                 operational_start: extract_date(&batch, op_start_idx, i),
@@ -324,9 +333,14 @@ pub fn run_with_writer<W: Write + ?Sized>(
     let successions_graph = crate::commands::find::load_succession_graph(parquet_dir);
     let org_metadata = crate::commands::find::load_org_metadata(parquet_dir);
 
-    let succ_hops = crate::commands::find::walk_succession_chain(&rec.ods_code, &successions_graph, &org_metadata);
-    let pred_hops = crate::commands::find::get_predecessors(&rec.ods_code, &successions_graph, &org_metadata);
-    let operates_list = load_operated_entities(parquet_dir, &rec.ods_code, &org_metadata);
+    let succ_hops = crate::commands::find::walk_succession_chain(
+        &rec.ods_code,
+        &successions_graph,
+        &org_metadata,
+    );
+    let pred_hops =
+        crate::commands::find::get_predecessors(&rec.ods_code, &successions_graph, &org_metadata);
+    let loaded_rels = load_relationships(parquet_dir, &rec.ods_code, &org_metadata);
 
     // Primary role name and secondary roles
     let mut primary_role_name = String::new();
@@ -364,13 +378,21 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 })
                 .collect();
 
-            let opt_entity = |code: String, name: String| -> Option<HierarchyEntityJson> {
-                if !code.is_empty() || !name.is_empty() {
-                    Some(HierarchyEntityJson { code, name })
-                } else {
-                    None
-                }
-            };
+            let rel_json: Vec<RelationshipItemJson> = loaded_rels
+                .into_iter()
+                .map(|r| RelationshipItemJson {
+                    rel_code: r.rel_code,
+                    rel_name: r.rel_name,
+                    direction: r.direction,
+                    code: r.code,
+                    name: r.name,
+                    status: r.status,
+                    operational_start: r.operational_start,
+                    operational_end: r.operational_end,
+                    legal_start: r.legal_start,
+                    legal_end: r.legal_end,
+                })
+                .collect();
 
             let info_json = InfoRecordJson {
                 ods_code: rec.ods_code,
@@ -390,13 +412,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 uprn: rec.uprn,
                 telephone: rec.telephone,
                 website: rec.website,
-                commissioner: opt_entity(rec.commissioner_code, rec.commissioner_name),
-                parent: opt_entity(rec.parent_code, rec.parent_name),
-                pcn: opt_entity(rec.pcn_code, rec.pcn_name),
-                trust: opt_entity(rec.trust_code, rec.trust_name),
-                icb: opt_entity(rec.icb_code, rec.icb_name),
-                region: opt_entity(rec.region_code, rec.region_name),
-                operates: operates_list,
+                relationships: rel_json,
                 succession: succ_json,
                 predecessors: pred_json,
                 legal_start: rec.legal_start,
@@ -410,9 +426,6 @@ pub fn run_with_writer<W: Write + ?Sized>(
             writeln!(writer, "{}", serde_json::to_string_pretty(&info_json)?)?;
         }
         OutputFormat::Markdown => {
-            use std::io::IsTerminal;
-            let use_color = std::io::stdout().is_terminal();
-
             let succ_hop_links: Vec<crate::formatting::SuccessionHopLink> = succ_hops
                 .iter()
                 .map(|h| crate::formatting::SuccessionHopLink {
@@ -435,11 +448,43 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 })
                 .collect();
 
-            let operates_links: Vec<crate::formatting::OperatedEntityLink> = operates_list
-                .iter()
-                .map(|op| crate::formatting::OperatedEntityLink {
-                    code: &op.code,
-                    name: &op.name,
+            let mut grouped_map: std::collections::BTreeMap<
+                (bool, String, String),
+                Vec<&LoadedRelationship>,
+            > = std::collections::BTreeMap::new();
+            for rel in &loaded_rels {
+                let is_inbound = rel.direction == "inbound";
+                grouped_map
+                    .entry((is_inbound, rel.rel_code.clone(), rel.rel_name.clone()))
+                    .or_default()
+                    .push(rel);
+            }
+
+            let rel_groups: Vec<crate::formatting::RelationshipGroup> = grouped_map
+                .into_iter()
+                .map(|((is_inbound, rel_code, rel_name), items)| {
+                    let total_count = items.len();
+                    let display_items: Vec<crate::formatting::RelationshipItemView> = items
+                        .into_iter()
+                        .take(10)
+                        .map(|it| crate::formatting::RelationshipItemView {
+                            code: &it.code,
+                            name: &it.name,
+                            status: &it.status,
+                            operational_start: it.operational_start.as_deref(),
+                            operational_end: it.operational_end.as_deref(),
+                            legal_start: it.legal_start.as_deref(),
+                            legal_end: it.legal_end.as_deref(),
+                        })
+                        .collect();
+
+                    crate::formatting::RelationshipGroup {
+                        rel_code: Box::leak(rel_code.into_boxed_str()),
+                        rel_name: Box::leak(rel_name.into_boxed_str()),
+                        is_inbound,
+                        items: display_items,
+                        total_count,
+                    }
                 })
                 .collect();
 
@@ -456,19 +501,7 @@ pub fn run_with_writer<W: Write + ?Sized>(
                 uprn: rec.uprn.as_deref().unwrap_or(""),
                 telephone: rec.telephone.as_deref().unwrap_or(""),
                 website: rec.website.as_deref().unwrap_or(""),
-                commissioner: &rec.commissioner_name,
-                commissioner_code: &rec.commissioner_code,
-                parent: &rec.parent_name,
-                parent_code: &rec.parent_code,
-                pcn: &rec.pcn_name,
-                pcn_code: &rec.pcn_code,
-                trust: &rec.trust_name,
-                trust_code: &rec.trust_code,
-                icb: &rec.icb_name,
-                icb_code: &rec.icb_code,
-                region: &rec.region_name,
-                region_code: &rec.region_code,
-                operates: &operates_links,
+                relationships: &rel_groups,
                 succession: &succ_hop_links,
                 predecessors: &pred_hop_links,
                 operational_start: rec.operational_start.as_deref(),
@@ -485,63 +518,151 @@ pub fn run_with_writer<W: Write + ?Sized>(
     Ok(())
 }
 
-pub fn load_operated_entities(
+#[derive(Debug, Clone)]
+pub struct LoadedRelationship {
+    pub rel_code: String,
+    pub rel_name: String,
+    pub direction: String,
+    pub code: String,
+    pub name: String,
+    pub status: String,
+    pub operational_start: Option<String>,
+    pub operational_end: Option<String>,
+    pub legal_start: Option<String>,
+    pub legal_end: Option<String>,
+}
+
+pub fn load_relationships(
     parquet_dir: &Path,
     target_code: &str,
     org_meta: &std::collections::HashMap<String, (String, String)>,
-) -> Vec<OperatedEntityJson> {
-    let mut map: std::collections::HashMap<String, OperatedEntityJson> = std::collections::HashMap::new();
+) -> Vec<LoadedRelationship> {
     let path = parquet_dir.join("relationships.parquet");
-    let Ok(file) = File::open(&path) else { return Vec::new() };
-    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return Vec::new() };
-    let Ok(reader) = builder.build() else { return Vec::new() };
+    let Ok(file) = File::open(&path) else {
+        return Vec::new();
+    };
+    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else {
+        return Vec::new();
+    };
+    let Ok(reader) = builder.build() else {
+        return Vec::new();
+    };
+
+    let mut rels = Vec::new();
 
     for batch in reader.flatten() {
         let schema = batch.schema();
-        let (Ok(src_idx), Ok(tgt_idx), Ok(type_idx), Ok(status_idx)) = (
-            schema.index_of("source_code"),
-            schema.index_of("target_code"),
-            schema.index_of("rel_type_code"),
-            schema.index_of("rel_status"),
-        ) else {
+        let Ok(src_idx) = schema.index_of("source_code") else {
             continue;
         };
+        let Ok(tgt_idx) = schema.index_of("target_code") else {
+            continue;
+        };
+        let type_idx = schema
+            .index_of("rel_code")
+            .or_else(|_| schema.index_of("rel_type_code"))
+            .ok();
+        let name_idx = schema
+            .index_of("rel_name")
+            .or_else(|_| schema.index_of("rel_type_name"))
+            .ok();
+        let status_idx = schema.index_of("rel_status").ok();
+        let leg_start_idx = schema.index_of("legal_start").ok();
+        let leg_end_idx = schema.index_of("legal_end").ok();
+        let op_start_idx = schema.index_of("operational_start").ok();
+        let op_end_idx = schema.index_of("operational_end").ok();
 
         let src_arr = batch.column(src_idx).as_any().downcast_ref::<StringArray>();
         let tgt_arr = batch.column(tgt_idx).as_any().downcast_ref::<StringArray>();
-        let type_arr = batch.column(type_idx).as_any().downcast_ref::<StringArray>();
-        let status_arr = batch.column(status_idx).as_any().downcast_ref::<StringArray>();
 
-        let (Some(src_arr), Some(tgt_arr), Some(type_arr), Some(status_arr)) = (src_arr, tgt_arr, type_arr, status_arr) else {
+        let (Some(src_arr), Some(tgt_arr)) = (src_arr, tgt_arr) else {
             continue;
         };
 
-        for i in 0..batch.num_rows() {
-            if tgt_arr.is_valid(i) && tgt_arr.value(i).eq_ignore_ascii_case(target_code) {
-                if type_arr.is_valid(i) && type_arr.value(i) == "RE6" {
-                    if src_arr.is_valid(i) {
-                        let child_code = src_arr.value(i).to_string();
-                        let (name, is_active) = if let Some((n, s)) = org_meta.get(&child_code) {
-                            (n.clone(), s.eq_ignore_ascii_case("active"))
-                        } else {
-                            let s = if status_arr.is_valid(i) { status_arr.value(i) } else { "active" };
-                            (String::new(), s.eq_ignore_ascii_case("active"))
-                        };
+        let extract_date = |idx: Option<usize>, row: usize| -> Option<String> {
+            let idx = idx?;
+            let arr = batch.column(idx).as_any().downcast_ref::<Date32Array>()?;
+            if arr.is_valid(row) {
+                let days = arr.value(row);
+                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
+                let date = epoch.checked_add_signed(chrono::Duration::days(days as i64))?;
+                Some(date.format("%Y-%m-%d").to_string())
+            } else {
+                None
+            }
+        };
 
-                        if is_active {
-                            map.entry(child_code.clone())
-                                .or_insert_with(|| OperatedEntityJson {
-                                    code: child_code,
-                                    name,
-                                });
-                        }
+        let col_str = |idx: Option<usize>, row: usize| -> String {
+            if let Some(idx) = idx {
+                if let Some(arr) = batch.column(idx).as_any().downcast_ref::<StringArray>() {
+                    if arr.is_valid(row) {
+                        return arr.value(row).to_string();
                     }
                 }
+            }
+            String::new()
+        };
+
+        for i in 0..batch.num_rows() {
+            let is_outbound =
+                src_arr.is_valid(i) && src_arr.value(i).eq_ignore_ascii_case(target_code);
+            let is_inbound =
+                tgt_arr.is_valid(i) && tgt_arr.value(i).eq_ignore_ascii_case(target_code);
+
+            if is_outbound || is_inbound {
+                let other_code = if is_outbound {
+                    tgt_arr.value(i).to_string()
+                } else {
+                    src_arr.value(i).to_string()
+                };
+
+                let other_name = if let Some((name, _)) = org_meta.get(&other_code) {
+                    name.clone()
+                } else {
+                    String::new()
+                };
+
+                let rel_code = col_str(type_idx, i);
+                let rel_name = col_str(name_idx, i);
+                let status = col_str(status_idx, i);
+
+                rels.push(LoadedRelationship {
+                    rel_code,
+                    rel_name,
+                    direction: if is_outbound {
+                        "outbound".to_string()
+                    } else {
+                        "inbound".to_string()
+                    },
+                    code: other_code,
+                    name: other_name,
+                    status: if status.is_empty() {
+                        "active".to_string()
+                    } else {
+                        status
+                    },
+                    operational_start: extract_date(op_start_idx, i),
+                    operational_end: extract_date(op_end_idx, i),
+                    legal_start: extract_date(leg_start_idx, i),
+                    legal_end: extract_date(leg_end_idx, i),
+                });
             }
         }
     }
 
-    let mut result: Vec<OperatedEntityJson> = map.into_values().collect();
-    result.sort_by(|a, b| a.code.cmp(&b.code));
-    result
+    rels.sort_by(|a, b| {
+        a.direction
+            .cmp(&b.direction)
+            .reverse()
+            .then_with(|| a.rel_name.cmp(&b.rel_name))
+            .then_with(|| {
+                let a_act = a.status.eq_ignore_ascii_case("active");
+                let b_act = b.status.eq_ignore_ascii_case("active");
+                b_act.cmp(&a_act)
+            })
+            .then_with(|| b.operational_start.cmp(&a.operational_start))
+            .then_with(|| a.code.cmp(&b.code))
+    });
+
+    rels
 }

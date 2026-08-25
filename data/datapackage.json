@@ -41,13 +41,6 @@
             }
           },
           {
-            "name": "status",
-            "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
             "name": "role_codes",
             "type": "array",
             "constraints": {
@@ -64,20 +57,6 @@
           {
             "name": "primary_role_code",
             "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
-            "name": "successor_codes",
-            "type": "array",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
-            "name": "predecessor_codes",
-            "type": "array",
             "constraints": {
               "required": true
             }
@@ -115,52 +94,25 @@
             "type": "string"
           },
           {
-            "name": "commissioner_name",
-            "type": "string"
+            "name": "predecessor_codes",
+            "type": "array",
+            "constraints": {
+              "required": true
+            }
           },
           {
-            "name": "commissioner_code",
-            "type": "string"
+            "name": "successor_codes",
+            "type": "array",
+            "constraints": {
+              "required": true
+            }
           },
           {
-            "name": "parent_name",
-            "type": "string"
-          },
-          {
-            "name": "parent_code",
-            "type": "string"
-          },
-          {
-            "name": "pcn_name",
-            "type": "string"
-          },
-          {
-            "name": "pcn_code",
-            "type": "string"
-          },
-          {
-            "name": "trust_name",
-            "type": "string"
-          },
-          {
-            "name": "trust_code",
-            "type": "string"
-          },
-          {
-            "name": "icb_name",
-            "type": "string"
-          },
-          {
-            "name": "icb_code",
-            "type": "string"
-          },
-          {
-            "name": "region_name",
-            "type": "string"
-          },
-          {
-            "name": "region_code",
-            "type": "string"
+            "name": "status",
+            "type": "string",
+            "constraints": {
+              "required": true
+            }
           },
           {
             "name": "legal_start",
@@ -222,13 +174,6 @@
             }
           },
           {
-            "name": "status",
-            "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
             "name": "role_codes",
             "type": "array",
             "constraints": {
@@ -245,20 +190,6 @@
           {
             "name": "primary_role_code",
             "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
-            "name": "successor_codes",
-            "type": "array",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
-            "name": "predecessor_codes",
-            "type": "array",
             "constraints": {
               "required": true
             }
@@ -296,52 +227,25 @@
             "type": "string"
           },
           {
-            "name": "commissioner_name",
-            "type": "string"
+            "name": "predecessor_codes",
+            "type": "array",
+            "constraints": {
+              "required": true
+            }
           },
           {
-            "name": "commissioner_code",
-            "type": "string"
+            "name": "successor_codes",
+            "type": "array",
+            "constraints": {
+              "required": true
+            }
           },
           {
-            "name": "parent_name",
-            "type": "string"
-          },
-          {
-            "name": "parent_code",
-            "type": "string"
-          },
-          {
-            "name": "pcn_name",
-            "type": "string"
-          },
-          {
-            "name": "pcn_code",
-            "type": "string"
-          },
-          {
-            "name": "trust_name",
-            "type": "string"
-          },
-          {
-            "name": "trust_code",
-            "type": "string"
-          },
-          {
-            "name": "icb_name",
-            "type": "string"
-          },
-          {
-            "name": "icb_code",
-            "type": "string"
-          },
-          {
-            "name": "region_name",
-            "type": "string"
-          },
-          {
-            "name": "region_code",
-            "type": "string"
+            "name": "status",
+            "type": "string",
+            "constraints": {
+              "required": true
+            }
           },
           {
             "name": "legal_start",
@@ -403,13 +307,6 @@
             }
           },
           {
-            "name": "role_id",
-            "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
             "name": "is_primary",
             "type": "boolean",
             "constraints": {
@@ -440,6 +337,13 @@
             "type": "date"
           },
           {
+            "name": "role_id",
+            "type": "string",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
             "name": "trud_release_date",
             "type": "date",
             "constraints": {
@@ -467,13 +371,6 @@
       "schema": {
         "fields": [
           {
-            "name": "rel_id",
-            "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
             "name": "source_code",
             "type": "string",
             "constraints": {
@@ -488,14 +385,14 @@
             }
           },
           {
-            "name": "rel_type_code",
+            "name": "rel_code",
             "type": "string",
             "constraints": {
               "required": true
             }
           },
           {
-            "name": "rel_type_name",
+            "name": "rel_name",
             "type": "string",
             "constraints": {
               "required": true
@@ -523,6 +420,13 @@
           {
             "name": "operational_end",
             "type": "date"
+          },
+          {
+            "name": "rel_id",
+            "type": "string",
+            "constraints": {
+              "required": true
+            }
           },
           {
             "name": "trud_release_date",
@@ -559,13 +463,6 @@
       "schema": {
         "fields": [
           {
-            "name": "succession_id",
-            "type": "string",
-            "constraints": {
-              "required": true
-            }
-          },
-          {
             "name": "predecessor_code",
             "type": "string",
             "constraints": {
@@ -582,6 +479,13 @@
           {
             "name": "legal_start",
             "type": "date"
+          },
+          {
+            "name": "succession_id",
+            "type": "string",
+            "constraints": {
+              "required": true
+            }
           },
           {
             "name": "trud_release_date",

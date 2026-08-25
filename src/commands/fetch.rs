@@ -68,6 +68,10 @@ pub struct Args {
     #[arg(long)]
     pub local_archive: Option<PathBuf>,
 
+    /// Workspace directory (defaults to ./ods_data if omitted)
+    #[arg(long, short = 'w')]
+    pub workspace: Option<PathBuf>,
+
     /// Print verbose output (URL fetched and raw API response text before deserialization)
     #[arg(long, short = 'v')]
     pub verbose: bool,
@@ -208,7 +212,10 @@ impl TrudFetcher for UreqTrudFetcher {
 
 pub fn run(args: Args) -> Result<()> {
     let progress = Progress::stderr(ProgressCaps::detect(args.quiet, args.verbose, args.no_progress));
-    let workspace_root = find_workspace_root()
+    let workspace_root = args
+        .workspace
+        .clone()
+        .or_else(find_workspace_root)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
 
     if let Some(ref local_path) = args.local_archive {

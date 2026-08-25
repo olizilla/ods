@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use quick_xml::events::{Event, BytesStart};
 use quick_xml::reader::Reader;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -177,39 +176,6 @@ pub struct OdsRecord {
 
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub successors: Vec<OdsSuccessor>,
-
-    // --- resolved / denormalized fields ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commissioner: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commissioner_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcn_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trust_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icb: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icb_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legal_start: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legal_end: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operational_start: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operational_end: Option<String>,
 }
 
 /// Best-effort removal of extraction directories left behind by earlier runs.
@@ -618,11 +584,11 @@ pub fn run(args: Args) -> Result<()> {
     let output_file = File::create(&output_path)
         .with_context(|| format!("cannot create or write to output file: {}", output_path.display()))?;
 
-    // Hierarchy and Date Resolution Pass
-    eprintln!("Resolving parent hierarchies and dates...");
-    let start_resolve = std::time::Instant::now();
-    let resolved_records = resolve_hierarchies(records);
-    eprintln!("Hierarchy resolution complete. Took {:?}", start_resolve.elapsed());
+    // Convert parsed records
+    eprintln!("Converting parsed organisation records...");
+    let start_convert = std::time::Instant::now();
+    let converted_records = convert_parsed_orgs(records);
+    eprintln!("Record conversion complete. Took {:?}", start_convert.elapsed());
 
     // Write to NDJSON
     eprintln!("Writing compiled NDJSON to {}...", output_path.display());
@@ -634,7 +600,7 @@ pub fn run(args: Args) -> Result<()> {
     writer.write_all(prov_json.as_bytes())?;
     writer.write_all(b"\n")?;
 
-    for record in resolved_records.values() {
+    for record in converted_records.values() {
         let serialized = serde_json::to_string(record)?;
         writer.write_all(serialized.as_bytes())?;
         writer.write_all(b"\n")?;
@@ -645,373 +611,13 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn resolve_commissioner(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let mut current = code.to_string();
-    let mut visited = std::collections::HashSet::new();
-    while visited.insert(current.clone()) {
-        let Some(rec) = parsed.get(&current) else {
-            return None;
-        };
-        let is_commissioner = rec.roles.iter().any(|r| {
-            (r.id == crate::ods_codes::ROLE_ICB || r.id == "RO319" || r.id == "RO98" || r.id == "RO326")
-                && r.status.eq_ignore_ascii_case("active")
-        });
-        if is_commissioner && current != code {
-            return Some((rec.ods_code.clone(), rec.name.clone()));
-        }
-
-        // Stage 1: Prefer active target orgs with REL_COMMISSIONED_BY
-        let mut next = rec.relationships.iter().find_map(|rel| {
-            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
-                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                    if target_rec.status.eq_ignore_ascii_case("active") {
-                        return Some(rel.target.ods_code.clone());
-                    }
-                }
-            }
-            None
-        });
-
-        // Stage 2 (Fallback): If Sub-ICB Location (RO319), check REL_REGION (RE5) or REL_COMMISSIONED_BY (RE4)
-        if next.is_none() {
-            let is_sub_icb = rec.roles.iter().any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
-            if is_sub_icb {
-                for rel in &rec.relationships {
-                    if rel.status.eq_ignore_ascii_case("active")
-                        && (rel.id == crate::ods_codes::REL_REGION || rel.id == crate::ods_codes::REL_COMMISSIONED_BY)
-                    {
-                        if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                            if target_rec.status.eq_ignore_ascii_case("active") {
-                                next = Some(rel.target.ods_code.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Stage 3 (Fallback): Inactive target org + succession chain fallback
-        if next.is_none() {
-            for rel in &rec.relationships {
-                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_COMMISSIONED_BY {
-                    let target_code = &rel.target.ods_code;
-                    if let Some(target_rec) = parsed.get(target_code) {
-                        for succ in &target_rec.successors {
-                            if let Some(succ_rec) = parsed.get(&succ.target.ods_code) {
-                                if succ_rec.status.eq_ignore_ascii_case("active") {
-                                    next = Some(succ.target.ods_code.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if next.is_some() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if let Some(n) = next {
-            current = n;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-fn resolve_parent(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let mut current = code.to_string();
-    let mut visited = std::collections::HashSet::new();
-    while visited.insert(current.clone()) {
-        let Some(rec) = parsed.get(&current) else {
-            return None;
-        };
-        let is_trust = rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active"));
-        if is_trust {
-            return Some((rec.ods_code.clone(), rec.name.clone()));
-        }
-        let mut next = rec.relationships.iter().find_map(|rel| {
-            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                    if target_rec.status.eq_ignore_ascii_case("active") {
-                        return Some(rel.target.ods_code.clone());
-                    }
-                }
-            }
-            None
-        });
-
-        if next.is_none() {
-            for rel in &rec.relationships {
-                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                    next = Some(rel.target.ods_code.clone());
-                    break;
-                }
-            }
-        }
-
-        if let Some(n) = next {
-            current = n;
-        } else if let Some(ref parent) = rec.parent_organisation {
-            current = parent.ods_code.clone();
-        } else {
-            if current != code {
-                return Some((rec.ods_code.clone(), rec.name.clone()));
-            } else {
-                return None;
-            }
-        }
-    }
-    None
-}
-
-fn resolve_pcn(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let rec = parsed.get(code)?;
-    if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active")) {
-        return Some((rec.ods_code.clone(), rec.name.clone()));
-    }
-    for rel in &rec.relationships {
-        if rel.status.eq_ignore_ascii_case("active") {
-            if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                if target_rec.status.eq_ignore_ascii_case("active")
-                    && target_rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_PCN && r.status.eq_ignore_ascii_case("active"))
-                {
-                    return Some((target_rec.ods_code.clone(), target_rec.name.clone()));
-                }
-            }
-        }
-    }
-    None
-}
-
-fn resolve_trust(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let mut current = code.to_string();
-    let mut visited = std::collections::HashSet::new();
-    while visited.insert(current.clone()) {
-        let rec = parsed.get(&current)?;
-        if rec.roles.iter().any(|r| r.id == crate::ods_codes::ROLE_NHS_TRUST && r.status.eq_ignore_ascii_case("active")) {
-            return Some((rec.ods_code.clone(), rec.name.clone()));
-        }
-        let mut next = rec.relationships.iter().find_map(|rel| {
-            if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                    if target_rec.status.eq_ignore_ascii_case("active") {
-                        return Some(rel.target.ods_code.clone());
-                    }
-                }
-            }
-            None
-        });
-
-        if next.is_none() {
-            for rel in &rec.relationships {
-                if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_MANAGED_BY {
-                    next = Some(rel.target.ods_code.clone());
-                    break;
-                }
-            }
-        }
-
-        if let Some(n) = next {
-            current = n;
-        } else if let Some(ref parent) = rec.parent_organisation {
-            current = parent.ods_code.clone();
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-fn resolve_icb(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let mut current = code.to_string();
-    let mut visited = std::collections::HashSet::new();
-    while visited.insert(current.clone()) {
-        let Some(rec) = parsed.get(&current) else {
-            return None;
-        };
-
-        let is_root_icb = rec
-            .roles
-            .iter()
-            .any(|r| r.id == crate::ods_codes::ROLE_ICB && r.status.eq_ignore_ascii_case("active"));
-        if is_root_icb {
-            return Some((rec.ods_code.clone(), rec.name.clone()));
-        }
-
-        let mut next = None;
-
-        // If current is a Sub-ICB Location (RO319), follow RE5 / RE4 to root ICB (RO318)
-        let is_sub_icb = rec
-            .roles
-            .iter()
-            .any(|r| r.id == "RO319" && r.status.eq_ignore_ascii_case("active"));
-        if is_sub_icb {
-            for rel in &rec.relationships {
-                if rel.status.eq_ignore_ascii_case("active")
-                    && (rel.id == crate::ods_codes::REL_REGION || rel.id == crate::ods_codes::REL_COMMISSIONED_BY)
-                {
-                    if let Some(target_rec) = parsed.get(&rel.target.ods_code) {
-                        if target_rec.status.eq_ignore_ascii_case("active") {
-                            next = Some(rel.target.ods_code.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        if next.is_none() {
-            if let Some((comm_code, comm_name)) = resolve_commissioner(&current, parsed) {
-                if comm_code != current {
-                    next = Some(comm_code);
-                } else {
-                    return Some((comm_code, comm_name));
-                }
-            }
-        }
-
-        if next.is_none() {
-            if let Some(ref parent) = rec.parent_organisation {
-                if parent.ods_code != current {
-                    next = Some(parent.ods_code.clone());
-                }
-            }
-        }
-
-        if let Some(n) = next {
-            current = n;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-fn resolve_region(code: &str, parsed: &HashMap<String, ParsedOrg>) -> Option<(String, String)> {
-    let rec = parsed.get(code)?;
-    if let Some(ref reg_code) = rec.region_code {
-        let reg_name = parsed.get(reg_code).map(|r| r.name.clone())?;
-        return Some((reg_code.clone(), reg_name));
-    }
-    for rel in &rec.relationships {
-        if rel.status.eq_ignore_ascii_case("active") && rel.id == crate::ods_codes::REL_REGION {
-            let target_name = parsed.get(&rel.target.ods_code).map(|r| r.name.clone())?;
-            return Some((rel.target.ods_code.clone(), target_name));
-        }
-    }
-    None
-}
-
-pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collections::BTreeMap<String, OdsRecord> {
-    struct HierarchyProps {
-        commissioner: Option<String>,
-        commissioner_code: Option<String>,
-        parent: Option<String>,
-        parent_code: Option<String>,
-        pcn: Option<String>,
-        pcn_code: Option<String>,
-        trust: Option<String>,
-        trust_code: Option<String>,
-        icb: Option<String>,
-        icb_code: Option<String>,
-        region: Option<String>,
-        region_code: Option<String>,
-        legal_start: Option<String>,
-        legal_end: Option<String>,
-        operational_start: Option<String>,
-        operational_end: Option<String>,
-    }
-
-    let mut resolved_props: HashMap<String, HierarchyProps> = parsed
-        .par_iter()
-        .map(|(code, rec)| {
-            let comm = resolve_commissioner(code, &parsed);
-            let (commissioner_code, commissioner) = match comm {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let par = resolve_parent(code, &parsed);
-            let (parent_code, parent) = match par {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let pcn_res = resolve_pcn(code, &parsed);
-            let (pcn_code, pcn) = match pcn_res {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let trust_res = resolve_trust(code, &parsed);
-            let (trust_code, trust) = match trust_res {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let icb_res = resolve_icb(code, &parsed);
-            let (icb_code, icb) = match icb_res {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let reg_res = resolve_region(code, &parsed);
-            let (region_code, region) = match reg_res {
-                Some((c, n)) => (Some(c), Some(n)),
-                None => (None, None),
-            };
-
-            let legal_start = rec.dates.iter()
-                .find(|d| d.date_type == "Legal")
-                .and_then(|d| d.start.clone());
-            let legal_end = rec.dates.iter()
-                .find(|d| d.date_type == "Legal")
-                .and_then(|d| d.end.clone());
-            let operational_start = rec.dates.iter()
-                .find(|d| d.date_type == "Operational")
-                .and_then(|d| d.start.clone());
-            let operational_end = rec.dates.iter()
-                .find(|d| d.date_type == "Operational")
-                .and_then(|d| d.end.clone());
-
-            (
-                code.clone(),
-                HierarchyProps {
-                    commissioner,
-                    commissioner_code,
-                    parent,
-                    parent_code,
-                    pcn,
-                    pcn_code,
-                    trust,
-                    trust_code,
-                    icb,
-                    icb_code,
-                    region,
-                    region_code,
-                    legal_start,
-                    legal_end,
-                    operational_start,
-                    operational_end,
-                },
-            )
-        })
-        .collect();
-
+pub fn convert_parsed_orgs(parsed: HashMap<String, ParsedOrg>) -> std::collections::BTreeMap<String, OdsRecord> {
     let name_map: HashMap<String, String> =
         parsed.iter().map(|(k, v)| (k.clone(), v.name.clone())).collect();
 
     let mut records: std::collections::BTreeMap<String, OdsRecord> = std::collections::BTreeMap::new();
 
     for (code, mut org) in parsed {
-        let props = resolved_props
-            .remove(&code)
-            .expect("every parsed code must have resolved props");
-
         if let Some(ref mut parent) = org.parent_organisation {
             if let Some(name) = name_map.get(&parent.ods_code) {
                 parent.name = name.clone();
@@ -1055,7 +661,7 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
             status: org.status.to_lowercase(),
             role: org.role.to_lowercase(),
             parent_organisation: org.parent_organisation,
-            region_code: props.region_code.clone(),
+            region_code: org.region_code,
             root: org.root,
             assigning_authority_name: org.assigning_authority_name,
             record_class,
@@ -1066,21 +672,6 @@ pub fn resolve_hierarchies(parsed: HashMap<String, ParsedOrg>) -> std::collectio
             roles: org.roles,
             relationships: org.relationships,
             successors: org.successors,
-            commissioner: props.commissioner,
-            commissioner_code: props.commissioner_code,
-            parent: props.parent,
-            parent_code: props.parent_code,
-            pcn: props.pcn,
-            pcn_code: props.pcn_code,
-            trust: props.trust,
-            trust_code: props.trust_code,
-            icb: props.icb,
-            icb_code: props.icb_code,
-            region: props.region,
-            legal_start: props.legal_start,
-            legal_end: props.legal_end,
-            operational_start: props.operational_start,
-            operational_end: props.operational_end,
         });
     }
 
@@ -1569,7 +1160,10 @@ impl ParserState {
                         c_val = Some(attr.decode_and_unescape_value(reader)?.into_owned());
                     }
                 }
-                if let (Some(t), Some(v)) = (c_type, c_val) {
+                if let (Some(t), Some(mut v)) = (c_type, c_val) {
+                    if t.eq_ignore_ascii_case("http") {
+                        v = v.to_lowercase();
+                    }
                     self.org.contacts.push(OdsContact {
                         contact_type: t,
                         value: v,

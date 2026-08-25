@@ -4,20 +4,6 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn find_real_trud_zip() -> Option<PathBuf> {
-    let candidates = vec![
-        ".local/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
-        "./ods_data_good/releases/2026-07-31/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
-        "./ods_data/releases/2026-07-31/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
-        "./ods_data/current/trud/hscorgrefdataxml_data_7.0.0_20260731000001.zip",
-    ];
-
-    for c in candidates {
-        let path = PathBuf::from(c);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
     if let Ok(env_path) = std::env::var("TRUD_XML_PATH") {
         let path = PathBuf::from(env_path);
         if path.exists() {
@@ -92,13 +78,9 @@ fn test_synthetic_parquet_hash_stability() {
 #[test]
 #[ignore]
 fn test_real_trud_parquet_hash_stability() {
-    let zip_path = match find_real_trud_zip() {
-        Some(path) => path,
-        None => {
-            eprintln!("Skipping test_real_trud_parquet_hash_stability: no real TRUD zip found");
-            return;
-        }
-    };
+    let zip_path = find_real_trud_zip().expect(
+        "TRUD_XML_PATH environment variable must point to an existing TRUD zip archive to run this test",
+    );
 
     println!("Testing real TRUD archive reproducibility against {}", zip_path.display());
 

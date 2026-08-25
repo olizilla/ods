@@ -1228,12 +1228,20 @@ mod tests {
                         dates: vec![],
                     },
                 ],
-                commissioner: Some("NHS LONDON ICB".to_string()),
-                commissioner_code: Some("00A".to_string()),
-                operational_start: Some("2020-01-01".to_string()),
-                legal_start: None,
-                legal_end: None,
-                operational_end: None,
+                relationships: vec![
+                    crate::commands::ndjson::OdsRelationship {
+                        id: "RE4".to_string(),
+                        display_name: Some("IS COMMISSIONED BY".to_string()),
+                        unique_rel_id: "1001".to_string(),
+                        status: "active".to_string(),
+                        dates: vec![],
+                        target: crate::commands::ndjson::OdsRelationshipTarget {
+                            ods_code: "00A".to_string(),
+                            name: Some("NHS London ICB".to_string()),
+                            ..Default::default()
+                        },
+                    }
+                ],
                 ..Default::default()
             },
             crate::commands::ndjson::OdsRecord {

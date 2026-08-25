@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ods::commands::compile::{resolve_hierarchies, ParsedOrg, OdsRole, OdsRelationship, OdsRelationshipTarget, ParentOrganisation};
+use ods::commands::ndjson::{convert_parsed_orgs, ParsedOrg, OdsRole, OdsRelationship, OdsRelationshipTarget, ParentOrganisation};
 use std::collections::HashMap;
 
 fn create_mock_records(count: usize) -> HashMap<String, ParsedOrg> {
@@ -91,15 +91,15 @@ fn create_mock_records(count: usize) -> HashMap<String, ParsedOrg> {
     records
 }
 
-fn bench_hierarchy_resolution(c: &mut Criterion) {
-    // Generate 5,000 mock records to have a substantial graph to resolve
+fn bench_record_conversion(c: &mut Criterion) {
+    // Generate 5,000 mock records
     let records = create_mock_records(5000);
 
-    c.bench_function("hierarchy_resolution_5000_records", |b| {
+    c.bench_function("record_conversion_5000_records", |b| {
         b.iter_batched(
             || records.clone(),
             |recs| {
-                let res = resolve_hierarchies(black_box(recs));
+                let res = convert_parsed_orgs(black_box(recs));
                 black_box(res);
             },
             criterion::BatchSize::SmallInput,
@@ -107,6 +107,6 @@ fn bench_hierarchy_resolution(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_hierarchy_resolution);
+criterion_group!(benches, bench_record_conversion);
 criterion_main!(benches);
 

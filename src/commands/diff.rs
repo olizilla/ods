@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use super::ndjson::{OdsRecord, parse_single_pass, resolve_hierarchies, find_xml_file};
+use super::ndjson::{OdsRecord, parse_single_pass, convert_parsed_orgs, find_xml_file};
 use crate::provenance::OdsProvenance;
 
 #[derive(Parser, Debug)]
@@ -176,14 +176,8 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
         let role_arr = batch.column(schema.index_of("primary_role_code")?)
             .as_any().downcast_ref::<arrow::array::StringArray>().context("primary_role_code StringArray")?;
         let record_class_idx = schema.index_of("entity_type").ok();
-        let parent_idx = schema.index_of("parent_name").ok();
-        let parent_code_idx = schema.index_of("parent_code").ok();
-        let pcn_idx = schema.index_of("pcn_name").ok();
-        let pcn_code_idx = schema.index_of("pcn_code").ok();
-        let trust_idx = schema.index_of("trust_name").ok();
-        let trust_code_idx = schema.index_of("trust_code").ok();
-        let icb_idx = schema.index_of("icb_name").ok();
-        let icb_code_idx = schema.index_of("icb_code").ok();
+        let town_idx = schema.index_of("town").ok();
+        let postcode_idx = schema.index_of("postcode").ok();
 
         for i in 0..num_rows {
             let ods_code = ods_code_arr.value(i).to_string();
@@ -196,38 +190,23 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
                 .to_string();
             let record_class = record_class_idx.map(|idx| batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(i).to_string()).unwrap_or_else(|| "org".to_string());
 
-            let parent = parent_idx.and_then(|idx| {
+            let town = town_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
             });
-            let parent_code = parent_code_idx.and_then(|idx| {
+            let postcode = postcode_idx.and_then(|idx| {
                 let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
             });
-            let pcn = pcn_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
-            let pcn_code = pcn_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
-            let trust = trust_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
-            let trust_code = trust_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
-            let icb = icb_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
-            let icb_code = icb_code_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<arrow::array::StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            });
+            let geo_loc = if town.is_some() || postcode.is_some() {
+                Some(crate::commands::ndjson::Location {
+                    town,
+                    postcode,
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
 
             let record = OdsRecord {
                 ods_code: ods_code.clone(),
@@ -235,14 +214,7 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
                 status,
                 role,
                 record_class,
-                parent,
-                parent_code,
-                pcn,
-                pcn_code,
-                trust,
-                trust_code,
-                icb,
-                icb_code,
+                geo_loc,
                 ..Default::default()
             };
             records.insert(ods_code, record);
@@ -280,7 +252,7 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
 fn load_xml(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
     let xml_path = find_xml_file(path)?;
     let (prov, _, parsed) = parse_single_pass(&xml_path)?;
-    let map: HashMap<String, OdsRecord> = resolve_hierarchies(parsed).into_iter().collect();
+    let map: HashMap<String, OdsRecord> = convert_parsed_orgs(parsed).into_iter().collect();
     Ok((Some(prov), map))
 }
 
@@ -324,51 +296,12 @@ fn load_zip(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRe
     anyhow::bail!("No XML file found inside zip archive {}", path.display())
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct HierarchyFillRates {
-    pub gp_practice_total: usize,
-    pub gp_practice_icb_linked: usize,
-    pub trust_site_total: usize,
-    pub trust_site_trust_linked: usize,
-}
-
-pub fn compute_fill_rates(records: &HashMap<String, OdsRecord>) -> HierarchyFillRates {
-    let mut rates = HierarchyFillRates::default();
-    for rec in records.values() {
-        let is_active = rec.status.eq_ignore_ascii_case("active");
-        let is_gp = rec.role.eq_ignore_ascii_case("Prescribing Cost Centre")
-            || rec.role.eq_ignore_ascii_case("General Practice");
-        if is_active && is_gp {
-            rates.gp_practice_total += 1;
-            if rec.icb_code.is_some() {
-                rates.gp_practice_icb_linked += 1;
-            }
-        }
-
-        let r_lower = rec.role.to_lowercase();
-        let is_trust_site = r_lower.contains("site") && (r_lower.contains("trust") || r_lower.contains("hospital"));
-        if is_active && is_trust_site {
-            rates.trust_site_total += 1;
-            if rec.trust_code.is_some() {
-                rates.trust_site_trust_linked += 1;
-            }
-        }
-    }
-    rates
-}
-
 #[derive(Default, Debug)]
 pub struct DiffStats {
     pub status_changes: usize,
     pub name_changes: usize,
-    pub parent_changes: usize,
-    pub icb_changes: usize,
-    pub pcn_changes: usize,
-    pub trust_changes: usize,
     pub geo_changes: usize,
     pub other_changes: usize,
-    pub old_hierarchy_rates: Option<HierarchyFillRates>,
-    pub new_hierarchy_rates: Option<HierarchyFillRates>,
 }
 
 fn compute_diff(
@@ -381,11 +314,7 @@ fn compute_diff(
     Vec<EntityDiff>,
     DiffStats,
 )> {
-    let mut stats = DiffStats {
-        old_hierarchy_rates: Some(compute_fill_rates(old_records)),
-        new_hierarchy_rates: Some(compute_fill_rates(new_records)),
-        ..Default::default()
-    };
+    let mut stats = DiffStats::default();
     let old_keys: HashSet<_> = old_records.keys().cloned().collect();
     let new_keys: HashSet<_> = new_records.keys().cloned().collect();
 
@@ -422,10 +351,6 @@ fn compute_diff(
         let mut changes = HashMap::new();
         let mut has_status = false;
         let mut has_name = false;
-        let mut has_parent = false;
-        let mut has_icb = false;
-        let mut has_pcn = false;
-        let mut has_trust = false;
         let mut has_geo = false;
         let mut has_other = false;
 
@@ -462,50 +387,6 @@ fn compute_diff(
             has_other = true;
         }
 
-        if old_rec.parent_code != new_rec.parent_code || old_rec.parent != new_rec.parent {
-            changes.insert(
-                "parent_code".to_string(),
-                ValueChange {
-                    old: old_rec.parent_code.clone(),
-                    new: new_rec.parent_code.clone(),
-                },
-            );
-            has_parent = true;
-        }
-
-        if old_rec.icb_code != new_rec.icb_code || old_rec.icb != new_rec.icb {
-            changes.insert(
-                "icb_code".to_string(),
-                ValueChange {
-                    old: old_rec.icb_code.clone(),
-                    new: new_rec.icb_code.clone(),
-                },
-            );
-            has_icb = true;
-        }
-
-        if old_rec.pcn_code != new_rec.pcn_code || old_rec.pcn != new_rec.pcn {
-            changes.insert(
-                "pcn_code".to_string(),
-                ValueChange {
-                    old: old_rec.pcn_code.clone(),
-                    new: new_rec.pcn_code.clone(),
-                },
-            );
-            has_pcn = true;
-        }
-
-        if old_rec.trust_code != new_rec.trust_code || old_rec.trust != new_rec.trust {
-            changes.insert(
-                "trust_code".to_string(),
-                ValueChange {
-                    old: old_rec.trust_code.clone(),
-                    new: new_rec.trust_code.clone(),
-                },
-            );
-            has_trust = true;
-        }
-
         let old_postcode = old_rec.geo_loc.as_ref().and_then(|g| g.postcode.as_deref());
         let new_postcode = new_rec.geo_loc.as_ref().and_then(|g| g.postcode.as_deref());
         if old_postcode != new_postcode || old_rec.geo_loc != new_rec.geo_loc {
@@ -533,12 +414,8 @@ fn compute_diff(
         if !changes.is_empty() {
             if has_status { stats.status_changes += 1; }
             if has_name { stats.name_changes += 1; }
-            if has_parent { stats.parent_changes += 1; }
-            if has_icb { stats.icb_changes += 1; }
-            if has_pcn { stats.pcn_changes += 1; }
-            if has_trust { stats.trust_changes += 1; }
             if has_geo { stats.geo_changes += 1; }
-            if has_other && !has_status && !has_name && !has_parent && !has_icb && !has_pcn && !has_trust && !has_geo {
+            if has_other && !has_status && !has_name && !has_geo {
                 stats.other_changes += 1;
             }
 
@@ -600,33 +477,28 @@ fn render_summary_tui(
         .map(|d| format!("{} ({} recs)", d, total_new))
         .unwrap_or_else(|| format!("{} records", total_new));
 
-    let subtitle = format!("Baseline: {}  ➔  Target: {}", old_label, new_label);
-
-    let box_width = 72;
-    writeln!(w, "┌────────────────────────────────────────────────────────────────────────┐")?;
-    
-    // Header title line
-    let title_text = "ODS TRUD RELEASE DIFF REPORT";
-    let title_len = title_text.len();
-    let title_pad = if box_width > title_len { box_width - title_len } else { 0 };
-    let title_l = title_pad / 2;
-    let title_r = title_pad - title_l;
-    writeln!(w, "│{}{}{}│", " ".repeat(title_l), bold(title_text), " ".repeat(title_r))?;
-
-    // Subtitle line with publication dates
-    let sub_len = subtitle.len();
-    let sub_pad = box_width.saturating_sub(sub_len);
-    let sub_l = sub_pad / 2;
-    let sub_r = sub_pad - sub_l;
-    writeln!(w, "│{}{}{}│", " ".repeat(sub_l), subtitle, " ".repeat(sub_r))?;
-    
-    writeln!(w, "└────────────────────────────────────────────────────────────────────────┘")?;
-
-    let mod_pct = if total_old > 0 { (modified.len() as f64 / total_old as f64) * 100.0 } else { 0.0 };
+    writeln!(w, "\n{}", bold("================ ODS TRUD RELEASE DIFF REPORT ================"))?;
+    writeln!(w, "  Baseline: {}", old_label)?;
+    writeln!(w, "  Target:   {}", new_label)?;
 
     writeln!(w, "\n  {}", bold("Entity Lifecycle:"))?;
-    writeln!(w, "    {} Added:      {:>6} organisations", green("✚"), added.len())?;
-    writeln!(w, "    {} Removed:    {:>6} organisations", red("✖"), removed.len())?;
+    writeln!(
+        w,
+        "    {} Added:      {:>6} organisations",
+        green("✚"),
+        added.len()
+    )?;
+    writeln!(
+        w,
+        "    {} Removed:    {:>6} organisations",
+        red("✖"),
+        removed.len()
+    )?;
+    let mod_pct = if total_old > 0 {
+        (modified.len() as f64 / total_old as f64) * 100.0
+    } else {
+        0.0
+    };
     writeln!(
         w,
         "    {} Modified:   {:>6} organisations ({:.2}%)",
@@ -638,59 +510,9 @@ fn render_summary_tui(
     writeln!(w, "\n  {}", bold("Property Changes:"))?;
     writeln!(w, "    • {:<36} {:>6}", "Status Changes (Active ↔ Inactive):", stats.status_changes)?;
     writeln!(w, "    • {:<36} {:>6}", "Name Modifications:", stats.name_changes)?;
-    writeln!(w, "    • {:<36} {:>6}", "Parent Org Reassignments:", stats.parent_changes)?;
-    writeln!(w, "    • {:<36} {:>6}", "ICB Hierarchy Changes:", stats.icb_changes)?;
-    writeln!(w, "    • {:<36} {:>6}", "Trust Reassignments:", stats.trust_changes)?;
     writeln!(w, "    • {:<36} {:>6}", "Address / Geography Changes:", stats.geo_changes)?;
     if stats.other_changes > 0 {
         writeln!(w, "    • {:<36} {:>6}", "Other Property Changes:", stats.other_changes)?;
-    }
-
-    if let (Some(old_rates), Some(new_rates)) = (&stats.old_hierarchy_rates, &stats.new_hierarchy_rates) {
-        writeln!(w, "\n  {}", bold("Hierarchy Linkage Fill Rates:"))?;
-        let old_gp_pct = if old_rates.gp_practice_total > 0 {
-            (old_rates.gp_practice_icb_linked as f64 / old_rates.gp_practice_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let new_gp_pct = if new_rates.gp_practice_total > 0 {
-            (new_rates.gp_practice_icb_linked as f64 / new_rates.gp_practice_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let gp_diff = (new_rates.gp_practice_icb_linked as i64) - (old_rates.gp_practice_icb_linked as i64);
-        let gp_diff_str = if gp_diff >= 0 { format!("+{}", gp_diff) } else { format!("{}", gp_diff) };
-
-        writeln!(
-            w,
-            "    • {:<36} {:.1}% ({}/{}) ➔ {:.1}% ({}/{}) [{}]",
-            "GP Practice ➔ ICB Linkage:",
-            old_gp_pct, old_rates.gp_practice_icb_linked, old_rates.gp_practice_total,
-            new_gp_pct, new_rates.gp_practice_icb_linked, new_rates.gp_practice_total,
-            gp_diff_str
-        )?;
-
-        let old_t_pct = if old_rates.trust_site_total > 0 {
-            (old_rates.trust_site_trust_linked as f64 / old_rates.trust_site_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let new_t_pct = if new_rates.trust_site_total > 0 {
-            (new_rates.trust_site_trust_linked as f64 / new_rates.trust_site_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let t_diff = (new_rates.trust_site_trust_linked as i64) - (old_rates.trust_site_trust_linked as i64);
-        let t_diff_str = if t_diff >= 0 { format!("+{}", t_diff) } else { format!("{}", t_diff) };
-
-        writeln!(
-            w,
-            "    • {:<36} {:.1}% ({}/{}) ➔ {:.1}% ({}/{}) [{}]",
-            "Trust Site ➔ NHS Trust Linkage:",
-            old_t_pct, old_rates.trust_site_trust_linked, old_rates.trust_site_total,
-            new_t_pct, new_rates.trust_site_trust_linked, new_rates.trust_site_total,
-            t_diff_str
-        )?;
     }
 
     if args.verbose {
@@ -897,63 +719,11 @@ fn render_markdown(
     writeln!(w, "| ------------------------------------ | ----- |")?;
     writeln!(w, "| {:<36} | {:>5} |", "Status Changes (Active ↔ Inactive)", stats.status_changes)?;
     writeln!(w, "| {:<36} | {:>5} |", "Name Modifications", stats.name_changes)?;
-    writeln!(w, "| {:<36} | {:>5} |", "Parent Org Reassignments", stats.parent_changes)?;
-    writeln!(w, "| {:<36} | {:>5} |", "ICB Hierarchy Changes", stats.icb_changes)?;
-    writeln!(w, "| {:<36} | {:>5} |", "Trust Reassignments", stats.trust_changes)?;
     writeln!(w, "| {:<36} | {:>5} |", "Address / Geography Changes", stats.geo_changes)?;
     if stats.other_changes > 0 {
         writeln!(w, "| {:<36} | {:>5} |", "Other Property Changes", stats.other_changes)?;
     }
     writeln!(w)?;
-
-    if let (Some(old_rates), Some(new_rates)) = (&stats.old_hierarchy_rates, &stats.new_hierarchy_rates) {
-        let old_gp_pct = if old_rates.gp_practice_total > 0 {
-            (old_rates.gp_practice_icb_linked as f64 / old_rates.gp_practice_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let new_gp_pct = if new_rates.gp_practice_total > 0 {
-            (new_rates.gp_practice_icb_linked as f64 / new_rates.gp_practice_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let gp_diff = (new_rates.gp_practice_icb_linked as i64) - (old_rates.gp_practice_icb_linked as i64);
-        let gp_diff_str = if gp_diff >= 0 { format!("+{}", gp_diff) } else { format!("{}", gp_diff) };
-
-        let old_t_pct = if old_rates.trust_site_total > 0 {
-            (old_rates.trust_site_trust_linked as f64 / old_rates.trust_site_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let new_t_pct = if new_rates.trust_site_total > 0 {
-            (new_rates.trust_site_trust_linked as f64 / new_rates.trust_site_total as f64) * 100.0
-        } else {
-            0.0
-        };
-        let t_diff = (new_rates.trust_site_trust_linked as i64) - (old_rates.trust_site_trust_linked as i64);
-        let t_diff_str = if t_diff >= 0 { format!("+{}", t_diff) } else { format!("{}", t_diff) };
-
-        writeln!(w, "### Hierarchy Linkage Fill Rates\n")?;
-        writeln!(w, "| Relationship                           | Baseline Fill Rate | Target Fill Rate | Delta |")?;
-        writeln!(w, "| -------------------------------------- | ------------------ | ---------------- | ----- |")?;
-        writeln!(
-            w,
-            "| {:<38} | {:.1}% ({}/{}) | {:.1}% ({}/{}) | {:>5} |",
-            "GP Practice ➔ ICB Linkage",
-            old_gp_pct, old_rates.gp_practice_icb_linked, old_rates.gp_practice_total,
-            new_gp_pct, new_rates.gp_practice_icb_linked, new_rates.gp_practice_total,
-            gp_diff_str
-        )?;
-        writeln!(
-            w,
-            "| {:<38} | {:.1}% ({}/{}) | {:.1}% ({}/{}) | {:>5} |",
-            "Trust Site ➔ NHS Trust Linkage",
-            old_t_pct, old_rates.trust_site_trust_linked, old_rates.trust_site_total,
-            new_t_pct, new_rates.trust_site_trust_linked, new_rates.trust_site_total,
-            t_diff_str
-        )?;
-        writeln!(w)?;
-    }
 
     Ok(())
 }
@@ -968,33 +738,8 @@ mod tests {
             name: name.to_string(),
             status: status.to_string(),
             role: role.to_string(),
-            parent_organisation: None,
-            region_code: None,
-            root: None,
-            assigning_authority_name: None,
             record_class: "org".to_string(),
-            last_change_date: Some("2026-06-01".to_string()),
-            dates: vec![],
-            geo_loc: None,
-            contacts: vec![],
-            roles: vec![],
-            relationships: vec![],
-            successors: vec![],
-            commissioner: None,
-            commissioner_code: None,
-            parent: None,
-            parent_code: None,
-            pcn: None,
-            pcn_code: None,
-            trust: None,
-            trust_code: None,
-            icb: None,
-            icb_code: None,
-            region: None,
-            legal_start: None,
-            legal_end: None,
-            operational_start: None,
-            operational_end: None,
+            ..Default::default()
         }
     }
 

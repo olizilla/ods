@@ -129,10 +129,10 @@ During the development of `ods`, we identified several non-obvious structural qu
 
 ---
 
-### Gotcha 6: Expected Non-100% Parent Linkage (Specialized GP Practices)
-- **The Issue**: Active GP Practices link to ICB commissioners via relationship `RE4` (`is commissioned by`).
-- **Why it matters**: Out of ~12,700 GP practice entries in TRUD XML, ~60 specialized practices (e.g. Armed Forces medical units, overseas practices, prison health services) do not have a parent ICB assigned in official NHS data. Furthermore, ICBs (`RO318`) only exist in releases from July 2022 onwards.
-- **Resolution**: Hierarchy completeness is reported as comparative fill rates in `ods trud diff` rather than a hardcoded expectation in `ods trud audit`, keeping the audit strictly grounded in source-derivable invariants.
+### Gotcha 6: Expected Non-100% Commissioning Linkage (Specialized GP Practices)
+- **The Issue**: Active GP Practices link to commissioners via relationship `RE4` (`is commissioned by`).
+- **Why it matters**: Out of ~12,700 GP practice entries in TRUD XML, ~60 specialized practices (e.g. Armed Forces medical units, overseas practices, prison health services) do not have a commissioning link assigned in official NHS data.
+- **Resolution**: Rather than synthesizing or guessing missing parent links into flattened hierarchy columns, ODS publishes the raw relationships in `relationships.parquet` as stated by NHS TRUD.
 
 ---
 
@@ -143,7 +143,7 @@ During the development of `ods`, we identified several non-obvious structural qu
 | **Primary Scope** | Current & active/retired top-level entities | Closed legacy entities & historical successor maps |
 | **Top-Level Orgs** | ~294,706 entities | Historical closed entities |
 | **Target Node Expansion** | Adds ~9,050 target org references | Legacy target references |
-| **Primary Parquet Output** | `orgs_all.parquet`, `orgs.parquet`, `roles.parquet`, `rels.parquet` | `successors.parquet` |
+| **Primary Parquet Output** | `orgs_all.parquet`, `orgs.parquet`, `roles.parquet`, `relationships.parquet` | `successors.parquet` |
 
 ---
 
@@ -151,15 +151,15 @@ During the development of `ods`, we identified several non-obvious structural qu
 
 ### 1. Significant Roles Relegated to Secondary Roles (`RO261` vs `RO318`)
 - **The Challenge**: In raw NHS TRUD XML, the 42 Statutory Integrated Care Boards (ICBs) are assigned primary role code `RO261` (`"strategic partnership"`), while their defining statutory role `RO318` (`"integrated care board"`) is relegated to a secondary `<Role>` element.
-- **Impact**: Querying `SELECT * FROM orgs.parquet WHERE role = 'integrated care board'` returns 0 rows in `orgs.parquet` unless secondary role mappings or statutory name pattern matching are applied.
+- **Impact**: Querying on primary role code alone misses ICBs. Use `list_contains(role_codes, 'RO318')` or `list_contains(role_names, 'Integrated Care Board')` on `orgs.parquet`.
 
 ### 2. Regional Assignment Gaps & Unmapped Entities
-- **The Challenge**: Out of ~294,000 total entities in `orgs_all.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link assigned in the TRUD XML hierarchy.
-- **Impact**: Any naive fallback (such as defaulting unmapped entities to London `Y56`) artificially inflates London entity counts to 200,000+. Unmapped entities must be grouped into an explicit `[UNMAPPED / OTHER]` category.
+- **The Challenge**: Out of ~294,000 total entities in `orgs_all.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy.
+- **Impact**: `RE5 IS LOCATED IN THE GEOGRAPHY OF` is marked legacy by NHS ODS and only links a subset of entities.
 
 ### 3. Reporting Sub-ICB Locations vs Statutory ICB Boards
-- **The Challenge**: In TRUD XML, primary care practices are linked to Sub-ICB Locations (`RO319` / former CCG reporting codes - 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`).
-- **Impact**: Grouping raw `icb_code` values directly yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Extracting the 42 Statutory ICBs requires mapping sub-ICB reporting codes back to their parent Statutory ICB entity.
+- **The Challenge**: In TRUD XML, primary care practices are linked via `RE4` to Sub-ICB Locations (`RO319` / former CCG reporting codes - 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`).
+- **Impact**: Grouping raw `RE4` target codes yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Finding the Statutory ICBs requires traversing relationships in `relationships.parquet`.
 
 ---
 

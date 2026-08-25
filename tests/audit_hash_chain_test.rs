@@ -1,4 +1,7 @@
 use anyhow::Result;
+use arrow::array::RecordBatchReader;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ArrowWriter;
 use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
@@ -41,6 +44,10 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
       <un:Date type="Operational"><un:Start value="2020-01-01" /></un:Date>
       <un:OrgRecordClass value="RC1" />
       <un:Role id="RO177" uniqueRoleId="1" primaryRole="true" status="Active" />
+      <un:Rel id="RE4" uniqueRelId="1001" status="Active">
+        <Date><Type value="Operational" /><Start value="2020-01-01" /></Date>
+        <Target><OrgId extension="A200" /></Target>
+      </un:Rel>
       <un:Succ uniqueSuccId="100">
         <Date><Type value="Operational" /><Start value="2020-01-01" /></Date>
         <Type>Predecessor</Type>
@@ -79,7 +86,8 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
 
@@ -87,7 +95,8 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: rel_dir.clone(),
         output: rel_dir.clone(),
-    }).unwrap();
+    })
+    .unwrap();
 
     ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
 
@@ -132,7 +141,8 @@ fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<
 
     // Set trud_release_sha256_verified to false
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    let mut prov: ods::provenance::OdsProvenance =
+        serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
 
@@ -146,7 +156,10 @@ fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when archive is unverified");
+    assert!(
+        result.is_err(),
+        "audit must fail when archive is unverified"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("unverified") || err_msg.contains("discrepanc"),
@@ -202,7 +215,10 @@ fn test_audit_runs_full_suite_and_fails_on_tampered_sha256sums_file() -> Result<
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail on tampered SHA256SUMS file");
+    assert!(
+        result.is_err(),
+        "audit must fail on tampered SHA256SUMS file"
+    );
     Ok(())
 }
 
@@ -213,9 +229,13 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
 
     // Mutate dataset_file_sha256 in _provenance.json
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    let mut prov: ods::provenance::OdsProvenance =
+        serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
     if let Some(ref mut map) = prov.dataset_file_sha256 {
-        map.insert("orgs.parquet".to_string(), "0000000000000000000000000000000000000000000000000000000000000000".to_string());
+        map.insert(
+            "orgs.parquet".to_string(),
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
     }
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
 
@@ -229,7 +249,10 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail on corrupted dataset_file_sha256 in _provenance.json");
+    assert!(
+        result.is_err(),
+        "audit must fail on corrupted dataset_file_sha256 in _provenance.json"
+    );
     Ok(())
 }
 
@@ -252,10 +275,15 @@ fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when unaccounted files exist in release directory");
+    assert!(
+        result.is_err(),
+        "audit must fail when unaccounted files exist in release directory"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Unaccounted") || err_msg.contains("rels.parquet") || err_msg.contains("discrepanc"),
+        err_msg.contains("Unaccounted")
+            || err_msg.contains("rels.parquet")
+            || err_msg.contains("discrepanc"),
         "error message must mention unaccounted file, got: {}",
         err_msg
     );
@@ -283,7 +311,10 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when XML successions count does not match successions.parquet");
+    assert!(
+        result.is_err(),
+        "audit must fail when XML successions count does not match successions.parquet"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Succession") || err_msg.contains("discrepanc"),
@@ -328,7 +359,10 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when successions reference non-existent organisation codes");
+    assert!(
+        result.is_err(),
+        "audit must fail when successions reference non-existent organisation codes"
+    );
     Ok(())
 }
 
@@ -349,7 +383,10 @@ fn test_unexpected_files_detection() -> Result<()> {
     fs::create_dir_all(&ignored2)?;
 
     let unexpected = ods::commands::parquet::get_unexpected_files(&active_dir);
-    assert_eq!(unexpected, vec!["old_rules.json".to_string(), "rels.parquet".to_string()]);
+    assert_eq!(
+        unexpected,
+        vec!["old_rules.json".to_string(), "rels.parquet".to_string()]
+    );
     Ok(())
 }
 
@@ -379,8 +416,20 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     let empty_closures = std::collections::HashMap::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     // Export with empty closures when XML has a predecessor edge
-    ods::commands::parquet::export_orgs(&active_dir, &[record.clone()], &empty_closures, &empty_closures, prov.as_ref())?;
-    ods::commands::parquet::export_orgs_all(&active_dir, &[record], &empty_closures, &empty_closures, prov.as_ref())?;
+    ods::commands::parquet::export_orgs(
+        &active_dir,
+        &[record.clone()],
+        &empty_closures,
+        &empty_closures,
+        prov.as_ref(),
+    )?;
+    ods::commands::parquet::export_orgs_all(
+        &active_dir,
+        &[record],
+        &empty_closures,
+        &empty_closures,
+        prov.as_ref(),
+    )?;
     ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
@@ -393,7 +442,10 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when successor/predecessor closure does not match ground truth");
+    assert!(
+        result.is_err(),
+        "audit must fail when successor/predecessor closure does not match ground truth"
+    );
     Ok(())
 }
 
@@ -459,13 +511,15 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: rel_dir.clone(),
         output: rel_dir.clone(),
-    }).unwrap();
+    })
+    .unwrap();
     ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
 
     let args = ods::commands::audit::Args {
@@ -478,7 +532,10 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when source structural invariant is violated");
+    assert!(
+        result.is_err(),
+        "audit must fail when source structural invariant is violated"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("duplicate uniqueRoleId") || err_msg.contains("discrepanc"),
@@ -502,7 +559,8 @@ fn test_audit_all_skips_unmade_releases() -> Result<()> {
     fs::write(
         unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let args = ods::commands::audit::Args {
         input: None,
@@ -534,7 +592,8 @@ fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
         fs::write(
             unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
             serde_json::to_string_pretty(&prov).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     let args = ods::commands::audit::Args {
@@ -547,7 +606,10 @@ fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit --all must fail with non-zero exit when 100% of releases are skipped");
+    assert!(
+        result.is_err(),
+        "audit --all must fail with non-zero exit when 100% of releases are skipped"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("nothing to audit"),
@@ -616,13 +678,15 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: rel_dir.clone(),
         output: rel_dir.clone(),
-    }).unwrap();
+    })
+    .unwrap();
     ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
 
     let args = ods::commands::audit::Args {
@@ -635,7 +699,10 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_err(), "audit must fail when relationship target is dangling in source XML");
+    assert!(
+        result.is_err(),
+        "audit must fail when relationship target is dangling in source XML"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("dangling") || err_msg.contains("discrepanc"),
@@ -645,3 +712,130 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
+    let (_tmp, workspace_root, outer_zip_path) = setup_valid_workspace_with_provenance();
+    let rel_dir = workspace_root.join("releases").join("2026-07-31");
+    let orgs_file = rel_dir.join("orgs.parquet");
+
+    // Read existing orgs.parquet
+    let file = File::open(&orgs_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+    let schema = reader.schema();
+    let mut batches = Vec::new();
+    for b in reader {
+        let b = b?;
+        let mut cols = b.columns().to_vec();
+        let status_idx = schema.index_of("status")?;
+        let inactive_arr: std::sync::Arc<dyn arrow::array::Array> =
+            std::sync::Arc::new(arrow::array::StringArray::from(vec![
+                "Inactive";
+                b.num_rows()
+            ]));
+        cols[status_idx] = inactive_arr;
+        let modified_batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), cols)?;
+        batches.push(modified_batch);
+    }
+
+    // Write back modified orgs.parquet
+    {
+        let out_file = File::create(&orgs_file)?;
+        let mut writer = ArrowWriter::try_new(out_file, schema, None)?;
+        for b in &batches {
+            writer.write(b)?;
+        }
+        writer.close()?;
+    }
+
+    // Update provenance & SHA256SUMS so checksum matches the modified file
+    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None)?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(outer_zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+        all: false,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(
+        result.is_err(),
+        "audit must fail when orgs.parquet contains inactive rows"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("discrepanc"),
+        "error message must report discrepancies, got: {}",
+        err_msg
+    );
+    Ok(())
+}
+
+#[test]
+fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
+    let (_tmp, workspace_root, outer_zip_path) = setup_valid_workspace_with_provenance();
+    let rel_dir = workspace_root.join("releases").join("2026-07-31");
+    let orgs_file = rel_dir.join("orgs.parquet");
+
+    // Read existing orgs.parquet
+    let file = File::open(&orgs_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+    let schema = reader.schema();
+    let mut batches = Vec::new();
+    for b in reader {
+        let b = b?;
+        let mut cols = b.columns().to_vec();
+        let role_names_idx = schema.index_of("role_names")?;
+        // Build mismatched role_names list with empty array
+        let offsets = arrow::buffer::OffsetBuffer::from_lengths(vec![0; b.num_rows()]);
+        let values = std::sync::Arc::new(arrow::array::StringArray::from(Vec::<String>::new()))
+            as arrow::array::ArrayRef;
+        let field = std::sync::Arc::new(arrow::datatypes::Field::new(
+            "item",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        ));
+        let empty_list = arrow::array::ListArray::new(field, offsets, values, None);
+        cols[role_names_idx] = std::sync::Arc::new(empty_list);
+        let modified_batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), cols)?;
+        batches.push(modified_batch);
+    }
+
+    // Write back modified orgs.parquet
+    {
+        let out_file = File::create(&orgs_file)?;
+        let mut writer = ArrowWriter::try_new(out_file, schema, None)?;
+        for b in &batches {
+            writer.write(b)?;
+        }
+        writer.close()?;
+    }
+
+    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None)?;
+
+    let args = ods::commands::audit::Args {
+        input: Some(outer_zip_path),
+        workspace: Some(workspace_root),
+        json: false,
+        sample: 50,
+        full: true,
+        all: false,
+    };
+
+    let result = ods::commands::audit::run(args);
+    assert!(
+        result.is_err(),
+        "audit must fail when role_codes and role_names length mismatches"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("discrepanc"),
+        "error message must report discrepancies, got: {}",
+        err_msg
+    );
+    Ok(())
+}

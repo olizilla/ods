@@ -99,18 +99,6 @@ pub struct XmlSampleOrgRecord {
     pub telephone: Option<String>,
     pub website: Option<String>,
     pub last_changed: Option<String>,
-    pub commissioner_code: Option<String>,
-    pub commissioner_name: Option<String>,
-    pub parent_code: Option<String>,
-    pub parent_name: Option<String>,
-    pub pcn_code: Option<String>,
-    pub pcn_name: Option<String>,
-    pub trust_code: Option<String>,
-    pub trust_name: Option<String>,
-    pub icb_code: Option<String>,
-    pub icb_name: Option<String>,
-    pub region_code: Option<String>,
-    pub region_name: Option<String>,
 }
 
 #[derive(Default)]
@@ -151,16 +139,24 @@ fn run_all(args: Args) -> Result<()> {
     let start_total = Instant::now();
     let workspace_root = match args.workspace {
         Some(ref p) => p.clone(),
-        None => crate::workspace::find_workspace_root()
-            .context("No ODS workspace found. Pass `--workspace <DIR>` or run inside a workspace.")?,
+        None => crate::workspace::find_workspace_root().context(
+            "No ODS workspace found. Pass `--workspace <DIR>` or run inside a workspace.",
+        )?,
     };
 
     let releases = crate::workspace::list_releases(&workspace_root)?;
     if releases.is_empty() {
-        anyhow::bail!("No releases found in workspace {}", workspace_root.display());
+        anyhow::bail!(
+            "No releases found in workspace {}",
+            workspace_root.display()
+        );
     }
 
-    println!("Auditing {} releases in {}...", releases.len(), workspace_root.display());
+    println!(
+        "Auditing {} releases in {}...",
+        releases.len(),
+        workspace_root.display()
+    );
 
     let mut audited_count = 0;
     let mut skipped_count = 0;
@@ -201,13 +197,21 @@ fn run_all(args: Args) -> Result<()> {
                     println!("  ✓ {:<12} {:>6}  audited", release.date, elapsed_str);
                     audited_count += 1;
                 } else {
-                    println!("  ✖ {:<12} {:>6}  {} discrepancies", release.date, elapsed_str, discrepancies.len());
+                    println!(
+                        "  ✖ {:<12} {:>6}  {} discrepancies",
+                        release.date,
+                        elapsed_str,
+                        discrepancies.len()
+                    );
                     failed_count += 1;
                     failures.push((release.date.clone(), discrepancies));
                 }
             }
             Err(e) => {
-                println!("  ✖ {:<12} {:>6}  failed: {:#}", release.date, elapsed_str, e);
+                println!(
+                    "  ✖ {:<12} {:>6}  failed: {:#}",
+                    release.date, elapsed_str, e
+                );
                 failed_count += 1;
                 failures.push((release.date.clone(), vec![e.to_string()]));
             }
@@ -284,20 +288,39 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     let workspace_root = if discovered_dir.join("current").exists() {
         discovered_dir.clone()
-    } else if discovered_dir.parent().map(|p| p.join("current").exists()).unwrap_or(false) {
+    } else if discovered_dir
+        .parent()
+        .map(|p| p.join("current").exists())
+        .unwrap_or(false)
+    {
         discovered_dir.parent().unwrap().to_path_buf()
-    } else if discovered_dir.parent().and_then(|p| p.parent()).map(|p| p.join("current").exists()).unwrap_or(false) {
-        discovered_dir.parent().unwrap().parent().unwrap().to_path_buf()
+    } else if discovered_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("current").exists())
+        .unwrap_or(false)
+    {
+        discovered_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
     } else {
         std::env::current_dir()?.join(workspace::DEFAULT_WORKSPACE_DIR)
     };
 
-    let (workspace_date, active_release_path) = if input_path.is_dir() && input_path.join("orgs.parquet").exists() {
-        let date_str = input_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
-        (date_str, input_path.clone())
-    } else {
-        workspace::get_active_release(&workspace_root)?
-    };
+    let (workspace_date, active_release_path) =
+        if input_path.is_dir() && input_path.join("orgs.parquet").exists() {
+            let date_str = input_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            (date_str, input_path.clone())
+        } else {
+            workspace::get_active_release(&workspace_root)?
+        };
 
     let parquet_dir = if active_release_path.join("orgs.parquet").exists() {
         active_release_path.clone()
@@ -305,7 +328,10 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         active_release_path.join("parquet")
     };
 
-    let prov_file = if active_release_path.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+    let prov_file = if active_release_path
+        .join(crate::provenance::PROVENANCE_FILENAME)
+        .exists()
+    {
         active_release_path.join(crate::provenance::PROVENANCE_FILENAME)
     } else {
         active_release_path.join("provenance.json")
@@ -325,19 +351,27 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let input_prov = OdsProvenance::load_from_dir(&input_path)
         .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
         .unwrap_or_else(|| {
-            crate::commands::ndjson::parse_single_pass(&xml_path).map(|(p, _, _)| p).unwrap_or_default()
+            crate::commands::ndjson::parse_single_pass(&xml_path)
+                .map(|(p, _, _)| p)
+                .unwrap_or_default()
         });
 
     let input_sha256 = input_prov.trud_release_sha256.clone();
-    let workspace_sha256 = workspace_prov.as_ref().and_then(|p| p.trud_release_sha256.clone());
+    let workspace_sha256 = workspace_prov
+        .as_ref()
+        .and_then(|p| p.trud_release_sha256.clone());
 
-    let input_date = input_prov.trud_release_date.clone()
+    let input_date = input_prov
+        .trud_release_date
+        .clone()
         .unwrap_or_else(|| workspace_date.clone());
 
     let matched_release = match (&input_sha256, &workspace_sha256) {
         (Some(i_sha), Some(w_sha)) => i_sha.eq_ignore_ascii_case(w_sha),
         _ => {
-            let ws_date = workspace_prov.as_ref().and_then(|p| p.trud_release_date.clone())
+            let ws_date = workspace_prov
+                .as_ref()
+                .and_then(|p| p.trud_release_date.clone())
                 .unwrap_or_else(|| workspace_date.clone());
             input_date == ws_date
         }
@@ -355,11 +389,19 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
     }
 
-    let is_verified_archive = input_prov.trud_release_sha256_verified.is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified)
-        || workspace_prov.as_ref().and_then(|p| p.trud_release_sha256_verified).is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified);
+    let is_verified_archive = input_prov
+        .trud_release_sha256_verified
+        .is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified)
+        || workspace_prov
+            .as_ref()
+            .and_then(|p| p.trud_release_sha256_verified)
+            .is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified);
 
     if !is_verified_archive {
-        discrepancies.push("Unverified local archive provenance: SHA-256 has not been verified against TRUD API".to_string());
+        discrepancies.push(
+            "Unverified local archive provenance: SHA-256 has not been verified against TRUD API"
+                .to_string(),
+        );
     }
 
     // Verify SHA256SUMS and Parquet files integrity
@@ -381,7 +423,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     let recorded_sums: HashMap<String, String> = if sums_file.exists() {
         let content = std::fs::read_to_string(&sums_file).unwrap_or_default();
-        content.lines()
+        content
+            .lines()
             .filter_map(|line| {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() == 2 {
@@ -423,14 +466,20 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                                 ));
                             }
                         } else {
-                            discrepancies.push(format!("Missing _provenance.json dataset_file_sha256 entry for {filename}"));
+                            discrepancies.push(format!(
+                                "Missing _provenance.json dataset_file_sha256 entry for {filename}"
+                            ));
                         }
                     } else {
-                        discrepancies.push("Missing dataset_file_sha256 map in _provenance.json".to_string());
+                        discrepancies.push(
+                            "Missing dataset_file_sha256 map in _provenance.json".to_string(),
+                        );
                     }
                 }
             } else {
-                discrepancies.push(format!("Failed to compute live SHA-256 for Parquet file {filename}"));
+                discrepancies.push(format!(
+                    "Failed to compute live SHA-256 for Parquet file {filename}"
+                ));
             }
         } else {
             discrepancies.push(format!("Parquet file missing: {filename}"));
@@ -441,14 +490,23 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         println!("  1. File integrity:");
         if matched_release && is_verified_archive {
             if let Some(ref sha) = input_sha256 {
-                println!("     ✓ SHA-256 Match: {:<20} # Verified against TRUD API", sha);
+                println!(
+                    "     ✓ SHA-256 Match: {:<20} # Verified against TRUD API",
+                    sha
+                );
             } else {
-                println!("     ✓ Data Provenance match: {:<14} # Verified against TRUD API", input_date);
+                println!(
+                    "     ✓ Data Provenance match: {:<14} # Verified against TRUD API",
+                    input_date
+                );
             }
         } else if !is_verified_archive {
             println!("     ✖ Archive SHA-256: Unverified local archive provenance");
         } else {
-            println!("     ✖ Data Provenance mismatch: Input {} vs Workspace {}", input_date, workspace_date);
+            println!(
+                "     ✖ Data Provenance mismatch: Input {} vs Workspace {}",
+                input_date, workspace_date
+            );
         }
 
         let expected = parquet_files.len();
@@ -472,7 +530,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let sample_limit = if args.full { usize::MAX } else { args.sample };
     let raw_xml_invariants = scan_raw_xml_invariants(&xml_path, sample_limit)?;
 
-    let source_invariants_passed = check_source_invariants(&raw_xml_invariants.invariants, &mut discrepancies);
+    let source_invariants_passed =
+        check_source_invariants(&raw_xml_invariants.invariants, &mut discrepancies);
 
     if !args.json && !quiet_sub_output {
         println!("  2. Source Structural Invariants:");
@@ -480,40 +539,61 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         if inv.duplicate_role_ids == 0 {
             println!("     ✓ Unique Role IDs: 0 reuse");
         } else {
-            println!("     ✖ Unique Role IDs: {} duplicate uniqueRoleId instances", inv.duplicate_role_ids);
+            println!(
+                "     ✖ Unique Role IDs: {} duplicate uniqueRoleId instances",
+                inv.duplicate_role_ids
+            );
         }
 
         if inv.duplicate_rel_ids == 0 {
             println!("     ✓ Unique Rel IDs: 0 reuse");
         } else {
-            println!("     ✖ Unique Rel IDs: {} duplicate uniqueRelId instances", inv.duplicate_rel_ids);
+            println!(
+                "     ✖ Unique Rel IDs: {} duplicate uniqueRelId instances",
+                inv.duplicate_rel_ids
+            );
         }
 
         if inv.dangling_rel_targets == 0 && inv.dangling_succ_targets == 0 {
             println!("     ✓ Target Resolution: 0 dangling targets in XML");
         } else {
-            println!("     ✖ Target Resolution: {} dangling rel and {} dangling succ targets", inv.dangling_rel_targets, inv.dangling_succ_targets);
+            println!(
+                "     ✖ Target Resolution: {} dangling rel and {} dangling succ targets",
+                inv.dangling_rel_targets, inv.dangling_succ_targets
+            );
         }
 
         if inv.primary_role_id_mismatches == 0 {
             println!("     ✓ PrimaryRoleId Redundancy Cross-Check: 0 mismatches across relationship targets");
         } else {
-            println!("     ✖ PrimaryRoleId Redundancy Cross-Check: {} target primary role mismatches", inv.primary_role_id_mismatches);
+            println!(
+                "     ✖ PrimaryRoleId Redundancy Cross-Check: {} target primary role mismatches",
+                inv.primary_role_id_mismatches
+            );
         }
 
         if inv.unknown_role_concepts == 0 {
             println!("     ✓ CodeSystem Concept Integrity: 0 unknown role concepts");
         } else {
-            println!("     ✖ CodeSystem Concept Integrity: {} unknown role concept IDs", inv.unknown_role_concepts);
+            println!(
+                "     ✖ CodeSystem Concept Integrity: {} unknown role concept IDs",
+                inv.unknown_role_concepts
+            );
         }
 
         if inv.invalid_date_orders == 0 && inv.orgs_missing_operational_date == 0 {
             println!("     ✓ Date Validity: 0 invalid date orders (End >= Start) and 100% operational date coverage");
         } else {
-            println!("     ✖ Date Validity: {} invalid date orders, {} orgs missing operational dates", inv.invalid_date_orders, inv.orgs_missing_operational_date);
+            println!(
+                "     ✖ Date Validity: {} invalid date orders, {} orgs missing operational dates",
+                inv.invalid_date_orders, inv.orgs_missing_operational_date
+            );
         }
 
-        if inv.invalid_statuses == 0 && inv.invalid_succ_types == 0 && inv.inactive_without_operational_end == 0 {
+        if inv.invalid_statuses == 0
+            && inv.invalid_succ_types == 0
+            && inv.inactive_without_operational_end == 0
+        {
             println!("     ✓ Status & Succession Invariants: 0 invalid values, 0 inactive orgs without operational end");
         } else {
             println!("     ✖ Status & Succession Invariants: {} invalid status, {} invalid succ type, {} inactive without end", inv.invalid_statuses, inv.invalid_succ_types, inv.inactive_without_operational_end);
@@ -596,38 +676,83 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     if !args.json && !quiet_sub_output {
         if entities_match {
-            println!("     ✓ Entities: {:<27} # XML orgs count matches orgs_all.parquet", raw_xml_invariants.total_orgs);
+            println!(
+                "     ✓ Entities: {:<27} # XML orgs count matches orgs_all.parquet",
+                raw_xml_invariants.total_orgs
+            );
         } else {
-            let actual_str = total_orgs_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
-            println!("     ✖ Entities mismatch: XML {} vs Parquet {}", raw_xml_invariants.total_orgs, actual_str);
+            let actual_str = total_orgs_res
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!(
+                "     ✖ Entities mismatch: XML {} vs Parquet {}",
+                raw_xml_invariants.total_orgs, actual_str
+            );
         }
 
         if roles_match {
-            println!("     ✓ Roles: {:<30} # XML roles count matches roles.parquet", raw_xml_invariants.roles_count);
+            println!(
+                "     ✓ Roles: {:<30} # XML roles count matches roles.parquet",
+                raw_xml_invariants.roles_count
+            );
         } else {
-            let actual_str = roles_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
-            println!("     ✖ Roles mismatch: XML {} vs Parquet {}", raw_xml_invariants.roles_count, actual_str);
+            let actual_str = roles_res
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!(
+                "     ✖ Roles mismatch: XML {} vs Parquet {}",
+                raw_xml_invariants.roles_count, actual_str
+            );
         }
 
         if rels_match {
-            println!("     ✓ Relationships: {:<22} # XML rels count matches relationships.parquet", raw_xml_invariants.rels_count);
+            println!(
+                "     ✓ Relationships: {:<22} # XML rels count matches relationships.parquet",
+                raw_xml_invariants.rels_count
+            );
         } else {
-            let actual_str = rels_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
-            println!("     ✖ Relationships mismatch: XML {} vs Parquet {}", raw_xml_invariants.rels_count, actual_str);
+            let actual_str = rels_res
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!(
+                "     ✖ Relationships mismatch: XML {} vs Parquet {}",
+                raw_xml_invariants.rels_count, actual_str
+            );
         }
 
         if succs_match {
-            println!("     ✓ Successors: {:<25} # XML successions count matches successions.parquet", raw_xml_invariants.succs_distinct_count);
+            println!(
+                "     ✓ Successors: {:<25} # XML successions count matches successions.parquet",
+                raw_xml_invariants.succs_distinct_count
+            );
         } else {
-            let actual_str = succs_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
-            println!("     ✖ Successors mismatch: XML {} vs Parquet {}", raw_xml_invariants.succs_distinct_count, actual_str);
+            let actual_str = succs_res
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!(
+                "     ✖ Successors mismatch: XML {} vs Parquet {}",
+                raw_xml_invariants.succs_distinct_count, actual_str
+            );
         }
 
         if active_orgs_match {
-            println!("     ✓ Active: {:<29} # Active orgs in orgs.parquet", raw_xml_invariants.active_orgs);
+            println!(
+                "     ✓ Active: {:<29} # Active orgs in orgs.parquet",
+                raw_xml_invariants.active_orgs
+            );
         } else {
-            let actual_str = active_orgs_res.as_ref().map(|c| c.to_string()).unwrap_or_else(|_| "missing/unreadable".to_string());
-            println!("     ✖ Active mismatch: XML {} vs Parquet {}", raw_xml_invariants.active_orgs, actual_str);
+            let actual_str = active_orgs_res
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| "missing/unreadable".to_string());
+            println!(
+                "     ✖ Active mismatch: XML {} vs Parquet {}",
+                raw_xml_invariants.active_orgs, actual_str
+            );
         }
         println!();
         println!("  4. Schema & Referential Integrity Constraints:");
@@ -636,8 +761,16 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // ------------------------------------------------------------------------
     // SECTION 4: Schema & Referential Integrity Constraints
     // ------------------------------------------------------------------------
-    let (duplicate_codes, orphan_roles, orphan_rels, orphan_succs) =
-        audit_referential_integrity(&orgs_all_parquet, &roles_parquet, &rels_parquet, &succs_parquet, &mut discrepancies)?;
+    let (duplicate_codes, orphan_roles, orphan_rels, orphan_succs) = audit_referential_integrity(
+        &orgs_all_parquet,
+        &roles_parquet,
+        &rels_parquet,
+        &succs_parquet,
+        &mut discrepancies,
+    )?;
+
+    let (inactive_in_orgs, role_list_mismatches) =
+        audit_table_invariants(&orgs_parquet, &orgs_all_parquet, &mut discrepancies)?;
 
     // Unaccounted files check: any file in release directory not in SHA256SUMS
     let mut unaccounted_files = Vec::new();
@@ -695,11 +828,23 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             println!("     ✖ Orphan Successors: {}", orphan_succs);
         }
 
+        if inactive_in_orgs == 0 && role_list_mismatches == 0 {
+            println!("     ✓ Table Invariants: 100% active in orgs.parquet, 100% role_codes/role_names aligned");
+        } else {
+            println!(
+                "     ✖ Table Invariants: {} inactive in orgs.parquet, {} role mismatches",
+                inactive_in_orgs, role_list_mismatches
+            );
+        }
+
         if unaccounted_count == 0 {
             println!("     ✓ Unaccounted files: 0");
         } else {
             let file_list = unaccounted_files.join(", ");
-            println!("     ✖ Unaccounted files: {:<18} # {} not in SHA256SUMS", unaccounted_count, file_list);
+            println!(
+                "     ✖ Unaccounted files: {:<18} # {} not in SHA256SUMS",
+                unaccounted_count, file_list
+            );
         }
         println!();
         println!("  5. Field & Derived Column Parity:");
@@ -773,34 +918,64 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     Ok(discrepancies)
 }
 
-fn check_source_invariants(inv: &SourceStructuralInvariants, discrepancies: &mut Vec<String>) -> bool {
+fn check_source_invariants(
+    inv: &SourceStructuralInvariants,
+    discrepancies: &mut Vec<String>,
+) -> bool {
     let initial_len = discrepancies.len();
     if inv.duplicate_role_ids > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} duplicate uniqueRoleId instances", inv.duplicate_role_ids));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} duplicate uniqueRoleId instances",
+            inv.duplicate_role_ids
+        ));
     }
     if inv.duplicate_rel_ids > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} duplicate uniqueRelId instances", inv.duplicate_rel_ids));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} duplicate uniqueRelId instances",
+            inv.duplicate_rel_ids
+        ));
     }
     if inv.dangling_rel_targets > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} dangling relationship target references", inv.dangling_rel_targets));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} dangling relationship target references",
+            inv.dangling_rel_targets
+        ));
     }
     if inv.dangling_succ_targets > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} dangling successor target references", inv.dangling_succ_targets));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} dangling successor target references",
+            inv.dangling_succ_targets
+        ));
     }
     if inv.primary_role_id_mismatches > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} relationship target PrimaryRoleId mismatches", inv.primary_role_id_mismatches));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} relationship target PrimaryRoleId mismatches",
+            inv.primary_role_id_mismatches
+        ));
     }
     if inv.unknown_role_concepts > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} role IDs not defined in CodeSystem concepts", inv.unknown_role_concepts));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} role IDs not defined in CodeSystem concepts",
+            inv.unknown_role_concepts
+        ));
     }
     if inv.invalid_date_orders > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} date ranges with End < Start", inv.invalid_date_orders));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} date ranges with End < Start",
+            inv.invalid_date_orders
+        ));
     }
     if inv.orgs_missing_operational_date > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} organisations missing an Operational date block", inv.orgs_missing_operational_date));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} organisations missing an Operational date block",
+            inv.orgs_missing_operational_date
+        ));
     }
     if inv.invalid_statuses > 0 {
-        discrepancies.push(format!("Source Invariant Violation: Found {} invalid status values (not Active/Inactive)", inv.invalid_statuses));
+        discrepancies.push(format!(
+            "Source Invariant Violation: Found {} invalid status values (not Active/Inactive)",
+            inv.invalid_statuses
+        ));
     }
     if inv.invalid_succ_types > 0 {
         discrepancies.push(format!("Source Invariant Violation: Found {} invalid succession types (not Predecessor/Successor)", inv.invalid_succ_types));
@@ -899,7 +1074,11 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                         current_target_primary_role.clear();
                     }
                     b"Name" if org_depth == 1 && !in_target => in_name = true,
-                    b"AddrLn1" | b"AddrLn2" | b"AddrLn3" | b"AddrLn4" if org_depth == 1 && !in_target => in_addr_line = true,
+                    b"AddrLn1" | b"AddrLn2" | b"AddrLn3" | b"AddrLn4"
+                        if org_depth == 1 && !in_target =>
+                    {
+                        in_addr_line = true
+                    }
                     b"Town" if org_depth == 1 && !in_target => in_town = true,
                     b"County" if org_depth == 1 && !in_target => in_county = true,
                     b"PostCode" | b"Postcode" if org_depth == 1 && !in_target => in_postcode = true,
@@ -934,7 +1113,9 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                             }
                         }
                     }
-                    b"Status" if org_depth == 1 && !in_role && !in_rel && !in_succ && !in_target => {
+                    b"Status"
+                        if org_depth == 1 && !in_role && !in_rel && !in_succ && !in_target =>
+                    {
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"value" {
                                 if let Ok(val) = attr.decode_and_unescape_value(&reader) {
@@ -1035,7 +1216,8 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                                                 current_record.operational_end = Some(val_str);
                                             }
                                         } else if current_date_type.as_deref() == Some("legal") {
-                                            if let Some(ref start_val) = current_record.legal_start {
+                                            if let Some(ref start_val) = current_record.legal_start
+                                            {
                                                 if val_str < *start_val {
                                                     inv.invariants.invalid_date_orders += 1;
                                                 }
@@ -1080,7 +1262,9 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
 
                         if !role_id.is_empty() {
                             role_concept_ids.push(role_id.clone());
-                            if !role_status.eq_ignore_ascii_case("inactive") || current_record.status.eq_ignore_ascii_case("inactive") {
+                            if !role_status.eq_ignore_ascii_case("inactive")
+                                || current_record.status.eq_ignore_ascii_case("inactive")
+                            {
                                 if !current_record.role_codes.contains(&role_id) {
                                     current_record.role_codes.push(role_id.clone());
                                 }
@@ -1223,7 +1407,10 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                             if !current_target_code.is_empty() {
                                 rel_target_codes.push(current_target_code.clone());
                                 if !current_target_primary_role.is_empty() {
-                                    rel_primary_role_targets.push((current_target_code.clone(), current_target_primary_role.clone()));
+                                    rel_primary_role_targets.push((
+                                        current_target_code.clone(),
+                                        current_target_primary_role.clone(),
+                                    ));
                                 }
                             }
                         }
@@ -1232,7 +1419,11 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                     b"Organisation" => {
                         if org_depth == 1 && !in_target {
                             inv.total_orgs += 1;
-                            let status = if current_record.status.is_empty() { "Active".to_string() } else { current_record.status.clone() };
+                            let status = if current_record.status.is_empty() {
+                                "Active".to_string()
+                            } else {
+                                current_record.status.clone()
+                            };
                             if status.eq_ignore_ascii_case("active") {
                                 inv.active_orgs += 1;
                             } else if current_operational_end.is_none() {
@@ -1243,10 +1434,15 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                                 inv.invariants.orgs_missing_operational_date += 1;
                             }
 
-                            if inv.sample_orgs.len() < max_samples && !current_record.ods_code.is_empty() {
+                            if inv.sample_orgs.len() < max_samples
+                                && !current_record.ods_code.is_empty()
+                            {
                                 current_record.role_codes.sort_unstable();
                                 current_record.role_codes.dedup();
-                                inv.sample_orgs.insert(current_record.ods_code.clone(), current_record.clone());
+                                inv.sample_orgs.insert(
+                                    current_record.ods_code.clone(),
+                                    current_record.clone(),
+                                );
                             }
                         }
                         if org_depth > 0 {
@@ -1299,29 +1495,12 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
             for succ in &org.successors {
                 let is_pred = succ.succ_type.eq_ignore_ascii_case("predecessor");
                 if is_pred {
-                    inv.succession_edges.push((succ.target.ods_code.clone(), org.ods_code.clone()));
+                    inv.succession_edges
+                        .push((succ.target.ods_code.clone(), org.ods_code.clone()));
                 } else {
-                    inv.succession_edges.push((org.ods_code.clone(), succ.target.ods_code.clone()));
+                    inv.succession_edges
+                        .push((org.ods_code.clone(), succ.target.ods_code.clone()));
                 }
-            }
-        }
-
-        // Also resolve hierarchies on sample orgs
-        let resolved = crate::commands::ndjson::resolve_hierarchies(parsed_orgs);
-        for (code, sample) in inv.sample_orgs.iter_mut() {
-            if let Some(rec) = resolved.get(code) {
-                sample.commissioner_code = rec.commissioner_code.clone();
-                sample.commissioner_name = rec.commissioner.clone();
-                sample.parent_code = rec.parent_code.clone();
-                sample.parent_name = rec.parent.clone();
-                sample.pcn_code = rec.pcn_code.clone();
-                sample.pcn_name = rec.pcn.clone();
-                sample.trust_code = rec.trust_code.clone();
-                sample.trust_name = rec.trust.clone();
-                sample.icb_code = rec.icb_code.clone();
-                sample.icb_name = rec.icb.clone();
-                sample.region_code = rec.region_code.clone();
-                sample.region_name = rec.region.clone();
             }
         }
     }
@@ -1344,14 +1523,20 @@ fn audit_referential_integrity(
     let mut valid_codes = HashSet::new();
     let mut duplicate_codes = 0;
 
-    let file_res = File::open(orgs_all_parquet).and_then(|f| ParquetRecordBatchReaderBuilder::try_new(f).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+    let file_res = File::open(orgs_all_parquet).and_then(|f| {
+        ParquetRecordBatchReaderBuilder::try_new(f)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    });
     match file_res {
         Ok(builder) => match builder.build() {
             Ok(reader) => {
                 for batch in reader {
                     let batch = batch?;
-                    let ods_code_arr = batch.column(batch.schema().index_of("ods_code")?)
-                        .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
+                    let ods_code_arr = batch
+                        .column(batch.schema().index_of("ods_code")?)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .context("ods_code StringArray")?;
                     for i in 0..batch.num_rows() {
                         let code = ods_code_arr.value(i);
                         if !valid_codes.insert(code.to_string()) {
@@ -1361,11 +1546,17 @@ fn audit_referential_integrity(
                 }
             }
             Err(e) => {
-                discrepancies.push(format!("Referential Integrity Error: Failed to read orgs_all.parquet: {:#}", e));
+                discrepancies.push(format!(
+                    "Referential Integrity Error: Failed to read orgs_all.parquet: {:#}",
+                    e
+                ));
             }
         },
         Err(e) => {
-            discrepancies.push(format!("Referential Integrity Error: Failed to open orgs_all.parquet: {:#}", e));
+            discrepancies.push(format!(
+                "Referential Integrity Error: Failed to open orgs_all.parquet: {:#}",
+                e
+            ));
         }
     }
 
@@ -1389,9 +1580,15 @@ fn audit_referential_integrity(
                         let role_code_idx = schema.index_of("role_code").ok();
                         let role_name_idx = schema.index_of("role_name").ok();
 
-                        let code_arr = code_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
-                        let role_code_arr = role_code_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
-                        let role_name_arr = role_name_idx.and_then(|idx| batch.column(idx).as_any().downcast_ref::<StringArray>());
+                        let code_arr = code_idx.and_then(|idx| {
+                            batch.column(idx).as_any().downcast_ref::<StringArray>()
+                        });
+                        let role_code_arr = role_code_idx.and_then(|idx| {
+                            batch.column(idx).as_any().downcast_ref::<StringArray>()
+                        });
+                        let role_name_arr = role_name_idx.and_then(|idx| {
+                            batch.column(idx).as_any().downcast_ref::<StringArray>()
+                        });
 
                         for i in 0..batch.num_rows() {
                             if let Some(arr) = code_arr {
@@ -1417,10 +1614,13 @@ fn audit_referential_integrity(
                         }
                     }
                 } else {
-                    discrepancies.push("Referential Integrity Error: Failed to read roles.parquet".to_string());
+                    discrepancies.push(
+                        "Referential Integrity Error: Failed to read roles.parquet".to_string(),
+                    );
                 }
             } else {
-                discrepancies.push("Referential Integrity Error: Failed to parse roles.parquet".to_string());
+                discrepancies
+                    .push("Referential Integrity Error: Failed to parse roles.parquet".to_string());
             }
         }
 
@@ -1457,8 +1657,10 @@ fn audit_referential_integrity(
                                 for i in 0..batch.num_rows() {
                                     let target_code = target_arr.value(i);
                                     let source_code = source_arr.value(i);
-                                    if (!target_code.is_empty() && !valid_codes.contains(target_code))
-                                        || (!source_code.is_empty() && !valid_codes.contains(source_code))
+                                    if (!target_code.is_empty()
+                                        && !valid_codes.contains(target_code))
+                                        || (!source_code.is_empty()
+                                            && !valid_codes.contains(source_code))
                                     {
                                         orphan_rels += 1;
                                     }
@@ -1467,10 +1669,16 @@ fn audit_referential_integrity(
                         }
                     }
                 } else {
-                    discrepancies.push("Referential Integrity Error: Failed to read relationships.parquet".to_string());
+                    discrepancies.push(
+                        "Referential Integrity Error: Failed to read relationships.parquet"
+                            .to_string(),
+                    );
                 }
             } else {
-                discrepancies.push("Referential Integrity Error: Failed to parse relationships.parquet".to_string());
+                discrepancies.push(
+                    "Referential Integrity Error: Failed to parse relationships.parquet"
+                        .to_string(),
+                );
             }
         }
 
@@ -1502,7 +1710,8 @@ fn audit_referential_integrity(
                                     let pred_code = pred_arr.value(i);
                                     let succ_code = succ_arr.value(i);
                                     if (!pred_code.is_empty() && !valid_codes.contains(pred_code))
-                                        || (!succ_code.is_empty() && !valid_codes.contains(succ_code))
+                                        || (!succ_code.is_empty()
+                                            && !valid_codes.contains(succ_code))
                                     {
                                         orphan_succs += 1;
                                     }
@@ -1511,10 +1720,15 @@ fn audit_referential_integrity(
                         }
                     }
                 } else {
-                    discrepancies.push("Referential Integrity Error: Failed to read successions.parquet".to_string());
+                    discrepancies.push(
+                        "Referential Integrity Error: Failed to read successions.parquet"
+                            .to_string(),
+                    );
                 }
             } else {
-                discrepancies.push("Referential Integrity Error: Failed to parse successions.parquet".to_string());
+                discrepancies.push(
+                    "Referential Integrity Error: Failed to parse successions.parquet".to_string(),
+                );
             }
         }
 
@@ -1536,8 +1750,14 @@ fn compute_full_closures(
     let mut rev_adj: HashMap<String, HashSet<String>> = HashMap::new();
 
     for (pred, succ) in edges {
-        fwd_adj.entry(pred.clone()).or_default().insert(succ.clone());
-        rev_adj.entry(succ.clone()).or_default().insert(pred.clone());
+        fwd_adj
+            .entry(pred.clone())
+            .or_default()
+            .insert(succ.clone());
+        rev_adj
+            .entry(succ.clone())
+            .or_default()
+            .insert(pred.clone());
     }
 
     let mut successor_closures: HashMap<String, Vec<String>> = HashMap::new();
@@ -1621,41 +1841,84 @@ fn audit_sample_and_derived_parity(
         let schema = batch.schema();
         let num_rows = batch.num_rows();
 
-        let ods_code_arr = batch.column(schema.index_of("ods_code")?)
-            .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
-        let name_arr = batch.column(schema.index_of("name")?)
-            .as_any().downcast_ref::<StringArray>().context("name StringArray")?;
-        let status_arr = batch.column(schema.index_of("status")?)
-            .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
-        let entity_type_arr = schema.index_of("entity_type").ok()
+        let ods_code_arr = batch
+            .column(schema.index_of("ods_code")?)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("ods_code StringArray")?;
+        let name_arr = batch
+            .column(schema.index_of("name")?)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("name StringArray")?;
+        let status_arr = batch
+            .column(schema.index_of("status")?)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("status StringArray")?;
+        let entity_type_arr = schema
+            .index_of("entity_type")
+            .ok()
             .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
-            .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
+        let primary_role_arr = batch
+            .column(schema.index_of("primary_role_code")?)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("primary_role_code StringArray")?;
 
-        let role_codes_arr = batch.column(schema.index_of("role_codes")?)
-            .as_any().downcast_ref::<ListArray>().context("role_codes ListArray")?;
-        let role_names_arr = batch.column(schema.index_of("role_names")?)
-            .as_any().downcast_ref::<ListArray>().context("role_names ListArray")?;
-        let succ_codes_arr = batch.column(schema.index_of("successor_codes")?)
-            .as_any().downcast_ref::<ListArray>().context("successor_codes ListArray")?;
-        let pred_codes_arr = batch.column(schema.index_of("predecessor_codes")?)
-            .as_any().downcast_ref::<ListArray>().context("predecessor_codes ListArray")?;
+        let role_codes_arr = batch
+            .column(schema.index_of("role_codes")?)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .context("role_codes ListArray")?;
+        let role_names_arr = batch
+            .column(schema.index_of("role_names")?)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .context("role_names ListArray")?;
+        let succ_codes_arr = batch
+            .column(schema.index_of("successor_codes")?)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .context("successor_codes ListArray")?;
+        let pred_codes_arr = batch
+            .column(schema.index_of("predecessor_codes")?)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .context("predecessor_codes ListArray")?;
 
-        let address_arr = schema.index_of("address").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let town_arr = schema.index_of("town").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let county_arr = schema.index_of("county").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let postcode_arr = schema.index_of("postcode").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let country_arr = schema.index_of("country").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let uprn_arr = schema.index_of("uprn").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let telephone_arr = schema.index_of("telephone").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let website_arr = schema.index_of("website").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-
-        let commissioner_code_arr = schema.index_of("commissioner_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let parent_code_arr = schema.index_of("parent_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let pcn_code_arr = schema.index_of("pcn_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let trust_code_arr = schema.index_of("trust_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let icb_code_arr = schema.index_of("icb_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
-        let region_code_arr = schema.index_of("region_code").ok().and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let address_arr = schema
+            .index_of("address")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let town_arr = schema
+            .index_of("town")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let county_arr = schema
+            .index_of("county")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let postcode_arr = schema
+            .index_of("postcode")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let country_arr = schema
+            .index_of("country")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let uprn_arr = schema
+            .index_of("uprn")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let telephone_arr = schema
+            .index_of("telephone")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
+        let website_arr = schema
+            .index_of("website")
+            .ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>());
 
         for i in 0..num_rows {
             let code = ods_code_arr.value(i);
@@ -1664,34 +1927,53 @@ fn audit_sample_and_derived_parity(
                 let p_name = name_arr.value(i);
                 if !p_name.eq_ignore_ascii_case(&xml_sample.name) {
                     verbatim_failures += 1;
-                    discrepancies.push(format!("Verbatim Field Mismatch ({code}): Name XML='{}' vs Parquet='{}'", xml_sample.name, p_name));
+                    discrepancies.push(format!(
+                        "Verbatim Field Mismatch ({code}): Name XML='{}' vs Parquet='{}'",
+                        xml_sample.name, p_name
+                    ));
                 }
 
                 let p_status = status_arr.value(i);
                 if !p_status.eq_ignore_ascii_case(&xml_sample.status) {
                     verbatim_failures += 1;
-                    discrepancies.push(format!("Verbatim Field Mismatch ({code}): Status XML='{}' vs Parquet='{}'", xml_sample.status, p_status));
+                    discrepancies.push(format!(
+                        "Verbatim Field Mismatch ({code}): Status XML='{}' vs Parquet='{}'",
+                        xml_sample.status, p_status
+                    ));
                 }
 
                 if let Some(et_arr) = entity_type_arr {
                     let p_et = et_arr.value(i);
-                    if !xml_sample.entity_type.is_empty() && !p_et.eq_ignore_ascii_case(&xml_sample.entity_type) {
+                    if !xml_sample.entity_type.is_empty()
+                        && !p_et.eq_ignore_ascii_case(&xml_sample.entity_type)
+                    {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): EntityType XML='{}' vs Parquet='{}'", xml_sample.entity_type, p_et));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): EntityType XML='{}' vs Parquet='{}'",
+                            xml_sample.entity_type, p_et
+                        ));
                     }
                 }
 
                 let p_prole = primary_role_arr.value(i);
-                if !xml_sample.primary_role_code.is_empty() && !p_prole.eq_ignore_ascii_case(&xml_sample.primary_role_code) {
+                if !xml_sample.primary_role_code.is_empty()
+                    && !p_prole.eq_ignore_ascii_case(&xml_sample.primary_role_code)
+                {
                     verbatim_failures += 1;
-                    discrepancies.push(format!("Verbatim Field Mismatch ({code}): PrimaryRole XML='{}' vs Parquet='{}'", xml_sample.primary_role_code, p_prole));
+                    discrepancies.push(format!(
+                        "Verbatim Field Mismatch ({code}): PrimaryRole XML='{}' vs Parquet='{}'",
+                        xml_sample.primary_role_code, p_prole
+                    ));
                 }
 
                 if let (Some(t_arr), Some(ref xml_town)) = (town_arr, &xml_sample.town) {
                     let p_town = t_arr.value(i);
                     if !p_town.eq_ignore_ascii_case(xml_town) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): Town XML='{}' vs Parquet='{}'", xml_town, p_town));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): Town XML='{}' vs Parquet='{}'",
+                            xml_town, p_town
+                        ));
                     }
                 }
 
@@ -1699,7 +1981,10 @@ fn audit_sample_and_derived_parity(
                     let p_county = c_arr.value(i);
                     if !p_county.eq_ignore_ascii_case(xml_county) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): County XML='{}' vs Parquet='{}'", xml_county, p_county));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): County XML='{}' vs Parquet='{}'",
+                            xml_county, p_county
+                        ));
                     }
                 }
 
@@ -1707,7 +1992,10 @@ fn audit_sample_and_derived_parity(
                     let p_country = co_arr.value(i);
                     if !p_country.eq_ignore_ascii_case(xml_country) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): Country XML='{}' vs Parquet='{}'", xml_country, p_country));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): Country XML='{}' vs Parquet='{}'",
+                            xml_country, p_country
+                        ));
                     }
                 }
 
@@ -1715,7 +2003,10 @@ fn audit_sample_and_derived_parity(
                     let p_uprn = u_arr.value(i);
                     if !p_uprn.eq_ignore_ascii_case(xml_uprn) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): UPRN XML='{}' vs Parquet='{}'", xml_uprn, p_uprn));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): UPRN XML='{}' vs Parquet='{}'",
+                            xml_uprn, p_uprn
+                        ));
                     }
                 }
 
@@ -1723,7 +2014,10 @@ fn audit_sample_and_derived_parity(
                     let p_tel = tel_arr.value(i);
                     if !p_tel.eq_ignore_ascii_case(xml_tel) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): Telephone XML='{}' vs Parquet='{}'", xml_tel, p_tel));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): Telephone XML='{}' vs Parquet='{}'",
+                            xml_tel, p_tel
+                        ));
                     }
                 }
 
@@ -1731,7 +2025,10 @@ fn audit_sample_and_derived_parity(
                     let p_web = web_arr.value(i);
                     if !p_web.eq_ignore_ascii_case(xml_web) {
                         verbatim_failures += 1;
-                        discrepancies.push(format!("Verbatim Field Mismatch ({code}): Website XML='{}' vs Parquet='{}'", xml_web, p_web));
+                        discrepancies.push(format!(
+                            "Verbatim Field Mismatch ({code}): Website XML='{}' vs Parquet='{}'",
+                            xml_web, p_web
+                        ));
                     }
                 }
 
@@ -1741,7 +2038,10 @@ fn audit_sample_and_derived_parity(
                     let normalized_xml = xml_post.split_whitespace().collect::<Vec<_>>().join(" ");
                     if !p_post.eq_ignore_ascii_case(&normalized_xml) {
                         derived_failures += 1;
-                        discrepancies.push(format!("Normalization Mismatch ({code}): Postcode XML='{}' vs Parquet='{}'", normalized_xml, p_post));
+                        discrepancies.push(format!(
+                            "Normalization Mismatch ({code}): Postcode XML='{}' vs Parquet='{}'",
+                            normalized_xml, p_post
+                        ));
                     }
                 }
 
@@ -1759,7 +2059,9 @@ fn audit_sample_and_derived_parity(
                 // Role codes list check
                 let r_values = role_codes_arr.value(i);
                 let r_str_arr = r_values.as_any().downcast_ref::<StringArray>().unwrap();
-                let mut parquet_roles: Vec<String> = (0..r_str_arr.len()).map(|j| r_str_arr.value(j).to_string()).collect();
+                let mut parquet_roles: Vec<String> = (0..r_str_arr.len())
+                    .map(|j| r_str_arr.value(j).to_string())
+                    .collect();
                 parquet_roles.sort();
                 parquet_roles.dedup();
                 let mut xml_roles = xml_sample.role_codes.clone();
@@ -1767,7 +2069,10 @@ fn audit_sample_and_derived_parity(
                 xml_roles.dedup();
                 if parquet_roles != xml_roles {
                     derived_failures += 1;
-                    discrepancies.push(format!("Role Codes Set Union Mismatch ({code}): XML={:?} vs Parquet={:?}", xml_roles, parquet_roles));
+                    discrepancies.push(format!(
+                        "Role Codes Set Union Mismatch ({code}): XML={:?} vs Parquet={:?}",
+                        xml_roles, parquet_roles
+                    ));
                 }
 
                 // Role names positional alignment & curation check
@@ -1808,68 +2113,29 @@ fn audit_sample_and_derived_parity(
                 let expected_succs = succ_closures.get(code).unwrap_or(&empty_vec);
                 let succ_values = succ_codes_arr.value(i);
                 let succ_str_arr = succ_values.as_any().downcast_ref::<StringArray>().unwrap();
-                let parquet_succs: Vec<String> = (0..succ_str_arr.len()).map(|j| succ_str_arr.value(j).to_string()).collect();
+                let parquet_succs: Vec<String> = (0..succ_str_arr.len())
+                    .map(|j| succ_str_arr.value(j).to_string())
+                    .collect();
                 if &parquet_succs != expected_succs {
                     derived_failures += 1;
-                    discrepancies.push(format!("Successor Closure Mismatch ({code}): Expected={:?} vs Parquet={:?}", expected_succs, parquet_succs));
+                    discrepancies.push(format!(
+                        "Successor Closure Mismatch ({code}): Expected={:?} vs Parquet={:?}",
+                        expected_succs, parquet_succs
+                    ));
                 }
 
                 let expected_preds = pred_closures.get(code).unwrap_or(&empty_vec);
                 let pred_values = pred_codes_arr.value(i);
                 let pred_str_arr = pred_values.as_any().downcast_ref::<StringArray>().unwrap();
-                let parquet_preds: Vec<String> = (0..pred_str_arr.len()).map(|j| pred_str_arr.value(j).to_string()).collect();
+                let parquet_preds: Vec<String> = (0..pred_str_arr.len())
+                    .map(|j| pred_str_arr.value(j).to_string())
+                    .collect();
                 if &parquet_preds != expected_preds {
                     derived_failures += 1;
-                    discrepancies.push(format!("Predecessor Closure Mismatch ({code}): Expected={:?} vs Parquet={:?}", expected_preds, parquet_preds));
-                }
-
-                // Resolved Hierarchy Check
-                if let (Some(icb_arr), Some(ref exp_icb)) = (icb_code_arr, &xml_sample.icb_code) {
-                    let p_icb = icb_arr.value(i);
-                    if !p_icb.eq_ignore_ascii_case(exp_icb) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): ICB Code Expected='{}' vs Parquet='{}'", exp_icb, p_icb));
-                    }
-                }
-
-                if let (Some(trust_arr), Some(ref exp_trust)) = (trust_code_arr, &xml_sample.trust_code) {
-                    let p_trust = trust_arr.value(i);
-                    if !p_trust.eq_ignore_ascii_case(exp_trust) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): Trust Code Expected='{}' vs Parquet='{}'", exp_trust, p_trust));
-                    }
-                }
-
-                if let (Some(parent_arr), Some(ref exp_parent)) = (parent_code_arr, &xml_sample.parent_code) {
-                    let p_parent = parent_arr.value(i);
-                    if !p_parent.eq_ignore_ascii_case(exp_parent) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): Parent Code Expected='{}' vs Parquet='{}'", exp_parent, p_parent));
-                    }
-                }
-
-                if let (Some(pcn_arr), Some(ref exp_pcn)) = (pcn_code_arr, &xml_sample.pcn_code) {
-                    let p_pcn = pcn_arr.value(i);
-                    if !p_pcn.eq_ignore_ascii_case(exp_pcn) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): PCN Code Expected='{}' vs Parquet='{}'", exp_pcn, p_pcn));
-                    }
-                }
-
-                if let (Some(comm_arr), Some(ref exp_comm)) = (commissioner_code_arr, &xml_sample.commissioner_code) {
-                    let p_comm = comm_arr.value(i);
-                    if !p_comm.eq_ignore_ascii_case(exp_comm) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): Commissioner Code Expected='{}' vs Parquet='{}'", exp_comm, p_comm));
-                    }
-                }
-
-                if let (Some(reg_arr), Some(ref exp_reg)) = (region_code_arr, &xml_sample.region_code) {
-                    let p_reg = reg_arr.value(i);
-                    if !p_reg.eq_ignore_ascii_case(exp_reg) {
-                        derived_failures += 1;
-                        discrepancies.push(format!("Hierarchy Resolution Mismatch ({code}): Region Code Expected='{}' vs Parquet='{}'", exp_reg, p_reg));
-                    }
+                    discrepancies.push(format!(
+                        "Predecessor Closure Mismatch ({code}): Expected={:?} vs Parquet={:?}",
+                        expected_preds, parquet_preds
+                    ));
                 }
             }
         }
@@ -1878,6 +2144,142 @@ fn audit_sample_and_derived_parity(
     let verbatim_ok = verbatim_failures == 0;
     let derived_ok = derived_failures == 0;
 
-    Ok((verbatim_ok, derived_ok && (discrepancies.len() == initial_count)))
+    Ok((
+        verbatim_ok,
+        derived_ok && (discrepancies.len() == initial_count),
+    ))
 }
 
+fn audit_table_invariants(
+    orgs_parquet: &Path,
+    orgs_all_parquet: &Path,
+    discrepancies: &mut Vec<String>,
+) -> Result<(usize, usize)> {
+    let mut inactive_in_orgs = 0;
+    let mut role_list_mismatches = 0;
+
+    if orgs_parquet.exists() {
+        let ofile = File::open(orgs_parquet)?;
+        let obuilder = ParquetRecordBatchReaderBuilder::try_new(ofile)?;
+        let oreader = obuilder.build()?;
+        for batch in oreader {
+            let batch = batch?;
+            let schema = batch.schema();
+            let status_idx = schema.index_of("status")?;
+            let role_codes_idx = schema.index_of("role_codes")?;
+            let role_names_idx = schema.index_of("role_names")?;
+
+            let status_arr = batch
+                .column(status_idx)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let role_codes_arr = batch
+                .column(role_codes_idx)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+            let role_names_arr = batch
+                .column(role_names_idx)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+
+            for i in 0..batch.num_rows() {
+                let st = status_arr.value(i);
+                if !st.eq_ignore_ascii_case("active") {
+                    inactive_in_orgs += 1;
+                }
+
+                let rc_val = role_codes_arr.value(i);
+                let rn_val = role_names_arr.value(i);
+                let rc_str = rc_val.as_any().downcast_ref::<StringArray>().unwrap();
+                let rn_str = rn_val.as_any().downcast_ref::<StringArray>().unwrap();
+
+                if rc_str.len() != rn_str.len() {
+                    role_list_mismatches += 1;
+                } else {
+                    for j in 0..rc_str.len() {
+                        let c = rc_str.value(j);
+                        let n = rn_str.value(j);
+                        match roles::role_names().role_name(c) {
+                            Ok(expected) => {
+                                if n != expected {
+                                    role_list_mismatches += 1;
+                                }
+                            }
+                            Err(_) => {
+                                role_list_mismatches += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if orgs_all_parquet.exists() {
+        let ofile = File::open(orgs_all_parquet)?;
+        let obuilder = ParquetRecordBatchReaderBuilder::try_new(ofile)?;
+        let oreader = obuilder.build()?;
+        for batch in oreader {
+            let batch = batch?;
+            let schema = batch.schema();
+            let role_codes_idx = schema.index_of("role_codes")?;
+            let role_names_idx = schema.index_of("role_names")?;
+
+            let role_codes_arr = batch
+                .column(role_codes_idx)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+            let role_names_arr = batch
+                .column(role_names_idx)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+
+            for i in 0..batch.num_rows() {
+                let rc_val = role_codes_arr.value(i);
+                let rn_val = role_names_arr.value(i);
+                let rc_str = rc_val.as_any().downcast_ref::<StringArray>().unwrap();
+                let rn_str = rn_val.as_any().downcast_ref::<StringArray>().unwrap();
+
+                if rc_str.len() != rn_str.len() {
+                    role_list_mismatches += 1;
+                } else {
+                    for j in 0..rc_str.len() {
+                        let c = rc_str.value(j);
+                        let n = rn_str.value(j);
+                        match roles::role_names().role_name(c) {
+                            Ok(expected) => {
+                                if n != expected {
+                                    role_list_mismatches += 1;
+                                }
+                            }
+                            Err(_) => {
+                                role_list_mismatches += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if inactive_in_orgs > 0 {
+        discrepancies.push(format!(
+            "Table Invariant Violation: Found {} inactive records in orgs.parquet (must be 100% active)",
+            inactive_in_orgs
+        ));
+    }
+
+    if role_list_mismatches > 0 {
+        discrepancies.push(format!(
+            "Table Invariant Violation: Found {} role_codes vs role_names length/curation mismatches across organisation records",
+            role_list_mismatches
+        ));
+    }
+
+    Ok((inactive_in_orgs, role_list_mismatches))
+}

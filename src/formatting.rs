@@ -23,9 +23,22 @@ pub struct SuccessionHopLink<'a> {
     pub status: &'a str,
 }
 
-pub struct OperatedEntityLink<'a> {
+pub struct RelationshipItemView<'a> {
     pub code: &'a str,
     pub name: &'a str,
+    pub status: &'a str,
+    pub operational_start: Option<&'a str>,
+    pub operational_end: Option<&'a str>,
+    pub legal_start: Option<&'a str>,
+    pub legal_end: Option<&'a str>,
+}
+
+pub struct RelationshipGroup<'a> {
+    pub rel_code: &'a str,
+    pub rel_name: &'a str,
+    pub is_inbound: bool,
+    pub items: Vec<RelationshipItemView<'a>>,
+    pub total_count: usize,
 }
 
 pub struct InspectorRecord<'a> {
@@ -41,19 +54,7 @@ pub struct InspectorRecord<'a> {
     pub uprn: &'a str,
     pub telephone: &'a str,
     pub website: &'a str,
-    pub commissioner: &'a str,
-    pub commissioner_code: &'a str,
-    pub parent: &'a str,
-    pub parent_code: &'a str,
-    pub pcn: &'a str,
-    pub pcn_code: &'a str,
-    pub trust: &'a str,
-    pub trust_code: &'a str,
-    pub icb: &'a str,
-    pub icb_code: &'a str,
-    pub region: &'a str,
-    pub region_code: &'a str,
-    pub operates: &'a [OperatedEntityLink<'a>],
+    pub relationships: &'a [RelationshipGroup<'a>],
     pub succession: &'a [SuccessionHopLink<'a>],
     pub predecessors: &'a [SuccessionHopLink<'a>],
     pub operational_start: Option<&'a str>,
@@ -85,44 +86,53 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
     };
 
     let s_val = |status: &str| -> String {
+        let is_active = status.eq_ignore_ascii_case("active");
         if use_color {
-            if status.eq_ignore_ascii_case("active") {
-                format!("\x1b[1;32m{}\x1b[0m", status)
+            if is_active {
+                format!("\x1b[32m{}\x1b[0m", status)
             } else {
-                format!("\x1b[1;31m{}\x1b[0m", status)
+                format!("\x1b[2m{}\x1b[0m", status)
             }
         } else {
             status.to_string()
         }
     };
 
-    writeln!(writer, "{}", h(&format!("# {} ({})", r.name, r.ods_code)))?;
-    writeln!(writer, "- {}: {}", k("Class"), r.record_class)?;
-    writeln!(writer, "- {}: {}", k("Status"), s_val(r.status))?;
+    // Header: # NAME (ODS_CODE)
+    writeln!(writer, "# {} ({})", r.name, r.ods_code)?;
 
-    if !r.role_code.is_empty() {
-        writeln!(writer, "- {}: {} ({})", k("Primary Role"), r.role, r.role_code)?;
-    } else {
-        writeln!(writer, "- {}: {}", k("Primary Role"), r.role)?;
-    }
+    // Core Identity Details
+    writeln!(writer, "\n- {}: {}", k("Class"), r.record_class)?;
+    writeln!(writer, "- {}: {}", k("Status"), s_val(r.status))?;
+    writeln!(
+        writer,
+        "- {}: {} ({})",
+        k("Primary Role"),
+        r.role,
+        r.role_code
+    )?;
 
     if !r.other_roles.is_empty() {
-        writeln!(writer, "- {}: {}", k("Other Roles"), r.other_roles.join(", "))?;
+        writeln!(
+            writer,
+            "- {}: {}",
+            k("Other Roles"),
+            r.other_roles.join(", ")
+        )?;
     }
 
-    if let Some(range) = format_date_range(r.operational_start, r.operational_end, r.status) {
-        writeln!(writer, "- {}: {}", k("Operational"), range)?;
+    // Lifecycle Dates
+    let dates = format_date_range(r.operational_start, r.operational_end, r.status)
+        .or_else(|| format_date_range(r.legal_start, r.legal_end, r.status));
+    if let Some(dates) = dates {
+        writeln!(writer, "- {}: {}", k("Dates"), dates)?;
     }
 
-    if let Some(range) = format_date_range(r.legal_start, r.legal_end, r.status) {
-        writeln!(writer, "- {}: {}", k("Legal"), range)?;
+    if let Some(last_change) = r.last_change_date {
+        writeln!(writer, "- {}: {}", k("Last Change"), last_change)?;
     }
 
-    if let Some(modified) = r.last_change_date {
-        writeln!(writer, "- {}: {}", k("Last Modified"), modified)?;
-    }
-
-    // Contact Details Section
+    // Contact Details
     let has_contact = !r.address.is_empty()
         || !r.country.is_empty()
         || !r.uprn.is_empty()
@@ -149,72 +159,42 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
     }
 
     // Relationships Section
-    let mut rel_items = Vec::new();
-
-    if !r.pcn.is_empty() {
-        if !r.pcn_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("PCN"), r.pcn, r.pcn_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("PCN"), r.pcn));
-        }
-    }
-
-    if !r.trust.is_empty() {
-        if !r.trust_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("Trust"), r.trust, r.trust_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("Trust"), r.trust));
-        }
-    }
-
-    if !r.icb.is_empty() {
-        if !r.icb_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("ICB"), r.icb, r.icb_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("ICB"), r.icb));
-        }
-    }
-
-    if !r.region.is_empty() {
-        if !r.region_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("Region"), r.region, r.region_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("Region"), r.region));
-        }
-    }
-
-    if !r.commissioner.is_empty() {
-        if !r.commissioner_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("Commissioned By"), r.commissioner, r.commissioner_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("Commissioned By"), r.commissioner));
-        }
-    }
-
-    if !r.parent.is_empty() {
-        if !r.parent_code.is_empty() {
-            rel_items.push(format!("- {}: {} ({})", k("Parent Org"), r.parent, r.parent_code));
-        } else {
-            rel_items.push(format!("- {}: {}", k("Parent Org"), r.parent));
-        }
-    }
-
-    if !rel_items.is_empty() {
+    if !r.relationships.is_empty() {
         writeln!(writer, "\n{}", h("## Relationships"))?;
-        for item in rel_items {
-            writeln!(writer, "{}", item)?;
-        }
-    }
+        for group in r.relationships {
+            let group_title = if group.is_inbound {
+                format!("{} (Inbound)", group.rel_name)
+            } else {
+                group.rel_name.to_string()
+            };
+            writeln!(writer, "\n- {}", k(&group_title))?;
 
-    if !r.operates.is_empty() {
-        writeln!(writer, "\n{}", h("## Operates"))?;
-        for op in r.operates {
-            writeln!(
-                writer,
-                "  {:<10}  {}",
-                op.code,
-                op.name
-            )?;
+            for item in &group.items {
+                let date_str =
+                    format_date_range(item.operational_start, item.operational_end, item.status)
+                        .or_else(|| {
+                            format_date_range(item.legal_start, item.legal_end, item.status)
+                        });
+                let status_display = s_val(item.status);
+                let meta = match date_str {
+                    Some(d) => format!("({}, {})", status_display, d),
+                    None => format!("({})", status_display),
+                };
+                if item.name.is_empty() {
+                    writeln!(writer, "  {:<10} {}", item.code, meta)?;
+                } else {
+                    writeln!(writer, "  {:<10} {} {}", item.code, item.name, meta)?;
+                }
+            }
+
+            if group.total_count > group.items.len() {
+                let remaining = group.total_count - group.items.len();
+                writeln!(
+                    writer,
+                    "  ... and {} more (use --format json for all)",
+                    remaining
+                )?;
+            }
         }
     }
 
@@ -252,5 +232,3 @@ pub fn render_inspector_markdown<W: Write + ?Sized>(
 
     Ok(())
 }
-
-
