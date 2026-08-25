@@ -30,7 +30,7 @@ enum Command {
     /// Build from official NHS source data (requires TRUD API key)
     Trud(commands::trud::TrudArgs),
 
-    /// Compile TRUD XML into Parquet tables and Markdown
+    /// Compile TRUD XML into Parquet tables
     Make(commands::make::MakeArgs),
 }
 

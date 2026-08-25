@@ -1,8 +1,8 @@
 .env
 .local
 .DS_Store
-
-/ods_data
-
-# Added by cargo
+/.*
+!/.gitignore
+/ods_data*
 /target
+/trud-releases.json

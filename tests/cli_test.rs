@@ -81,7 +81,7 @@ fn test_cli_make_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("parquet"));
-    assert!(stdout.contains("markdown"));
+    assert!(!stdout.contains("markdown"));
 }
 
 #[test]

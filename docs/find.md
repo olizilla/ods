@@ -2,7 +2,7 @@
 
 Search NHS organisations and sites across names, codes, locations, and roles.
 
-`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to CSV and JSON.
+`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to TSV, CSV, and JSON.
 
 ## Usage
 
@@ -23,7 +23,7 @@ ods find [QUERY] [OPTIONS]
 | `-a, --all` | Search all organisations (including inactive/closed history in `orgs_all.parquet`) |
 | `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
-| `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, or `json` |
+| `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, `json`, or `tsv` |
 | `-i, --input <DIR>` | Directory containing Parquet files (defaults to active release) |
 
 ## Search Model & Ranking
@@ -74,4 +74,15 @@ Pass `-v, --verbose` to view the full role set in stored order. `--format json` 
 
 ### 6. Normalisation
 Matching folds case, strips apostrophes, replaces symbols with spaces, and collapses whitespace. All displayed table headers, JSON fields, and CSV rows retain original source casing and punctuation verbatim.
+
+### 7. Pipe Workflows (`--format tsv`)
+`--format tsv` outputs the same five columns as the table (six with `--all`) separated by tabs, with **no header row** and no borders. This makes it pipe directly into fuzzy finders and standard Unix tools (`fzf`, `sk`, `cut`, `awk`, `xargs`):
+
+```bash
+# Interactive search with fzf
+ods find --format tsv | fzf
+
+# Pick an organisation and inspect its full profile
+ods find --format tsv | fzf | cut -f1 | xargs ods info
+```
 

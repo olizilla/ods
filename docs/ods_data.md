@@ -1,6 +1,6 @@
 # `ods_data` Workspace Directory
 
-The `ods_data` directory is the local workspace data root managed by the `ods` CLI. It organizes raw TRUD ODS releases, cryptographic provenance metadata, and derived projection artifacts (Parquet tables, NDJSON streams, and OKF Markdown wikis).
+The `ods_data` directory is the local workspace data root managed by the `ods` CLI. It organizes raw TRUD ODS releases, cryptographic provenance metadata, and derived projection artifacts (Parquet tables and NDJSON streams).
 
 ## Workspace Directory Tree
 
@@ -16,13 +16,12 @@ ods_data/
         ├── _provenance.json            # Source TRUD metadata & SHA-256 derived hashes
         ├── orgs.parquet                # Active organisations & sites table (Primary surface)
         ├── orgs_all.parquet            # Complete historical orgs table (active + inactive)
-        ├── rels.parquet                # Target relationship links (ICB, Trust, Region, PCN)
-        ├── roles.parquet               # Primary & secondary role mappings
+        ├── relationships.parquet       # Target relationship links (ICB, Trust, Region, PCN)
+        ├── roles.parquet              # Primary & secondary role mappings
         ├── SHA256SUMS                 # Flat verification manifest for _provenance.json and *.parquet
-        ├── successors.parquet          # Entity successor chains & reorganisations
-        ├── markdown/                   # Open Knowledge Format (OKF) wiki archive
-        │   └── wiki.zip
-        └── trud/                       # Official TRUD zip archives (gitignored)
+        ├── successions.parquet        # Entity successor chains & reorganisations
+        ├── datapackage.json           # Frictionless Data Package descriptor
+        └── trud/                      # Official TRUD zip archives (gitignored)
             └── hscorgrefdataxml_data_7.0.0_20260731000001.zip
 ```
 

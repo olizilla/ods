@@ -8,7 +8,6 @@ pub mod parquet_util;
 pub mod progress;
 pub mod provenance;
 pub mod roles;
-pub mod tui;
 pub mod workspace;
 
 

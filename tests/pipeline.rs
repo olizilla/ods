@@ -1,13 +1,12 @@
-//! Integration tests for the full ODS pipeline: compile → parquet → md.
+//! Integration tests for the full ODS pipeline: compile → parquet → find → cite.
 //!
 //! These tests replace `verify_compilation.sh` with idiomatic Rust:
 //! - `tempfile::TempDir` guarantees cleanup even on test panic
 //! - Assertions operate on typed `OdsRecord` structs rather than `grep` / regex
-//! - The zip archive is inspected in-process without extracting to disk
 //! - `CARGO_MANIFEST_DIR` resolves the fixture path regardless of `cwd`
 
-use ods::commands::{ndjson, md, parquet, find, cite};
-use std::io::{Read, Write};
+use ods::commands::{ndjson, parquet, find, cite};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -153,13 +152,12 @@ fn compile_produces_ndjson_with_correct_records() {
 }
 
 // ---------------------------------------------------------------------------
-// Stages 2 + 3 — parquet and md (chained on top of compile)
+// Stages 2, 3, 4 — parquet, find, cite (chained on top of compile)
 // ---------------------------------------------------------------------------
 
-/// Runs the full three-stage pipeline and asserts on the md zip contents.
-/// The zip is inspected in-process -- no `unzip` subprocess, no leftover files.
+/// Runs the full pipeline: XML → NDJSON → Parquet → find → cite.
 #[test]
-fn full_pipeline_parquet_and_md() {
+fn full_pipeline_parquet() {
     let tmp = TempDir::new().unwrap();
 
     // Stage 1: compile
@@ -201,47 +199,7 @@ fn full_pipeline_parquet_and_md() {
         "successions.parquet not created"
     );
 
-    // Stage 3: md
-    let zip_path = tmp.path().join("wiki.zip");
-
-    md::run(md::Args {
-        input: parquet_dir.clone(),
-        output: zip_path.clone(),
-    })
-    .expect("md::run should succeed");
-
-    assert!(zip_path.exists(), "wiki.zip was not created");
-
-    // Inspect zip contents in-process -- no unzip binary required
-    let zip_file = std::fs::File::open(&zip_path).unwrap();
-    let mut archive = zip::ZipArchive::new(zip_file).unwrap();
-
-    let entry_name = "organisations/gp_practice/Y01234.md";
-    let mut entry = archive
-        .by_name(entry_name)
-        .unwrap_or_else(|_| panic!("{entry_name} not found in wiki.zip"));
-
-    let mut md = String::new();
-    entry.read_to_string(&mut md).unwrap();
-
-    // YAML frontmatter fields
-    assert!(md.contains("type: GP Practice"),  "missing 'type' frontmatter\n---\n{md}");
-    assert!(md.contains("title: Mock GP Practice"),  "missing 'title' frontmatter\n---\n{md}");
-    assert!(md.contains("postcode: SO15 5SY"),        "missing 'postcode' frontmatter\n---\n{md}");
-    assert!(md.contains(r#"uprn: "100062506311""#),   "missing 'uprn' frontmatter\n---\n{md}");
-    assert!(md.contains(r#"telephone: "023 80706919""#), "missing 'telephone' frontmatter\n---\n{md}");
-    assert!(md.contains(r#"website: "http://example.com""#), "missing 'website' frontmatter\n---\n{md}");
-    assert!(
-        md.contains("resource: https://directory.spineservices.nhs.uk/OdsWebService/Ods/Y01234"),
-        "missing 'resource' frontmatter\n---\n{md}"
-    );
-
-    assert!(
-        md.contains("Parent Org: ALDER HEY CHILDREN'S NHS FOUNDATION TRUST (RAE)"),
-        "parent org relationship missing or malformed\n---\n{md}"
-    );
-
-    // Stage 4: find (TDD)
+    // Stage 3: find (TDD)
     let mut find_out = Vec::new();
     find::run_with_writer(
         find::Args {
@@ -264,7 +222,7 @@ fn full_pipeline_parquet_and_md() {
     let find_str = String::from_utf8(find_out).unwrap();
     assert!(find_str.contains("Mock GP Practice"), "find should locate Mock GP");
 
-    // Stage 5: cite
+    // Stage 4: cite
     let mut cite_out = Vec::new();
     cite::run_with_writer(
         cite::Args {

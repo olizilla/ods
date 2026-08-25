@@ -5,7 +5,6 @@ pub mod fetch;
 pub mod find;
 pub mod info;
 pub mod make;
-pub mod md;
 pub mod ndjson;
 pub mod parquet;
 pub mod pull;

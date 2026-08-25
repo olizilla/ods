@@ -11,7 +11,6 @@ pub struct ReleaseInfo {
     pub is_active: bool,
     pub has_parquet: bool,
     pub has_ndjson: bool,
-    pub has_markdown: bool,
 }
 
 /// Discovers the active Parquet directory based on the 4-tier hierarchy:
@@ -205,14 +204,12 @@ pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
                 let is_active = active_date.as_deref() == Some(date);
                 let has_parquet = path.join("orgs.parquet").exists() || path.join("parquet").join("orgs.parquet").exists();
                 let has_ndjson = path.join("ods.ndjson").exists() || path.join("ndjson").join("ods.ndjson").exists();
-                let has_markdown = path.join("markdown").join("wiki.zip").exists();
                 releases.push(ReleaseInfo {
                     date: date.to_string(),
                     path,
                     is_active,
                     has_parquet,
                     has_ndjson,
-                    has_markdown,
                 });
             }
         }

@@ -22,7 +22,7 @@ pub struct MakeArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum MakeCommand {
-    /// Generate target projections (Parquet tables + OKF Markdown wiki) from XML
+    /// Generate target projections (Parquet tables) from XML
     All {
         #[arg(long, short)]
         input: PathBuf,
@@ -34,10 +34,6 @@ pub enum MakeCommand {
 
     /// Generate columnar Parquet tables from TRUD XML
     Parquet(crate::commands::parquet::Args),
-
-    /// Generate OKF Markdown wiki archive from Parquet tables
-    #[command(alias = "md")]
-    Markdown(crate::commands::md::Args),
 
     /// Generate canonical NDJSON document stream from TRUD XML (hidden)
     #[command(hide = true)]
@@ -78,7 +74,6 @@ pub fn run(args: MakeArgs) -> Result<()> {
             Ok(())
         }
         Some(MakeCommand::Parquet(parquet_args)) => crate::commands::parquet::run(parquet_args),
-        Some(MakeCommand::Markdown(md_args)) => crate::commands::md::run(md_args),
         Some(MakeCommand::Ndjson(ndjson_args)) => crate::commands::ndjson::run(ndjson_args),
         None => {
             // Bare `ods make` defaults to `make all` using workspace trud/ directory or local XML

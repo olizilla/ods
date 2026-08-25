@@ -690,5 +690,84 @@ fn test_find_alias_and_role_merge_with_or_semantics() {
     assert!(s.contains("MAIN STREET DENTAL SURGERY"), "Must match Dental practice under OR semantics");
 }
 
+#[test]
+fn test_find_tsv_format_without_all() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    let mut out = Vec::new();
+    find::run_with_writer(
+        Args {
+            code: vec!["A82608".to_string(), "RJZ".to_string()],
+            format: OutputFormat::Tsv,
+            input: parquet_dir.clone(),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("find --format tsv should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 2, "Expected 2 TSV lines for 2 codes");
+
+    // Must have no header row containing "ODS Code"
+    assert!(!s.contains("ODS Code"), "TSV must not output a header row");
+
+    for line in lines {
+        let cols: Vec<&str> = line.split('\t').collect();
+        assert_eq!(cols.len(), 5, "Expected 5 tab-separated columns without --all, got: {:?}", cols);
+        assert!(!cols[0].is_empty(), "ODS code must not be empty");
+        assert!(!cols[1].is_empty(), "Name must not be empty");
+        assert!(!cols[2].is_empty(), "Postcode must not be empty");
+        assert!(!cols[3].is_empty(), "Roles must not be empty");
+        assert!(!cols[4].is_empty(), "Class must not be empty");
+    }
+}
+
+#[test]
+fn test_find_tsv_format_with_all() {
+    let parquet_dir = get_parquet_dir();
+    if !parquet_dir.join("orgs_all.parquet").exists() {
+        eprintln!("Skipping test: parquet files missing in ./ods_data/current");
+        return;
+    }
+
+    let mut out = Vec::new();
+    find::run_with_writer(
+        Args {
+            code: vec!["A82608".to_string()],
+            all: true,
+            format: OutputFormat::Tsv,
+            input: parquet_dir.clone(),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("find --all --format tsv should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 1);
+
+    let cols: Vec<&str> = lines[0].split('\t').collect();
+    assert_eq!(cols.len(), 6, "Expected 6 tab-separated columns with --all, got: {:?}", cols);
+    assert_eq!(cols[0], "A82608");
+    assert_eq!(cols[5], "active");
+}
+
+#[test]
+fn test_find_no_filters_guidance_returns_ok() {
+    // Calling run() with default args (no query, no filters, default Table format)
+    // outputs advice to stderr and returns Ok(()) without requiring any workspace/parquet dataset.
+    let result = find::run(Args::default());
+    assert!(result.is_ok(), "find with no filters should return Ok(()) without requiring a dataset");
+}
+
 
 

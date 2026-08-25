@@ -12,6 +12,7 @@ pub enum OutputFormat {
     Markdown,
     Csv,
     Json,
+    Tsv,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,7 @@ pub enum SortBy {
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Search query matching organisation name only. Omit to launch interactive TUI.
+    /// Search query matching organisation name (case-insensitive substring)
     pub query: Option<String>,
 
     /// Filter by exact ODS code (repeatable and comma-separated, e.g. A82608,RJZ)
@@ -58,7 +59,7 @@ pub struct Args {
     #[arg(long, short, value_enum)]
     pub sort: Option<SortBy>,
 
-    /// Output format: table, markdown, csv, json
+    /// Output format: table, markdown, csv, json, tsv
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 
@@ -416,13 +417,6 @@ struct ParsedRoleFilter {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let user_input = if args.input == PathBuf::from(".") {
-        None
-    } else {
-        Some(args.input.as_path())
-    };
-    let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
-
     if args.query.is_none()
         && args.code.is_empty()
         && args.location.is_none()
@@ -430,10 +424,20 @@ pub fn run(args: Args) -> Result<()> {
         && !args.gp
         && !args.dentist
     {
-        let mut tui_args = args;
-        tui_args.input = resolved_input;
-        return crate::tui::run(tui_args);
+        if args.format == OutputFormat::Table || args.format == OutputFormat::Markdown {
+            eprintln!(
+                "No search filters given. Try:\n\n  ods find sedbergh                 by name\n  ods find --in SW9                 by postcode, town, county or country\n  ods find --role RO76              by role\n\nOr browse with a fuzzy finder:\n\n  ods find --format tsv | fzf\n\nPick one and open it:\n\n  ods find --format tsv | fzf | cut -f1 | xargs ods info"
+            );
+            return Ok(());
+        }
     }
+
+    let user_input = if args.input == PathBuf::from(".") {
+        None
+    } else {
+        Some(args.input.as_path())
+    };
+    let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
 
     run_with_writer(args, &mut std::io::stdout(), &resolved_input)
 }
@@ -1025,94 +1029,135 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 writeln!(writer, "{}", fields.join(","))?;
             }
         }
-        OutputFormat::Table | OutputFormat::Markdown => {
-            use std::io::IsTerminal;
-            use comfy_table::{Table, ContentArrangement, presets};
-
-            let mut table = Table::new();
-
-            if args.format == OutputFormat::Markdown {
-                table.load_preset(presets::ASCII_MARKDOWN);
-                table.set_content_arrangement(ContentArrangement::Disabled);
-            } else {
-                table.load_preset(presets::UTF8_FULL_CONDENSED);
-                table.set_content_arrangement(ContentArrangement::Dynamic);
-                if std::io::stdout().is_terminal() {
-                    if let Ok((cols, _)) = crossterm::terminal::size() {
-                        table.set_width(cols);
-                    }
-                } else {
-                    table.set_width(120);
-                }
+        OutputFormat::Tsv | OutputFormat::Table | OutputFormat::Markdown => {
+            struct DisplayRow<'a> {
+                ods_code: &'a str,
+                full_name: String,
+                postcode: &'a str,
+                role_display: String,
+                entity_type: &'a str,
+                status: &'a str,
             }
 
-            if args.all {
-                table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Status"]);
-            } else {
-                table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
-            }
-
-            for r in &matches {
-                let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
-                    let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
-                    if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
-                        format!("{} → {}", r.name, live_succ)
+            let display_rows: Vec<DisplayRow> = matches
+                .iter()
+                .map(|r| {
+                    let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
+                        let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
+                        if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
+                            format!("{} → {}", r.name, live_succ)
+                        } else {
+                            r.name.clone()
+                        }
                     } else {
                         r.name.clone()
-                    }
-                } else {
-                    r.name.clone()
-                };
+                    };
 
-                let role_display = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
+                    let role_display = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
+
+                    DisplayRow {
+                        ods_code: &r.ods_code,
+                        full_name,
+                        postcode: &r.postcode,
+                        role_display,
+                        entity_type: &r.entity_type,
+                        status: &r.status,
+                    }
+                })
+                .collect();
+
+            if args.format == OutputFormat::Tsv {
+                for row in &display_rows {
+                    if args.all {
+                        writeln!(
+                            writer,
+                            "{}\t{}\t{}\t{}\t{}\t{}",
+                            row.ods_code, row.full_name, row.postcode, row.role_display, row.entity_type, row.status
+                        )?;
+                    } else {
+                        writeln!(
+                            writer,
+                            "{}\t{}\t{}\t{}\t{}",
+                            row.ods_code, row.full_name, row.postcode, row.role_display, row.entity_type
+                        )?;
+                    }
+                }
+            } else {
+                use std::io::IsTerminal;
+                use comfy_table::{Table, ContentArrangement, presets};
+
+                let mut table = Table::new();
+
+                if args.format == OutputFormat::Markdown {
+                    table.load_preset(presets::ASCII_MARKDOWN);
+                    table.set_content_arrangement(ContentArrangement::Disabled);
+                } else {
+                    table.load_preset(presets::UTF8_FULL_CONDENSED);
+                    table.set_content_arrangement(ContentArrangement::Dynamic);
+                    if std::io::stdout().is_terminal() {
+                        if let Ok((cols, _)) = crossterm::terminal::size() {
+                            table.set_width(cols);
+                        }
+                    } else {
+                        table.set_width(120);
+                    }
+                }
 
                 if args.all {
-                    table.add_row(vec![
-                        &r.ods_code,
-                        &full_name,
-                        &r.postcode,
-                        &role_display,
-                        &r.entity_type,
-                        &r.status,
-                    ]);
+                    table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Status"]);
                 } else {
-                    table.add_row(vec![
-                        &r.ods_code,
-                        &full_name,
-                        &r.postcode,
-                        &role_display,
-                        &r.entity_type,
-                    ]);
+                    table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
                 }
-            }
 
-            for notice in &alias_notices {
-                writeln!(writer, "{}", notice)?;
-            }
+                for row in &display_rows {
+                    if args.all {
+                        table.add_row(vec![
+                            row.ods_code,
+                            &row.full_name,
+                            row.postcode,
+                            &row.role_display,
+                            row.entity_type,
+                            row.status,
+                        ]);
+                    } else {
+                        table.add_row(vec![
+                            row.ods_code,
+                            &row.full_name,
+                            row.postcode,
+                            &row.role_display,
+                            row.entity_type,
+                        ]);
+                    }
+                }
 
-            writeln!(writer, "{}", table)?;
+                for notice in &alias_notices {
+                    writeln!(writer, "{}", notice)?;
+                }
 
-            if let Some(lvl) = matched_loc_level {
-                writeln!(
-                    writer,
-                    "\n* matched {} — {} organisations",
-                    lvl.name(),
-                    matched_count
-                )?;
-            }
+                writeln!(writer, "{}", table)?;
 
-            if args.all {
-                writeln!(
-                    writer,
-                    "\nFound {} matching records in '{}' (including inactive/closed history).",
-                    matched_count, file_name
-                )?;
-            } else {
-                writeln!(
-                    writer,
-                    "\nFound {} matching active records in '{}'. Pass --all to include inactive/closed history.",
-                    matched_count, file_name
-                )?;
+                if let Some(lvl) = matched_loc_level {
+                    writeln!(
+                        writer,
+                        "\n* matched {} — {} organisations",
+                        lvl.name(),
+                        matched_count
+                    )?;
+                }
+
+                if args.all {
+                    writeln!(
+                        writer,
+                        "\nFound {} matching records in '{}' (including inactive/closed history).",
+                        matched_count, file_name
+                    )?;
+                } else {
+                    writeln!(
+                        writer,
+                        "\nFound {} matching active records in '{}'. Pass --all to include inactive/closed history.",
+                        matched_count, file_name
+                    )?;
+                }
             }
         }
     }

@@ -7,8 +7,7 @@ The `ods` project lets use and explore the data in in multiple ways:
 | I want to...                  | Feature                | Commands |
 |-------------------------------|------------------------|----------|
 | _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM https://ods.fyi/orgs.parquet` |
-| _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` |
-| _**Inspect** an NHS org_      | Detail inspector       | `ods info <ODS_CODE>` |
+| _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` `ods info` |
 | _**Cite** the data_           | Citation guide         | `ods cite` |
 | _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` `ods make` `ods trud audit` |
 | _What changed this month?_    | Diff trud ods releases | `ods trud diff` |
@@ -69,8 +68,6 @@ ods_data/
         ├── successions.parquet        # Entity successor chains
         ├── datapackage.json           # Frictionless Data Package descriptor
         ├── SHA256SUMS                 # Flat verification manifest for _provenance.json and *.parquet
-        ├── markdown/                  # Open Knowledge Format (OKF) wiki archive
-        │   └── wiki.zip
         └── trud/                      # TRUD zip archives (gitignored)
 ```
 
@@ -87,7 +84,7 @@ Commands:
   pull  Download pre-built dataset releases
   cite  Show provenance metadata and academic citation
   trud  Build from official NHS source data (requires TRUD API key)
-  make  Compile TRUD XML into Parquet tables and Markdown
+  make  Compile TRUD XML into Parquet tables
   help  Print this message or the help of the given subcommand(s)
 ```
 
@@ -99,6 +96,7 @@ Searches for organisations or sites in the Parquet tables by name, ODS code, or 
 ```bash
 ods find "Royal Free"
 ods find --role 'GP Practice' --format csv
+ods find --format tsv | fzf
 ```
 
 ### info
@@ -141,12 +139,11 @@ ods trud verify
 
 ### make
 
-Generates target projections (Parquet tables + OKF Markdown wiki) from raw TRUD XML data.
+Generates target projections (Parquet tables) from raw TRUD XML data.
 
 ```bash
-ods make                  # Generate target projections (Parquet + Markdown)
+ods make                  # Generate target projections (Parquet tables)
 ods make parquet          # Generate Parquet tables from TRUD XML
-ods make md               # Generate OKF Markdown wiki archive from Parquet
 ```
 
 ## Contributing
@@ -166,10 +163,13 @@ Considerate PRs welcome! The priorities for this project are:
     - We must not introduce data errors, the trud xml is complicated enough
     - We must track sha256 hashes from NHS TRUD API to derived sources so researchers can trust and cite the derived data.
 2. **User experience**
-    - The NHS org data xml is hard to work with. We're publishing more a more user-friendly alternative - remotely queryable parquet files, and readable [Open Knowldege Format] compliant markdown.
-     - Speed affects user experience. The tool must be fast.
-     - Availability affects accessbility. The data must be available offline and not require a log in.
+    - The NHS org data xml is hard to work with. We're publishing derived Parquet files as more user-friendly alternative to allow SQL, querying over http, and queries across releases.
+    - Speed affects user experience. The tool must be fast.
+    - Availability affects accessbility. The data must be available offline and not require a log in.
 
 
-[Open Knowldege Format]: https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing/
+## Useful Links
 
+- ODS Data Model: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
+- NHS TRUD ODS info: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5
+- NHS TRUD ODS releases: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases
