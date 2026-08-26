@@ -174,20 +174,17 @@ only for work actually done. Data to stdout, progress to stderr, so `ods pull --
 
 ## Gotchas
 
-- **Parquet columns are resolved by name at runtime** via `schema.index_of("...")`.
-  A rename compiles clean and fails when it runs. Grep for the string.
-- **Arrow nullability is declared explicitly.** A mostly-null column declared
-  non-nullable fails at write time, not compile time.
-- **Run the docs.** README examples have gone stale twice when the role vocabulary
-  changed underneath them. If you touch a documented interface, execute the
-  examples.
+- **Parquet columns are resolved by name at runtime** If you rename a column The code
+  will compile but fail at runtime. You gotta grep for the string.
+- **nullable columns is declared explicitly rather than determined from the current data** 
+  A mostly-null column will fail at write time, not compile time.
+- The primary role describes the register rather than the organisation
+- successions are many-to-many
+- legal dates are mostly empty
+- The most recent release is not a superset of all previous releases. Some orgs have
+  been removed from teh dataset over time, and info about previous years gets updated.
 
-## The source data has issues
-
-The primary role describes the register rather than the organisation, successions
-are many-to-many, legal dates are mostly empty, and a snapshot taken today won't
-reproduce one taken in 2019. [docs/queries.md] has the list, with the queries
-that show each one.
+[docs/queries.md] has the full list, with the queries that show each one.
 
 ## Licensing
 
@@ -195,31 +192,28 @@ The code is [AGPL-3.0]. It requires source disclosure from anyone running a
 modified version as a network service.
 
 The ODS data is published by NHS England under the [Open Government Licence], and
-the derived Parquet inherits it. Attribution to NHS England is important.
+the derived Parquet inherits it. Attribution should point to NHS England first.
 
-We publish the derived Parquet and not the raw TRUD XML. That's a choice. OGL
-may permit mirroring it, but NHS England use registration to reach
-people when data is corrected and to collect error reports, and mirroring raw
-files would skip that. The parquet is the product and the provenance chain points
-at TRUD for anyone who wants the source.
+We publish the derived Parquet, not the TRUD XML. The NHS TRUD service asks people
+to register for access to the source data so they can contact people when the data
+is corrected or updated.
+
+The parquet tables are our main output and the provenance chain points to the TRUD
+for anyone who wants the source.
 
 Per the OGL licence: 
-- report errors upstream when you find them,
-- keep a record of which release you used. 
+- Report errors upstream when you find them,
+- Keep a record of which release you used. 
 
-`_provenance.json` covers the second automatically, for every artefact `ods` makes.
+Our per release `_provenance.json` covers the second point, for every artefact `ods` makes.
 
-## Where decisions live
+## Where next?
 
 - [docs/parquet.md] — schemas, naming rules, and the decisions they settle
 - [docs/queries.md] — worked queries, single-release and across an archive
-- [category_rules.json] — the classification opinion, with reasons, including
-  removed rules
-
 
 [docs/parquet.md]: ./docs/parquet.md
 [docs/queries.md]: ./docs/queries.md
-[category_rules.json]: ./data/category_rules.json
 [role_names.json]: ./data/role_names.json
 [agpl-3.0]: https://www.gnu.org/licenses/agpl-3.0.en.html
 [open government licence]: https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/licence/26
