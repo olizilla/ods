@@ -24,18 +24,16 @@ $ cargo install --path .
 $ ods pull
 
 # find active nhs entities in Sedbergh
-$ ods find sedbergh
-| ODS Code   | Name                                     | Postcode  | Category             | Class
-|------------|------------------------------------------|-----------|----------------------|-----
-| 8GJ58      | PARKER M JUNE (ACUPUNCURIST)             | LA10 5AU  | Non-NHS Organisation | org
-| A82608     | SEDBERGH MEDICAL PRACTICE                | LA10 5DL  | GP Practice          | org
-| A82608001  | DR LUMB W & PARTNER                      | LA10 5QJ  | Branch Surgery       | site
-| EE112451   | SEDBERGH SCHOOL                          | LA10 5RY  | School               | org
-| FLG02      | ALLIED PHARMACY SEDBERGH                 | LA10 5BL  | Pharmacy             | org
-| RNN88      | SEDBERGH HEALTH CENTRE                   | LA10 5RX  | NHS Trust Site       | site
+$ ods find --in sedbergh
+┌───────────┬──────────────────────────────────────────┬──────────┬──────────────────────────────────┬───────┐
+│ ODS Code  ┆ Name                                     ┆ Postcode ┆ Roles                            ┆ Class │
+╞═══════════╪══════════════════════════════════════════╪══════════╪══════════════════════════════════╪═══════╡
+│ 8GJ58     ┆ PARKER M JUNE (ACUPUNCURIST)             ┆ LA10 5AU ┆ Non-NHS Organisation             ┆ org   │
+│ A82608    ┆ SEDBERGH MEDICAL PRACTICE                ┆ LA10 5DL ┆ GP Practice +1                   ┆ org   │
+│ A82608001 ┆ DR LUMB W & PARTNER                      ┆ LA10 5QJ ┆ Branch Surgery                   ┆ site  │
+│ D2E8H     ┆ AP SD THIRTEEN LIMITED                   ┆ LA10 5BL ┆ Pharmacy Headquarter             ┆ org   │
+│ EE112233  ┆ SEDBERGH PRIMARY SCHOOL                  ┆ LA10 5AL ┆ School, Community School         ┆ org   │
 ```
-
-_Real output `SEDBURGH MEDICAL CENTRE` is misspelled in the source data. please open issues for data errors you find so we can report them in batches back to the NHS._
 
 ### The longer path: register and pull source data from NHS TRUD
 
@@ -109,19 +107,10 @@ These are the principles behind the decisions made so far
 
 **Say what the source says.** ODS facts are carried verbatim. `publication_seq_num`
 is spelled the way the XML spells it, and TRUD's uppercase hashes stay uppercase.
-Where we deviate, we write down why: role display names are curated with typos
-fixed and abbreviations expanded, each substantive change justified in
-[role_names.json].
 
-**Keep opinions separable.** `orgs.category` is a judgement call, because the ODS
-`primary role` describes GP practices as `RO177 Prescribing Cost Centre`, captures
-the administrative register that they are part of but is unhelpful for everyone else.
-So the `category` column is an opinionated extension to the data. The rules that
-determine its values live in [category_rules.json], shipped with the release and
-hashed with everything else, with a `why` on each rule. If you disagree with it
-you can edit it and recompute from the same inputs.
-The bar for a rule is high: only where the primary role actively misleads about
-the kind of thing. Taxonomic details belong in the `roles` column.
+**Keep opinions separable.** Where we deviate, we write down why: role display names
+are curated with typos fixed and abbreviations expanded, each substantive change
+is documented in [role_names.json].
 
 **Claim exactly what the mechanism delivers.** for example `ods pull` verifies 
 checksums fetched from the same host as the data. That proves _integrity of transfer_, 
@@ -132,13 +121,7 @@ fact they are: `trud_*` from the TRUD API, `publication_*` from the ODS XML
 manifest, `tool_*` from `ods` itself. A missing value reads `unknown` and never
 uses a fallback. avoid offering plausible wrong answers. Same reasoning applies
 to swallowed errors. Always clearly state what went wrong and where possible offer
-steps to retry or fix it. 
-
-**Write down what you rejected.** Half the value in these docs is the options we
-dropped, and why. Prescribing cost centre subtypes, sigstore signing,
-`primary_role_code`, renaming successors to bare service names. Without the
-reasoning, the next reader re-derives the same argument and eventually "fixes" a
-deliberate choice.
+steps to retry or fix it.
 
 ## What counts as done
 
@@ -179,8 +162,8 @@ only for work actually done. Data to stdout, progress to stderr, so `ods pull --
 - **nullable columns is declared explicitly rather than determined from the current data** 
   A mostly-null column will fail at write time, not compile time.
 - The primary role describes the register rather than the organisation
-- successions are many-to-many
-- legal dates are mostly empty
+- Successions are many-to-many
+- Legal dates are mostly empty, prefer operational dates
 - The most recent release is not a superset of all previous releases. Some orgs have
   been removed from teh dataset over time, and info about previous years gets updated.
 
