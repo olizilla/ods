@@ -77,7 +77,7 @@ pub struct Args {
     pub verbose: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TrudReleaseItem {
     pub id: String,
 
@@ -98,6 +98,24 @@ pub struct TrudReleaseItem {
 
     #[serde(rename = "archiveFileUrl")]
     pub download_url: String,
+
+    #[serde(rename = "checksumFileUrl", default)]
+    pub checksum_file_url: Option<String>,
+
+    #[serde(rename = "checksumFileName", default)]
+    pub checksum_file_name: Option<String>,
+
+    #[serde(rename = "signatureFileUrl", default)]
+    pub signature_file_url: Option<String>,
+
+    #[serde(rename = "signatureFileName", default)]
+    pub signature_file_name: Option<String>,
+
+    #[serde(rename = "publicKeyFileUrl", default)]
+    pub public_key_file_url: Option<String>,
+
+    #[serde(rename = "publicKeyFileName", default)]
+    pub public_key_file_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,18 +156,25 @@ pub struct ReleaseListItemJson {
 
 pub trait TrudFetcher: Send + Sync {
     fn fetch_releases(&self) -> Result<Vec<TrudReleaseItem>>;
+    fn releases_raw_json(&self) -> Option<String> {
+        None
+    }
     fn download_archive(
         &self,
         url: &str,
         dest_path: &Path,
         on_bytes: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<()>;
+    fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
+        self.download_archive(url, dest_path, &|_| {})
+    }
 }
 
 pub struct UreqTrudFetcher {
     pub api_key: String,
     pub agent: ureq::Agent,
     pub verbose: bool,
+    pub cached_raw_json: std::sync::Mutex<Option<String>>,
 }
 
 impl UreqTrudFetcher {
@@ -162,13 +187,21 @@ impl UreqTrudFetcher {
             api_key: api_key.to_string(),
             agent,
             verbose,
+            cached_raw_json: std::sync::Mutex::new(None),
         }
     }
 }
 
 impl TrudFetcher for UreqTrudFetcher {
     fn fetch_releases(&self) -> Result<Vec<TrudReleaseItem>> {
-        fetch_trud_releases(&self.api_key, self.verbose)
+        let (releases, raw_json) = fetch_trud_releases_and_raw(&self.api_key, self.verbose)?;
+        let safe_json = crate::provenance::sanitize_trud_url(&raw_json, Some(&self.api_key));
+        *self.cached_raw_json.lock().unwrap() = Some(safe_json);
+        Ok(releases)
+    }
+
+    fn releases_raw_json(&self) -> Option<String> {
+        self.cached_raw_json.lock().unwrap().clone()
     }
 
     fn download_archive(
@@ -205,6 +238,25 @@ impl TrudFetcher for UreqTrudFetcher {
             on_bytes(n as u64);
         }
 
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
+        let real_url = url.replace("<REDACTED_API_KEY>", &self.api_key);
+        if self.verbose {
+            let safe_url = crate::provenance::sanitize_trud_url(&real_url, Some(&self.api_key));
+            eprintln!("[VERBOSE] Download File URL: {}", safe_url);
+        }
+
+        let resp = self.agent.get(&real_url)
+            .call()
+            .context("Failed to download file from TRUD")?;
+
+        let file = File::create(dest_path)?;
+        let mut writer = BufWriter::new(file);
+        let mut reader = resp.into_reader();
+        std::io::copy(&mut reader, &mut writer)?;
         writer.flush()?;
         Ok(())
     }
@@ -448,6 +500,14 @@ fn pull_single_release<F: TrudFetcher>(
                 target_release.release_date,
                 format_size(target_release.archive_file_size)
             ));
+            let att_line = capture_attestations(
+                &trud_dir,
+                &target_release,
+                fetcher,
+                fetcher.releases_raw_json().as_deref(),
+                args.api_key.as_deref(),
+            );
+            progress.settle_detail(&att_line);
             if pin_moved {
                 progress.settle_detail(&format!("current → releases/{}", target_release.release_date));
             }
@@ -548,6 +608,14 @@ fn pull_single_release<F: TrudFetcher>(
         target_release.release_date,
         format_size(target_release.archive_file_size)
     ));
+    let att_line = capture_attestations(
+        &trud_dir,
+        &target_release,
+        fetcher,
+        fetcher.releases_raw_json().as_deref(),
+        args.api_key.as_deref(),
+    );
+    progress.settle_detail(&att_line);
     if progress.caps().verbose {
         progress.settle_detail(&format!("SHA-256: {}", local_sha256));
     }
@@ -722,6 +790,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
         buffered: HashMap::new(),
     }));
 
+    let raw_json = Arc::new(fetcher.releases_raw_json());
+
     pool.scope(|s| {
         for _ in 0..num_jobs {
             let next_idx = next_idx.clone();
@@ -735,6 +805,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
             let outcomes = outcomes.clone();
             let newest_downloaded_date = newest_downloaded_date.clone();
             let coordinator = coordinator.clone();
+            let raw_json = raw_json.clone();
 
             s.spawn(move |_| {
                 loop {
@@ -897,6 +968,13 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                             } else {
                                 let _ = std::fs::rename(&part_path, &dest_path);
                                 let _ = write_provenance_json(&release_dir, release, &local_sha, true, &progress);
+                                capture_attestations(
+                                    &trud_dir,
+                                    release,
+                                    fetcher,
+                                    raw_json.as_ref().as_deref(),
+                                    args.api_key.as_deref(),
+                                );
 
                                 downloaded_count.fetch_add(1, Ordering::Relaxed);
                                 progress.remove_in_flight(&release.release_date);
@@ -1064,6 +1142,10 @@ fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &s
 }
 
 pub fn fetch_trud_releases(api_key: &str, verbose: bool) -> Result<Vec<TrudReleaseItem>> {
+    fetch_trud_releases_and_raw(api_key, verbose).map(|(rels, _)| rels)
+}
+
+pub fn fetch_trud_releases_and_raw(api_key: &str, verbose: bool) -> Result<(Vec<TrudReleaseItem>, String)> {
     let url = format!(
         "https://isd.digital.nhs.uk/trud/api/v1/keys/{}/items/{}/releases",
         api_key, TRUD_ODS_ITEM_ID
@@ -1094,10 +1176,19 @@ pub fn fetch_trud_releases(api_key: &str, verbose: bool) -> Result<Vec<TrudRelea
     // Sanitize download URLs inside release items so API keys are never leaked
     let sanitized_releases = resp.releases.into_iter().map(|mut r| {
         r.download_url = crate::provenance::sanitize_trud_url(&r.download_url, Some(api_key));
+        if let Some(ref u) = r.checksum_file_url {
+            r.checksum_file_url = Some(crate::provenance::sanitize_trud_url(u, Some(api_key)));
+        }
+        if let Some(ref u) = r.signature_file_url {
+            r.signature_file_url = Some(crate::provenance::sanitize_trud_url(u, Some(api_key)));
+        }
+        if let Some(ref u) = r.public_key_file_url {
+            r.public_key_file_url = Some(crate::provenance::sanitize_trud_url(u, Some(api_key)));
+        }
         r
     }).collect();
 
-    Ok(sanitized_releases)
+    Ok((sanitized_releases, raw_body))
 }
 
 pub fn parse_trud_filename(filename: &str) -> Result<(String, Option<String>)> {
@@ -1183,6 +1274,7 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         archive_file_sha256: local_sha256.clone(),
         archive_file_size: file_size,
         download_url: format!("file://{}", zip_file.display()),
+        ..Default::default()
     };
 
     write_provenance_json_with_verification(
@@ -1202,6 +1294,7 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         release_date,
         format_size(file_size)
     ));
+    progress.settle_detail("attestations: none — no API response to fetch them from");
     if progress.caps().verbose {
         progress.settle_detail(&format!("SHA-256: {}", local_sha256));
     }
@@ -1264,4 +1357,131 @@ fn write_provenance_json_with_verification(
     let json = serde_json::to_string_pretty(&prov)?;
     std::fs::write(&prov_path, json).context("Failed to write _provenance.json")?;
     Ok(())
+}
+
+pub fn run_local_archive_with_progress(
+    args: &Args,
+    workspace_root: &Path,
+    local_path: &Path,
+    progress: &Progress,
+) -> Result<()> {
+    run_local_archive(args, workspace_root, local_path, progress)
+}
+
+pub fn capture_attestations<F: TrudFetcher>(
+    trud_dir: &Path,
+    release: &TrudReleaseItem,
+    fetcher: &F,
+    raw_json: Option<&str>,
+    api_key: Option<&str>,
+) -> String {
+    let _ = std::fs::create_dir_all(trud_dir);
+
+    // 1. Write trud-releases-<release_date>.json
+    let releases_json_path = trud_dir.join(format!("trud-releases-{}.json", release.release_date));
+    let json_content = if let Some(raw) = raw_json {
+        crate::provenance::sanitize_trud_url(raw, api_key)
+    } else {
+        let mut safe_release = release.clone();
+        safe_release.download_url = crate::provenance::sanitize_trud_url(&safe_release.download_url, api_key);
+        if let Some(ref u) = safe_release.checksum_file_url {
+            safe_release.checksum_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
+        }
+        if let Some(ref u) = safe_release.signature_file_url {
+            safe_release.signature_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
+        }
+        if let Some(ref u) = safe_release.public_key_file_url {
+            safe_release.public_key_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
+        }
+        let fallback_obj = serde_json::json!({
+            "apiVersion": "1",
+            "releases": [safe_release]
+        });
+        serde_json::to_string_pretty(&fallback_obj).unwrap_or_default()
+    };
+    let _ = std::fs::write(&releases_json_path, json_content);
+
+    let mut captured = Vec::new();
+    let mut missing_reasons = Vec::new();
+
+    // 2. Checksum file
+    if let Some(ref url) = release.checksum_file_url {
+        let filename = release.checksum_file_name.as_deref().unwrap_or_else(|| {
+            url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("checksum.xml")
+        });
+        let dest = trud_dir.join(filename);
+        let res = if dest.exists() {
+            Ok(())
+        } else {
+            fetcher.download_file(url, &dest)
+        };
+        if res.is_ok() {
+            captured.push("checksum");
+        } else {
+            missing_reasons.push("checksum download failed");
+        }
+    } else {
+        missing_reasons.push("checksum not offered for this release");
+    }
+
+    // 3. Signature file (stored as .xml.asc)
+    if let Some(ref url) = release.signature_file_url {
+        let url_fname = url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("");
+        let filename = if url_fname.ends_with(".asc") {
+            url_fname.to_string()
+        } else if let Some(ref sig_name) = release.signature_file_name {
+            if sig_name.ends_with(".sig") {
+                format!("{}.asc", sig_name.strip_suffix(".sig").unwrap())
+            } else {
+                sig_name.clone()
+            }
+        } else {
+            format!("{}.asc", release.checksum_file_name.as_deref().unwrap_or("checksum.xml"))
+        };
+        let dest = trud_dir.join(filename);
+        let res = if dest.exists() {
+            Ok(())
+        } else {
+            fetcher.download_file(url, &dest)
+        };
+        if res.is_ok() {
+            captured.push("signature");
+        } else {
+            missing_reasons.push("signature download failed");
+        }
+    } else {
+        missing_reasons.push("signature not offered for this release");
+    }
+
+    // 4. Public key file
+    if let Some(ref url) = release.public_key_file_url {
+        let filename = release.public_key_file_name.as_deref().unwrap_or_else(|| {
+            url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("trud-public-key.pgp")
+        });
+        let dest = trud_dir.join(filename);
+        let res = if dest.exists() {
+            Ok(())
+        } else {
+            fetcher.download_file(url, &dest)
+        };
+        if res.is_ok() {
+            captured.push("public key");
+        } else {
+            missing_reasons.push("public key download failed");
+        }
+    } else {
+        missing_reasons.push("public key not offered for this release");
+    }
+
+    format_attestations_line(&captured, &missing_reasons)
+}
+
+fn format_attestations_line(captured: &[&str], missing_reasons: &[&str]) -> String {
+    if missing_reasons.is_empty() {
+        format!("attestations: {}", captured.join(", "))
+    } else if captured.is_empty() {
+        format!("attestations: none — {}", missing_reasons.join(", "))
+    } else {
+        format!("attestations: {} — {}", captured.join(", "), missing_reasons.join(", "))
+    }
 }

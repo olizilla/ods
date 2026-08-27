@@ -213,6 +213,7 @@ fn generate_96_mock_releases() -> Vec<TrudReleaseItem> {
             archive_file_sha256: sha256,
             archive_file_size: bytes.len() as u64,
             download_url: format!("https://trud.mock/{}", date_str),
+            ..Default::default()
         });
 
         month += 1;
@@ -639,6 +640,7 @@ fn test_batch_pin_untouched_on_total_failure() {
             archive_file_sha256: "DUMMY".to_string(),
             archive_file_size: 1000,
             download_url: "https://example.com/2026-07-31".to_string(),
+            ..Default::default()
         },
     ];
 
@@ -699,6 +701,7 @@ fn test_batch_summary_reports_landed_bytes_not_planned() {
             archive_file_sha256: sha_r1,
             archive_file_size: r1_size,
             download_url: "https://example.com/2026-07-31".to_string(),
+            ..Default::default()
         },
         TrudReleaseItem {
             id: "341".to_string(),
@@ -708,6 +711,7 @@ fn test_batch_summary_reports_landed_bytes_not_planned() {
             archive_file_sha256: sha_r2,
             archive_file_size: r2_size,
             download_url: "https://example.com/2026-06-30".to_string(),
+            ..Default::default()
         },
     ];
 
@@ -763,6 +767,7 @@ fn test_batch_all_failed_summary_leads_with_cross() {
             archive_file_sha256: "DUMMY1".to_string(),
             archive_file_size: 1000,
             download_url: "https://example.com/2026-07-31".to_string(),
+            ..Default::default()
         },
         TrudReleaseItem {
             id: "341".to_string(),
@@ -772,6 +777,7 @@ fn test_batch_all_failed_summary_leads_with_cross() {
             archive_file_sha256: "DUMMY2".to_string(),
             archive_file_size: 1000,
             download_url: "https://example.com/2026-06-30".to_string(),
+            ..Default::default()
         },
     ];
 
