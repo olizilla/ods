@@ -223,20 +223,16 @@ fn test_audit_runs_full_suite_and_fails_on_tampered_sha256sums_file() -> Result<
 }
 
 #[test]
-fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifacts() -> Result<()> {
+fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
-    // Mutate dataset_file_sha256 in _provenance.json
+    // Mutate trud_release_sha256 in _provenance.json
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
     let mut prov: ods::provenance::OdsProvenance =
         serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    if let Some(ref mut map) = prov.dataset_file_sha256 {
-        map.insert(
-            "orgs.parquet".to_string(),
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        );
-    }
+    prov.trud_release_sha256 =
+        Some("0000000000000000000000000000000000000000000000000000000000000000".to_string());
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
 
     let args = ods::commands::audit::Args {
@@ -251,7 +247,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_derived_artifact
     let result = ods::commands::audit::run(args);
     assert!(
         result.is_err(),
-        "audit must fail on corrupted dataset_file_sha256 in _provenance.json"
+        "audit must fail on corrupted trud_release_sha256 in _provenance.json"
     );
     Ok(())
 }

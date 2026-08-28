@@ -1,0 +1,520 @@
+use anyhow::Result;
+use ods::commands::make_oci::{perform_all_checks, run, Args};
+use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::TempDir;
+
+fn git_cmd(repo_dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(repo_dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z");
+    cmd
+}
+
+/// Sets up a synthetic release directory ready for `ods make oci`.
+fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let rel_dir = tmp.path().join("releases").join("2026-07-31");
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+
+    // Create synthetic outer zip in trud/
+    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    {
+        let outer_file = File::create(&outer_zip_path).unwrap();
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default();
+        outer_zip.start_file("dummy.txt", options).unwrap();
+        outer_zip.write_all(b"dummy source zip").unwrap();
+        outer_zip.finish().unwrap();
+    }
+    let zip_sha256 = compute_file_sha256(&outer_zip_path).unwrap();
+
+    // Create synthetic Parquet tables and notes
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
+    fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"0.1.0\"}").unwrap();
+    fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
+
+    // Initialize git repository in tmp.path() hermetically without host config
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        format!("[package]\nname = \"ods\"\nversion = \"{}\"\n", env!("CARGO_PKG_VERSION")),
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("src")).unwrap();
+    fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
+
+    let _ = git_cmd(tmp.path()).args(["init", "-b", "main"]).output();
+    let _ = git_cmd(tmp.path()).args(["add", "."]).output();
+    let _ = git_cmd(tmp.path())
+        .args(["commit", "-m", "initial", "--no-gpg-sign"])
+        .output();
+    let head_out = git_cmd(tmp.path()).args(["rev-parse", "HEAD"]).output().unwrap();
+    let git_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+    let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
+
+    let mut prov = OdsProvenance::default();
+    prov.trud_release_name = Some("Release 7.0.0".to_string());
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov.trud_release_filesize_bytes = Some(37_983_173);
+    prov.trud_release_sha256 = Some(zip_sha256.clone());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    prov.publication_date = Some("2026-07-28".to_string());
+    prov.publication_seq_num = Some("4700".to_string());
+    prov.publication_type = Some("Full".to_string());
+    prov.publication_record_count = Some(2);
+    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    prov.tool_git_sha = Some(git_sha);
+    prov.tool_git_dirty = Some(false);
+    prov.dataset_version = Some("1.0.0".to_string());
+
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+
+    (tmp, rel_dir)
+}
+
+fn test_args(input: PathBuf, version: &str, check: bool, tool_repo: Option<PathBuf>) -> Args {
+    Args {
+        input,
+        version: version.to_string(),
+        check,
+        offline: true,
+        tool_repo,
+        index: None,
+    }
+}
+
+#[test]
+fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Verify root files exist
+    assert!(rel_dir.join("_release.json").exists());
+    assert!(rel_dir.join("SHA256SUMS").exists());
+    assert!(rel_dir.join("_provenance.json").exists());
+
+    // Verify oci/ files exist
+    let oci_dir = rel_dir.join("oci");
+    assert!(oci_dir.join("oci-layout").exists());
+    assert!(oci_dir.join("index.json").exists());
+
+    let blobs_dir = oci_dir.join("blobs").join("sha256");
+    assert!(blobs_dir.is_dir());
+
+    // Verify symlinks resolve and point to release root files
+    let mut real_manifest_count = 0;
+    let mut symlink_count = 0;
+    for entry in fs::read_dir(&blobs_dir)?.flatten() {
+        let p = entry.path();
+        if p.is_symlink() {
+            symlink_count += 1;
+            let target = fs::canonicalize(&p)?;
+            assert!(target.exists(), "Symlink target must exist: {}", target.display());
+            assert_eq!(target.parent().unwrap(), fs::canonicalize(&rel_dir)?.as_path());
+        } else if p.is_file() {
+            real_manifest_count += 1;
+        }
+    }
+
+    assert_eq!(real_manifest_count, 1, "Exactly one real manifest file in blobs/sha256/");
+    assert!(symlink_count >= 4, "Must have symlinks for all published layers");
+
+    // Verify index.json contents
+    let index_bytes = fs::read(oci_dir.join("index.json"))?;
+    let index: ods::oci::OciIndex = serde_json::from_slice(&index_bytes)?;
+    assert_eq!(index.schema_version, 2);
+    assert_eq!(index.media_type, ods::oci::MEDIA_TYPE_INDEX);
+    assert_eq!(index.manifests.len(), 2);
+    let ref0 = index.manifests[0]
+        .annotations
+        .as_ref()
+        .unwrap()
+        .get(ods::oci::ANNOTATION_REF_NAME)
+        .unwrap();
+    let ref1 = index.manifests[1]
+        .annotations
+        .as_ref()
+        .unwrap()
+        .get(ods::oci::ANNOTATION_REF_NAME)
+        .unwrap();
+    assert_eq!(ref0, "2026-07-31");
+    assert_eq!(ref1, "2026-07-31_1.0.1");
+    assert_eq!(index.manifests[0].media_type, ods::oci::MEDIA_TYPE_MANIFEST);
+    assert_eq!(index.manifests[0].artifact_type, ods::oci::ARTIFACT_TYPE_DATASET);
+    assert_eq!(index.manifests[1].media_type, ods::oci::MEDIA_TYPE_MANIFEST);
+    assert_eq!(index.manifests[1].artifact_type, ods::oci::ARTIFACT_TYPE_DATASET);
+    assert_eq!(index.manifests[0].digest, index.manifests[1].digest);
+
+    // Re-running with check = true must succeed
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(failures.is_empty(), "All checks must pass on cleanly generated layout");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_oci_regenerates_datapackage_with_full_semver() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let dp_content = fs::read_to_string(rel_dir.join("datapackage.json"))?;
+    let dp_val: serde_json::Value = serde_json::from_str(&dp_content)?;
+    assert_eq!(dp_val["version"], "1.0.1");
+
+    // Also verify manifest layer digest for datapackage.json matches the 1.0.1 file on disk
+    let dp_sha = compute_file_sha256(&rel_dir.join("datapackage.json"))?;
+    let oci_dir = rel_dir.join("oci");
+    let manifest_path = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .flatten()
+        .find(|e| e.path().is_file() && !e.path().is_symlink())
+        .unwrap()
+        .path();
+    let manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
+    let dp_layer = manifest
+        .layers
+        .iter()
+        .find(|l| {
+            l.annotations
+                .as_ref()
+                .and_then(|a| a.get("org.opencontainers.image.title"))
+                .map(|t| t == "datapackage.json")
+                .unwrap_or(false)
+        })
+        .unwrap();
+    assert_eq!(dp_layer.digest, format!("sha256:{}", dp_sha.to_lowercase()));
+
+    Ok(())
+}
+
+#[test]
+fn test_make_oci_check_mode_verifies_without_writing() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Now run with check: true
+    let res = run(test_args(rel_dir, "1.0.1", true, Some(tmp.path().to_path_buf())));
+    assert!(res.is_ok(), "Check mode must succeed on valid OCI bundle");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_oci_idempotent_repack_after_rebuilt_content() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+
+    // First pack
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Rebuild/modify a parquet file on disk
+    fs::write(rel_dir.join("orgs.parquet"), b"rebuilt parquet content with changed bytes")?;
+
+    // Second pack: must regenerate oci/ wholesale without stale blobs or symlinks
+    let res = run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())));
+    assert!(res.is_ok(), "Re-pack after changed content must succeed: {:?}", res.err());
+
+    // Verify exactly one real manifest blob in blobs/sha256/
+    let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
+    let mut real_manifests = 0;
+    for entry in fs::read_dir(&blobs_dir)?.flatten() {
+        if entry.path().is_file() && !entry.path().is_symlink() {
+            real_manifests += 1;
+        }
+    }
+    assert_eq!(real_manifests, 1, "Exactly one real manifest file after re-pack");
+
+    // Verify all checks pass cleanly (no stale symlink failures)
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(failures.is_empty(), "All checks must pass on cleanly regenerated layout: {:?}", failures);
+
+    Ok(())
+}
+
+#[test]
+fn test_determinism_two_different_working_directories_produce_identical_manifests() -> Result<()> {
+    let (tmp_a, rel_dir_a) = setup_synthetic_release_dir();
+    let (tmp_b, rel_dir_b) = setup_synthetic_release_dir();
+
+    run(test_args(rel_dir_a.clone(), "1.0.1", false, Some(tmp_a.path().to_path_buf())))?;
+    run(test_args(rel_dir_b.clone(), "1.0.1", false, Some(tmp_b.path().to_path_buf())))?;
+
+    let get_manifest_bytes = |dir: &Path| -> Result<Vec<u8>> {
+        let blobs = dir.join("oci").join("blobs").join("sha256");
+        for entry in fs::read_dir(blobs)?.flatten() {
+            let path = entry.path();
+            if path.is_file() && !path.is_symlink() {
+                return Ok(fs::read(path)?);
+            }
+        }
+        anyhow::bail!("No manifest file found");
+    };
+
+    let bytes_a = get_manifest_bytes(&rel_dir_a)?;
+    let bytes_b = get_manifest_bytes(&rel_dir_b)?;
+
+    assert_eq!(bytes_a, bytes_b, "Manifests built across different directories must be byte-identical");
+
+    let rel_a = fs::read_to_string(rel_dir_a.join("_release.json"))?;
+    let rel_b = fs::read_to_string(rel_dir_b.join("_release.json"))?;
+    assert_eq!(rel_a, rel_b, "_release.json must be byte-identical");
+
+    Ok(())
+}
+
+#[test]
+fn test_refusal_repacking_from_disk_mismatch() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Tamper with a source file on disk after packaging
+    fs::write(rel_dir.join("orgs.parquet"), b"tampered content after packing")?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("Re-packing from source files yields non-identical manifest bytes")),
+        "Must catch disk divergence during re-packing: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_releases_json_duplicate_row() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let mut index = ods::index::OdsReleaseIndex::baked()?;
+    index.releases.push(ods::index::ReleaseIndexEntry {
+        trud_release_date: "2026-07-31".to_string(),
+        dataset_version: "1.0.1".to_string(),
+        tag: "2026-07-31_1.0.1".to_string(),
+        manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
+        trud_release_sha256: "8151248D".to_string(),
+        tool_version: "0.4.3".to_string(),
+        dataset_doi: None,
+        withdrawn: None,
+    });
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), Some(&index), true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("data/releases.json already has a row for 2026-07-31 1.0.1")),
+        "Must report duplicate releases.json row refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_baseline_invalid_before_disk_mutations() {
+    let tmp = TempDir::new().unwrap();
+    let rel_dir = tmp.path().join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    // Create an invalid baseline provenance (missing publication fields, tool version, etc.)
+    let mut prov = OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    fs::write(rel_dir.join(PROVENANCE_FILENAME), serde_json::to_string(&prov).unwrap()).unwrap();
+
+    let res = run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())));
+    assert!(res.is_err());
+    assert!(!rel_dir.join("SHA256SUMS").exists(), "Must not write SHA256SUMS on baseline failure");
+    assert!(!rel_dir.join("oci").exists(), "Must not create oci/ on baseline failure");
+}
+
+#[test]
+fn test_refusal_git_tag_already_exists() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    // Create the tag in git: data/2026-07-31_1.0.1
+    git_cmd(tmp.path())
+        .args(["tag", "--no-sign", "data/2026-07-31_1.0.1"])
+        .output()?;
+
+    let res = run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())));
+    assert!(res.is_err(), "run must fail when git tag already exists");
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("already exists locally")),
+        "Must report existing git tag refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_stale_symlink_target_modified() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Tamper with target file without updating symlink
+    fs::write(rel_dir.join("roles.parquet"), b"modified roles content")?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("blob symlink stale")),
+        "Must report stale symlink refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_broken_symlink() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
+    let broken_link = blobs_dir.join("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../../../nonexistent_file.parquet", &broken_link)?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("blob symlink broken")),
+        "Must report broken symlink refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_tampered_index_json_digest() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let index_path = rel_dir.join("oci").join("index.json");
+    let mut index: ods::oci::OciIndex = serde_json::from_slice(&fs::read(&index_path)?)?;
+    index.manifests[0].digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    fs::write(&index_path, serde_json::to_vec_pretty(&index)?)?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("index.json names manifest digest")),
+        "Must report tampered index.json refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_config_digest_disagrees_with_provenance_layer() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
+    for entry in fs::read_dir(&blobs_dir)?.flatten() {
+        let p = entry.path();
+        if p.is_file() && !p.is_symlink() {
+            let mut manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(&p)?)?;
+            manifest.config.digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
+            fs::write(&p, manifest.to_canonical_bytes()?)?;
+            break;
+        }
+    }
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("config.digest") && f.contains("_provenance.json layer digest")),
+        "Must report config digest mismatch refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_uppercase_digest_in_manifest() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
+    for entry in fs::read_dir(&blobs_dir)?.flatten() {
+        let p = entry.path();
+        if p.is_file() && !p.is_symlink() {
+            let mut manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(&p)?)?;
+            let hex_part = manifest.layers[0].digest.trim_start_matches("sha256:");
+            manifest.layers[0].digest = format!("sha256:{}", hex_part.to_uppercase());
+            fs::write(&p, manifest.to_canonical_bytes()?)?;
+            break;
+        }
+    }
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("digest is not lowercase hex")),
+        "Must report uppercase digest refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_sha256sums_disagrees_with_layers() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    // Add extra line to SHA256SUMS for a phantom file
+    let mut sums = fs::read_to_string(rel_dir.join("SHA256SUMS"))?;
+    sums.push_str("0000000000000000000000000000000000000000000000000000000000000000  phantom.parquet\n");
+    fs::write(rel_dir.join("SHA256SUMS"), sums)?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("phantom.parquet")),
+        "Must report SHA256SUMS extra file refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_tool_git_dirty() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.tool_git_dirty = Some(true);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("tool_git_dirty is true")),
+        "Must report tool_git_dirty refusal: {:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_refusal_tool_git_sha_mismatch() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), "1.0.1", false, Some(tmp.path().to_path_buf())))?;
+
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.tool_git_sha = Some("0000000000000000000000000000000000000000".to_string());
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_checks(&rel_dir, "1.0.1", Some(tmp.path()), None, true)?;
+    assert!(
+        failures.iter().any(|f| f.contains("tool_git_sha")),
+        "Must report tool_git_sha mismatch refusal: {:?}",
+        failures
+    );
+    Ok(())
+}

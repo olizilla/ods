@@ -205,6 +205,7 @@ fn test_cli_pull_local_release_output() {
         "stderr must contain '* Release 2026-05-29 already local, verified', got:\n{}",
         stderr
     );
+
     assert!(
         stderr.contains("current → releases/2026-05-29"),
         "stderr must contain 'current → releases/2026-05-29', got:\n{}",
@@ -231,8 +232,8 @@ fn test_cli_find_empty_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Run `ods pull` to download the latest pre-built NHS ODS dataset release"),
-        "stderr must advise running ods pull, got:\n{}",
+        stderr.contains("Run `ods pull` to download a release, then `ods use <date>` to pin it"),
+        "stderr must advise running ods pull and ods use, got:\n{}",
         stderr
     );
 }
@@ -255,8 +256,8 @@ fn test_cli_cite_empty_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Run `ods pull` to download the latest pre-built NHS ODS dataset release"),
-        "stderr must advise running ods pull, got:\n{}",
+        stderr.contains("Run `ods pull` to download a release, then `ods use <date>` to pin it"),
+        "stderr must advise running ods pull and ods use, got:\n{}",
         stderr
     );
 }
@@ -289,8 +290,8 @@ fn test_cli_find_unpinned_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Pin one:  ods pull 2026-07-31"),
-        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr.contains("Pin one:  ods use 2026-07-31"),
+        "stderr must contain 'Pin one:  ods use 2026-07-31', got:\n{}",
         stderr
     );
 }
@@ -322,8 +323,8 @@ fn test_cli_cite_unpinned_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Pin one:  ods pull 2026-07-31"),
-        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr.contains("Pin one:  ods use 2026-07-31"),
+        "stderr must contain 'Pin one:  ods use 2026-07-31', got:\n{}",
         stderr
     );
 }
@@ -350,8 +351,8 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
         stderr
     );
     assert!(
-        stderr.contains("Pin one:  ods pull 2026-07-31"),
-        "stderr must contain 'Pin one:  ods pull 2026-07-31', got:\n{}",
+        stderr.contains("Pin one:  ods use 2026-07-31"),
+        "stderr must contain 'Pin one:  ods use 2026-07-31', got:\n{}",
         stderr
     );
 }

@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 pub const DATAPACKAGE_JSON: &str = include_str!("../data/datapackage.json");
 
-pub fn schema_version() -> &'static str {
+pub fn dataset_version() -> &'static str {
     "0.1.0"
 }
 
@@ -134,7 +134,7 @@ pub fn generate_datapackage() -> Value {
         "name": "nhs-ods-parquet",
         "title": "NHS Organisation Data Service (ODS) Parquet Dataset",
         "description": "Columnar Parquet dataset compiled from the official NHS TRUD Organisation Data Service (ODS) release",
-        "version": schema_version(),
+        "version": dataset_version(),
         "licenses": [
             {
                 "name": "OGL-UK-3.0",
@@ -153,13 +153,24 @@ pub fn generate_datapackage() -> Value {
 pub fn generate_release_datapackage(
     output_dir: &std::path::Path,
     provenance: Option<&crate::provenance::OdsProvenance>,
+    dataset_doi: Option<&str>,
+    dataset_version_opt: Option<&str>,
 ) -> Value {
     let mut pkg: Value = serde_json::from_str(DATAPACKAGE_JSON).unwrap_or_else(|_| generate_datapackage());
 
+    if let Some(doi) = dataset_doi {
+        pkg["id"] = json!(doi);
+    } else if let Some(obj) = pkg.as_object_mut() {
+        obj.remove("id");
+    }
+
+    let ver = dataset_version_opt
+        .map(|s| s.to_string())
+        .or_else(|| provenance.and_then(|p| p.dataset_version.clone()))
+        .unwrap_or_else(|| dataset_version().to_string());
+    pkg["version"] = json!(ver);
+
     if let Some(prov) = provenance {
-        if let Some(ref doi) = prov.dataset_doi {
-            pkg["id"] = json!(doi);
-        }
 
         let mut sources = Vec::new();
         let source_title = prov

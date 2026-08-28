@@ -238,6 +238,18 @@ release and compare bytes. Hashes are uppercase throughout, matching TRUD.
 The same facts are in each file's Parquet key-value metadata, so a file separated
 from its directory still knows where it came from.
 
+## Versioning
+
+Three numbers, three jobs:
+- `trud_release_date` — which source? (recorded in `_provenance.json` and every Parquet row).
+- `dataset_version` — which cut, and which attempt at it? (SemVer recorded in `_provenance.json`, the manifest, and release index).
+- `ods` crate version — which tool? (`Cargo.toml`, `tool_version`).
+
+`dataset_version` is global and monotonic. It identifies a *cut* — the state of the tool and rules at the moment of packing — so once it moves, every release packed afterwards carries the new number.
+
+**A patch bump means "prefer this", not "the derivation changed."** After a one-off bad build is republished at 1.0.1, every subsequent month is byte-identically derived to the 1.0.0 months before it and still carries 1.0.1.
+
+
 ## Know This
 
 There are suprises lurking in the data...

@@ -138,6 +138,32 @@ from stable monthly sources. Always compare the output to the input.
 
 Every change needs a test, and tests run offline.
 
+## Release Process
+
+We separate **tool releases** from **dataset releases**:
+
+### 1. Tool Releases (`scripts/release-tool.sh`)
+When shipping a new version of the `ods` binary:
+- Bump `version` in `Cargo.toml`.
+- Run `scripts/release-tool.sh`. It verifies the working tree is clean, runs `cargo test`, tags `v<version>`, and pushes to origin.
+- GitHub Actions builds binaries for all targets and attaches them to the GitHub release.
+
+### 2. Dataset Releases (`scripts/release-data.sh <date> <version>`)
+When publishing a monthly dataset cut or republishing a fix:
+1. Pull and compile the release:
+   ```console
+   $ ods trud pull <date>
+   $ ods make
+   ```
+2. Build and verify the OCI bundle:
+   ```console
+   $ scripts/release-data.sh <date> <version>
+   ```
+   This executes `ods make oci --input ods_data/releases/<date> --version <version>`.
+   It derives the file list dynamically, updates `SHA256SUMS`, writes `oci/` layout with relative blob symlinks, and performs all structural and publishability checks before appending to `data/releases.json`.
+3. If an earlier release for `<date>` had errors, the script prompts for the withdrawal reason and marks the old row `withdrawn` in `data/releases.json`.
+4. The script commits `data/releases.json`, creates git tag `data/<date>_<version>`, and publishes GitHub release assets.
+
 ## Conventions
 
 **Pre-1.0, so rename cleanly.** No compatibility shims, no legacy aliases, no

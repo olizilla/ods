@@ -77,18 +77,9 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_git_dirty: Option<bool>,
 
-    // --- 4. Dataset Identity & Artifact Hashes (dataset_*) ---
+    // --- 4. Dataset Identity (dataset_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_revision: Option<u32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_parquet_schema_version: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_doi: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_file_sha256: Option<std::collections::BTreeMap<String, String>>,
+    pub dataset_version: Option<String>,
 }
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
@@ -112,10 +103,7 @@ impl Default for OdsProvenance {
             tool_version: None,
             tool_git_sha: None,
             tool_git_dirty: None,
-            dataset_revision: None,
-            dataset_parquet_schema_version: None,
-            dataset_doi: None,
-            dataset_file_sha256: None,
+            dataset_version: None,
         }
     }
 }
@@ -158,14 +146,8 @@ impl OdsProvenance {
                 meta.insert("ods.tool_git_dirty".to_string(), "true".to_string());
             }
         }
-        if let Some(rev) = self.dataset_revision {
-            meta.insert("ods.dataset_revision".to_string(), rev.to_string());
-        }
-        if let Some(ref ver) = self.dataset_parquet_schema_version {
-            meta.insert("ods.dataset_parquet_schema_version".to_string(), ver.clone());
-        }
-        if let Some(ref doi) = self.dataset_doi {
-            meta.insert("ods.dataset_doi".to_string(), doi.clone());
+        if let Some(ref ver) = self.dataset_version {
+            meta.insert("ods.dataset_version".to_string(), ver.clone());
         }
         meta
     }
@@ -275,10 +257,7 @@ impl OdsProvenance {
             tool_version: None,
             tool_git_sha: None,
             tool_git_dirty: None,
-            dataset_revision: None,
-            dataset_parquet_schema_version: None,
-            dataset_doi: None,
-            dataset_file_sha256: None,
+            dataset_version: None,
         }
     }
 
@@ -354,7 +333,7 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
     url.to_string()
 }
 
-pub fn update_provenance_and_write_sha256sums(output_dir: &Path, revision: Option<u32>) -> Result<()> {
+pub fn update_provenance_and_write_sha256sums(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
     let parquet_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
@@ -364,14 +343,12 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path, revision: Optio
         "datapackage.json",
     ];
 
-    let mut hashes = std::collections::BTreeMap::new();
     let mut sha_lines = Vec::new();
 
     for file_name in &parquet_files {
         let file_path = output_dir.join(file_name);
         if file_path.exists() {
             let hash = compute_file_sha256(&file_path)?;
-            hashes.insert((*file_name).to_string(), hash.clone());
             sha_lines.push(format!("{}  {}", hash, file_name));
         }
     }
@@ -435,9 +412,11 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path, revision: Optio
         None
     };
 
-    prov.dataset_revision = Some(revision.unwrap_or(1));
-    prov.dataset_parquet_schema_version = Some(crate::datapackage::schema_version().to_string());
-    prov.dataset_file_sha256 = Some(hashes);
+    prov.dataset_version = Some(
+        dataset_version
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crate::datapackage::dataset_version().to_string()),
+    );
 
     if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
         let _ = std::fs::write(&prov_path, updated_json);

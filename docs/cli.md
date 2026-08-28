@@ -46,7 +46,7 @@ Options:
 `--format json` is intended for scripts and agents, but its shape is **not
 versioned**. Field names may change between `ods` releases without notice.
 
-The Parquet schema has `dataset_parquet_schema_version` and a
+The Parquet schema has `dataset_version` and a
 `datapackage.json` contract; the CLI's JSON output has no equivalent yet. If you
 are building something durable, read the Parquet files directly — they are the
 stable interface, and `datapackage.json` describes them.

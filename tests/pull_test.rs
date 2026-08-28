@@ -98,11 +98,6 @@ fn test_pull_latest_release_downloads_verifies_and_links() {
         "SHA256SUMS must exist in current"
     );
 
-    let prov_str = std::fs::read_to_string(current_dir.join("_provenance.json")).unwrap();
-    assert!(
-        prov_str.contains("10.5281/zenodo.123456"),
-        "dataset_doi must be populated from release metadata"
-    );
 }
 
 #[test]

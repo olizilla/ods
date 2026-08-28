@@ -205,7 +205,7 @@ pub fn run(args: Args) -> Result<()> {
     // 6. Ship the datapackage.json alongside the data so the schema and metadata
     //    are reproducible from a release alone, without the tool.
     let release_pkg =
-        crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref());
+        crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref(), None, None);
     let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
     std::fs::write(args.output.join("datapackage.json"), pkg_json)
         .context("writing datapackage.json")?;
@@ -235,6 +235,9 @@ pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
         "datapackage.json",
         crate::provenance::PROVENANCE_FILENAME,
         "provenance.json",
+        "_release.json",
+        "NOTES.md",
+        "SHA256SUMS",
     ]
     .into_iter()
     .collect();

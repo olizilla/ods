@@ -313,7 +313,7 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
 }
 
 #[test]
-fn test_sha256sums_and_dataset_file_sha256_are_uppercase_and_match() -> Result<()> {
+fn test_sha256sums_are_uppercase_and_provenance_has_dataset_version() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
@@ -337,14 +337,12 @@ fn test_sha256sums_and_dataset_file_sha256_are_uppercase_and_match() -> Result<(
         serde_json::to_string_pretty(&prov)?,
     )?;
 
-    ods::provenance::update_provenance_and_write_sha256sums(output_dir, Some(1))?;
+    ods::provenance::update_provenance_and_write_sha256sums(output_dir, Some("0.1.0"))?;
 
     let prov_content = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
     let updated_prov: ods::provenance::OdsProvenance = serde_json::from_str(&prov_content)?;
-    let dataset_files = updated_prov.dataset_file_sha256.expect("dataset_file_sha256 must be present");
 
-    assert_eq!(updated_prov.dataset_revision, Some(1));
-    assert_eq!(updated_prov.dataset_parquet_schema_version, Some("0.1.0".to_string()));
+    assert_eq!(updated_prov.dataset_version, Some("0.1.0".to_string()));
 
     let sha256sums_content = fs::read_to_string(output_dir.join("SHA256SUMS"))?;
     
@@ -362,18 +360,6 @@ fn test_sha256sums_and_dataset_file_sha256_are_uppercase_and_match() -> Result<(
                 filename,
                 hash
             );
-
-            if filename != ods::provenance::PROVENANCE_FILENAME {
-                let prov_hash = dataset_files.get(filename).unwrap_or_else(|| {
-                    panic!("{} not found in _provenance.json dataset_file_sha256", filename)
-                });
-                assert_eq!(
-                    hash,
-                    prov_hash,
-                    "SHA256SUMS and _provenance.json dataset_file_sha256 must agree exactly (including case) for {}",
-                    filename
-                );
-            }
         }
     }
 
@@ -439,9 +425,7 @@ fn test_trud_pull_writes_no_tool_or_dataset_keys() -> Result<()> {
     assert!(!obj.contains_key("tool_version"), "tool_version must not exist after trud pull");
     assert!(!obj.contains_key("tool_git_sha"), "tool_git_sha must not exist after trud pull");
     assert!(!obj.contains_key("tool_git_dirty"), "tool_git_dirty must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_revision"), "dataset_revision must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_parquet_schema_version"), "dataset_parquet_schema_version must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_file_sha256"), "dataset_file_sha256 must not exist after trud pull");
+    assert!(!obj.contains_key("dataset_version"), "dataset_version must not exist after trud pull");
 
     Ok(())
 }
@@ -466,11 +450,16 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_doi = Some("10.5281/zenodo.1234567".to_string());
 
-    let release_pkg = ods::datapackage::generate_release_datapackage(output_dir, Some(&prov));
+    let release_pkg = ods::datapackage::generate_release_datapackage(
+        output_dir,
+        Some(&prov),
+        Some("10.5281/zenodo.1234567"),
+        Some("1.0.1"),
+    );
 
     assert_eq!(release_pkg["id"], "10.5281/zenodo.1234567");
+    assert_eq!(release_pkg["version"], "1.0.1");
     let sources = release_pkg["sources"].as_array().expect("sources must be array");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["title"], "Release 7.0.0");
@@ -520,7 +509,7 @@ fn test_reproducibility_two_different_working_directories_produce_identical_sha2
             output: out_dir.clone(),
         };
         ods::commands::parquet::run(args)?;
-        ods::provenance::update_provenance_and_write_sha256sums(&out_dir, Some(1))?;
+        ods::provenance::update_provenance_and_write_sha256sums(&out_dir, Some("0.1.0"))?;
     }
 
     let prov_a = fs::read_to_string(tmp_a.path().join("out").join("_provenance.json"))?;

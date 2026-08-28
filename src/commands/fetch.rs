@@ -1348,10 +1348,7 @@ fn write_provenance_json_with_verification(
         tool_version: None,
         tool_git_sha: None,
         tool_git_dirty: None,
-        dataset_revision: None,
-        dataset_parquet_schema_version: None,
-        dataset_doi: None,
-        dataset_file_sha256: None,
+        dataset_version: None,
     };
 
     let json = serde_json::to_string_pretty(&prov)?;

@@ -81,7 +81,7 @@ pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
             let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
             let newest_date = &releases[0].date;
             return Err(anyhow!(
-                "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
+                "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods use {}",
                 count_str,
                 newest_date
             ));
@@ -90,7 +90,7 @@ pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
 
     Err(anyhow!(
         "✖ No dataset found in ods_data/current\n\
-         Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
+         Run `ods pull` to download a release, then `ods use <date>` to pin it, or `ods make` to compile from source."
     ))
 }
 
@@ -275,4 +275,55 @@ pub fn count_records_in_parquet(path: &Path) -> Result<usize> {
     }
     Ok(total)
 }
+
+pub fn parse_sha256sums(content: &str) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let hash = parts[0].to_string();
+            let file_name = parts[1].trim_start_matches('*').to_string();
+            map.insert(file_name, hash);
+        }
+    }
+    map
+}
+
+pub fn is_release_dir_verified(release_dir: &Path) -> bool {
+    let sums_path = release_dir.join("SHA256SUMS");
+    if !sums_path.exists() {
+        return false;
+    }
+
+    let content = match fs::read_to_string(&sums_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let expected = parse_sha256sums(&content);
+    if expected.is_empty() {
+        return false;
+    }
+
+    for (file_name, expected_hash) in expected {
+        let file_path = release_dir.join(&file_name);
+        if !file_path.exists() {
+            return false;
+        }
+        let actual_hash = match crate::provenance::compute_file_sha256(&file_path) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
+            return false;
+        }
+    }
+
+    true
+}
+
 

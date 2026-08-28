@@ -567,9 +567,7 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     }
     assert!(!obj.contains_key("tool_version"), "tool_version must not exist after trud pull");
     assert!(!obj.contains_key("tool_git_sha"), "tool_git_sha must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_revision"), "dataset_revision must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_parquet_schema_version"), "dataset_parquet_schema_version must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_file_sha256"), "dataset_file_sha256 must not exist after trud pull");
+    assert!(!obj.contains_key("dataset_version"), "dataset_version must not exist after trud pull");
 }
 
 #[test]

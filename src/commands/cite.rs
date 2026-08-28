@@ -89,7 +89,54 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         .unwrap_or_else(|| "<not verified>".to_string());
     let mut tool_version = prov.as_ref().and_then(|p| p.tool_version.clone())
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-    let mut dataset_doi = prov.as_ref().and_then(|p| p.dataset_doi.clone());
+    let mut dataset_version = prov.as_ref().and_then(|p| p.dataset_version.clone());
+    let mut manifest_digest: Option<String> = None;
+    let mut withdrawn: Option<String> = None;
+    let mut dataset_doi: Option<String> = None;
+
+    let release_json_path = input_dir.join("_release.json");
+    if release_json_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&release_json_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(doi) = val.get("dataset_doi").and_then(|d| d.as_str()) {
+                    dataset_doi = Some(doi.to_string());
+                }
+                if let Some(ver) = val.get("dataset_version").and_then(|v| v.as_str()) {
+                    if dataset_version.is_none() {
+                        dataset_version = Some(ver.to_string());
+                    }
+                }
+                if let Some(digest) = val.get("manifest_digest").and_then(|d| d.as_str()) {
+                    manifest_digest = Some(digest.to_string());
+                }
+                if let Some(w) = val.get("withdrawn").and_then(|w| w.as_str()) {
+                    withdrawn = Some(w.to_string());
+                }
+            }
+        }
+    }
+
+    let trud_date = prov.as_ref().and_then(|p| p.trud_release_date.clone());
+    if withdrawn.is_none() {
+        if let (Some(ref d), Some(ref v)) = (&trud_date, &dataset_version) {
+            if let Ok(index) = crate::index::OdsReleaseIndex::baked() {
+                if let Some(entry) = index.releases.iter().find(|r| &r.trud_release_date == d && &r.dataset_version == v) {
+                    if let Some(ref w) = entry.withdrawn {
+                        withdrawn = Some(w.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(ref reason) = withdrawn {
+        let d_str = trud_date.as_deref().unwrap_or(&publication_date);
+        let v_str = dataset_version.as_deref().unwrap_or("unknown");
+        anyhow::bail!(
+            "✖ Refusing to cite {} v{}\n  This release was withdrawn: {}\n  Update to a valid release: ods pull {}",
+            d_str, v_str, reason, d_str
+        );
+    }
 
     // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
     for f in &files {
@@ -137,13 +184,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                                         tool_version = val.clone();
                                     }
                                 }
-                                "ods.dataset_doi" => {
-                                    if dataset_doi.is_none() {
-                                        if let Some(ref val) = item.value {
-                                            dataset_doi = Some(val.clone());
-                                        }
-                                    }
-                                }
                                 _ => {}
                             }
                         }
@@ -168,23 +208,36 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         format!(": {} publication", publication_type)
     };
 
+    let d_tag = trud_date.as_deref().unwrap_or(&publication_date);
+
     match args.format.to_lowercase().as_str() {
         "bibtex" => {
-            let cite_key = format!(
-                "nhs_england_ods_{}_{}",
-                publication_date.replace('-', "_"),
-                publication_seq_num
-            );
+            let cite_key = if let Some(ref ver) = dataset_version {
+                format!("ods-{}-v{}", d_tag, ver)
+            } else {
+                format!(
+                    "nhs_england_ods_{}_{}",
+                    publication_date.replace('-', "_"),
+                    publication_seq_num
+                )
+            };
             writeln!(writer, "@misc{{{},", cite_key)?;
             writeln!(writer, "  author = {{NHS England}},")?;
-            writeln!(
-                writer,
-                "  title = {{Organisation Data Service{} ({}, Seq {})}},",
-                type_title_part, publication_date, publication_seq_num
-            )?;
+            let title_str = if let Some(ref ver) = dataset_version {
+                format!("NHS Organisation Data Service ({} cut, v{})", d_tag, ver)
+            } else {
+                format!(
+                    "Organisation Data Service{} ({}, Seq {})",
+                    type_title_part, publication_date, publication_seq_num
+                )
+            };
+            writeln!(writer, "  title = {{{}}},", title_str)?;
             writeln!(writer, "  year = {{{}}},", year)?;
             if publication_date.len() >= 7 {
                 writeln!(writer, "  month = {{{}}},", &publication_date[5..7])?;
+            }
+            if let Some(ref ver) = dataset_version {
+                writeln!(writer, "  version = {{{}}},", ver)?;
             }
             if let Some(ref doi) = dataset_doi {
                 writeln!(writer, "  doi = {{{}}},", doi)?;
@@ -194,11 +247,15 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 writer,
                 "  url = {{https://isd.digital.nhs.uk/trud}},"
             )?;
+            let note_str = if let Some(ref md) = manifest_digest {
+                format!("Manifest: {}", md)
+            } else {
+                format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
+            };
             writeln!(
                 writer,
-                "  note = {{orgs.parquet SHA-256: {}; compiled by ods v{}}}",
-                orgs_parquet_hash.to_ascii_uppercase(),
-                tool_version
+                "  note = {{{}}}",
+                note_str
             )?;
             writeln!(writer, "}}")?;
         }
@@ -214,10 +271,22 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 (2026, 7, 28)
             };
 
+            let title_str = if let Some(ref ver) = dataset_version {
+                format!("Organisation Data Service ({} cut, v{})", d_tag, ver)
+            } else {
+                format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num)
+            };
+
+            let note_str = if let Some(ref md) = manifest_digest {
+                format!("Manifest: {}", md)
+            } else {
+                format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
+            };
+
             let mut item_obj = json!({
                 "type": "dataset",
                 "id": format!("nhs-ods-{}-{}", publication_date, publication_seq_num),
-                "title": format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num),
+                "title": title_str,
                 "author": [
                     { "literal": "NHS England" }
                 ],
@@ -226,8 +295,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 },
                 "publisher": "NHS TRUD",
                 "URL": "https://isd.digital.nhs.uk/trud",
-                "note": format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
+                "note": note_str
             });
+
+            if let Some(ref ver) = dataset_version {
+                item_obj["version"] = json!(ver);
+            }
 
             if let Some(ref doi) = dataset_doi {
                 item_obj["DOI"] = json!(doi);
@@ -237,18 +310,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "{}", serde_json::to_string_pretty(&csl)?)?;
         }
         "apa" => {
+            let title_str = if let Some(ref ver) = dataset_version {
+                format!("Organisation Data Service ({} cut, v{})", d_tag, ver)
+            } else {
+                format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num)
+            };
             if let Some(ref doi) = dataset_doi {
                 let doi_url = if doi.starts_with("http") { doi.clone() } else { format!("https://doi.org/{}", doi) };
                 writeln!(
                     writer,
-                    "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. {}",
-                    year, type_title_part, publication_date, publication_seq_num, doi_url
+                    "NHS England. ({}) {} [Data set]. NHS TRUD. {}",
+                    year, title_str, doi_url
                 )?;
             } else {
                 writeln!(
                     writer,
-                    "NHS England. ({}) Organisation Data Service{} ({}, Seq {}) [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
-                    year, type_title_part, publication_date, publication_seq_num
+                    "NHS England. ({}) {} [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
+                    year, title_str
                 )?;
             }
         }
@@ -264,6 +342,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "  Publication type:   {}", publication_type)?;
             writeln!(writer, "  Release file:       {}", release_file)?;
             writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
+            if let Some(ref ver) = dataset_version {
+                writeln!(writer, "  Dataset version:    v{}", ver)?;
+            }
+            if let Some(ref md) = manifest_digest {
+                writeln!(writer, "  Manifest digest:    {}", md)?;
+            }
             if let Some(ref doi) = dataset_doi {
                 writeln!(writer, "  Dataset DOI:        {}", doi)?;
             }
@@ -293,11 +377,19 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 
             writeln!(writer, "How to Cite")?;
             writeln!(writer, "  When citing the source data:")?;
-            writeln!(
-                writer,
-                "    NHS England. ({}). Organisation Data Service{}\n    ({}, Seq {}). NHS TRUD. https://isd.digital.nhs.uk/trud",
-                year, type_title_part, publication_date, publication_seq_num
-            )?;
+            if let Some(ref ver) = dataset_version {
+                writeln!(
+                    writer,
+                    "    NHS England. ({}). NHS ODS Dataset ({} cut, v{}).\n    NHS TRUD. https://isd.digital.nhs.uk/trud",
+                    year, d_tag, ver
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "    NHS England. ({}). Organisation Data Service{}\n    ({}, Seq {}). NHS TRUD. https://isd.digital.nhs.uk/trud",
+                    year, type_title_part, publication_date, publication_seq_num
+                )?;
+            }
             writeln!(writer)?;
             writeln!(writer, "  When citing the derived sources:")?;
             writeln!(

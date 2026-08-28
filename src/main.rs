@@ -32,6 +32,9 @@ enum Command {
 
     /// Compile TRUD XML into Parquet tables
     Make(commands::make::MakeArgs),
+
+    /// Pin an active dataset release
+    Use(commands::use_cmd::Args),
 }
 
 fn main() -> Result<()> {
@@ -44,6 +47,7 @@ fn main() -> Result<()> {
         Command::Cite(args) => commands::cite::run(args),
         Command::Trud(args) => commands::trud::run(args),
         Command::Make(args) => commands::make::run(args),
+        Command::Use(args) => commands::use_cmd::run(args),
     };
 
     // Release XML is unpacked to scratch space (~660 MB) for the duration of

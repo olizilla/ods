@@ -404,6 +404,24 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         );
     }
 
+    if let Some(ref prov) = workspace_prov {
+        if let Err(e) = prov.validate_baseline() {
+            discrepancies.push(format!("_provenance.json baseline invalid: {e}"));
+        }
+        if let (Some(ref file), Some(ref exp_sha)) = (&prov.trud_release_file, &prov.trud_release_sha256) {
+            let archive_path = active_release_path.join("trud").join(file);
+            if archive_path.exists() {
+                if let Ok(act_sha) = crate::provenance::compute_file_sha256(&archive_path) {
+                    if !act_sha.eq_ignore_ascii_case(exp_sha) {
+                        discrepancies.push(format!(
+                            "Archive checksum mismatch for {file}: recorded {exp_sha} != actual {act_sha}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     // Verify SHA256SUMS and Parquet files integrity
     let parquet_files = [
         "orgs.parquet",
@@ -419,7 +437,6 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         active_release_path.join("SHA256SUMS")
     };
     let mut sums_matched_count = 0;
-    let mut prov_derived_matched_count = 0;
 
     let recorded_sums: HashMap<String, String> = if sums_file.exists() {
         let content = std::fs::read_to_string(&sums_file).unwrap_or_default();
@@ -453,28 +470,6 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                     }
                 } else {
                     discrepancies.push(format!("Missing SHA256SUMS entry for {filename}"));
-                }
-
-                if let Some(ref w_prov) = workspace_prov {
-                    if let Some(ref derived) = w_prov.dataset_file_sha256 {
-                        if let Some(expected_prov_sha) = derived.get(*filename) {
-                            if computed_sha.eq_ignore_ascii_case(expected_prov_sha) {
-                                prov_derived_matched_count += 1;
-                            } else {
-                                discrepancies.push(format!(
-                                    "_provenance.json dataset_file_sha256 mismatch for {filename}: Computed {computed_sha} != provenance {expected_prov_sha}"
-                                ));
-                            }
-                        } else {
-                            discrepancies.push(format!(
-                                "Missing _provenance.json dataset_file_sha256 entry for {filename}"
-                            ));
-                        }
-                    } else {
-                        discrepancies.push(
-                            "Missing dataset_file_sha256 map in _provenance.json".to_string(),
-                        );
-                    }
                 }
             } else {
                 discrepancies.push(format!(
@@ -514,12 +509,6 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             println!("     ✓ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
         } else {
             println!("     ✖ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
-        }
-
-        if prov_derived_matched_count == expected {
-            println!("     ✓ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json dataset_file_sha256");
-        } else {
-            println!("     ✖ Provenance Artifact Chain: {prov_derived_matched_count}/{expected} Parquet files match _provenance.json dataset_file_sha256");
         }
         println!();
     }
