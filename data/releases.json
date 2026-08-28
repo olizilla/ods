@@ -3,9 +3,10 @@
   "index_version": 2,
   "mirrors": [
     {
-      "operator": "github",
-      "kind": "files",
-      "url": "https://github.com/olizilla/ods/releases/download/data/{release}_{version}/{file}"
+      "url": "https://ods.fyi/v2/ods-data"
+    },
+    {
+      "url": "https://ghcr.io/v2/olizilla/ods-data"
     }
   ],
   "releases": []

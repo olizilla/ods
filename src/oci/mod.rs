@@ -161,7 +161,7 @@ pub fn media_type_for_file(filename: &str) -> &'static str {
         MEDIA_TYPE_JSON
     } else if filename.ends_with(".md") {
         MEDIA_TYPE_MARKDOWN
-    } else if filename == "SHA256SUMS" || filename.ends_with(".txt") {
+    } else if filename.ends_with(".txt") {
         MEDIA_TYPE_TEXT_PLAIN
     } else {
         "application/octet-stream"

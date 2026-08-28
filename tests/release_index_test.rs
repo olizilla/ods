@@ -308,15 +308,41 @@ fn test_resolve_none_refuses_when_newest_date_is_withdrawn() {
 }
 
 #[test]
-fn test_mirror_expand_url() {
+fn test_mirror_urls_and_host() {
     let mirror = ods::index::MirrorEntry {
-        operator: "github".to_string(),
-        kind: "files".to_string(),
-        url: "https://github.com/olizilla/ods/releases/download/data/{release}_{version}/{file}".to_string(),
+        url: "https://ods.fyi/v2/ods-data".to_string(),
     };
     assert_eq!(
-        mirror.expand_url("2026-07-31", "1.0.1", "manifest.json"),
-        "https://github.com/olizilla/ods/releases/download/data/2026-07-31_1.0.1/manifest.json"
+        mirror.blob_url("sha256:0f2a000000000000000000000000000000000000000000000000000000000000"),
+        "https://ods.fyi/v2/ods-data/blobs/sha256:0f2a000000000000000000000000000000000000000000000000000000000000"
     );
+    assert_eq!(
+        mirror.manifest_url("2026-07-31_1.0.1"),
+        "https://ods.fyi/v2/ods-data/manifests/2026-07-31_1.0.1"
+    );
+    assert_eq!(mirror.host(), "ods.fyi");
+
+    let ghcr = ods::index::MirrorEntry {
+        url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
+    };
+    assert_eq!(ghcr.host(), "ghcr.io");
+}
+
+#[test]
+fn test_cached_release_index_save_and_load() -> Result<()> {
+    let tmp = tempfile::TempDir::new()?;
+    let baked = OdsReleaseIndex::baked()?;
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-08-28T12:00:00Z".to_string(),
+        index: baked.clone(),
+    };
+
+    assert!(ods::index::CachedReleaseIndex::load_from_workspace(tmp.path())?.is_none());
+    cached.save_to_workspace(tmp.path())?;
+
+    let loaded = ods::index::CachedReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
+    assert_eq!(loaded.fetched_at, "2026-08-28T12:00:00Z");
+    assert_eq!(loaded.index.index_version, baked.index_version);
+    Ok(())
 }
 

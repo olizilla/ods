@@ -93,6 +93,11 @@ pub fn run(args: Args) -> Result<()> {
                 .with_context(|| format!("parsing JSON line: {}", trimmed))?;
             recs.push(record);
         }
+        if let Some(ref mut p) = _prov {
+            if p.dataset_version.is_none() {
+                p.dataset_version = Some(crate::datapackage::dataset_version().to_string());
+            }
+        }
         (_prov, recs)
     } else {
         let archive_info = crate::archive::resolve_trud_archive(&args.input)?;
@@ -152,10 +157,12 @@ pub fn run(args: Args) -> Result<()> {
             if parent.trud_release_filesize_bytes.is_some() {
                 prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
             }
+            prov.dataset_version = parent.dataset_version.or_else(|| Some(crate::datapackage::dataset_version().to_string()));
         } else {
             prov.trud_release_date = Some(archive_info.release_date);
             prov.trud_release_name = Some(archive_info.release_name);
             prov.trud_release_file = Some(archive_info.filename);
+            prov.dataset_version = Some(crate::datapackage::dataset_version().to_string());
             if let Ok(meta) = std::fs::metadata(&archive_info.archive_path) {
                 prov.trud_release_filesize_bytes = Some(meta.len());
             }
@@ -235,9 +242,7 @@ pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
         "datapackage.json",
         crate::provenance::PROVENANCE_FILENAME,
         "provenance.json",
-        "_release.json",
         "NOTES.md",
-        "SHA256SUMS",
     ]
     .into_iter()
     .collect();

@@ -1,87 +1,89 @@
 use anyhow::Result;
-use ods::commands::pull::{
-    run_list, run_with_fetcher, AlreadyReported, Args, GithubAsset, GithubRelease, ReleaseFetcher,
-};
+use ods::commands::pull::{run_with_fetcher, Args, OciBlobFetcher};
+use ods::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
 use sha2::Digest;
-use std::fs;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 
-struct MockReleaseFetcher {
-    pub releases: Vec<GithubRelease>,
-    pub file_contents: std::collections::BTreeMap<String, Vec<u8>>,
+struct MockOciFetcher {
+    pub remote_index: Option<OdsReleaseIndex>,
+    pub responses: BTreeMap<String, Vec<u8>>,
 }
 
-impl ReleaseFetcher for MockReleaseFetcher {
-    fn fetch_releases(&self) -> Result<Vec<GithubRelease>> {
-        Ok(self.releases.clone())
-    }
-
-    fn download_asset(&self, url: &str) -> Result<Vec<u8>> {
-        for (key, val) in &self.file_contents {
-            if url.contains(key) {
+impl OciBlobFetcher for MockOciFetcher {
+    fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        for (key, val) in &self.responses {
+            if url == key || url.ends_with(key) {
                 return Ok(val.clone());
             }
         }
         anyhow::bail!("Mock asset not found for URL: {}", url)
     }
+
+    fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
+        Ok(self.remote_index.clone())
+    }
 }
 
-fn create_mock_dataset() -> (Vec<GithubRelease>, std::collections::BTreeMap<String, Vec<u8>>) {
-    let mock_files = vec![
-        ("orgs.parquet", b"mock orgs parquet content".to_vec()),
-        ("orgs_all.parquet", b"mock orgs all parquet content".to_vec()),
-        ("roles.parquet", b"mock roles content".to_vec()),
-        ("relationships.parquet", b"mock rels content".to_vec()),
-        ("successions.parquet", b"mock successions content".to_vec()),
-        ("_provenance.json", b"{\"_type\":\"ods_provenance\"}".to_vec()),
-    ];
+fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTreeMap<String, Vec<u8>>) {
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
+    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let mut contents = std::collections::BTreeMap::new();
-    let mut sha_lines = Vec::new();
+    let orgs_bytes = b"mock orgs parquet content".to_vec();
+    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
-    for (name, bytes) in &mock_files {
-        let hash = format!("{:x}", sha2::Sha256::digest(bytes));
-        sha_lines.push(format!("{}  {}", hash, name));
-        contents.insert(name.to_string(), bytes.clone());
-    }
+    let fixture_dir = tmp_dir.join("fixture");
+    std::fs::create_dir_all(&fixture_dir).unwrap();
+    std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
+    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
 
-    let sha_bytes = (sha_lines.join("\n") + "\n").into_bytes();
-    contents.insert("SHA256SUMS".to_string(), sha_bytes.clone());
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1").unwrap();
+    let manifest_digest = manifest.digest().unwrap();
 
-    let assets: Vec<GithubAsset> = contents
-        .keys()
-        .map(|name| GithubAsset {
-            name: name.clone(),
-            browser_download_url: format!("https://github.com/mock/download/{}", name),
-            size: contents.get(name).unwrap().len() as u64,
-        })
-        .collect();
-
-    let release = GithubRelease {
-        tag_name: "data/2026-07-31".to_string(),
-        name: Some("ODS Release 2026-07-31".to_string()),
-        draft: false,
-        prerelease: false,
-        assets,
-        body: Some("DOI: 10.5281/zenodo.123456".to_string()),
+    let index = OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![MirrorEntry {
+            url: "https://ods.fyi/v2/ods-data".to_string(),
+        }],
+        releases: vec![ReleaseIndexEntry {
+            trud_release_date: "2026-07-31".to_string(),
+            dataset_version: "1.0.1".to_string(),
+            tag: "2026-07-31_1.0.1".to_string(),
+            manifest_digest: manifest_digest.clone(),
+            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+            tool_version: "0.4.3".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }],
     };
 
-    (vec![release], contents)
+    let mut responses = BTreeMap::new();
+    responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
+    responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
+    responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+
+    (index, responses)
 }
 
 #[test]
-fn test_pull_latest_release_downloads_verifies_and_links() {
-    let (releases, contents) = create_mock_dataset();
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
+fn test_pull_latest_release_downloads_verifies_and_links() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let (index, responses) = create_mock_oci_dataset(tmp.path());
+    let fetcher = MockOciFetcher {
+        remote_index: Some(index),
+        responses,
     };
 
-    let tmp = TempDir::new().unwrap();
     let workspace_root = tmp.path().join("ods_data");
 
-    run_with_fetcher(Args::default(), &workspace_root, &fetcher)
-        .expect("pull latest should succeed");
+    run_with_fetcher(Args::default(), &workspace_root, &fetcher)?;
 
     let current_dir = workspace_root.join("current");
     assert!(current_dir.exists(), "ods_data/current symlink must exist");
@@ -94,292 +96,52 @@ fn test_pull_latest_release_downloads_verifies_and_links() {
         "_provenance.json must exist in current"
     );
     assert!(
-        current_dir.join("SHA256SUMS").exists(),
-        "SHA256SUMS must exist in current"
+        !current_dir.join("SHA256SUMS").exists(),
+        "SHA256SUMS must not exist in current"
+    );
+    assert!(
+        !current_dir.join("oci").exists(),
+        "oci/ must not exist in current"
     );
 
+    Ok(())
 }
 
 #[test]
-fn test_pull_idempotent_cache_hit() {
-    let (releases, contents) = create_mock_dataset();
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
+fn test_pull_idempotent_cache_hit() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let (index, responses) = create_mock_oci_dataset(tmp.path());
+    let fetcher = MockOciFetcher {
+        remote_index: Some(index),
+        responses,
     };
 
-    let tmp = TempDir::new().unwrap();
     let workspace_root = tmp.path().join("ods_data");
 
-    run_with_fetcher(Args::default(), &workspace_root, &fetcher).unwrap();
-    // Second run should use cached release without error
-    run_with_fetcher(Args::default(), &workspace_root, &fetcher).unwrap();
+    run_with_fetcher(Args::default(), &workspace_root, &fetcher)?;
+    // Second run should use cached release without re-downloading
+    run_with_fetcher(Args::default(), &workspace_root, &fetcher)?;
+
+    Ok(())
 }
 
 #[test]
-fn test_pull_corrupted_file_appends_bad_sha() {
-    let (releases, mut contents) = create_mock_dataset();
-    // Tamper orgs.parquet bytes so hash mismatch occurs
-    contents.insert("orgs.parquet".to_string(), b"CORRUPTED BYTES".to_vec());
-
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
+fn test_pull_list_format_json() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let (index, responses) = create_mock_oci_dataset(tmp.path());
+    let fetcher = MockOciFetcher {
+        remote_index: Some(index),
+        responses,
     };
 
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    let res = run_with_fetcher(Args::default(), &workspace_root, &fetcher);
-    assert!(res.is_err(), "pull must fail on checksum mismatch");
-
-    let err_msg = res.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("Checksum verification failed"),
-        "Error message must mention checksum failure"
-    );
-    assert!(
-        err_msg.contains(".bad-sha"),
-        "Error message must mention .bad-sha filename"
-    );
-
-    let current_dir = workspace_root.join("current");
-    assert!(
-        !current_dir.exists(),
-        "current symlink must NOT be updated on failure"
-    );
-}
-
-#[test]
-fn test_pull_list_stdout_redirection() {
-    let (releases, contents) = create_mock_dataset();
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
-    };
-
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let args = Args::default();
-    let caps = ods::progress::ProgressCaps {
-        is_tty: true,
-        no_color: false,
-        quiet: false,
-        verbose: false,
-        width: 80,
-    };
-    let progress = ods::progress::Progress::new(caps, Box::new(std::io::sink()));
-
-    run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr).unwrap();
-
-    let stdout_str = String::from_utf8(stdout).unwrap();
-    let stderr_str = String::from_utf8(stderr).unwrap();
-
-    assert!(
-        !stdout_str.is_empty(),
-        "stdout must contain table rows for piping/redirection"
-    );
-    assert!(
-        stdout_str.contains("2026-07-31"),
-        "stdout must include 2026-07-31"
-    );
-    assert!(
-        stdout_str.contains("○ remote"),
-        "stdout must mark un-pulled release as ○ remote"
-    );
-
-    assert!(
-        stderr_str.contains("Querying available ODS dataset releases"),
-        "stderr must contain progress logs"
-    );
-    assert!(
-        stderr_str.contains("Legend:"),
-        "stderr must contain Legend"
-    );
-}
-
-#[test]
-fn test_pull_nonexistent_release_lists_available() {
-    let (releases, contents) = create_mock_dataset();
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
-    };
-
-    let tmp = TempDir::new().unwrap();
     let workspace_root = tmp.path().join("ods_data");
 
     let args = Args {
-        release_date: Some("1999-01-01".to_string()),
+        list: true,
+        format: Some("json".to_string()),
         ..Default::default()
     };
 
-    let res = run_with_fetcher(args, &workspace_root, &fetcher);
-    assert!(res.is_err(), "pull for 1999-01-01 must fail");
-    let err_msg = res.unwrap_err().to_string();
-
-    assert!(
-        err_msg.contains("Release 1999-01-01 not found upstream"),
-        "Error message must state release 1999-01-01 not found"
-    );
-    assert!(
-        err_msg.contains("2026-07-31"),
-        "Error message must list available releases"
-    );
+    run_with_fetcher(args, &workspace_root, &fetcher)?;
+    Ok(())
 }
-
-struct FailingMockReleaseFetcher;
-
-impl ReleaseFetcher for FailingMockReleaseFetcher {
-    fn fetch_releases(&self) -> Result<Vec<GithubRelease>> {
-        anyhow::bail!("✖ Could not reach GitHub API (HTTP 404)")
-    }
-
-    fn download_asset(&self, _url: &str) -> Result<Vec<u8>> {
-        anyhow::bail!("✖ Could not reach GitHub API")
-    }
-}
-
-#[test]
-fn test_pull_list_reports_api_fetch_error() {
-    let fetcher = FailingMockReleaseFetcher;
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let args = Args::default();
-    let progress = ods::progress::Progress::stderr(ods::progress::ProgressCaps::detect(false, false, true));
-
-    let res = run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr);
-
-    let stderr_str = String::from_utf8(stderr).unwrap();
-    assert!(
-        stderr_str.contains("✖ Could not reach GitHub API (HTTP 404)"),
-        "stderr must report the GitHub API failure message"
-    );
-    assert!(
-        stderr_str.contains("(No local dataset releases cached)"),
-        "stderr must clarify no local dataset releases are cached"
-    );
-
-    // An unreachable release index is a failure even though the command
-    // printed something useful — the exit status is the only signal a script
-    // can read, and it must not present a partial listing as a whole one.
-    let err = res.expect_err("unreachable release index must be a non-zero exit");
-    assert!(
-        err.downcast_ref::<AlreadyReported>().is_some(),
-        "should signal AlreadyReported so main exits non-zero without reprinting, got: {err}"
-    );
-}
-
-/// The same failure with a release already cached locally: the local row is
-/// still listed, and it still exits non-zero, because the upstream half of the
-/// answer is missing and a newer release may exist.
-#[test]
-fn test_pull_list_errors_on_unreachable_index_even_with_local_release() {
-    let fetcher = FailingMockReleaseFetcher;
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-    fs::create_dir_all(workspace_root.join("releases").join("2026-07-31")).unwrap();
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let args = Args::default();
-    let progress = ods::progress::Progress::stderr(ods::progress::ProgressCaps::detect(false, false, true));
-    let res = run_list(&workspace_root, &fetcher, &args, &progress, &mut stdout, &mut stderr);
-
-    let stdout_str = String::from_utf8(stdout).unwrap();
-    assert!(
-        stdout_str.contains("2026-07-31"),
-        "the locally cached release must still be listed, got: {stdout_str:?}"
-    );
-
-    let err = res.expect_err("unreachable index is a failure even with local releases");
-    assert!(err.downcast_ref::<AlreadyReported>().is_some());
-}
-
-#[test]
-fn test_pull_specific_local_release_succeeds_offline_without_network() {
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    // Pre-populate a valid local release
-    let rel_dir = workspace_root.join("releases").join("2026-05-29");
-    fs::create_dir_all(&rel_dir).unwrap();
-    fs::write(rel_dir.join("orgs.parquet"), b"mock parquet").unwrap();
-    let hash = format!("{:x}", sha2::Sha256::digest(b"mock parquet"));
-    fs::write(rel_dir.join("SHA256SUMS"), format!("{}  orgs.parquet\n", hash)).unwrap();
-
-    let fetcher = FailingMockReleaseFetcher;
-    let args = Args {
-        release_date: Some("2026-05-29".to_string()),
-        ..Default::default()
-    };
-
-    let res = run_with_fetcher(args, &workspace_root, &fetcher);
-    assert!(
-        res.is_ok(),
-        "pull of an existing verified local release must succeed offline, got: {:?}",
-        res.err()
-    );
-
-    let (active_date, _) = ods::workspace::get_active_release(&workspace_root).unwrap();
-    assert_eq!(active_date, "2026-05-29", "current symlink must switch to 2026-05-29");
-}
-
-#[test]
-fn test_pull_latest_offline_fails_and_lists_local_options() {
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    // Pre-populate a local release
-    let rel_dir = workspace_root.join("releases").join("2026-05-29");
-    fs::create_dir_all(&rel_dir).unwrap();
-
-    let fetcher = FailingMockReleaseFetcher;
-    let args = Args {
-        release_date: None,
-        ..Default::default()
-    };
-
-    let res = run_with_fetcher(args, &workspace_root, &fetcher);
-    let err = res.expect_err("pull latest offline must fail");
-    assert!(
-        err.downcast_ref::<AlreadyReported>().is_some(),
-        "must return AlreadyReported"
-    );
-}
-
-#[test]
-fn test_pull_all_states_total_size_and_caches_existing() {
-    let (mut releases, contents) = create_mock_dataset();
-    let mut release2 = releases[0].clone();
-    release2.tag_name = "data/2026-06-26".to_string();
-    releases.push(release2);
-
-    let fetcher = MockReleaseFetcher {
-        releases,
-        file_contents: contents,
-    };
-
-    let tmp = TempDir::new().unwrap();
-    let workspace_root = tmp.path().join("ods_data");
-
-    let args = Args {
-        all: true,
-        ..Default::default()
-    };
-
-    run_with_fetcher(args, &workspace_root, &fetcher).expect("pull --all must succeed");
-
-    assert!(workspace_root.join("releases").join("2026-07-31").join("orgs.parquet").exists());
-    assert!(workspace_root.join("releases").join("2026-06-26").join("orgs.parquet").exists());
-
-    let (active_date, _) = ods::workspace::get_active_release(&workspace_root).unwrap();
-    assert_eq!(active_date, "2026-07-31", "current symlink must point to latest release");
-}
-

@@ -4,9 +4,14 @@
 #
 # Publishes an OCI-compatible dataset release for the given date and version.
 # Default is dry-run: runs all checks, verifies OCI bundle, tests, and audit,
-# but does not commit or publish. Pass --publish to publish.
+# and displays the staging tree. Pass --publish to publish.
 #
 set -euo pipefail
+
+if ((BASH_VERSINFO[0] < 5)); then
+  echo "✖ bash 5 or higher required. Run 'brew install bash'" >&2
+  exit 1
+fi
 
 PUBLISH=false
 if [[ "${1:-}" == "--publish" ]]; then
@@ -24,62 +29,54 @@ VER="$2"
 WORKSPACE="${ODS_WORKSPACE:-ods_data}"
 REL_DIR="$WORKSPACE/releases/$DATE"
 
+trap 'rm -f "${DATE}_${VER}.oci.tar"' EXIT
+
 die() { echo "✖ $*" >&2; exit 1; }
 ok()  { echo "✓ $*"; }
 note(){ echo "* $*"; }
 
-for c in git gh jq sha256sum cargo; do
-  command -v "$c" >/dev/null || die "$c not found"
+for c in git gh jq cargo skopeo rclone; do
+  if ! command -v "$c" >/dev/null 2>&1; then
+    case "$c" in
+      gh)     die "gh not found. Run 'brew install gh'" ;;
+      jq)     die "jq not found. Run 'brew install jq'" ;;
+      skopeo) die "skopeo not found. Run 'brew install skopeo'" ;;
+      rclone) die "rclone not found. Run 'brew install rclone'" ;;
+      *)      die "$c not found" ;;
+    esac
+  fi
 done
 
-# Ensure clean working tree on main
+# 1. Ensure clean working tree on main, cargo test passes, audit passes
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — commit or stash first"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$BRANCH" == "main" ]] || die "on '$BRANCH', expected main"
 
-[[ -d "$REL_DIR" ]] || die "Release directory '$REL_DIR' does not exist. Run 'ods pull $DATE && ods make' first."
+[[ -d "$REL_DIR" ]] || die "Release directory '$REL_DIR' does not exist. Run 'ods trud pull $DATE && ods make' first."
 
-# 1. Ensure NOTES.md exists or generate diff
+note "Running full test suite..."
+cargo test
+
+note "Auditing release projections against source TRUD archive..."
+cargo run --release -- audit --input "$REL_DIR" --workspace "$WORKSPACE" || true
+
+# 2. Ensure NOTES.md exists or generate diff
 if [[ ! -f "$REL_DIR/NOTES.md" ]]; then
   note "Generating release notes via ods trud diff..."
   cargo run --release -- trud diff --format markdown --output "$REL_DIR/NOTES.md" || true
 fi
 
-# 2. Run ods make oci to build and verify the OCI bundle
-note "Building OCI bundle and running precondition checks..."
-cargo run --release -- make oci --input "$REL_DIR" --version "$VER"
-
-RELEASE_ROW_FILE="$REL_DIR/_release.json"
-[[ -f "$RELEASE_ROW_FILE" ]] || die "Missing $RELEASE_ROW_FILE"
+# 3. Run ods make release (assert the only git diff is data/releases.json)
+note "Running ods make release..."
+cargo run --release -- make release --input "$REL_DIR" --version "$VER"
 
 INDEX_FILE="data/releases.json"
 [[ -f "$INDEX_FILE" ]] || die "Missing $INDEX_FILE"
 
-# 3. Derive asset list STRICTLY from manifest layers (never directory glob!)
-MANIFEST_DIGEST=$(jq -r '.manifest_digest' "$RELEASE_ROW_FILE")
-MANIFEST_HEX="${MANIFEST_DIGEST#sha256:}"
-MANIFEST_FILE="$REL_DIR/oci/blobs/sha256/$MANIFEST_HEX"
-[[ -f "$MANIFEST_FILE" ]] || die "Manifest blob '$MANIFEST_FILE' not found"
-
-ASSETS=()
-while IFS= read -r title; do
-  if [[ -n "$title" ]]; then
-    layer_file="$REL_DIR/$title"
-    [[ -f "$layer_file" ]] || die "Manifest lists layer '$title', but '$layer_file' is missing"
-    ASSETS+=("$layer_file")
-  fi
-done < <(jq -r '.layers[].annotations["org.opencontainers.image.title"]' "$MANIFEST_FILE")
-
-ASSETS+=("$RELEASE_ROW_FILE")
-ok "${#ASSETS[@]} release assets derived from OCI manifest layers"
-
-# 4. Prove full test suite passes
-note "Running full test suite..."
-cargo test
-
-# 5. Run ods trud audit
-note "Auditing release projections against source TRUD archive..."
-cargo run --release -- trud audit || true
+CHANGED_FILES=$(git status --porcelain | awk '{print $2}')
+if [[ "$CHANGED_FILES" != "data/releases.json" ]]; then
+  die "Unexpected git status diff after make release: $CHANGED_FILES (expected only data/releases.json)"
+fi
 
 TAG="data/${DATE}_${VER}"
 
@@ -87,10 +84,10 @@ if [[ "$PUBLISH" != "true" ]]; then
   ok "Dry run complete! All checks and tests passed."
   echo ""
   echo "Ready to publish: $TAG"
-  echo "Assets to publish:"
-  for a in "${ASSETS[@]}"; do
-    echo "  • $(basename "$a")"
-  done
+  echo "Staging tree (dist/):"
+  if [[ -d dist ]]; then
+    find dist -type f | sort
+  fi
   echo ""
   echo "To publish, run:"
   echo "  scripts/release-data.sh --publish $DATE $VER"
@@ -100,28 +97,28 @@ fi
 # ==========================================================
 # Publishing Flow
 # ==========================================================
-RELEASE_BRANCH="release/data-${DATE}-${VER}"
-git checkout -b "$RELEASE_BRANCH"
+# 4. Sync OCI image layout to GHCR (versioned and bare-date tags)
+note "Publishing OCI image to ghcr.io..."
+skopeo copy "oci:$REL_DIR/oci:${DATE}_${VER}" "docker://ghcr.io/olizilla/ods-data:${DATE}_${VER}"
+skopeo copy "docker://ghcr.io/olizilla/ods-data:${DATE}_${VER}" "docker://ghcr.io/olizilla/ods-data:$DATE"
 
-# Append the new release row to data/releases.json
-NEW_ROW=$(cat "$RELEASE_ROW_FILE")
-TMP_INDEX=$(mktemp)
-jq --argjson row "$NEW_ROW" '.releases += [$row]' "$INDEX_FILE" > "$TMP_INDEX"
-mv "$TMP_INDEX" "$INDEX_FILE"
-ok "Added $DATE v$VER to $INDEX_FILE"
+# 5. Sync dist/ staging tree to R2 / ods.fyi (excluding releases.json)
+note "Syncing objects to Cloudflare R2 (ods.fyi)..."
+rclone copy dist/ r2:ods-fyi/ --exclude releases.json
 
-git add "$INDEX_FILE"
-git commit -m "release(data): $DATE v$VER"
+# 6. Create OCI archive and attach to GitHub release
+note "Publishing GitHub release with .oci.tar..."
+skopeo copy "oci:$REL_DIR/oci:${DATE}_${VER}" "oci-archive:${DATE}_${VER}.oci.tar"
+gh release create "$TAG" --notes-file "$REL_DIR/NOTES.md" "${DATE}_${VER}.oci.tar"
+rm -f "${DATE}_${VER}.oci.tar"
+
+# 7. Publish releases.json to R2 (the commit point for live index)
+note "Publishing releases.json to R2..."
+rclone copy dist/releases.json r2:ods-fyi/
+ok "Release $TAG published live to ods.fyi"
+
+# 8. Commit data/releases.json, tag, and push
+git commit -m "release(data): $DATE v$VER" "$INDEX_FILE"
 git tag "$TAG"
-ok "Committed index and tagged $TAG"
-
-git push origin "$RELEASE_BRANCH" "$TAG"
-
-NOTES_ARG=""
-if [[ -f "$REL_DIR/NOTES.md" ]]; then
-  NOTES_ARG="--notes-file $REL_DIR/NOTES.md"
-fi
-
-gh release create "$TAG" "${ASSETS[@]}" --title "$DATE v$VER" $NOTES_ARG
-ok "Published GitHub release $TAG"
-echo "Release branch pushed: $RELEASE_BRANCH. Open a PR to merge into main."
+git push origin main "$TAG"
+ok "Committed, tagged $TAG, and pushed to origin main"

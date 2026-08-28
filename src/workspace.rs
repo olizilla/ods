@@ -276,54 +276,147 @@ pub fn count_records_in_parquet(path: &Path) -> Result<usize> {
     Ok(total)
 }
 
-pub fn parse_sha256sums(content: &str) -> std::collections::BTreeMap<String, String> {
-    let mut map = std::collections::BTreeMap::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let hash = parts[0].to_string();
-            let file_name = parts[1].trim_start_matches('*').to_string();
-            map.insert(file_name, hash);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationOutcome {
+    VerifiedPublished {
+        date: String,
+        version: String,
+        digest: String,
+    },
+    VerifiedUnpublished {
+        date: String,
+        version: String,
+        digest: String,
+    },
+    Mismatch {
+        date: String,
+        version: String,
+        expected_digest: String,
+        reconstructed_digest: String,
+    },
+    Corrupted(String),
+}
+
+impl VerificationOutcome {
+    pub fn is_verified(&self) -> bool {
+        matches!(
+            self,
+            VerificationOutcome::VerifiedPublished { .. }
+                | VerificationOutcome::VerifiedUnpublished { .. }
+        )
+    }
+
+    pub fn is_verified_published(&self) -> bool {
+        matches!(self, VerificationOutcome::VerifiedPublished { .. })
+    }
+}
+
+pub fn verify_release_dir(
+    release_dir: &Path,
+    custom_index: Option<&crate::index::OdsReleaseIndex>,
+) -> VerificationOutcome {
+    let prov = match crate::provenance::OdsProvenance::load_from_dir(release_dir) {
+        Some(p) => p,
+        None => return VerificationOutcome::Corrupted("Missing or unreadable _provenance.json".to_string()),
+    };
+
+    let date = match prov.trud_release_date.as_deref() {
+        Some(d) => d.to_string(),
+        None => return VerificationOutcome::Corrupted("Provenance missing trud_release_date".to_string()),
+    };
+
+    let version = match prov.dataset_version.clone() {
+        Some(v) => v,
+        None => return VerificationOutcome::Corrupted("Provenance missing dataset_version".to_string()),
+    };
+
+    let (manifest, _) = match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, &version) {
+        Ok(m) => m,
+        Err(e) => return VerificationOutcome::Corrupted(format!("Failed to reconstruct manifest: {}", e)),
+    };
+
+    let reconstructed_digest = match manifest.digest() {
+        Ok(d) => d,
+        Err(e) => return VerificationOutcome::Corrupted(format!("Failed to compute manifest digest: {}", e)),
+    };
+
+    // Cross-check datapackage.json resources if present
+    let dp_path = release_dir.join("datapackage.json");
+    if dp_path.exists() {
+        if let Ok(dp_bytes) = fs::read(&dp_path) {
+            if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
+                if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
+                    for res in resources {
+                        if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
+                            let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
+                            let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                            let found_layer = manifest.layers.iter().find(|l| {
+                                l.annotations
+                                    .as_ref()
+                                    .and_then(|a| a.get(crate::oci::ANNOTATION_TITLE))
+                                    .map(|t| t == res_name || t == res_path)
+                                    .unwrap_or(false)
+                            });
+                            match found_layer {
+                                Some(l) => {
+                                    let l_hash = l.digest.trim_start_matches("sha256:").to_lowercase();
+                                    if clean_hash != l_hash {
+                                        return VerificationOutcome::Corrupted(format!(
+                                            "datapackage resource {} hash mismatch",
+                                            res_name
+                                        ));
+                                    }
+                                }
+                                None => {
+                                    return VerificationOutcome::Corrupted(format!(
+                                        "datapackage resource {} not found in manifest layers",
+                                        res_name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-    map
+
+    let baked_index = crate::index::OdsReleaseIndex::baked().ok();
+    let index_to_check = custom_index.or(baked_index.as_ref());
+
+    if let Some(index) = index_to_check {
+        if let Some(entry) = index
+            .releases
+            .iter()
+            .find(|r| r.trud_release_date == date && r.dataset_version == version)
+        {
+            if entry.manifest_digest == reconstructed_digest {
+                return VerificationOutcome::VerifiedPublished {
+                    date,
+                    version,
+                    digest: reconstructed_digest,
+                };
+            } else {
+                return VerificationOutcome::Mismatch {
+                    date,
+                    version,
+                    expected_digest: entry.manifest_digest.clone(),
+                    reconstructed_digest,
+                };
+            }
+        }
+    }
+
+    VerificationOutcome::VerifiedUnpublished {
+        date,
+        version,
+        digest: reconstructed_digest,
+    }
 }
 
 pub fn is_release_dir_verified(release_dir: &Path) -> bool {
-    let sums_path = release_dir.join("SHA256SUMS");
-    if !sums_path.exists() {
-        return false;
-    }
-
-    let content = match fs::read_to_string(&sums_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let expected = parse_sha256sums(&content);
-    if expected.is_empty() {
-        return false;
-    }
-
-    for (file_name, expected_hash) in expected {
-        let file_path = release_dir.join(&file_name);
-        if !file_path.exists() {
-            return false;
-        }
-        let actual_hash = match crate::provenance::compute_file_sha256(&file_path) {
-            Ok(h) => h,
-            Err(_) => return false,
-        };
-        if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
-            return false;
-        }
-    }
-
-    true
+    verify_release_dir(release_dir, None).is_verified()
 }
 
 

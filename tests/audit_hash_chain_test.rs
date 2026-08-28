@@ -98,7 +98,7 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     })
     .unwrap();
 
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir, None).unwrap();
 
     (tmp, workspace_root, outer_zip_path)
 }
@@ -195,15 +195,13 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()
 }
 
 #[test]
-fn test_audit_runs_full_suite_and_fails_on_tampered_sha256sums_file() -> Result<()> {
+fn test_audit_runs_full_suite_and_fails_on_unaccounted_file_in_release_dir() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
-    // Mutate SHA256SUMS file
-    let sums_path = active_dir.join("SHA256SUMS");
-    let content = fs::read_to_string(&sums_path)?;
-    let tampered = content.replace('0', "1");
-    fs::write(&sums_path, tampered)?;
+    // Add unaccounted file to release directory
+    let phantom_path = active_dir.join("phantom.parquet");
+    fs::write(&phantom_path, b"unaccounted file contents")?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -217,7 +215,13 @@ fn test_audit_runs_full_suite_and_fails_on_tampered_sha256sums_file() -> Result<
     let result = ods::commands::audit::run(args);
     assert!(
         result.is_err(),
-        "audit must fail on tampered SHA256SUMS file"
+        "audit must fail on unaccounted file in release dir"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Unaccounted") || err_msg.contains("phantom.parquet") || err_msg.contains("discrepanc"),
+        "error must mention unaccounted file, got: {}",
+        err_msg
     );
     Ok(())
 }
@@ -295,7 +299,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let empty_records: Vec<ods::commands::ndjson::OdsRecord> = Vec::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -343,7 +347,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -426,7 +430,7 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
         &empty_closures,
         prov.as_ref(),
     )?;
-    ods::provenance::update_provenance_and_write_sha256sums(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -516,7 +520,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
         output: rel_dir.clone(),
     })
     .unwrap();
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir, None).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -683,7 +687,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
         output: rel_dir.clone(),
     })
     .unwrap();
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir, None).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -744,8 +748,8 @@ fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
         writer.close()?;
     }
 
-    // Update provenance & SHA256SUMS so checksum matches the modified file
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None)?;
+    // Update provenance
+    ods::provenance::update_provenance(&rel_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -811,7 +815,7 @@ fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
         writer.close()?;
     }
 
-    ods::provenance::update_provenance_and_write_sha256sums(&rel_dir, None)?;
+    ods::provenance::update_provenance(&rel_dir, None)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),

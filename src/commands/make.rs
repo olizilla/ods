@@ -32,6 +32,9 @@ pub enum MakeCommand {
     /// Generate OCI image layout for a compiled release
     Oci(crate::commands::make_oci::Args),
 
+    /// Cut and validate a publishable release row for data/releases.json
+    Release(crate::commands::make_release::Args),
+
     /// Generate canonical NDJSON document stream from TRUD XML (hidden)
     #[command(hide = true)]
     Ndjson(crate::commands::ndjson::Args),
@@ -62,8 +65,8 @@ pub fn run(args: MakeArgs) -> Result<()> {
             std::fs::write(parquet_out.join("datapackage.json"), pkg_json)
                 .context("writing datapackage.json to release directory")?;
 
-            // 3. Write SHA256SUMS and update _provenance.json with tool_* and dataset_*
-            crate::provenance::update_provenance_and_write_sha256sums(&parquet_out, None)?;
+            // 3. Update _provenance.json with tool_* and dataset_*
+            crate::provenance::update_provenance(&parquet_out, None)?;
 
             crate::commands::parquet::warn_unexpected_files(&parquet_out);
 
@@ -72,6 +75,7 @@ pub fn run(args: MakeArgs) -> Result<()> {
         }
         Some(MakeCommand::Parquet(parquet_args)) => crate::commands::parquet::run(parquet_args),
         Some(MakeCommand::Oci(oci_args)) => crate::commands::make_oci::run(oci_args),
+        Some(MakeCommand::Release(release_args)) => crate::commands::make_release::run(release_args),
         Some(MakeCommand::Ndjson(ndjson_args)) => crate::commands::ndjson::run(ndjson_args),
         None => {
             // Bare `ods make` defaults to `make all` using workspace trud/ directory or local XML

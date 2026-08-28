@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use clap::Args as ClapArgs;
 use std::path::PathBuf;
 use crate::workspace::{
-    find_workspace_root, get_active_release, is_release_dir_verified, set_active_release,
+    find_workspace_root, get_active_release, set_active_release,
     DEFAULT_WORKSPACE_DIR,
 };
 
@@ -31,13 +31,39 @@ pub fn run(args: Args) -> Result<()> {
         );
     }
 
-    if !is_release_dir_verified(&release_dir) {
-        bail!(
-            "✖ Release {} in {} has unverified or missing files (SHA256SUMS mismatch)\n  Run 'ods pull --force {}' to repair it.",
-            args.release_date,
-            workspace_root.display(),
-            args.release_date
-        );
+    let index = if let Ok(Some(cached)) = crate::index::CachedReleaseIndex::load_from_workspace(&workspace_root) {
+        let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_else(|_| cached.index.clone());
+        baked.merge(&cached.index).unwrap_or(baked)
+    } else {
+        crate::index::OdsReleaseIndex::baked().unwrap_or_default()
+    };
+
+    let outcome = crate::workspace::verify_release_dir(&release_dir, Some(&index));
+    match outcome {
+        crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
+            eprintln!("✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version);
+        }
+        crate::workspace::VerificationOutcome::VerifiedUnpublished { digest, .. } => {
+            eprintln!("* reconstructed manifest {} verified (unpublished local release)", digest);
+        }
+        crate::workspace::VerificationOutcome::Mismatch { date, version, expected_digest, reconstructed_digest } => {
+            bail!(
+                "✖ reconstructed manifest {} does not match the index for {} ({}): {}\n  A file in this directory does not match the published release.",
+                reconstructed_digest,
+                date,
+                version,
+                expected_digest
+            );
+        }
+        crate::workspace::VerificationOutcome::Corrupted(err) => {
+            bail!(
+                "✖ Release {} in {} is invalid: {}\n  Run 'ods pull --force {}' to repair it.",
+                args.release_date,
+                workspace_root.display(),
+                err,
+                args.release_date
+            );
+        }
     }
 
     let already_active = if let Ok((active_date, _)) = get_active_release(&workspace_root) {

@@ -65,7 +65,7 @@ _provenance.json
     │
     ▼ ods make             deterministic projections of the data
     │
-*.parquet + SHA256SUMS
+*.parquet + manifest
 ```
 
 Anyone with a TRUD account can rebuild the release and get identical bytes.
@@ -75,7 +75,7 @@ Four different claims, bought by four different mechanisms:
 | Claim | Meaning | Secured by |
 | :--- | :--- | :--- |
 | **Provenance** | what this derives from | TRUD's hash, `tool_git_sha`, `Cargo.lock` at that sha |
-| **Integrity** | bytes unchanged since publication | `SHA256SUMS`, hashes baked into `ods`, mirrors |
+| **Integrity** | bytes unchanged since publication | `manifest.json`, hashes baked into `ods`, mirrors |
 | **Authenticity** | published by this project | the Zenodo record and the git history |
 | **Correctness** | the derivation is faithful | **someone re-running it** |
 
@@ -155,14 +155,19 @@ When publishing a monthly dataset cut or republishing a fix:
    $ ods trud pull <date>
    $ ods make
    ```
-2. Build and verify the OCI bundle:
+2. Build and verify the OCI bundle, checking preconditions:
    ```console
-   $ scripts/release-data.sh <date> <version>
+   $ ods make release --version <version>
    ```
-   This executes `ods make oci --input ods_data/releases/<date> --version <version>`.
-   It derives the file list dynamically, updates `SHA256SUMS`, writes `oci/` layout with relative blob symlinks, and performs all structural and publishability checks before appending to `data/releases.json`.
-3. If an earlier release for `<date>` had errors, the script prompts for the withdrawal reason and marks the old row `withdrawn` in `data/releases.json`.
-4. The script commits `data/releases.json`, creates git tag `data/<date>_<version>`, and publishes GitHub release assets.
+   This performs structural checks, verifies git tags, and appends the release row to `data/releases.json`.
+3. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
+4. Commit `data/releases.json`, create git tag `data/<date>_<version>`, and publish:
+   ```console
+   $ git add data/releases.json && git commit -m "release(data): <date> v<version>"
+   $ git tag data/<date>_<version>
+   $ ods publish
+   ```
+   This uploads layers and image manifests directly to registry mirrors over OCI transport.
 
 ## Conventions
 

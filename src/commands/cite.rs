@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde_json::json;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
@@ -34,6 +34,76 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()> {
+    let fetcher = crate::commands::pull::HttpOciFetcher;
+    run_with_writer_and_fetcher(args, writer, &fetcher)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexFetchStatus {
+    JustNow,
+    Cached(String),
+    Baked,
+}
+
+pub fn resolve_cite_index<F: crate::commands::pull::OciBlobFetcher>(
+    workspace_root: Option<&Path>,
+    fetcher: &F,
+) -> Result<(crate::index::OdsReleaseIndex, IndexFetchStatus)> {
+    let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_default();
+
+    // 1. Try fetching remote index online
+    match fetcher.fetch_release_index() {
+        Ok(Some(fetched)) => {
+            match baked.merge(&fetched) {
+                Ok(merged) => {
+                    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+                    if let Some(ws) = workspace_root {
+                        let cached = crate::index::CachedReleaseIndex {
+                            fetched_at: now_rfc3339,
+                            index: merged.clone(),
+                        };
+                        let _ = cached.save_to_workspace(ws);
+                    }
+                    return Ok((merged, IndexFetchStatus::JustNow));
+                }
+                Err(e) => {
+                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                return Err(e);
+            }
+        }
+    }
+
+    // 2. Try loading cached index from workspace
+    if let Some(ws) = workspace_root {
+        if let Ok(Some(cached)) = crate::index::CachedReleaseIndex::load_from_workspace(ws) {
+            match baked.merge(&cached.index) {
+                Ok(merged) => return Ok((merged, IndexFetchStatus::Cached(cached.fetched_at))),
+                Err(e) => {
+                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fall back to baked index
+    Ok((baked, IndexFetchStatus::Baked))
+}
+
+pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
+    args: Args,
+    writer: &mut dyn std::io::Write,
+    fetcher: &F,
+) -> Result<()> {
     let files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
@@ -77,65 +147,68 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         }
     }
 
-    let mut publication_date = prov.as_ref().and_then(|p| p.publication_date.clone())
+    let prov_unwrapped = prov.as_ref().cloned().unwrap_or_default();
+    let dataset_version = prov_unwrapped
+        .dataset_version
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("✖ Refusing to cite corrupted release in {}: _provenance.json missing dataset_version", input_dir.display()))?;
+
+    let mut publication_date = prov_unwrapped.publication_date.clone()
         .unwrap_or_else(|| "unknown".to_string());
-    let mut publication_seq_num = prov.as_ref().and_then(|p| p.publication_seq_num.clone())
+    let mut publication_seq_num = prov_unwrapped.publication_seq_num.clone()
         .unwrap_or_else(|| "unknown".to_string());
-    let mut publication_type = prov.as_ref().and_then(|p| p.publication_type.clone())
+    let mut publication_type = prov_unwrapped.publication_type.clone()
         .unwrap_or_else(|| "unknown".to_string());
-    let mut release_file = prov.as_ref().and_then(|p| p.trud_release_file.clone())
+    let mut release_file = prov_unwrapped.trud_release_file.clone()
         .unwrap_or_else(|| "hscorgrefdataxml".to_string());
-    let mut archive_sha256 = prov.as_ref().and_then(|p| p.trud_release_sha256.clone())
+    let mut archive_sha256 = prov_unwrapped.trud_release_sha256.clone()
         .unwrap_or_else(|| "<not verified>".to_string());
-    let mut tool_version = prov.as_ref().and_then(|p| p.tool_version.clone())
+    let mut tool_version = prov_unwrapped.tool_version.clone()
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-    let mut dataset_version = prov.as_ref().and_then(|p| p.dataset_version.clone());
-    let mut manifest_digest: Option<String> = None;
-    let mut withdrawn: Option<String> = None;
+    let trud_date = prov_unwrapped.trud_release_date.clone();
+
+    // 1. Reconstruct manifest in memory
+    let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&input_dir, &prov_unwrapped, &dataset_version)
+        .context("reconstructing manifest in memory for citation")?;
+    let manifest_digest = manifest.digest()?;
+
+    // 2. Discover workspace and load/cache index
+    let workspace_root = input_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .or_else(crate::workspace::find_workspace_root);
+
+    let (index, index_status) = resolve_cite_index(workspace_root.as_deref(), fetcher)?;
+
+    // 3. Verify directory against index
+    let outcome = crate::workspace::verify_release_dir(&input_dir, Some(&index));
+    match outcome {
+        crate::workspace::VerificationOutcome::Mismatch { expected_digest, reconstructed_digest, .. } => {
+            anyhow::bail!(
+                "✖ Refusing to cite corrupted release in {}\n  Reconstructed manifest {} != expected {}",
+                input_dir.display(),
+                reconstructed_digest,
+                expected_digest
+            );
+        }
+        crate::workspace::VerificationOutcome::Corrupted(err) => {
+            anyhow::bail!("✖ Refusing to cite corrupted release in {}: {}", input_dir.display(), err);
+        }
+        _ => {}
+    }
+
+    // 4. Check for withdrawal in index
     let mut dataset_doi: Option<String> = None;
-
-    let release_json_path = input_dir.join("_release.json");
-    if release_json_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&release_json_path) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(doi) = val.get("dataset_doi").and_then(|d| d.as_str()) {
-                    dataset_doi = Some(doi.to_string());
-                }
-                if let Some(ver) = val.get("dataset_version").and_then(|v| v.as_str()) {
-                    if dataset_version.is_none() {
-                        dataset_version = Some(ver.to_string());
-                    }
-                }
-                if let Some(digest) = val.get("manifest_digest").and_then(|d| d.as_str()) {
-                    manifest_digest = Some(digest.to_string());
-                }
-                if let Some(w) = val.get("withdrawn").and_then(|w| w.as_str()) {
-                    withdrawn = Some(w.to_string());
-                }
-            }
+    let d_ref = trud_date.as_deref().unwrap_or(&publication_date);
+    if let Some(entry) = index.releases.iter().find(|r| r.trud_release_date == d_ref && r.dataset_version == dataset_version) {
+        if let Some(ref reason) = entry.withdrawn {
+            anyhow::bail!(
+                "✖ Refusing to cite {} v{}\n  This release was withdrawn: {}\n  Update to a valid release: ods pull {}",
+                d_ref, dataset_version, reason, d_ref
+            );
         }
-    }
-
-    let trud_date = prov.as_ref().and_then(|p| p.trud_release_date.clone());
-    if withdrawn.is_none() {
-        if let (Some(ref d), Some(ref v)) = (&trud_date, &dataset_version) {
-            if let Ok(index) = crate::index::OdsReleaseIndex::baked() {
-                if let Some(entry) = index.releases.iter().find(|r| &r.trud_release_date == d && &r.dataset_version == v) {
-                    if let Some(ref w) = entry.withdrawn {
-                        withdrawn = Some(w.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(ref reason) = withdrawn {
-        let d_str = trud_date.as_deref().unwrap_or(&publication_date);
-        let v_str = dataset_version.as_deref().unwrap_or("unknown");
-        anyhow::bail!(
-            "✖ Refusing to cite {} v{}\n  This release was withdrawn: {}\n  Update to a valid release: ods pull {}",
-            d_str, v_str, reason, d_str
-        );
+        dataset_doi = entry.dataset_doi.clone();
     }
 
     // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
@@ -199,46 +272,20 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
         "unknown"
     };
 
-    let orgs_parquet_hash = crate::provenance::compute_file_sha256(&input_dir.join("orgs.parquet"))
-        .unwrap_or_else(|_| "<hash error>".to_string());
-
-    let type_title_part = if publication_type == "unknown" {
-        "".to_string()
-    } else {
-        format!(": {} publication", publication_type)
-    };
-
     let d_tag = trud_date.as_deref().unwrap_or(&publication_date);
 
     match args.format.to_lowercase().as_str() {
         "bibtex" => {
-            let cite_key = if let Some(ref ver) = dataset_version {
-                format!("ods-{}-v{}", d_tag, ver)
-            } else {
-                format!(
-                    "nhs_england_ods_{}_{}",
-                    publication_date.replace('-', "_"),
-                    publication_seq_num
-                )
-            };
+            let cite_key = format!("ods-{}-v{}", d_tag, dataset_version);
             writeln!(writer, "@misc{{{},", cite_key)?;
             writeln!(writer, "  author = {{NHS England}},")?;
-            let title_str = if let Some(ref ver) = dataset_version {
-                format!("NHS Organisation Data Service ({} cut, v{})", d_tag, ver)
-            } else {
-                format!(
-                    "Organisation Data Service{} ({}, Seq {})",
-                    type_title_part, publication_date, publication_seq_num
-                )
-            };
+            let title_str = format!("NHS Organisation Data Service ({} cut, v{})", d_tag, dataset_version);
             writeln!(writer, "  title = {{{}}},", title_str)?;
             writeln!(writer, "  year = {{{}}},", year)?;
             if publication_date.len() >= 7 {
                 writeln!(writer, "  month = {{{}}},", &publication_date[5..7])?;
             }
-            if let Some(ref ver) = dataset_version {
-                writeln!(writer, "  version = {{{}}},", ver)?;
-            }
+            writeln!(writer, "  version = {{{}}},", dataset_version)?;
             if let Some(ref doi) = dataset_doi {
                 writeln!(writer, "  doi = {{{}}},", doi)?;
             }
@@ -247,11 +294,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 writer,
                 "  url = {{https://isd.digital.nhs.uk/trud}},"
             )?;
-            let note_str = if let Some(ref md) = manifest_digest {
-                format!("Manifest: {}", md)
-            } else {
-                format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
-            };
+            let note_str = format!("Manifest: {}", manifest_digest);
             writeln!(
                 writer,
                 "  note = {{{}}}",
@@ -271,17 +314,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 (2026, 7, 28)
             };
 
-            let title_str = if let Some(ref ver) = dataset_version {
-                format!("Organisation Data Service ({} cut, v{})", d_tag, ver)
-            } else {
-                format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num)
-            };
-
-            let note_str = if let Some(ref md) = manifest_digest {
-                format!("Manifest: {}", md)
-            } else {
-                format!("orgs.parquet SHA-256: {}; compiled by ods v{}", orgs_parquet_hash.to_ascii_uppercase(), tool_version)
-            };
+            let title_str = format!("Organisation Data Service ({} cut, v{})", d_tag, dataset_version);
+            let note_str = format!("Manifest: {}", manifest_digest);
 
             let mut item_obj = json!({
                 "type": "dataset",
@@ -295,12 +329,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
                 },
                 "publisher": "NHS TRUD",
                 "URL": "https://isd.digital.nhs.uk/trud",
-                "note": note_str
+                "note": note_str,
+                "version": dataset_version
             });
-
-            if let Some(ref ver) = dataset_version {
-                item_obj["version"] = json!(ver);
-            }
 
             if let Some(ref doi) = dataset_doi {
                 item_obj["DOI"] = json!(doi);
@@ -310,11 +341,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "{}", serde_json::to_string_pretty(&csl)?)?;
         }
         "apa" => {
-            let title_str = if let Some(ref ver) = dataset_version {
-                format!("Organisation Data Service ({} cut, v{})", d_tag, ver)
-            } else {
-                format!("Organisation Data Service{} ({}, Seq {})", type_title_part, publication_date, publication_seq_num)
-            };
+            let title_str = format!("Organisation Data Service ({} cut, v{})", d_tag, dataset_version);
             if let Some(ref doi) = dataset_doi {
                 let doi_url = if doi.starts_with("http") { doi.clone() } else { format!("https://doi.org/{}", doi) };
                 writeln!(
@@ -331,6 +358,20 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             }
         }
         _ => {
+            // Header line per Task 4
+            match index_status {
+                IndexFetchStatus::JustNow => {
+                    writeln!(writer, "✓ {} ({}) — checked against the index just now\n", d_tag, dataset_version)?;
+                }
+                IndexFetchStatus::Cached(ref fetched_at) => {
+                    let fetched_day = fetched_at.split('T').next().unwrap_or(fetched_at);
+                    writeln!(writer, "✓ {} ({})\n  index last fetched {}; a withdrawal published since would not show here\n", d_tag, dataset_version, fetched_day)?;
+                }
+                IndexFetchStatus::Baked => {
+                    writeln!(writer, "✓ {} ({})\n", d_tag, dataset_version)?;
+                }
+            }
+
             // Default text format
             writeln!(writer, "Source")?;
             writeln!(
@@ -342,12 +383,8 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
             writeln!(writer, "  Publication type:   {}", publication_type)?;
             writeln!(writer, "  Release file:       {}", release_file)?;
             writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
-            if let Some(ref ver) = dataset_version {
-                writeln!(writer, "  Dataset version:    v{}", ver)?;
-            }
-            if let Some(ref md) = manifest_digest {
-                writeln!(writer, "  Manifest digest:    {}", md)?;
-            }
+            writeln!(writer, "  Dataset version:    v{}", dataset_version)?;
+            writeln!(writer, "  Manifest digest:    {}", manifest_digest)?;
             if let Some(ref doi) = dataset_doi {
                 writeln!(writer, "  Dataset DOI:        {}", doi)?;
             }
@@ -377,19 +414,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 
             writeln!(writer, "How to Cite")?;
             writeln!(writer, "  When citing the source data:")?;
-            if let Some(ref ver) = dataset_version {
-                writeln!(
-                    writer,
-                    "    NHS England. ({}). NHS ODS Dataset ({} cut, v{}).\n    NHS TRUD. https://isd.digital.nhs.uk/trud",
-                    year, d_tag, ver
-                )?;
-            } else {
-                writeln!(
-                    writer,
-                    "    NHS England. ({}). Organisation Data Service{}\n    ({}, Seq {}). NHS TRUD. https://isd.digital.nhs.uk/trud",
-                    year, type_title_part, publication_date, publication_seq_num
-                )?;
-            }
+            writeln!(
+                writer,
+                "    NHS England. ({}). NHS ODS Dataset ({} cut, v{}).\n    NHS TRUD. https://isd.digital.nhs.uk/trud",
+                year, d_tag, dataset_version
+            )?;
             writeln!(writer)?;
             writeln!(writer, "  When citing the derived sources:")?;
             writeln!(

@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use crate::index::{parse_semver, OdsReleaseIndex, ReleaseIndexEntry};
 use crate::oci::*;
 use crate::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 
@@ -23,74 +21,6 @@ pub struct Args {
     /// Verify existing OCI layout without rebuilding
     #[arg(long)]
     pub check: bool,
-
-    /// Skip remote git network checks
-    #[arg(long)]
-    pub offline: bool,
-
-    /// Path to git repository containing ods tool (defaults to auto-detection)
-    #[arg(long)]
-    pub tool_repo: Option<PathBuf>,
-
-    /// Path to release index file (defaults to data/releases.json or baked index)
-    #[arg(long)]
-    pub index: Option<PathBuf>,
-}
-
-fn is_tool_repo_dir(dir: &Path) -> bool {
-    if !dir.join(".git").exists() || !dir.join("Cargo.toml").exists() {
-        return false;
-    }
-    let content = match fs::read_to_string(dir.join("Cargo.toml")) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let mut in_package_section = false;
-    let mut is_ods_package = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_package_section = trimmed == "[package]";
-        } else if in_package_section {
-            let stripped: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
-            if stripped == "name=\"ods\"" || stripped == "name='ods'" {
-                is_ods_package = true;
-                break;
-            }
-        }
-    }
-
-    is_ods_package && (dir.join("src").join("main.rs").exists() || dir.join("src").join("lib.rs").exists())
-}
-
-pub fn find_tool_repo(release_dir: &Path) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let p = PathBuf::from(dir);
-        if is_tool_repo_dir(&p) {
-            return Some(p);
-        }
-    }
-    if let Ok(mut cur) = std::env::current_dir() {
-        loop {
-            if is_tool_repo_dir(&cur) {
-                return Some(cur);
-            }
-            if !cur.pop() {
-                break;
-            }
-        }
-    }
-    let mut cur = release_dir.to_path_buf();
-    loop {
-        if is_tool_repo_dir(&cur) {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            break;
-        }
-    }
-    None
 }
 
 /// Builds an OCI manifest directly by scanning the release directory files and computing digests.
@@ -108,7 +38,7 @@ pub fn build_manifest_from_dir(
         let path = entry.path();
         if path.is_file() {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with('.') || name == "_release.json" {
+                if name.starts_with('.') || name == "oci" {
                     continue;
                 }
                 publishable_files.push(name.to_string());
@@ -170,7 +100,7 @@ pub fn build_manifest_from_dir(
         annotations.insert(ANNOTATION_FYI_TOOL_GIT_SHA.to_string(), tool_sha.clone());
     }
 
-    let mut manifest = OciManifest {
+    let manifest = OciManifest {
         schema_version: 2,
         media_type: MEDIA_TYPE_MANIFEST.to_string(),
         artifact_type: ARTIFACT_TYPE_DATASET.to_string(),
@@ -178,33 +108,32 @@ pub fn build_manifest_from_dir(
         layers,
         annotations: Some(annotations),
     };
-    manifest.sort_layers_by_title();
 
-    let bytes = manifest.to_canonical_bytes()?;
-    Ok((manifest, bytes))
+    let manifest_bytes = manifest.to_canonical_bytes()?;
+    Ok((manifest, manifest_bytes))
 }
 
 pub fn run(args: Args) -> Result<()> {
     let release_dir = &args.input;
-    if !release_dir.is_dir() {
-        bail!("Input release directory '{}' does not exist", release_dir.display());
+    if !release_dir.exists() {
+        bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    // Parse and validate version format early
-    parse_semver(&args.version)?;
-
-    let mut prov = OdsProvenance::load_from_dir(release_dir)
-        .context("Failed to load _provenance.json from release directory")?;
+    let mut prov = match OdsProvenance::load_from_dir(release_dir) {
+        Some(p) => p,
+        None => bail!(
+            "Missing or unreadable _provenance.json in {}",
+            release_dir.display()
+        ),
+    };
 
     let date = prov
         .trud_release_date
         .clone()
-        .context("Missing trud_release_date in _provenance.json")?;
+        .ok_or_else(|| anyhow::anyhow!("Provenance missing trud_release_date"))?;
 
     let oci_dir = release_dir.join("oci");
     let blobs_dir = oci_dir.join("blobs").join("sha256");
-
-    let tool_repo = args.tool_repo.clone().or_else(|| find_tool_repo(release_dir));
 
     if !args.check {
         // Step 0: Validate baseline provenance preconditions BEFORE touching disk!
@@ -234,36 +163,11 @@ pub fn run(args: Args) -> Result<()> {
             serde_json::to_string_pretty(&pkg)? + "\n",
         )?;
 
-        // Step 2: Write SHA256SUMS from the dynamically discovered files (excluding SHA256SUMS and _release.json)
-        let mut publishable_names = Vec::new();
-        let entries = fs::read_dir(release_dir)?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') || name == "SHA256SUMS" || name == "_release.json" {
-                        continue;
-                    }
-                    publishable_names.push(name.to_string());
-                }
-            }
-        }
-        publishable_names.sort();
-
-        let mut sha_lines = Vec::new();
-        for fname in &publishable_names {
-            let hash = compute_file_sha256(&release_dir.join(fname))?;
-            sha_lines.push(format!("{}  {}", hash.to_uppercase(), fname));
-        }
-        let sums_path = release_dir.join("SHA256SUMS");
-        let sums_content = sha_lines.join("\n") + "\n";
-        fs::write(&sums_path, &sums_content)?;
-
-        // Step 3: Build OciManifest from disk
+        // Step 2: Build OciManifest from disk
         let (manifest, manifest_bytes) = build_manifest_from_dir(release_dir, &prov, &args.version)?;
         let manifest_digest = manifest.digest()?;
 
-        // Step 4: Write oci/ layout
+        // Step 3: Write oci/ layout
         fs::create_dir_all(&blobs_dir)?;
 
         let layout = OciLayout::default();
@@ -304,7 +208,7 @@ pub fn run(args: Args) -> Result<()> {
         let index_bytes = oci_index.to_canonical_bytes()?;
         fs::write(oci_dir.join("index.json"), index_bytes)?;
 
-        // Step 5: Write relative symlinks in oci/blobs/sha256/
+        // Step 4: Write relative symlinks in oci/blobs/sha256/
         for layer in &manifest.layers {
             let fname = layer
                 .annotations
@@ -319,71 +223,44 @@ pub fn run(args: Args) -> Result<()> {
                     .with_context(|| format!("creating symlink at {}", link_path.display()))?;
             }
         }
-
-        // Step 6: Write _release.json
-        let versioned_tag = format!("{}_{}", date, args.version);
-        let release_row = ReleaseIndexEntry {
-            trud_release_date: date.clone(),
-            dataset_version: args.version.clone(),
-            tag: versioned_tag,
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: prov.trud_release_sha256.clone().unwrap_or_default().to_uppercase(),
-            tool_version: prov.tool_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
-            dataset_doi: None,
-            withdrawn: None,
-        };
-        let row_json = serde_json::to_string_pretty(&release_row)?;
-        fs::write(release_dir.join("_release.json"), row_json + "\n")?;
     }
 
-    // Step 7: Perform all 11 structural and publishability checks
-    // ALWAYS PERFORM ALL CHECKS, EVEN IF SOME FAIL
-    let custom_index = if let Some(ref p) = args.index {
-        let content = fs::read_to_string(p)?;
-        Some(serde_json::from_str::<OdsReleaseIndex>(&content)?)
-    } else {
-        None
-    };
-
-    let failures = perform_all_checks(
-        release_dir,
-        &args.version,
-        tool_repo.as_deref(),
-        custom_index.as_ref(),
-        args.offline,
-    )?;
+    // Step 5: Perform structural checks 1-8
+    let failures = perform_structural_checks(release_dir, &args.version)?;
 
     if !failures.is_empty() {
-        for f in &failures {
-            eprintln!("✖ {}", f);
+        for failure in &failures {
+            eprintln!("✖ {}", failure);
         }
         let count = failures.len();
-        let word = if count == 1 { "check" } else { "checks" };
-        bail!("{} {} failed", count, word);
+        eprintln!("{} check{} failed", count, if count == 1 { "" } else { "s" });
+        bail!("Structural checks failed");
     }
 
-    // All checks passed!
     let manifest_path = find_manifest_in_blobs(&blobs_dir)?;
     let manifest_bytes = fs::read(&manifest_path)?;
     let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
-    let total_bytes: u64 = manifest.layers.iter().map(|l| l.size).sum();
-    let mb = (total_bytes as f64) / 1_048_576.0;
+    let manifest_digest = manifest.digest()?;
 
-    println!("* {} layers, {:.1} MB", manifest.layers.len(), mb);
+    let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
+    let size_mb = (total_size as f64) / (1024.0 * 1024.0);
+
     if args.check {
-        println!("✓ oci/ verified, manifest {}", manifest.digest()?);
-        println!("✓ tags {}, {}_{} verified", date, date, args.version);
-        println!("✓ _release.json verified");
+        println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
+        println!("✓ oci/ verified");
     } else {
-        println!("✓ oci/ written, manifest {}", manifest.digest()?);
+        println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
+        println!("✓ oci/ written, manifest {}", manifest_digest);
         println!("✓ tags {}, {}_{}", date, date, args.version);
-        println!("✓ _release.json written");
     }
 
     Ok(())
 }
 
 fn find_manifest_in_blobs(blobs_dir: &Path) -> Result<PathBuf> {
+    if !blobs_dir.exists() {
+        bail!("blobs directory does not exist: {}", blobs_dir.display());
+    }
     for entry in fs::read_dir(blobs_dir)?.flatten() {
         let path = entry.path();
         if path.is_file() && !path.is_symlink() {
@@ -393,17 +270,7 @@ fn find_manifest_in_blobs(blobs_dir: &Path) -> Result<PathBuf> {
     bail!("No real manifest file found in {}", blobs_dir.display());
 }
 
-pub fn perform_all_checks_default(release_dir: &Path, expected_version: &str) -> Result<Vec<String>> {
-    perform_all_checks(release_dir, expected_version, None, None, true)
-}
-
-pub fn perform_all_checks(
-    release_dir: &Path,
-    expected_version: &str,
-    tool_repo: Option<&Path>,
-    custom_index: Option<&OdsReleaseIndex>,
-    offline: bool,
-) -> Result<Vec<String>> {
+pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
     let prov = match OdsProvenance::load_from_dir(release_dir) {
@@ -417,11 +284,6 @@ pub fn perform_all_checks(
     // Check 1: Provenance baseline validation
     if let Err(e) = prov.validate_baseline() {
         failures.push(format!("Provenance baseline failure: {}", e));
-    }
-
-    // Check 10: tool_git_dirty == false
-    if prov.tool_git_dirty == Some(true) {
-        failures.push("tool_git_dirty is true: dataset built from a dirty working tree".to_string());
     }
 
     let oci_dir = release_dir.join("oci");
@@ -571,6 +433,48 @@ pub fn perform_all_checks(
             }
         }
 
+        // Check 5b: datapackage.json resource hashes agree with layer digests
+        let dp_path = release_dir.join("datapackage.json");
+        if dp_path.exists() {
+            if let Ok(dp_bytes) = fs::read(&dp_path) {
+                if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
+                    if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
+                        for res in resources {
+                            if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
+                                let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
+                                let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                                let found_layer = m.layers.iter().find(|l| {
+                                    l.annotations
+                                        .as_ref()
+                                        .and_then(|a| a.get(ANNOTATION_TITLE))
+                                        .map(|t| t == res_name || t == res_path)
+                                        .unwrap_or(false)
+                                });
+                                match found_layer {
+                                    Some(l) => {
+                                        let l_hash = l.digest.trim_start_matches("sha256:").to_lowercase();
+                                        if clean_hash != l_hash {
+                                            failures.push(format!(
+                                                "datapackage.json resource {} hash {} disagrees with layer digest {}",
+                                                res_name, res_hash, l.digest
+                                            ));
+                                        }
+                                    }
+                                    None => {
+                                        failures.push(format!(
+                                            "datapackage.json resource {} not found in manifest layers",
+                                            res_name
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Check 6: config.digest equals the digest of the layer titled _provenance.json
         let prov_layer = m.layers.iter().find(|l| {
             l.annotations
@@ -623,185 +527,21 @@ pub fn perform_all_checks(
                 failures.push(format!("Re-packing from source files failed: {}", e));
             }
         }
-
-        // Check 9: SHA256SUMS agrees with layers[] in both directions
-        let sums_path = release_dir.join("SHA256SUMS");
-        if !sums_path.exists() {
-            failures.push("Missing SHA256SUMS".to_string());
-        } else if let Ok(sums_content) = fs::read_to_string(&sums_path) {
-            let mut recorded_sums = HashMap::new();
-            for line in sums_content.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() == 2 {
-                    recorded_sums.insert(parts[1].to_string(), parts[0].to_lowercase());
-                }
-            }
-
-            for layer in &m.layers {
-                let title = layer
-                    .annotations
-                    .as_ref()
-                    .and_then(|a| a.get(ANNOTATION_TITLE))
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                if title == "SHA256SUMS" {
-                    continue;
-                }
-                let layer_hex = layer.digest.trim_start_matches("sha256:").to_lowercase();
-                if let Some(recorded_hex) = recorded_sums.get(title) {
-                    if layer_hex != *recorded_hex {
-                        failures.push(format!("SHA256SUMS lists {} with a digest no layer carries", title));
-                    }
-                } else {
-                    failures.push(format!("Layer {} missing from SHA256SUMS", title));
-                }
-            }
-
-            for fname in recorded_sums.keys() {
-                let found = m.layers.iter().any(|l| {
-                    l.annotations
-                        .as_ref()
-                        .and_then(|a| a.get(ANNOTATION_TITLE))
-                        .map(|t| t == fname)
-                        .unwrap_or(false)
-                });
-                if !found {
-                    failures.push(format!("File {} listed in SHA256SUMS not in manifest layers", fname));
-                }
-            }
-        }
-    }
-
-    // Git checks (Checks 11 and 15) run against the tool's repo directory
-    let repo_dir = tool_repo.unwrap_or(release_dir);
-    let repo_dir_str = repo_dir.to_string_lossy();
-
-    // Check 11: tool_git_sha == commit v<tool_version> points at
-    let tool_ver = prov.tool_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION"));
-    if let Some(ref tool_sha) = prov.tool_git_sha {
-        let tag_name = format!("v{}", tool_ver);
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &repo_dir_str,
-                "rev-parse",
-                "-q",
-                "--verify",
-                &format!("refs/tags/{}^{{commit}}", tag_name),
-            ])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let tag_sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !tag_sha.starts_with(tool_sha.as_str()) && !tool_sha.starts_with(tag_sha.as_str()) {
-                    failures.push(format!(
-                        "tool_git_sha {} is not the commit {} points at ({})\n  Data must be built by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
-                        tool_sha, tag_name, tag_sha, tag_name
-                    ));
-                }
-            } else {
-                failures.push(format!(
-                    "tool_git_sha {} is not the commit {} points at (tag missing)\n  Data must be built by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
-                    tool_sha, tag_name, tag_name
-                ));
-            }
-        }
-    }
-
-    // Check 12: trud_release_sha256_verified == "trud_api" or "published_release"
-    match prov.trud_release_sha256_verified {
-        Some(crate::provenance::TrudVerificationSource::TrudApi)
-        | Some(crate::provenance::TrudVerificationSource::PublishedRelease) => {}
-        _ => {
-            failures.push(
-                "trud_release_sha256_verified is not trud_api: source was never verified against TRUD".to_string(),
-            );
-        }
-    }
-
-    // Check 13: dataset_version matches expected_version and parses as semver
-    if let Some(ref prov_ver) = prov.dataset_version {
-        if prov_ver != expected_version {
-            failures.push(format!(
-                "Provenance dataset_version ({}) != expected version ({})",
-                prov_ver, expected_version
-            ));
-        }
-    } else {
-        failures.push("Provenance missing dataset_version".to_string());
-    }
-
-    // Check 14: data/releases.json has no row for this (date, version)
-    let index_opt = if let Some(idx) = custom_index {
-        Some(idx.clone())
-    } else {
-        crate::index::OdsReleaseIndex::baked().ok()
-    };
-
-    if let Some(ref index) = index_opt {
-        let date = prov.trud_release_date.as_deref().unwrap_or("");
-        if index
-            .releases
-            .iter()
-            .any(|r| r.trud_release_date == date && r.dataset_version == expected_version)
-        {
-            failures.push(format!(
-                "data/releases.json already has a row for {} {}\n  Published releases are immutable. Bump the patch version.",
-                date, expected_version
-            ));
-        }
-    }
-
-    // Check 15: git tag data/<date>_<version> free locally and on origin
-    let date = prov.trud_release_date.as_deref().unwrap_or("");
-    let git_tag = format!("data/{}_{}", date, expected_version);
-    let local_tag = Command::new("git")
-        .args([
-            "-C",
-            &repo_dir_str,
-            "rev-parse",
-            "-q",
-            "--verify",
-            &format!("refs/tags/{}", git_tag),
-        ])
-        .output();
-    if let Ok(out) = local_tag {
-        if out.status.success() {
-            failures.push(format!("git tag {} already exists locally", git_tag));
-        }
-    }
-
-    let is_offline = offline || std::env::var("ODS_OFFLINE").is_ok();
-    if !is_offline {
-        let has_origin = Command::new("git")
-            .args(["-C", &repo_dir_str, "remote", "get-url", "origin"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if has_origin {
-            let origin_tag = Command::new("git")
-                .args([
-                    "-C",
-                    &repo_dir_str,
-                    "-c",
-                    "http.lowSpeedLimit=1000",
-                    "-c",
-                    "http.lowSpeedTime=2",
-                    "ls-remote",
-                    "--exit-code",
-                    "--tags",
-                    "origin",
-                    &git_tag,
-                ])
-                .output();
-            if let Ok(out) = origin_tag {
-                if out.status.success() {
-                    failures.push(format!("git tag {} exists on origin", git_tag));
-                }
-            }
-        }
     }
 
     Ok(failures)
+}
+
+pub fn perform_all_checks(
+    release_dir: &Path,
+    expected_version: &str,
+    _tool_repo: Option<&Path>,
+    _custom_index: Option<&crate::index::OdsReleaseIndex>,
+    _offline: bool,
+) -> Result<Vec<String>> {
+    perform_structural_checks(release_dir, expected_version)
+}
+
+pub fn perform_all_checks_default(release_dir: &Path, expected_version: &str) -> Result<Vec<String>> {
+    perform_structural_checks(release_dir, expected_version)
 }

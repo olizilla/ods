@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 pub const RELEASES_JSON: &str = include_str!("../data/releases.json");
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OdsReleaseIndex {
     #[serde(rename = "_type")]
     pub type_tag: String,
@@ -17,17 +17,51 @@ pub struct OdsReleaseIndex {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirrorEntry {
-    pub operator: String,
-    pub kind: String,
     pub url: String,
 }
 
 impl MirrorEntry {
-    pub fn expand_url(&self, release_date: &str, version: &str, file: &str) -> String {
-        self.url
-            .replace("{release}", release_date)
-            .replace("{version}", version)
-            .replace("{file}", file)
+    pub fn blob_url(&self, digest: &str) -> String {
+        format!("{}/blobs/{}", self.url.trim_end_matches('/'), digest)
+    }
+
+    pub fn manifest_url(&self, tag_or_digest: &str) -> String {
+        format!("{}/manifests/{}", self.url.trim_end_matches('/'), tag_or_digest)
+    }
+
+    pub fn host(&self) -> String {
+        let trimmed = self.url.trim_start_matches("https://").trim_start_matches("http://");
+        let host_part = trimmed.split('/').next().unwrap_or(trimmed);
+        host_part.split(':').next().unwrap_or(host_part).to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedReleaseIndex {
+    pub fetched_at: String,
+    pub index: OdsReleaseIndex,
+}
+
+impl CachedReleaseIndex {
+    pub fn load_from_workspace(workspace_root: &std::path::Path) -> Result<Option<Self>> {
+        let path = workspace_root.join("_releases.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("reading cached index at {}", path.display()))?;
+        let cached: CachedReleaseIndex = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing cached index at {}", path.display()))?;
+        Ok(Some(cached))
+    }
+
+    pub fn save_to_workspace(&self, workspace_root: &std::path::Path) -> Result<()> {
+        let path = workspace_root.join("_releases.json");
+        let bytes = serde_json::to_vec_pretty(self)
+            .context("serializing cached release index")?;
+        std::fs::write(&path, bytes)
+            .with_context(|| format!("writing cached index to {}", path.display()))?;
+        Ok(())
     }
 }
 
@@ -67,6 +101,17 @@ pub fn parse_semver(v: &str) -> Result<(u64, u64, u64)> {
         .with_context(|| format!("Invalid patch version in '{v}'"))?;
     Ok((major, minor, patch))
 }
+
+#[derive(Debug)]
+pub struct SecurityError(pub String);
+
+impl std::fmt::Display for SecurityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Security error: {}", self.0)
+    }
+}
+
+impl std::error::Error for SecurityError {}
 
 impl OdsReleaseIndex {
     /// Loads and validates the checked-in baked release index.
@@ -156,22 +201,22 @@ impl OdsReleaseIndex {
                 .find(|r| r.trud_release_date == baked_rel.trud_release_date && r.dataset_version == baked_rel.dataset_version)
             {
                 if baked_rel.manifest_digest != fetched_rel.manifest_digest {
-                    bail!(
-                        "Security error: fetched index contradicts baked release ({}, {}): baked digest {} != fetched digest {}",
+                    return Err(SecurityError(format!(
+                        "fetched index contradicts baked release ({}, {}): baked digest {} != fetched digest {}",
                         baked_rel.trud_release_date,
                         baked_rel.dataset_version,
                         baked_rel.manifest_digest,
                         fetched_rel.manifest_digest
-                    );
+                    )).into());
                 }
                 if !baked_rel.trud_release_sha256.eq_ignore_ascii_case(&fetched_rel.trud_release_sha256) {
-                    bail!(
-                        "Security error: fetched index contradicts baked release ({}, {}): baked TRUD SHA-256 {} != fetched TRUD SHA-256 {}",
+                    return Err(SecurityError(format!(
+                        "fetched index contradicts baked release ({}, {}): baked TRUD SHA-256 {} != fetched TRUD SHA-256 {}",
                         baked_rel.trud_release_date,
                         baked_rel.dataset_version,
                         baked_rel.trud_release_sha256,
                         fetched_rel.trud_release_sha256
-                    );
+                    )).into());
                 }
             }
         }

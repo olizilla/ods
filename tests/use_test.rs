@@ -1,6 +1,5 @@
 use anyhow::Result;
 use ods::commands::use_cmd::{run as use_run, Args as UseArgs};
-use ods::provenance::compute_file_sha256;
 use std::fs;
 use tempfile::TempDir;
 
@@ -28,12 +27,39 @@ fn test_use_refuses_when_release_unverified() {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(
-        rel_dir.join("SHA256SUMS"),
-        "0000000000000000000000000000000000000000000000000000000000000000  orgs.parquet\n",
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
     )
     .unwrap();
+
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+
+    // Cache an index with a different manifest digest
+    let release_entry = ods::index::ReleaseIndexEntry {
+        trud_release_date: "2026-07-31".to_string(),
+        dataset_version: "1.0.1".to_string(),
+        tag: "2026-07-31_1.0.1".to_string(),
+        manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        trud_release_sha256: "AAAA".to_string(),
+        tool_version: "0.4.3".to_string(),
+        dataset_doi: None,
+        withdrawn: None,
+    };
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-08-28T12:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex {
+            type_tag: "ods_release_index".to_string(),
+            index_version: 2,
+            concept_doi: None,
+            mirrors: vec![],
+            releases: vec![release_entry],
+        },
+    };
+    cached.save_to_workspace(&workspace).unwrap();
 
     let res = use_run(UseArgs {
         release_date: "2026-07-31".to_string(),
@@ -42,7 +68,8 @@ fn test_use_refuses_when_release_unverified() {
 
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("has unverified or missing files (SHA256SUMS mismatch)"));
+    assert!(err.contains("does not match the index"));
+    assert!(err.contains("A file in this directory does not match the published release"));
 }
 
 #[test]
@@ -52,13 +79,16 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let orgs_bytes = b"sample orgs parquet bytes";
-    fs::write(rel_dir.join("orgs.parquet"), orgs_bytes).unwrap();
-    let hash = compute_file_sha256(&rel_dir.join("orgs.parquet"))?;
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(
-        rel_dir.join("SHA256SUMS"),
-        format!("{}  orgs.parquet\n", hash),
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov)?,
     )?;
+
+    let orgs_bytes = b"sample orgs parquet bytes";
+    fs::write(rel_dir.join("orgs.parquet"), orgs_bytes)?;
 
     use_run(UseArgs {
         release_date: "2026-07-31".to_string(),

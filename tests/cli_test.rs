@@ -1,6 +1,5 @@
 //! End-to-end CLI integration tests verifying binary execution and stdout/stderr output formatting.
 
-use sha2::Digest;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -74,6 +73,7 @@ fn test_cli_cite_output_formatting() {
     prov.publication_seq_num = Some("4700".to_string());
     prov.publication_type = Some("Full".to_string());
     prov.publication_record_count = Some(305541);
+    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(rel_dir.join("orgs.parquet"), b"dummy").unwrap();
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
@@ -148,9 +148,7 @@ fn test_cli_pull_help_has_no_api_key() {
 #[test]
 fn test_cli_trud_pull_help_has_positional_release_and_no_release_flag() {
     let output = ods_binary()
-        .arg("trud")
-        .arg("pull")
-        .arg("--help")
+        .args(["trud", "pull", "--help"])
         .output()
         .expect("Failed to execute trud pull --help");
 
@@ -174,19 +172,60 @@ fn test_cli_pull_local_release_output() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
+    let mut prov1 = ods::provenance::OdsProvenance::default();
+    prov1.trud_release_date = Some("2026-05-29".to_string());
+    prov1.dataset_version = Some("1.0.1".to_string());
     let rel1 = ws.join("releases").join("2026-05-29");
     fs::create_dir_all(&rel1).unwrap();
-    let p1 = rel1.join("orgs.parquet");
-    fs::write(&p1, b"dummy parquet 1").unwrap();
-    let h1 = format!("{:x}", sha2::Sha256::digest(b"dummy parquet 1"));
-    fs::write(rel1.join("SHA256SUMS"), format!("{} *orgs.parquet\n", h1)).unwrap();
+    fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov1).unwrap()).unwrap();
+    fs::write(rel1.join("orgs.parquet"), b"dummy parquet 1").unwrap();
 
+    let (m1, _) = ods::commands::make_oci::build_manifest_from_dir(&rel1, &prov1, "1.0.1").unwrap();
+    let d1 = m1.digest().unwrap();
+
+    let mut prov2 = ods::provenance::OdsProvenance::default();
+    prov2.trud_release_date = Some("2026-06-26".to_string());
+    prov2.dataset_version = Some("1.0.1".to_string());
     let rel2 = ws.join("releases").join("2026-06-26");
     fs::create_dir_all(&rel2).unwrap();
-    let p2 = rel2.join("orgs.parquet");
-    fs::write(&p2, b"dummy parquet 2").unwrap();
-    let h2 = format!("{:x}", sha2::Sha256::digest(b"dummy parquet 2"));
-    fs::write(rel2.join("SHA256SUMS"), format!("{} *orgs.parquet\n", h2)).unwrap();
+    fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov2).unwrap()).unwrap();
+    fs::write(rel2.join("orgs.parquet"), b"dummy parquet 2").unwrap();
+
+    let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2, &prov2, "1.0.1").unwrap();
+    let d2 = m2.digest().unwrap();
+
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-08-28T12:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex {
+            type_tag: "ods_release_index".to_string(),
+            index_version: 2,
+            concept_doi: None,
+            mirrors: vec![],
+            releases: vec![
+                ods::index::ReleaseIndexEntry {
+                    trud_release_date: "2026-05-29".to_string(),
+                    dataset_version: "1.0.1".to_string(),
+                    tag: "2026-05-29_1.0.1".to_string(),
+                    manifest_digest: d1,
+                    trud_release_sha256: "AAAA".to_string(),
+                    tool_version: "0.4.3".to_string(),
+                    dataset_doi: None,
+                    withdrawn: None,
+                },
+                ods::index::ReleaseIndexEntry {
+                    trud_release_date: "2026-06-26".to_string(),
+                    dataset_version: "1.0.1".to_string(),
+                    tag: "2026-06-26_1.0.1".to_string(),
+                    manifest_digest: d2,
+                    trud_release_sha256: "BBBB".to_string(),
+                    tool_version: "0.4.3".to_string(),
+                    dataset_doi: None,
+                    withdrawn: None,
+                },
+            ],
+        },
+    };
+    cached.save_to_workspace(&ws).unwrap();
 
     // Ensure starting pin is 2026-06-26 so switching to 2026-05-29 moves the pin
     ods::workspace::set_active_release(&ws, "2026-06-26").unwrap();
@@ -201,8 +240,8 @@ fn test_cli_pull_local_release_output() {
     assert!(output.status.success(), "stderr was: {}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("* Release 2026-05-29 already local, verified"),
-        "stderr must contain '* Release 2026-05-29 already local, verified', got:\n{}",
+        stderr.contains("verified (cache hit)"),
+        "stderr must contain 'verified (cache hit)', got:\n{}",
         stderr
     );
 

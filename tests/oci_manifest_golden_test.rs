@@ -130,15 +130,12 @@ fn test_oci_manifest_golden_fixture_structure_and_digest() -> Result<()> {
 
 #[test]
 fn test_make_oci_real_run_packs_deterministic_manifest() -> Result<()> {
-    let (tmp, rel_dir) = setup_golden_release_dir();
+    let (_tmp, rel_dir) = setup_golden_release_dir();
 
     run(Args {
         input: rel_dir.clone(),
         version: "1.0.1".to_string(),
         check: false,
-        offline: true,
-        tool_repo: Some(tmp.path().to_path_buf()),
-        index: None,
     })?;
 
     // Find generated manifest blob

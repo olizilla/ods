@@ -18,7 +18,6 @@ ods_data/
         ├── orgs_all.parquet            # Complete historical orgs table (active + inactive)
         ├── relationships.parquet       # Target relationship links (ICB, Trust, Region, PCN)
         ├── roles.parquet              # Primary & secondary role mappings
-        ├── SHA256SUMS                 # Flat verification manifest for _provenance.json and *.parquet
         ├── successions.parquet        # Entity successor chains & reorganisations
         ├── datapackage.json           # Frictionless Data Package descriptor
         └── trud/                      # Official TRUD zip archives (gitignored)

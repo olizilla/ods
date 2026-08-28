@@ -229,7 +229,7 @@ which handle them natively.
 
 ## Provenance
 
-Every release ships `_provenance.json` and `SHA256SUMS`, recording the TRUD
+Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
 archive it came from and its verified SHA-256, the ODS publication date and
 sequence number, and the commit that built it. That's enough to rebuild the
 release and compare bytes. Hashes are uppercase throughout, matching TRUD.

@@ -6,4 +6,6 @@
 !/.github/
 /ods_data*
 /target
+/dist
+*.oci.tar
 /trud-releases.json

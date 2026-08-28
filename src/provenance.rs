@@ -333,26 +333,7 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
     url.to_string()
 }
 
-pub fn update_provenance_and_write_sha256sums(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
-    let parquet_files = vec![
-        "orgs.parquet",
-        "orgs_all.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-    ];
-
-    let mut sha_lines = Vec::new();
-
-    for file_name in &parquet_files {
-        let file_path = output_dir.join(file_name);
-        if file_path.exists() {
-            let hash = compute_file_sha256(&file_path)?;
-            sha_lines.push(format!("{}  {}", hash, file_name));
-        }
-    }
-
+pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
     let prov_path = output_dir.join(PROVENANCE_FILENAME);
     let mut prov = if prov_path.exists() {
         let content = std::fs::read_to_string(&prov_path)?;
@@ -418,19 +399,8 @@ pub fn update_provenance_and_write_sha256sums(output_dir: &Path, dataset_version
             .unwrap_or_else(|| crate::datapackage::dataset_version().to_string()),
     );
 
-    if let Ok(updated_json) = serde_json::to_string_pretty(&prov) {
-        let _ = std::fs::write(&prov_path, updated_json);
-        if let Ok(prov_hash) = compute_file_sha256(&prov_path) {
-            sha_lines.push(format!("{}  {}", prov_hash, PROVENANCE_FILENAME));
-        }
-    }
-
-    if !sha_lines.is_empty() {
-        let sums_path = output_dir.join("SHA256SUMS");
-        let sums_content = sha_lines.join("\n") + "\n";
-        std::fs::write(&sums_path, sums_content)
-            .with_context(|| format!("writing SHA256SUMS manifest to {}", sums_path.display()))?;
-    }
+    let updated_json = serde_json::to_string_pretty(&prov)?;
+    std::fs::write(&prov_path, updated_json)?;
 
     Ok(())
 }

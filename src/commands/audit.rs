@@ -422,62 +422,87 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
     }
 
-    // Verify SHA256SUMS and Parquet files integrity
-    let parquet_files = [
-        "orgs.parquet",
-        "orgs_all.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-    ];
-    let sums_file = if parquet_dir.join("SHA256SUMS").exists() {
-        parquet_dir.join("SHA256SUMS")
-    } else {
-        active_release_path.join("SHA256SUMS")
-    };
-    let mut sums_matched_count = 0;
+    // Reconstruct manifest and verify layers
+    let mut manifest_layers_count = 0;
+    let mut manifest_matched_count = 0;
+    let mut reconstructed_manifest_opt: Option<crate::oci::OciManifest> = None;
 
-    let recorded_sums: HashMap<String, String> = if sums_file.exists() {
-        let content = std::fs::read_to_string(&sums_file).unwrap_or_default();
-        content
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() == 2 {
-                    Some((parts[1].to_string(), parts[0].to_string()))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else {
-        discrepancies.push("Missing SHA256SUMS file in active release directory".to_string());
-        HashMap::new()
-    };
-
-    for filename in &parquet_files {
-        let p_path = parquet_dir.join(filename);
-        if p_path.exists() {
-            if let Ok(computed_sha) = crate::provenance::compute_file_sha256(&p_path) {
-                if let Some(expected_sum) = recorded_sums.get(*filename) {
-                    if computed_sha.eq_ignore_ascii_case(expected_sum) {
-                        sums_matched_count += 1;
-                    } else {
-                        discrepancies.push(format!(
-                            "SHA256SUMS checksum mismatch for {filename}: Computed {computed_sha} != SHA256SUMS {expected_sum}"
-                        ));
+    if let Some(ref prov) = workspace_prov {
+        if let Some(version) = prov.dataset_version.as_deref() {
+            match crate::commands::make_oci::build_manifest_from_dir(&parquet_dir, prov, version) {
+                Ok((manifest, _)) => {
+                    manifest_layers_count = manifest.layers.len();
+                    for layer in &manifest.layers {
+                    let title = layer
+                        .annotations
+                        .as_ref()
+                        .and_then(|a| a.get(crate::oci::ANNOTATION_TITLE))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    if title.is_empty() {
+                        continue;
                     }
-                } else {
-                    discrepancies.push(format!("Missing SHA256SUMS entry for {filename}"));
+                    let p_path = parquet_dir.join(title);
+                    if p_path.exists() {
+                        if title.ends_with(".parquet") {
+                            if let Err(e) = crate::workspace::count_records_in_parquet(&p_path) {
+                                discrepancies.push(format!("Corrupted Parquet file {title}: {e:#}"));
+                                continue;
+                            }
+                        }
+                        if let Ok(act_sha) = crate::provenance::compute_file_sha256(&p_path) {
+                            let exp_sha = layer.digest.trim_start_matches("sha256:").to_lowercase();
+                            if act_sha.to_lowercase() != exp_sha {
+                                discrepancies.push(format!(
+                                    "Digest mismatch for {title}: computed sha256:{act_sha} != layer digest {}",
+                                    layer.digest
+                                ));
+                                continue;
+                            }
+                        }
+                        manifest_matched_count += 1;
+                    } else {
+                        discrepancies.push(format!("Manifest layer file missing: {title}"));
+                    }
                 }
-            } else {
-                discrepancies.push(format!(
-                    "Failed to compute live SHA-256 for Parquet file {filename}"
-                ));
+                reconstructed_manifest_opt = Some(manifest);
             }
-        } else {
-            discrepancies.push(format!("Parquet file missing: {filename}"));
+            Err(e) => {
+                discrepancies.push(format!("Failed to reconstruct manifest: {e}"));
+            }
+        }
+    } else {
+        discrepancies.push("_provenance.json missing dataset_version".to_string());
+    }
+} else {
+    discrepancies.push("Missing _provenance.json in release directory".to_string());
+}
+
+    // Cross-check datapackage.json resource hashes if datapackage.json is present
+    let dp_path = parquet_dir.join("datapackage.json");
+    if dp_path.exists() {
+        if let Ok(dp_bytes) = std::fs::read(&dp_path) {
+            if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
+                if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
+                    for res in resources {
+                        let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or(res_name);
+                        if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
+                            let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
+                            let target_file = parquet_dir.join(res_path);
+                            if target_file.exists() {
+                                if let Ok(act_sha) = crate::provenance::compute_file_sha256(&target_file) {
+                                    if act_sha.to_lowercase() != clean_hash {
+                                        discrepancies.push(format!(
+                                            "Checksum mismatch for {res_path}: computed {act_sha} != datapackage.json hash {res_hash}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -504,11 +529,10 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             );
         }
 
-        let expected = parquet_files.len();
-        if sums_matched_count == expected {
-            println!("     ✓ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
+        if manifest_layers_count > 0 && manifest_matched_count == manifest_layers_count {
+            println!("     ✓ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files match reconstructed manifest");
         } else {
-            println!("     ✖ SHA256SUMS Verification: {sums_matched_count}/{expected} Parquet files match recorded checksums");
+            println!("     ✖ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files match reconstructed manifest");
         }
         println!();
     }
@@ -761,22 +785,35 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let (inactive_in_orgs, role_list_mismatches) =
         audit_table_invariants(&orgs_parquet, &orgs_all_parquet, &mut discrepancies)?;
 
-    // Unaccounted files check: any file in release directory not in SHA256SUMS
+    // Unaccounted files check: any file in release directory not in manifest layers
+    let mut layer_titles: HashSet<String> = HashSet::new();
+    layer_titles.insert(crate::provenance::PROVENANCE_FILENAME.to_string());
+    layer_titles.insert("provenance.json".to_string());
+    if let Some(ref manifest) = reconstructed_manifest_opt {
+        for layer in &manifest.layers {
+            if let Some(ref ann) = layer.annotations {
+                if let Some(title) = ann.get(crate::oci::ANNOTATION_TITLE) {
+                    layer_titles.insert(title.clone());
+                }
+            }
+        }
+    }
+
     let mut unaccounted_files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&parquet_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "SHA256SUMS"
-                        || name == crate::provenance::PROVENANCE_FILENAME
-                        || name == "provenance.json"
-                        || name.starts_with('.')
-                    {
-                        continue;
-                    }
-                    if !recorded_sums.contains_key(name) {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+                if path.is_file() {
+                    if !layer_titles.contains(name) {
                         unaccounted_files.push(name.to_string());
+                    }
+                } else if path.is_dir() {
+                    if name != "oci" && name != "trud" {
+                        unaccounted_files.push(format!("{}/", name));
                     }
                 }
             }
@@ -787,7 +824,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     if unaccounted_count > 0 {
         let file_list = unaccounted_files.join(", ");
         discrepancies.push(format!(
-            "Unaccounted files found in release directory: {} not in SHA256SUMS ({})",
+            "Unaccounted files found in release directory: {} not in manifest layers ({})",
             unaccounted_count, file_list
         ));
     }
@@ -831,7 +868,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         } else {
             let file_list = unaccounted_files.join(", ");
             println!(
-                "     ✖ Unaccounted files: {:<18} # {} not in SHA256SUMS",
+                "     ✖ Unaccounted files: {:<18} # {} not in manifest layers",
                 unaccounted_count, file_list
             );
         }

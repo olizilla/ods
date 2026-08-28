@@ -67,7 +67,6 @@ ods_data/
         ├── roles.parquet              # Primary & secondary roles (Holdings table)
         ├── successions.parquet        # Entity successor chains
         ├── datapackage.json           # Frictionless Data Package descriptor
-        ├── SHA256SUMS                 # Flat verification manifest for _provenance.json and *.parquet
         └── trud/                      # TRUD zip archives (gitignored)
 ```
 

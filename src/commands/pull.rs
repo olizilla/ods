@@ -1,19 +1,29 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use serde::Serialize;
+use sha2::Digest;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
-use sha2::Digest;
 
-use crate::progress::{format_duration, format_size, Progress, ProgressCaps};
-use crate::provenance::compute_file_sha256;
+use crate::index::{CachedReleaseIndex, MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use crate::oci::*;
+use crate::progress::{Progress, ProgressCaps};
 use crate::workspace::{
-    ensure_workspace_gitignore, find_workspace_root, generate_workspace_readme,
-    is_release_dir_verified, list_releases, set_active_release, DEFAULT_WORKSPACE_DIR,
+    ensure_workspace_gitignore, find_workspace_root, generate_workspace_readme, list_releases,
+    set_active_release, verify_release_dir, DEFAULT_WORKSPACE_DIR,
 };
+
+#[derive(Debug)]
+pub struct AlreadyReported;
+
+impl std::fmt::Display for AlreadyReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "already reported")
+    }
+}
+
+impl std::error::Error for AlreadyReported {}
 
 #[derive(Parser, Debug, Default, Clone)]
 pub struct Args {
@@ -32,10 +42,6 @@ pub struct Args {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Number of concurrent download workers (max: 8)
-    #[arg(long, default_value_t = 4)]
-    pub jobs: usize,
-
     /// Show errors and summary only
     #[arg(long, short = 'q', conflicts_with = "verbose")]
     pub quiet: bool,
@@ -44,7 +50,7 @@ pub struct Args {
     #[arg(long)]
     pub no_progress: bool,
 
-    /// Output format (ndjson for pull outcomes, json for release list)
+    /// Output format (json for release list)
     #[arg(long)]
     pub format: Option<String>,
 
@@ -53,882 +59,612 @@ pub struct Args {
     pub verbose: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct GithubRelease {
-    pub tag_name: String,
-    pub name: Option<String>,
-    pub draft: bool,
-    pub prerelease: bool,
-    pub assets: Vec<GithubAsset>,
-    pub body: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct GithubAsset {
-    pub name: String,
-    pub browser_download_url: String,
-    pub size: u64,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ReleaseOutcome {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tag_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filesize_bytes: Option<u64>,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct ReleaseListItemJson {
     pub date: String,
-    pub size_bytes: u64,
+    pub version: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_digest: Option<String>,
 }
 
-pub trait ReleaseFetcher: Send + Sync {
-    fn fetch_releases(&self) -> Result<Vec<GithubRelease>>;
-    fn download_asset(&self, url: &str) -> Result<Vec<u8>>;
-    fn fetch_release_index(&self) -> Result<Option<crate::index::OdsReleaseIndex>> {
+pub trait OciBlobFetcher: Send + Sync {
+    fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>>;
+    fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
         Ok(None)
     }
 }
 
-pub struct UreqReleaseFetcher {
-    pub repo: String,
-}
+pub struct HttpOciFetcher;
 
-impl UreqReleaseFetcher {
-    pub fn new(repo: &str) -> Self {
-        Self {
-            repo: repo.to_string(),
-        }
+impl OciBlobFetcher for HttpOciFetcher {
+    fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        download_bytes_with_auth(url, None)
     }
-}
 
-impl ReleaseFetcher for UreqReleaseFetcher {
-    fn fetch_releases(&self) -> Result<Vec<GithubRelease>> {
-        let url = format!("https://api.github.com/repos/{}/releases", self.repo);
-        let resp = ureq::get(&url)
-            .set("User-Agent", "ods-cli")
-            .call();
-
-        match resp {
-            Ok(response) => {
-                let releases: Vec<GithubRelease> = response.into_json()?;
-                Ok(releases)
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                if code == 403 || code == 429 {
-                    anyhow::bail!(
-                        "✖ GitHub API rate limit exceeded (HTTP {}). Please try again later.",
-                        code
-                    );
-                } else {
-                    anyhow::bail!(
-                        "✖ GitHub API request failed (HTTP {}): {}",
-                        code,
-                        response.status_text()
-                    );
+    fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
+        let index_urls = [
+            "https://ods.fyi/releases.json",
+            "https://raw.githubusercontent.com/olizilla/ods/main/data/releases.json",
+        ];
+        for url in &index_urls {
+            if let Ok(bytes) = download_bytes_with_auth(url, None) {
+                if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+                    return Ok(Some(idx));
                 }
             }
-            Err(e) => {
-                anyhow::bail!("✖ Failed to connect to GitHub Releases API: {}", e);
+        }
+        Ok(None)
+    }
+}
+
+fn parse_www_authenticate(header: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut realm = None;
+    let mut service = None;
+    let mut scope = None;
+
+    let trimmed = header.trim_start_matches("Bearer ").trim_start_matches("bearer ");
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        if let Some((k, v)) = part.split_once('=') {
+            let val = v.trim_matches('"').to_string();
+            match k.trim() {
+                "realm" => realm = Some(val),
+                "service" => service = Some(val),
+                "scope" => scope = Some(val),
+                _ => {}
             }
         }
     }
+    (realm, service, scope)
+}
 
-    fn download_asset(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = ureq::get(url)
-            .set("User-Agent", "ods-cli")
-            .call();
+fn fetch_token(realm: &str, service: Option<&str>, scope: Option<&str>) -> Result<String> {
+    let mut req = ureq::get(realm).set("User-Agent", "ods-cli");
+    if let Some(s) = service {
+        req = req.query("service", s);
+    }
+    if let Some(sc) = scope {
+        req = req.query("scope", sc);
+    }
+    let resp = req.call().context("fetching auth token")?;
+    let val: serde_json::Value = resp.into_json().context("parsing token json")?;
+    if let Some(tok) = val.get("token").and_then(|t| t.as_str()) {
+        Ok(tok.to_string())
+    } else if let Some(tok) = val.get("access_token").and_then(|t| t.as_str()) {
+        Ok(tok.to_string())
+    } else {
+        bail!("No token found in auth response");
+    }
+}
 
-        match resp {
-            Ok(response) => {
+pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Result<Vec<u8>> {
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .build();
+
+    let mut current_url = url.to_string();
+    let mut current_token = initial_token.map(|s| s.to_string());
+    let mut redirect_count = 0;
+    let mut auth_retried = false;
+
+    loop {
+        let mut req = agent.get(&current_url).set("User-Agent", "ods-cli");
+        if let Some(ref tok) = current_token {
+            req = req.set("Authorization", &format!("Bearer {}", tok));
+        }
+
+        match req.call() {
+            Ok(resp) => {
                 let mut bytes = Vec::new();
-                response.into_reader().read_to_end(&mut bytes)?;
-                Ok(bytes)
+                resp.into_reader().read_to_end(&mut bytes)?;
+                return Ok(bytes);
             }
-            Err(e) => anyhow::bail!("✖ Download failed from {}: {}", url, e),
-        }
-    }
+            Err(ureq::Error::Status(401, resp)) => {
+                if auth_retried {
+                    bail!("401 Unauthorized (token rejected) for URL: {}", current_url);
+                }
+                if let Some(auth_header) = resp.header("www-authenticate") {
+                    let (realm, service, scope) = parse_www_authenticate(auth_header);
+                    if let Some(realm_url) = realm {
+                        auth_retried = true;
+                        let new_token = fetch_token(&realm_url, service.as_deref(), scope.as_deref())?;
+                        current_token = Some(new_token);
+                        continue;
+                    }
+                }
+                bail!("401 Unauthorized for URL: {}", current_url);
+            }
+            Err(ureq::Error::Status(301..=308, resp)) => {
+                if redirect_count >= 10 {
+                    bail!("Too many redirects for {}", url);
+                }
+                redirect_count += 1;
+                let location = resp.header("location")
+                    .ok_or_else(|| anyhow::anyhow!("Redirect missing Location header"))?;
 
-    fn fetch_release_index(&self) -> Result<Option<crate::index::OdsReleaseIndex>> {
-        let url = format!("https://raw.githubusercontent.com/{}/main/data/releases.json", self.repo);
-        let resp = match ureq::get(&url)
-            .set("User-Agent", "ods-cli")
-            .timeout(std::time::Duration::from_secs(3))
-            .call()
-        {
-            Ok(r) => r,
-            Err(_) => return Ok(None),
-        };
-        let mut bytes = Vec::new();
-        resp.into_reader().read_to_end(&mut bytes)?;
-        let index: crate::index::OdsReleaseIndex = serde_json::from_slice(&bytes)?;
-        Ok(Some(index))
+                let orig_host = current_url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+                let new_host = location.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+                if orig_host != new_host {
+                    current_token = None;
+                }
+                current_url = location.to_string();
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let workspace_root =
-        find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
-    let fetcher = UreqReleaseFetcher::new("olizilla/ods");
+    let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+    let fetcher = HttpOciFetcher;
     run_with_fetcher(args, &workspace_root, &fetcher)
 }
 
-pub fn run_with_fetcher<F: ReleaseFetcher>(
+pub fn run_with_fetcher<F: OciBlobFetcher>(
     args: Args,
     workspace_root: &Path,
     fetcher: &F,
 ) -> Result<()> {
-    run_with_fetcher_and_index(args, workspace_root, fetcher, None)
+    run_with_fetcher_and_baked(args, workspace_root, fetcher, None)
 }
 
-pub fn run_with_fetcher_and_index<F: ReleaseFetcher>(
+pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
     args: Args,
     workspace_root: &Path,
     fetcher: &F,
-    base_index: Option<crate::index::OdsReleaseIndex>,
+    baked_override: Option<OdsReleaseIndex>,
 ) -> Result<()> {
-    let progress = Progress::stderr(ProgressCaps::detect(args.quiet, args.verbose, args.no_progress));
+    let caps = ProgressCaps::detect(args.quiet, args.verbose, args.no_progress);
+    let progress = Progress::stderr(caps);
 
-    // 1. Start with baked release index (or injected test index)
-    let baked_index = match base_index {
-        Some(idx) => idx,
-        None => crate::index::OdsReleaseIndex::baked().unwrap_or_else(|_| crate::index::OdsReleaseIndex {
-            type_tag: "ods_release_index".to_string(),
-            index_version: 2,
-            concept_doi: None,
-            mirrors: vec![],
-            releases: vec![],
-        }),
-    };
+    fs::create_dir_all(workspace_root)
+        .with_context(|| format!("creating workspace at {}", workspace_root.display()))?;
+    ensure_workspace_gitignore(workspace_root)?;
 
-    // 2. Fetch remote index if available, and merge (catching security contradictions)
-    let active_index = match fetcher.fetch_release_index() {
+    // Step 1: Resolve index
+    let (index, _) = resolve_index_with_baked(workspace_root, fetcher, baked_override)?;
+
+    if args.list {
+        return list_releases_cmd(workspace_root, &index, &args, &progress);
+    }
+
+    if args.all {
+        return pull_all_releases_cmd(workspace_root, &index, &args, fetcher, &progress);
+    }
+
+    let target_entry = index.resolve(args.release_date.as_deref())?;
+    pull_single_release(workspace_root, &index, target_entry, &args, fetcher, &progress)
+}
+
+pub fn resolve_index_with_baked<F: OciBlobFetcher>(
+    workspace_root: &Path,
+    fetcher: &F,
+    baked_override: Option<OdsReleaseIndex>,
+) -> Result<(OdsReleaseIndex, Option<String>)> {
+    let baked = baked_override.unwrap_or_else(|| OdsReleaseIndex::baked().unwrap_or_default());
+
+    // 1. Try fetching remote index
+    match fetcher.fetch_release_index() {
         Ok(Some(fetched)) => {
-            match baked_index.merge(&fetched) {
-                Ok(m) => m,
+            match baked.merge(&fetched) {
+                Ok(merged) => {
+                    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+                    let cached = CachedReleaseIndex {
+                        fetched_at: now_rfc3339,
+                        index: merged.clone(),
+                    };
+                    let _ = cached.save_to_workspace(workspace_root);
+                    return Ok((merged, Some("just now".to_string())));
+                }
                 Err(e) => {
-                    progress.error(&e.to_string(), &[]);
+                    // Security contradiction on a baked release MUST abort immediately!
+                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                        return Err(e);
+                    }
+                    // Non-security fetch/parse/validation errors fall back to cache/baked
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                return Err(e);
+            }
+        }
+    }
+
+    // 2. Try loading cached index from workspace
+    if let Ok(Some(cached)) = CachedReleaseIndex::load_from_workspace(workspace_root) {
+        match baked.merge(&cached.index) {
+            Ok(merged) => return Ok((merged, Some(cached.fetched_at))),
+            Err(e) => {
+                if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
                     return Err(e);
                 }
             }
         }
-        _ => baked_index,
-    };
-
-    if args.list {
-        return run_list(workspace_root, fetcher, &args, &progress, &mut std::io::stdout(), &mut std::io::stderr());
     }
 
-    if args.all {
-        return pull_all_releases(workspace_root, &args, fetcher, &progress);
-    }
-
-    // 3. Check if requested release or latest release is handled by OCI index
-    let resolved_entry = if let Some(ref target_date) = args.release_date {
-        let is_known = active_index.releases.iter().any(|r| &r.trud_release_date == target_date);
-        if is_known {
-            Some(active_index.resolve(Some(target_date))?)
-        } else {
-            None
-        }
-    } else if !active_index.releases.is_empty() {
-        Some(active_index.resolve(None)?)
-    } else {
-        None
-    };
-
-    if let Some(entry) = resolved_entry {
-        return pull_oci_release(workspace_root, entry, &active_index.mirrors, &args, fetcher, &progress);
-    }
-
-    // 4. Fallback to legacy GitHub releases pull if not in OCI release index
-    if let Some(ref target_date) = args.release_date {
-        let release_dir = workspace_root.join("releases").join(target_date);
-        if !args.force && release_dir.exists() && is_release_dir_verified(&release_dir) {
-            progress.settle(&format!("* Release {} already local, verified", target_date));
-            if !args.all {
-                let pin_moved = update_active_release_link_if_changed(workspace_root, target_date)?;
-                generate_workspace_readme(workspace_root, target_date, None, None)?;
-                if pin_moved {
-                    progress.settle_detail(&format!("current → releases/{}", target_date));
-                }
-            }
-            return Ok(());
-        }
-        return pull_specific_release(workspace_root, target_date, &args, fetcher, &progress);
-    }
-
-    pull_latest_release(workspace_root, &args, fetcher, &progress)
+    // 3. Fall back to baked index
+    Ok((baked, None))
 }
 
-fn pull_oci_release<F: ReleaseFetcher>(
+fn list_releases_cmd(
     workspace_root: &Path,
-    entry: &crate::index::ReleaseIndexEntry,
-    mirrors: &[crate::index::MirrorEntry],
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
-) -> Result<()> {
-    let release_date = &entry.trud_release_date;
-    let release_dir = workspace_root.join("releases").join(release_date);
-
-    if !args.force && release_dir.exists() && is_release_dir_verified(&release_dir) {
-        progress.settle(&format!("* Release {} already local, verified", release_date));
-        if !args.all {
-            let pin_moved = update_active_release_link_if_changed(workspace_root, release_date)?;
-            generate_workspace_readme(workspace_root, release_date, None, None)?;
-            if pin_moved {
-                progress.settle_detail(&format!("current → releases/{}", release_date));
-            }
-        }
-        return Ok(());
-    }
-
-    fs::create_dir_all(&release_dir)?;
-
-    let default_mirror = crate::index::MirrorEntry {
-        operator: "github".to_string(),
-        kind: "files".to_string(),
-        url: "https://github.com/olizilla/ods/releases/download/data/{release}_{version}/{file}".to_string(),
-    };
-    let mirror = mirrors.first().unwrap_or(&default_mirror);
-
-    progress.step(&format!("Fetching manifest for {} v{}…", release_date, entry.dataset_version));
-
-    // 1. Fetch manifest.json
-    let manifest_url = mirror.expand_url(release_date, &entry.dataset_version, "manifest.json");
-    let manifest_bytes = fetcher.download_asset(&manifest_url)?;
-
-    // 2. VERIFY BEFORE PARSE
-    let manifest_sha = format!("sha256:{:x}", sha2::Sha256::digest(&manifest_bytes));
-    if manifest_sha != entry.manifest_digest {
-        anyhow::bail!(
-            "✖ Manifest digest mismatch for {}\n  Expected: {}\n  Actual:   {}",
-            entry.tag,
-            entry.manifest_digest,
-            manifest_sha
-        );
-    }
-
-    // 3. Parse manifest
-    let manifest: crate::oci::OciManifest = serde_json::from_slice(&manifest_bytes)
-        .context("Failed to parse verified OCI manifest")?;
-
-    // 4. Download layers by org.opencontainers.image.title
-    for layer in &manifest.layers {
-        let title = layer
-            .annotations
-            .as_ref()
-            .and_then(|a| a.get("org.opencontainers.image.title"))
-            .ok_or_else(|| anyhow::anyhow!("Layer missing title annotation"))?;
-
-        progress.step(&format!("Downloading {}…", title));
-        let layer_url = mirror.expand_url(release_date, &entry.dataset_version, title);
-        let layer_bytes = fetcher.download_asset(&layer_url)?;
-
-        // Verify layer digest
-        let layer_sha = format!("sha256:{:x}", sha2::Sha256::digest(&layer_bytes));
-        if layer_sha != layer.digest {
-            anyhow::bail!(
-                "✖ Layer digest mismatch for {}\n  Expected: {}\n  Actual:   {}",
-                title,
-                layer.digest,
-                layer_sha
-            );
-        }
-
-        let out_file = release_dir.join(title);
-        fs::write(&out_file, &layer_bytes)?;
-    }
-
-    // 5. Write _release.json
-    let release_json = serde_json::to_string_pretty(entry)?;
-    fs::write(release_dir.join("_release.json"), format!("{}\n", release_json))?;
-
-    // 6. Pin current, write README.md, ensure gitignore
-    ensure_workspace_gitignore(workspace_root)?;
-
-    if !args.all {
-        let pin_moved = update_active_release_link_if_changed(workspace_root, release_date)?;
-        generate_workspace_readme(workspace_root, release_date, None, None)?;
-
-        progress.settle(&format!(
-            "✓ {} v{} downloaded and verified (manifest {})",
-            release_date, entry.dataset_version, manifest_sha
-        ));
-        if pin_moved {
-            progress.settle_detail(&format!("current → releases/{}", release_date));
-        }
-        progress.finish("Done!");
-    } else {
-        progress.settle(&format!(
-            "✓ {} v{} downloaded and verified (manifest {})",
-            release_date, entry.dataset_version, manifest_sha
-        ));
-        progress.settle_detail(&format!("releases/{}", release_date));
-    }
-
-    Ok(())
-}
-
-/// Marker error for a command that has already written its own diagnostics.
-#[derive(Debug)]
-pub struct AlreadyReported;
-
-impl std::fmt::Display for AlreadyReported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "command failed; see the messages above")
-    }
-}
-
-impl std::error::Error for AlreadyReported {}
-
-pub fn run_list<F: ReleaseFetcher, W1: std::io::Write, W2: std::io::Write>(
-    workspace_root: &Path,
-    fetcher: &F,
+    index: &OdsReleaseIndex,
     args: &Args,
     progress: &Progress,
-    stdout: &mut W1,
-    stderr: &mut W2,
 ) -> Result<()> {
-    if progress.caps().is_tty && args.format.is_none() {
-        writeln!(stderr, "Querying available ODS dataset releases...\n")?;
-    }
-
-    let (remote_releases, fetch_err) = match fetcher.fetch_releases() {
-        Ok(rel) => (rel, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-
-    let remote_dates: Vec<(String, u64)> = remote_releases
-        .iter()
-        .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
-        .map(|r| {
-            let date = r.tag_name.trim_start_matches("data/").to_string();
-            let size: u64 = r.assets.iter().map(|a| a.size).sum();
-            (date, size)
-        })
-        .collect();
-
     let local_releases = if workspace_root.exists() {
         list_releases(workspace_root).unwrap_or_default()
     } else {
         vec![]
     };
-
     let (active_date, _) = crate::workspace::get_active_release(workspace_root).unwrap_or_default();
 
-    let mut all_dates_map: BTreeMap<String, (u64, bool, bool)> = BTreeMap::new();
-    for (d, sz) in &remote_dates {
-        all_dates_map.insert(d.clone(), (*sz, false, true));
-    }
-    for r in &local_releases {
-        let entry = all_dates_map.entry(r.date.clone()).or_insert((0, true, false));
-        entry.1 = true;
-    }
+    let mut items: Vec<ReleaseListItemJson> = Vec::new();
 
-    let mut sorted_dates: Vec<(String, u64, bool, bool)> = all_dates_map
-        .into_iter()
-        .map(|(d, (sz, is_loc, is_rem))| (d, sz, is_loc, is_rem))
-        .collect();
-    sorted_dates.sort_by(|a, b| b.0.cmp(&a.0));
+    for r in &index.releases {
+        let is_act = !active_date.is_empty() && active_date == r.trud_release_date;
+        let is_loc = local_releases.iter().any(|lr| lr.date == r.trud_release_date);
+        let status = if let Some(ref reason) = r.withdrawn {
+            format!("withdrawn ({})", reason)
+        } else if is_act {
+            "active (local)".to_string()
+        } else if is_loc {
+            "local".to_string()
+        } else {
+            "remote".to_string()
+        };
+
+        items.push(ReleaseListItemJson {
+            date: r.trud_release_date.clone(),
+            version: r.dataset_version.clone(),
+            status,
+            manifest_digest: Some(r.manifest_digest.clone()),
+        });
+    }
 
     if args.format.as_deref() == Some("json") {
-        let json_items: Vec<ReleaseListItemJson> = sorted_dates.iter().map(|(date, sz, is_loc, _)| {
-            let is_act = !active_date.is_empty() && active_date == *date;
-            let status_str = if is_act {
-                "active (local)"
-            } else if *is_loc {
-                "local"
-            } else {
-                "remote"
-            };
-            ReleaseListItemJson {
-                date: date.clone(),
-                size_bytes: *sz,
-                status: status_str.to_string(),
-            }
-        }).collect();
-
-        serde_json::to_writer_pretty(&mut *stdout, &json_items)?;
-        writeln!(stdout)?;
+        println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());
     }
 
-    if let Some(ref err) = fetch_err {
-        writeln!(stderr, "{}\n", err)?;
+    if progress.caps().is_tty {
+        eprintln!("Available ODS dataset releases:\n");
     }
 
-    let mut has_active = false;
-    let mut has_local = false;
-    let mut has_remote = false;
-
-    if sorted_dates.is_empty() {
-        if fetch_err.is_some() {
-            writeln!(stderr, "  (No local dataset releases cached)")?;
-        } else {
-            writeln!(stderr, "  (No dataset releases found)")?;
-        }
+    if items.is_empty() {
+        println!("(No dataset releases available in index)");
     } else {
-        for (date, size, is_loc, is_rem) in &sorted_dates {
-            let is_act = !active_date.is_empty() && active_date == *date;
-            let status_str = if is_act {
-                has_active = true;
-                "● active (local)"
-            } else if *is_loc {
-                has_local = true;
-                "○ local"
-            } else if *is_rem {
-                has_remote = true;
-                "○ remote"
+        for item in &items {
+            let icon = if item.status.starts_with("active") {
+                "●"
+            } else if item.status.starts_with("withdrawn") {
+                "✖"
             } else {
-                "○ unknown"
+                "○"
             };
-
-            let size_str = if *size > 0 { format_size(*size) } else { "".to_string() };
-            writeln!(stdout, "  {:10}  {:6}  {}", date, size_str, status_str)?;
+            println!("  {} {:10}  v{:6}  {}", icon, item.date, item.version, item.status);
         }
     }
 
-    if progress.caps().is_tty && !sorted_dates.is_empty() {
-        writeln!(stderr, "\nLegend:")?;
-        if has_active {
-            writeln!(stderr, "  ● active (local)  Active release pin (./ods_data/current)")?;
-        }
-        if has_local {
-            writeln!(stderr, "  ○ local           Cached locally in ./ods_data/releases/")?;
-        }
-        if has_remote {
-            writeln!(stderr, "  ○ remote          Available for pull from upstream")?;
-        }
-        writeln!(stderr, "\nTo pull a specific release, run: ods pull <YYYY-MM-DD>")?;
-    }
-
-    if fetch_err.is_some() {
-        return Err(AlreadyReported.into());
+    if progress.caps().is_tty {
+        eprintln!("\nTo pull a release: ods pull <YYYY-MM-DD>");
     }
 
     Ok(())
 }
 
-fn pull_latest_release<F: ReleaseFetcher>(
+fn pull_all_releases_cmd<F: OciBlobFetcher>(
     workspace_root: &Path,
+    index: &OdsReleaseIndex,
     args: &Args,
     fetcher: &F,
     progress: &Progress,
 ) -> Result<()> {
-    progress.step("Querying available ODS dataset releases…");
-    let releases = match fetcher.fetch_releases() {
-        Ok(r) => r,
-        Err(e) => {
-            let local_releases = if workspace_root.exists() {
-                list_releases(workspace_root).unwrap_or_default()
-            } else {
-                vec![]
-            };
+    let mut valid_releases: Vec<&ReleaseIndexEntry> = index
+        .releases
+        .iter()
+        .filter(|r| r.withdrawn.is_none())
+        .collect();
 
-            progress.clear_live();
-            eprintln!("{}", e);
-            if !local_releases.is_empty() {
-                let local_dates: Vec<String> = local_releases.into_iter().map(|r| r.date).collect();
-                let local_dates_str = local_dates.join(", ");
-                let latest_local = local_dates.first().cloned().unwrap_or_default();
-                eprintln!("  Locally available: {}", local_dates_str);
-                eprintln!("  Pull one by date to use it offline: ods pull {}", latest_local);
-            }
-            return Err(AlreadyReported.into());
+    if valid_releases.is_empty() {
+        bail!("No valid releases available to pull");
+    }
+
+    // Sort by trud_release_date and dataset_version ascending
+    valid_releases.sort_by(|a, b| {
+        a.trud_release_date
+            .cmp(&b.trud_release_date)
+            .then_with(|| {
+                crate::index::parse_semver(&a.dataset_version)
+                    .ok()
+                    .cmp(&crate::index::parse_semver(&b.dataset_version).ok())
+            })
+    });
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for entry in &valid_releases {
+        match pull_single_release(workspace_root, index, entry, args, fetcher, progress) {
+            Ok(()) => succeeded.push(entry.trud_release_date.clone()),
+            Err(e) => failed.push((entry.trud_release_date.clone(), e.to_string())),
         }
+    }
+
+    if let Some(newest_date) = succeeded.last() {
+        set_active_release(workspace_root, newest_date)?;
+        generate_workspace_readme(workspace_root, newest_date, None, None)?;
+    }
+
+    if !failed.is_empty() && succeeded.is_empty() {
+        bail!("Failed to pull all releases: {:?}", failed);
+    }
+
+    Ok(())
+}
+
+fn pull_single_release<F: OciBlobFetcher>(
+    workspace_root: &Path,
+    index: &OdsReleaseIndex,
+    entry: &ReleaseIndexEntry,
+    args: &Args,
+    fetcher: &F,
+    progress: &Progress,
+) -> Result<()> {
+    let rel_dir = workspace_root.join("releases").join(&entry.trud_release_date);
+
+    // Cache hit & self-healing check
+    if rel_dir.exists() && !args.force {
+        let outcome = verify_release_dir(&rel_dir, Some(index));
+        match outcome {
+            crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
+                if digest == &entry.manifest_digest {
+                    set_active_release(workspace_root, &entry.trud_release_date)?;
+                    generate_workspace_readme(workspace_root, &entry.trud_release_date, None, None)?;
+                    eprintln!(
+                        "✓ {} ({}) verified (cache hit)",
+                        date, version
+                    );
+                    eprintln!("  current → releases/{}", entry.trud_release_date);
+                    return Ok(());
+                } else {
+                    eprintln!(
+                        "* existing releases/{} digest mismatch; re-fetching from registry...",
+                        entry.trud_release_date
+                    );
+                    let _ = fs::remove_dir_all(&rel_dir);
+                }
+            }
+            _ => {
+                eprintln!(
+                    "* existing releases/{} corrupted or invalid; re-fetching from registry...",
+                    entry.trud_release_date
+                );
+                let _ = fs::remove_dir_all(&rel_dir);
+            }
+        }
+    }
+
+    let default_mirrors = vec![
+        MirrorEntry {
+            url: "https://ods.fyi/v2/ods-data".to_string(),
+        },
+        MirrorEntry {
+            url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
+        },
+    ];
+    let mirrors = if index.mirrors.is_empty() {
+        &default_mirrors[..]
+    } else {
+        &index.mirrors[..]
     };
-    let mut data_releases: Vec<(String, GithubRelease)> = releases
-        .into_iter()
-        .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
-        .map(|r| {
-            let date = r.tag_name.trim_start_matches("data/").to_string();
-            (date, r)
-        })
-        .collect();
 
-    if data_releases.is_empty() {
-        anyhow::bail!("✖ No pre-built dataset releases found upstream in `data/*` namespace.");
-    }
+    let is_baked = if let Ok(baked) = OdsReleaseIndex::baked() {
+        baked
+            .releases
+            .iter()
+            .any(|r| r.trud_release_date == entry.trud_release_date && r.dataset_version == entry.dataset_version)
+    } else {
+        false
+    };
 
-    data_releases.sort_by(|a, b| b.0.cmp(&a.0));
-    let (latest_date, release) = data_releases.remove(0);
+    let mut corroboration_status = None;
 
-    pull_release_by_meta(workspace_root, &latest_date, &release, args, fetcher, progress)
-}
+    // Task 5: If release is frontier (newer than binary), corroborate with second mirror
+    if !is_baked && mirrors.len() >= 2 {
+        let mirror1 = &mirrors[0];
+        let mirror2 = &mirrors[1];
 
-fn pull_all_releases<F: ReleaseFetcher>(
-    workspace_root: &Path,
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
-) -> Result<()> {
-    progress.step("Querying available ODS dataset releases…");
-    let releases = fetcher.fetch_releases()?;
-    let mut data_releases: Vec<(String, GithubRelease)> = releases
-        .into_iter()
-        .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
-        .map(|r| {
-            let date = r.tag_name.trim_start_matches("data/").to_string();
-            (date, r)
-        })
-        .collect();
-
-    if data_releases.is_empty() {
-        anyhow::bail!("✖ No pre-built dataset releases found upstream in `data/*` namespace.");
-    }
-
-    data_releases.sort_by(|a, b| b.0.cmp(&a.0)); // newest to oldest
-
-    let total_count = data_releases.len();
-    let total_bytes: u64 = data_releases
-        .iter()
-        .flat_map(|(_, r)| r.assets.iter().map(|a| a.size))
-        .sum();
-
-    progress.settle(&format!(
-        "✓ {} releases available · {}",
-        total_count,
-        format_size(total_bytes)
-    ));
-
-    // Plan Phase
-    let mut to_download: Vec<(String, GithubRelease)> = Vec::new();
-    let mut cached_count = 0;
-    let mut cached_bytes = 0;
-    let mut latest_cached_date: Option<String> = None;
-
-    for (date, release) in data_releases {
-        let release_dir = workspace_root.join("releases").join(&date);
-        let rel_size: u64 = release.assets.iter().map(|a| a.size).sum();
-        if release_dir.exists() && !args.force && is_release_dir_verified(&release_dir) {
-            cached_count += 1;
-            cached_bytes += rel_size;
-            if latest_cached_date.is_none() || latest_cached_date.as_ref().unwrap() < &date {
-                latest_cached_date = Some(date.clone());
+        let m2_tag_url = mirror2.manifest_url(&entry.tag);
+        if let Ok(m2_bytes) = fetcher.fetch_bytes(&m2_tag_url) {
+            let m2_digest = format!("sha256:{:x}", sha2::Sha256::digest(&m2_bytes));
+            if m2_digest != entry.manifest_digest {
+                eprintln!(
+                    "✖ {} and {} disagree on {}\n  {:<8} {}\n  {:<8} {}\n  A published (date, version) names one set of bytes. Not proceeding.",
+                    mirror1.host(),
+                    mirror2.host(),
+                    entry.tag,
+                    mirror1.host(),
+                    entry.manifest_digest,
+                    mirror2.host(),
+                    m2_digest
+                );
+                bail!("Manifest digests disagree between mirrors");
             }
+            corroboration_status = Some(format!(
+                "new release. hash verified by {} and {}",
+                mirror1.host(),
+                mirror2.host()
+            ));
         } else {
-            to_download.push((date, release));
+            corroboration_status = Some(format!(
+                "new release. hash from {} only, not corroborated",
+                mirror1.host()
+            ));
         }
-    }
-
-    let to_download_count = to_download.len();
-    let to_download_bytes: u64 = to_download
-        .iter()
-        .flat_map(|(_, r)| r.assets.iter().map(|a| a.size))
-        .sum();
-
-    if to_download_count == 0 {
-        progress.settle(&format!(
-            "✓ {} cached, verified · nothing to download",
-            cached_count
+    } else if !is_baked {
+        corroboration_status = Some(format!(
+            "new release. hash from {} only, not corroborated",
+            mirrors[0].host()
         ));
-        return Ok(());
     }
 
-    progress.clear_live();
-    progress.settle(&format!(
-        "✓ {} cached · {} to download · {}",
-        cached_count,
-        to_download_count,
-        format_size(to_download_bytes)
-    ));
+    let scratch_dir = workspace_root.join("scratch");
+    fs::create_dir_all(&scratch_dir)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = scratch_dir.join(format!("pull_{}_{}", entry.trud_release_date, timestamp));
+    if temp_path.exists() {
+        let _ = fs::remove_dir_all(&temp_path);
+    }
+    fs::create_dir_all(&temp_path)?;
 
-    // Execute Phase
-    let mut downloaded_count = 0;
-    let mut downloaded_bytes = 0;
-    let mut failed_count = 0;
-    let mut failures: Vec<(String, String)> = Vec::new();
-    let existing_active_date = crate::workspace::get_active_release(workspace_root).ok().map(|(d, _)| d);
-    let mut newest_downloaded_date: Option<String> = None;
-    let batch_start = Instant::now();
+    let mut last_err = None;
 
-    progress.batch_bar(1, to_download_count, 0, to_download_bytes, None, None);
+    for mirror in mirrors {
+        progress.step(&format!(
+            "{} ({}) fetching manifest from {}…",
+            entry.trud_release_date,
+            entry.dataset_version,
+            mirror.host()
+        ));
 
-    for (date, release) in to_download {
-        let rel_size: u64 = release.assets.iter().map(|a| a.size).sum();
-        progress.set_in_flight(&date, &format!("{}  {}  downloading…", date, format_size(rel_size)));
-        let res = pull_release_by_meta(workspace_root, &date, &release, args, fetcher, progress);
-        progress.remove_in_flight(&date);
-        match res {
-            Ok(_) => {
-                downloaded_count += 1;
-                downloaded_bytes += rel_size;
-                if newest_downloaded_date.is_none() || newest_downloaded_date.as_ref().unwrap() < &date {
-                    newest_downloaded_date = Some(date.clone());
-                }
-                progress.settle(&format!("✓ {}  {}  downloaded", date, format_size(rel_size)));
-                if args.format.as_deref() == Some("ndjson") {
-                    emit_ndjson_outcome(&ReleaseOutcome {
-                        release_date: Some(date.clone()),
-                        tag_name: Some(release.tag_name.clone()),
-                        filesize_bytes: Some(rel_size),
-                        status: "downloaded".to_string(),
-                        path: Some(format!("ods_data/releases/{}", date)),
-                        error: None,
-                    });
-                }
-            }
+        // 1. Fetch manifest
+        let manifest_url = mirror.manifest_url(&entry.manifest_digest);
+        let manifest_bytes = match fetcher.fetch_bytes(&manifest_url) {
+            Ok(b) => b,
             Err(e) => {
-                failed_count += 1;
-                progress.settle(&format!("✖ {}  download failed — {}", date, e));
-                failures.push((date.clone(), e.to_string()));
-                if args.format.as_deref() == Some("ndjson") {
-                    emit_ndjson_outcome(&ReleaseOutcome {
-                        release_date: Some(date.clone()),
-                        tag_name: Some(release.tag_name.clone()),
-                        filesize_bytes: Some(rel_size),
-                        status: "failed".to_string(),
-                        path: None,
-                        error: Some(e.to_string()),
-                    });
-                }
+                last_err = Some(format!("{}: {}", mirror.host(), e));
+                continue;
             }
-        }
-    }
+        };
 
-    let elapsed = batch_start.elapsed();
-    let landed_bytes = cached_bytes + downloaded_bytes;
-    progress.clear_live();
-    let symbol = if downloaded_count == 0 && failed_count > 0 { "✖" } else { "✓" };
-    progress.settle_summary(&format!(
-        "{} {} downloaded · {} cached · {} failed · {} total  in {}",
-        symbol,
-        downloaded_count,
-        cached_count,
-        failed_count,
-        format_size(landed_bytes),
-        format_duration(elapsed)
-    ));
-
-    // If --all is passed, only update current link if a newer item was actually fetched.
-    if downloaded_count > 0 {
-        if let Some(ref fetched_date) = newest_downloaded_date {
-            let target_pin = match &existing_active_date {
-                Some(existing) => {
-                    if fetched_date > existing {
-                        Some(fetched_date.clone())
-                    } else {
-                        None
-                    }
-                }
-                None => {
-                    let newest_cached = latest_cached_date.as_deref();
-                    let best = newest_cached.into_iter().chain(Some(fetched_date.as_str())).max().unwrap();
-                    Some(best.to_string())
-                }
-            };
-
-            if let Some(ref target) = target_pin {
-                let pin_moved = update_active_release_link_if_changed(workspace_root, target)?;
-                generate_workspace_readme(workspace_root, target, None, None)?;
-                if pin_moved {
-                    progress.settle_detail(&format!("current → releases/{}", target));
-                }
-            }
-        }
-    }
-
-    if !failures.is_empty() {
-        for (f_date, f_err) in failures {
-            progress.error(&format!("{}  {}", f_date, f_err), &[&format!("Retry with: ods pull {}", f_date)]);
-        }
-        return Err(AlreadyReported.into());
-    }
-
-    Ok(())
-}
-
-fn pull_specific_release<F: ReleaseFetcher>(
-    workspace_root: &Path,
-    target_date: &str,
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
-) -> Result<()> {
-    progress.step("Querying available ODS dataset releases…");
-    let releases = fetcher.fetch_releases()?;
-    let tag = format!("data/{}", target_date);
-
-    let found = releases
-        .iter()
-        .cloned()
-        .find(|r| !r.draft && (r.tag_name == tag || r.tag_name == target_date));
-
-    match found {
-        Some(release) => pull_release_by_meta(workspace_root, target_date, &release, args, fetcher, progress),
-        None => {
-            let mut available: Vec<String> = releases
-                .iter()
-                .filter(|r| !r.draft && r.tag_name.starts_with("data/"))
-                .map(|r| r.tag_name.trim_start_matches("data/").to_string())
-                .collect();
-            available.sort_by(|a, b| b.cmp(a));
-
-            let avail_str = if available.is_empty() {
-                "  (None available)".to_string()
-            } else {
-                available
-                    .iter()
-                    .map(|d| format!("    • {}", d))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-
-            anyhow::bail!(
-                "✖ Release {} not found upstream.\nAvailable remote releases:\n{}",
-                target_date,
-                avail_str
-            );
-        }
-    }
-}
-
-fn pull_release_by_meta<F: ReleaseFetcher>(
-    workspace_root: &Path,
-    date: &str,
-    release: &GithubRelease,
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
-) -> Result<()> {
-    let release_dir = workspace_root.join("releases").join(date);
-
-    if release_dir.exists() && !args.force {
-        if is_release_dir_verified(&release_dir) {
-            progress.settle(&format!("* Release {} already local, verified", date));
-            let pin_moved = update_active_release_link_if_changed(workspace_root, date)?;
-            generate_workspace_readme(workspace_root, date, None, None)?;
-            if pin_moved {
-                progress.settle_detail(&format!("current → releases/{}", date));
-            }
-            return Ok(());
-        }
-    }
-
-    let total_bytes: u64 = release.assets.iter().map(|a| a.size).sum();
-
-    let sha_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == "SHA256SUMS")
-        .context("✖ Release asset `SHA256SUMS` is missing from upstream release")?;
-
-    let temp_dir_path = workspace_root
-        .join("releases")
-        .join(format!(".tmp_pull_{}_{}", date, std::process::id()));
-    if temp_dir_path.exists() {
-        let _ = fs::remove_dir_all(&temp_dir_path);
-    }
-    fs::create_dir_all(&temp_dir_path)?;
-
-    progress.step(&format!("{}   downloading SHA256SUMS…", date));
-    let sha256sums_bytes = fetcher.download_asset(&sha_asset.browser_download_url)?;
-    fs::write(temp_dir_path.join("SHA256SUMS"), &sha256sums_bytes)?;
-
-    let sha256sums_str = String::from_utf8_lossy(&sha256sums_bytes);
-    let expected_hashes = crate::workspace::parse_sha256sums(&sha256sums_str);
-
-    for (file_name, _expected_hash) in &expected_hashes {
-        if file_name == "SHA256SUMS" {
+        let computed_digest = format!("sha256:{:x}", sha2::Sha256::digest(&manifest_bytes));
+        if computed_digest != entry.manifest_digest {
+            last_err = Some(format!(
+                "{}: manifest digest mismatch: computed {}, expected {}",
+                mirror.host(),
+                computed_digest,
+                entry.manifest_digest
+            ));
             continue;
         }
 
-        progress.step(&format!("{}   downloading {}…", date, file_name));
-
-        let file_bytes = if let Some(asset) = release.assets.iter().find(|a| a.name == *file_name) {
-            fetcher.download_asset(&asset.browser_download_url)?
-        } else {
-            let url = format!(
-                "https://github.com/olizilla/ods/releases/download/{}/{}",
-                release.tag_name, file_name
-            );
-            fetcher.download_asset(&url)?
+        let manifest: OciManifest = match serde_json::from_slice(&manifest_bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                last_err = Some(format!("{}: invalid manifest JSON: {}", mirror.host(), e));
+                continue;
+            }
         };
 
-        let file_path = temp_dir_path.join(file_name);
-        fs::write(&file_path, file_bytes)?;
-    }
+        // 2. Fetch each layer
+        let mut failed_layer = false;
+        for layer in &manifest.layers {
+            let filename = match layer
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(ANNOTATION_TITLE))
+            {
+                Some(f) => f,
+                None => {
+                    failed_layer = true;
+                    last_err = Some(format!("{}: layer missing title annotation", mirror.host()));
+                    break;
+                }
+            };
 
-    progress.step(&format!("{}   verifying SHA-256 checksums…", date));
-    for (file_name, expected_hash) in &expected_hashes {
-        let file_path = temp_dir_path.join(file_name);
-        if !file_path.exists() {
-            anyhow::bail!("✖ Missing file listed in SHA256SUMS: {}", file_name);
-        }
+            progress.step(&format!(
+                "{} ({}) downloading {} from {}…",
+                entry.trud_release_date,
+                entry.dataset_version,
+                filename,
+                mirror.host()
+            ));
 
-        let actual_hash = compute_file_sha256(&file_path)?;
-        if actual_hash.to_lowercase() != expected_hash.to_lowercase() {
-            let bad_path = temp_dir_path.join(format!("{}.bad-sha", file_name));
-            let _ = fs::rename(&file_path, &bad_path);
+            let blob_url = mirror.blob_url(&layer.digest);
+            let layer_bytes = match fetcher.fetch_bytes(&blob_url) {
+                Ok(b) => b,
+                Err(e) => {
+                    failed_layer = true;
+                    last_err = Some(format!("{}: failed to download {}: {}", mirror.host(), filename, e));
+                    break;
+                }
+            };
 
-            anyhow::bail!(
-                "✖ Checksum verification failed for {}\n  Expected SHA-256: {}\n  Actual SHA-256:   {}\nRenamed corrupted file to {}",
-                file_name,
-                expected_hash,
-                actual_hash,
-                bad_path.display()
-            );
-        }
-    }
+            let computed_layer_digest = format!("sha256:{:x}", sha2::Sha256::digest(&layer_bytes));
+            if computed_layer_digest != layer.digest {
+                failed_layer = true;
+                last_err = Some(format!(
+                    "{}: layer {} checksum mismatch: computed {}, expected {}",
+                    mirror.host(),
+                    filename,
+                    computed_layer_digest,
+                    layer.digest
+                ));
+                break;
+            }
 
-
-    if release_dir.exists() {
-        let _ = fs::remove_dir_all(&release_dir);
-    }
-    fs::rename(&temp_dir_path, &release_dir)?;
-
-    ensure_workspace_gitignore(workspace_root)?;
-
-    if !args.all {
-        let pin_moved = update_active_release_link_if_changed(workspace_root, date)?;
-        generate_workspace_readme(workspace_root, date, None, None)?;
-
-        progress.settle(&format!(
-            "✓ {}  {}  SHA-256 verified",
-            date,
-            format_size(total_bytes)
-        ));
-        if progress.caps().verbose {
-            for (f, h) in &expected_hashes {
-                progress.settle_detail(&format!("SHA-256 ({}): {}", f, h));
+            if let Err(e) = fs::write(temp_path.join(filename), &layer_bytes) {
+                failed_layer = true;
+                last_err = Some(format!("Failed to write {}: {}", filename, e));
+                break;
             }
         }
-        if pin_moved {
-            progress.settle_detail(&format!("current → releases/{}", date));
+
+        if failed_layer {
+            continue;
         }
-        progress.finish("Done!");
-    }
 
-    Ok(())
-}
-
-fn emit_ndjson_outcome(outcome: &ReleaseOutcome) {
-    if let Ok(json) = serde_json::to_string(outcome) {
-        println!("{}", json);
-    }
-}
-
-fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
-    if let Ok((active_date, _)) = crate::workspace::get_active_release(workspace_root) {
-        if active_date == release_date {
-            return Ok(false);
+        // 3. Verify assembled directory
+        let outcome = verify_release_dir(&temp_path, Some(index));
+        if !outcome.is_verified() {
+            last_err = Some(format!("{}: assembled release directory failed verification", mirror.host()));
+            continue;
         }
+
+        // 4. Atomic install
+        fs::create_dir_all(workspace_root.join("releases"))?;
+        if rel_dir.exists() {
+            fs::remove_dir_all(&rel_dir)?;
+        }
+        fs::rename(&temp_path, &rel_dir)?;
+
+        // 5. Pin current and generate README
+        set_active_release(workspace_root, &entry.trud_release_date)?;
+        generate_workspace_readme(workspace_root, &entry.trud_release_date, None, None)?;
+
+        let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
+        let size_mb = (total_size as f64) / (1024.0 * 1024.0);
+
+        let verification_msg = if is_baked {
+            format!("hash verified by ods {}", env!("CARGO_PKG_VERSION"))
+        } else {
+            corroboration_status.unwrap_or_else(|| format!("from {}", mirror.host()))
+        };
+
+        eprintln!(
+            "✓ {} ({})  {:.0}MB  {}",
+            entry.trud_release_date,
+            entry.dataset_version,
+            size_mb,
+            verification_msg
+        );
+        eprintln!("  current → releases/{}", entry.trud_release_date);
+
+        return Ok(());
     }
-    set_active_release(workspace_root, release_date)?;
-    Ok(true)
+
+    bail!(
+        "✖ All mirrors failed to pull release {} ({}): {}",
+        entry.trud_release_date,
+        entry.dataset_version,
+        last_err.unwrap_or_else(|| "no reachable mirrors".to_string())
+    )
 }
-
-
-
