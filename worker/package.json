@@ -1,0 +1,23 @@
+{
+  "name": "ods-fyi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:unit": "vitest run --project=unit",
+    "test:e2e": "vitest run --project=e2e",
+    "generate-fixtures": "bash ../scripts/generate-expected-keys.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.2",
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/node": "^20.17.10",
+    "miniflare": "^3.20241218.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^3.100.0"
+  }
+}

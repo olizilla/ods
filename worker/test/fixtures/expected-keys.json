@@ -1,0 +1,21 @@
+[
+  "2026-07-31/1.0.1/NOTES.md",
+  "2026-07-31/1.0.1/_provenance.json",
+  "2026-07-31/1.0.1/datapackage.json",
+  "2026-07-31/1.0.1/orgs.parquet",
+  "2026-07-31/1.0.1/roles.parquet",
+  "latest/NOTES.md",
+  "latest/_provenance.json",
+  "latest/datapackage.json",
+  "latest/orgs.parquet",
+  "latest/roles.parquet",
+  "v2/ods-data/blobs/sha256/0b19e9910a525c3ceb11ed7b821e1c390d1b18cac24be0f4ae5a477a9409690f",
+  "v2/ods-data/blobs/sha256/5dd6b71bb3898e49df0c3653b6f8ad56ce5acc5ef6a24a69966b7371adb03381",
+  "v2/ods-data/blobs/sha256/87fa60a579ab77f8bf1d9ee24566d5afe572229299081e9e679acbee78bee23c",
+  "v2/ods-data/blobs/sha256/c67e925e689a477fe47d148b8213523e8dc7d96a5636726f52b58faa7ed72ed6",
+  "v2/ods-data/blobs/sha256/dafe84307d307fdada314a55037318b7e241336c71b6a7667b468787e99340b4",
+  "v2/ods-data/blobs/sha256/f589910447402a3a1547051e3c30e4e94afee98e36fbd78230379b870d49cd0f",
+  "v2/ods-data/manifests/2026-07-31",
+  "v2/ods-data/manifests/2026-07-31_1.0.1",
+  "v2/ods-data/manifests/latest"
+]

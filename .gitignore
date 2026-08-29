@@ -9,3 +9,8 @@
 /dist
 *.oci.tar
 /trud-releases.json
+/worker/node_modules
+/worker/.wrangler
+/worker/dist
+/worker/results
+/results

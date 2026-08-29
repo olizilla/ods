@@ -1,0 +1,7 @@
+name = "ods-fyi"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "ods-fyi"

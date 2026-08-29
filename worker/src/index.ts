@@ -1,0 +1,338 @@
+export interface Env {
+  BUCKET: R2Bucket;
+}
+
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Range, If-Match, If-None-Match',
+  'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges, ETag, Docker-Content-Digest',
+  'Access-Control-Max-Age': '86400',
+};
+
+const ROOT_TEXT = `ods.fyi — NHS Organisation Data Service, as Parquet.
+
+  duckdb -c "SELECT * FROM 'https://ods.fyi/latest/orgs.parquet' LIMIT 5"
+
+Releases: https://ods.fyi/releases.json
+Source:   https://github.com/olizilla/ods
+`;
+
+/**
+ * Pure function mapping request path to R2 object key.
+ */
+export function pathToKey(pathname: string): string {
+  const clean = pathname.replace(/^\/+/, '');
+
+  // Rule: /manifests/sha256:<hex> -> /blobs/sha256/<hex>
+  const manifestDigestMatch = clean.match(/^(.*\/)?manifests\/sha256:([a-fA-F0-9]{64})$/);
+  if (manifestDigestMatch) {
+    const prefix = manifestDigestMatch[1] || '';
+    const hex = manifestDigestMatch[2].toLowerCase();
+    return `${prefix}blobs/sha256/${hex}`;
+  }
+
+  // Rule: replace sha256:<hex> with sha256/<hex> (lowercased)
+  return clean.replace(/sha256:([a-fA-F0-9]{64})/gi, (_, hex) => `sha256/${hex.toLowerCase()}`);
+}
+
+/**
+ * Calculates SHA-256 hex digest of a Uint8Array or ArrayBuffer.
+ */
+export async function sha256Hex(data: ArrayBuffer | Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Pure function deriving headers from the *request path*.
+ */
+export function deriveHeaders(pathname: string, etag?: string, computedDigest?: string): Headers {
+  const headers = new Headers();
+
+  // Apply standard CORS headers
+  for (const [k, v] of Object.entries(CORS_HEADERS)) {
+    headers.set(k, v);
+  }
+
+  headers.set('Accept-Ranges', 'bytes');
+
+  if (etag) {
+    headers.set('ETag', etag.startsWith('"') ? etag : `"${etag}"`);
+  }
+
+  const clean = pathname.replace(/^\/+/, '');
+
+  // 1. Content-Type
+  if (clean.includes('/manifests/')) {
+    headers.set('Content-Type', 'application/vnd.oci.image.manifest.v1+json');
+  } else if (clean.includes('/blobs/')) {
+    headers.set('Content-Type', 'application/octet-stream');
+  } else if (clean.endsWith('.parquet')) {
+    headers.set('Content-Type', 'application/vnd.apache.parquet');
+  } else if (clean.endsWith('.json')) {
+    headers.set('Content-Type', 'application/json');
+  } else if (clean.endsWith('.md')) {
+    headers.set('Content-Type', 'text/markdown; charset=utf-8');
+  } else if (clean.endsWith('.zip')) {
+    headers.set('Content-Type', 'application/zip');
+  } else {
+    headers.set('Content-Type', 'application/octet-stream');
+  }
+
+  // 2. Docker-Content-Digest
+  const digestMatch = clean.match(/sha256:([a-fA-F0-9]{64})/i);
+  if (digestMatch) {
+    headers.set('Docker-Content-Digest', `sha256:${digestMatch[1].toLowerCase()}`);
+  } else if (computedDigest) {
+    headers.set('Docker-Content-Digest', `sha256:${computedDigest.toLowerCase()}`);
+  }
+
+  // 3. Cache-Control
+  const isImmutable =
+    clean.includes('/blobs/') ||
+    /^\d{4}-\d{2}-\d{2}\/\d+\.\d+\.\d+\//.test(clean) ||
+    /\/manifests\/\d{4}-\d{2}-\d{2}_\d+\.\d+\.\d+$/.test(clean);
+
+  if (isImmutable) {
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  } else {
+    headers.set('Cache-Control', 'no-cache');
+  }
+
+  return headers;
+}
+
+function errorResponse(pathname: string): Response {
+  if (pathname.startsWith('/v2/')) {
+    const headers = new Headers(CORS_HEADERS);
+    headers.set('Content-Type', 'application/json');
+    const body = JSON.stringify({
+      errors: [
+        {
+          code: 'NAME_UNKNOWN',
+          message: 'manifest unknown',
+          detail: null,
+        },
+      ],
+    });
+    return new Response(body, { status: 404, headers });
+  }
+
+  const headers = new Headers(CORS_HEADERS);
+  headers.set('Content-Type', 'text/plain; charset=utf-8');
+  return new Response('Not found. See https://ods.fyi/ for what lives here.\n', {
+    status: 404,
+    headers,
+  });
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+
+    // Handle OPTIONS (CORS preflight)
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: CORS_HEADERS,
+      });
+    }
+
+    // Only GET and HEAD are supported
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: CORS_HEADERS,
+      });
+    }
+
+    // Root endpoint
+    if (pathname === '/' || pathname === '') {
+      if (request.method === 'HEAD') {
+        const headers = new Headers(CORS_HEADERS);
+        headers.set('Content-Type', 'text/plain; charset=utf-8');
+        headers.set('Content-Length', new TextEncoder().encode(ROOT_TEXT).length.toString());
+        return new Response(null, { status: 200, headers });
+      }
+      const headers = new Headers(CORS_HEADERS);
+      headers.set('Content-Type', 'text/plain; charset=utf-8');
+      return new Response(ROOT_TEXT, { status: 200, headers });
+    }
+
+    // OCI V2 Ping endpoint
+    if (pathname === '/v2' || pathname === '/v2/') {
+      const headers = new Headers(CORS_HEADERS);
+      headers.set('Content-Type', 'application/json');
+      return new Response('{}', { status: 200, headers });
+    }
+
+    const key = pathToKey(pathname);
+
+    // Range parsing: ignore multi-range requests and treat as unranged (full body 200)
+    const rawRange = request.headers.get('range');
+    const isMultiRange = rawRange ? rawRange.includes(',') : false;
+
+    // Check if HEAD on manifest tag
+    const isManifestTag = pathname.includes('/manifests/') && !pathname.includes('sha256:');
+
+    if (request.method === 'HEAD') {
+      if (isManifestTag) {
+        // Must hash body to set Docker-Content-Digest on HEAD
+        const object = await env.BUCKET.get(key);
+        if (!object) {
+          return errorResponse(pathname);
+        }
+        const bodyBytes = await object.arrayBuffer();
+        const digest = await sha256Hex(bodyBytes);
+        const headers = deriveHeaders(pathname, object.httpEtag, digest);
+        headers.set('Content-Length', object.size.toString());
+        return new Response(null, { status: 200, headers });
+      }
+
+      const headObj = await env.BUCKET.head(key);
+      if (!headObj) {
+        return errorResponse(pathname);
+      }
+      const headers = deriveHeaders(pathname, headObj.httpEtag);
+      headers.set('Content-Length', headObj.size.toString());
+      return new Response(null, { status: 200, headers });
+    }
+
+    // Check If-None-Match first
+    const ifNoneMatch = request.headers.get('if-none-match');
+
+    if (!rawRange || isMultiRange) {
+      const object = await env.BUCKET.get(key);
+      if (!object) {
+        return errorResponse(pathname);
+      }
+
+      // Check If-None-Match
+      if (ifNoneMatch && object.httpEtag) {
+        const cleanEtag = object.httpEtag.replace(/^"|"$/g, '');
+        const clientEtag = ifNoneMatch.replace(/^"|"$/g, '');
+        if (cleanEtag === clientEtag || ifNoneMatch === '*') {
+          const headers = deriveHeaders(pathname, object.httpEtag);
+          return new Response(null, { status: 304, headers });
+        }
+      }
+
+      let computedDigest: string | undefined;
+      let body: ReadableStream | ArrayBuffer = object.body;
+
+      if (isManifestTag) {
+        const bodyBytes = await object.arrayBuffer();
+        computedDigest = await sha256Hex(bodyBytes);
+        body = bodyBytes;
+      }
+
+      const headers = deriveHeaders(pathname, object.httpEtag, computedDigest);
+      headers.set('Content-Length', object.size.toString());
+
+      return new Response(body, {
+        status: 200,
+        headers,
+      });
+    }
+
+    // Single range request: check head for 404 / 416 bounds first
+    const headObj = await env.BUCKET.head(key);
+    if (!headObj) {
+      return errorResponse(pathname);
+    }
+
+    const rangeMatch = rawRange.match(/^bytes=(\d*)-(\d*)$/);
+    if (rangeMatch) {
+      const startStr = rangeMatch[1];
+      const endStr = rangeMatch[2];
+      let isUnsatisfiable = false;
+
+      if (startStr !== '' && endStr !== '') {
+        const start = parseInt(startStr, 10);
+        const end = parseInt(endStr, 10);
+        if (start >= headObj.size || start > end) {
+          isUnsatisfiable = true;
+        }
+      } else if (startStr !== '') {
+        const start = parseInt(startStr, 10);
+        if (start >= headObj.size) {
+          isUnsatisfiable = true;
+        }
+      } else if (endStr !== '') {
+        const suffix = parseInt(endStr, 10);
+        if (suffix === 0) {
+          isUnsatisfiable = true;
+        }
+      }
+
+      if (isUnsatisfiable) {
+        const headers = deriveHeaders(pathname, headObj.httpEtag);
+        headers.set('Content-Range', `bytes */${headObj.size}`);
+        return new Response(null, {
+          status: 416,
+          headers,
+        });
+      }
+    }
+
+    let object: R2ObjectBody | null;
+    try {
+      object = await env.BUCKET.get(key, {
+        range: request.headers,
+      });
+    } catch {
+      object = null;
+    }
+
+    if (!object) {
+      const headers = deriveHeaders(pathname, headObj.httpEtag);
+      headers.set('Content-Range', `bytes */${headObj.size}`);
+      return new Response(null, {
+        status: 416,
+        headers,
+      });
+    }
+
+    // Check If-None-Match
+    if (ifNoneMatch && object.httpEtag) {
+      const cleanEtag = object.httpEtag.replace(/^"|"$/g, '');
+      const clientEtag = ifNoneMatch.replace(/^"|"$/g, '');
+      if (cleanEtag === clientEtag || ifNoneMatch === '*') {
+        const headers = deriveHeaders(pathname, object.httpEtag);
+        return new Response(null, { status: 304, headers });
+      }
+    }
+
+    let computedDigest: string | undefined;
+    if (isManifestTag) {
+      const fullObj = await env.BUCKET.get(key);
+      if (fullObj) {
+        const bytes = await fullObj.arrayBuffer();
+        computedDigest = await sha256Hex(bytes);
+      }
+    }
+
+    const headers = deriveHeaders(pathname, object.httpEtag, computedDigest);
+
+    if ('range' in object && object.range) {
+      const offset = (object.range as { offset?: number }).offset ?? 0;
+      const length = (object.range as { length?: number }).length ?? object.size;
+      headers.set('Content-Range', `bytes ${offset}-${offset + length - 1}/${object.size}`);
+      headers.set('Content-Length', length.toString());
+
+      return new Response(object.body, {
+        status: 206,
+        headers,
+      });
+    }
+
+    headers.set('Content-Length', object.size.toString());
+    return new Response(object.body, {
+      status: 200,
+      headers,
+    });
+  },
+};

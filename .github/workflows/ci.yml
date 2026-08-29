@@ -3,20 +3,36 @@ name: CI
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.agents/**'
+      - 'CITATION.cff'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.agents/**'
+      - 'CITATION.cff'
+
+# Supersede in-flight runs for the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # The worker e2e and the smoke test both need ./target/debug/ods  
   test:
-    name: Test Suite & Reproducibility
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run Test Suite
+      - name: Run ods tests
         run: |
           OUTPUT=$(cargo test -- --nocapture 2>&1 | tee /dev/stderr)
           if echo "$OUTPUT" | grep -q "Skipping test"; then
@@ -24,13 +40,40 @@ jobs:
             exit 1
           fi
 
-      - name: Build Release Binary
-        run: cargo build --release
+      # Release-mode compile coverage without a second full build. cargo check
+      # runs the frontend and stops before codegen and linking; cargo test above
+      # already links a debug binary. What neither catches is release-only
+      # runtime behaviour (debug_assert! compiled out, overflow checks off) —
+      # that needs `cargo test --release`, which is not worth it per-PR.
+      - name: Check release profile compiles
+        run: cargo check --release
+
+      - name: Build binary
+        run: cargo build
 
       - name: Test ods make oci and audit verification
         run: |
           TMP_ZIP=$(mktemp -d)/hscorgrefdataxml_data_7.0.0_20260731000001.zip
           zip -j -q "$TMP_ZIP" tests/fixtures/mock_hscorgrefdata.xml
-          ./target/release/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
-          ./target/release/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0 --check
-          ./target/release/ods audit --input "$TMP_ZIP" --workspace ods_data --full
+          ./target/debug/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
+          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0 --check
+          ./target/debug/ods audit --input "$TMP_ZIP" --workspace ods_data --full
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+
+      - name: Install OCI Conformance Runner
+        run: go install github.com/opencontainers/distribution-spec/conformance@3ecd27b5c78d
+
+      - name: Install Worker Dependencies
+        run: npm ci --prefix worker
+
+      - name: Run ods.fyi worker tests
+        run: npm test --prefix worker

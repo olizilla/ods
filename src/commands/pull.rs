@@ -83,10 +83,18 @@ impl OciBlobFetcher for HttpOciFetcher {
     }
 
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
-        let index_urls = [
+        // Test/dev hook: allow pointing release index fetcher to a custom URL (e.g. local Miniflare test server)
+        let custom_url = std::env::var("ODS_RELEASE_INDEX_URL").ok();
+        let default_urls = [
             "https://ods.fyi/releases.json",
             "https://raw.githubusercontent.com/olizilla/ods/main/data/releases.json",
         ];
+        let mut index_urls: Vec<&str> = Vec::new();
+        if let Some(ref u) = custom_url {
+            index_urls.push(u.as_str());
+        } else {
+            index_urls.extend_from_slice(&default_urls);
+        }
         for url in &index_urls {
             if let Ok(bytes) = download_bytes_with_auth(url, None) {
                 if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
