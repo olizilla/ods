@@ -159,15 +159,16 @@ When publishing a monthly dataset cut or republishing a fix:
    ```console
    $ ods make release --version <version>
    ```
-   This performs structural checks, verifies git tags, and appends the release row to `data/releases.json`.
+   This performs structural checks, verifies git tags, stages the release's objects into `dist/`, and appends the release row to `data/releases.json`.
+
+   > `dist/` contains this release's objects. `releases.json` is not a release object: it is the index, it lives in git, and it is published from there as the commit point.
+
 3. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
-4. Commit `data/releases.json`, create git tag `data/<date>_<version>`, and publish:
+4. Publish using the release script:
    ```console
-   $ git add data/releases.json && git commit -m "release(data): <date> v<version>"
-   $ git tag data/<date>_<version>
-   $ ods publish
+   $ scripts/release-data.sh --publish <date> <version>
    ```
-   This uploads layers and image manifests directly to registry mirrors over OCI transport.
+   This syncs `dist/` release objects to R2 / GHCR, creates the GitHub release, publishes `data/releases.json` to R2 as the commit point, commits `data/releases.json`, and tags `data/<date>_<version>`.
 
 ## Conventions
 

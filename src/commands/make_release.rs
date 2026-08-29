@@ -141,7 +141,16 @@ pub fn run(args: Args) -> Result<()> {
         })?,
     };
 
-    let tool_repo = args.tool_repo.clone().or_else(|| find_tool_repo(&release_dir));
+    let tool_repo = match args.tool_repo {
+        Some(ref p) => {
+            if is_tool_repo_dir(p) {
+                Some(p.clone())
+            } else {
+                None
+            }
+        }
+        None => find_tool_repo(&release_dir),
+    };
 
     // 1. Run ods make oci first to regenerate oci/ wholesale
     crate::commands::make_oci::run(crate::commands::make_oci::Args {
@@ -192,7 +201,7 @@ pub fn run(args: Args) -> Result<()> {
         }
         let count = failures.len();
         eprintln!("{} check{} failed", count, if count == 1 { "" } else { "s" });
-        bail!("Release checks failed");
+        bail!("Release checks failed:\n{}", failures.join("\n"));
     }
 
     let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
@@ -231,37 +240,15 @@ pub fn run(args: Args) -> Result<()> {
     // 4. Append to data/releases.json
     let target_index_path = args.index.clone().or_else(|| {
         tool_repo.as_ref().map(|tr| tr.join("data").join("releases.json"))
-    });
+    }).ok_or_else(|| anyhow::anyhow!("cannot locate the ods repository — data/releases.json is where a release row is reviewed\n  Pass --tool-repo, or run from inside the repo."))?;
 
-    let final_index_content = if let Some(ref p) = target_index_path {
-        if p.exists() {
-            let content = fs::read_to_string(p)?;
-            let mut index: OdsReleaseIndex = serde_json::from_str(&content)?;
-            index.releases.push(release_row.clone());
-            let updated = serde_json::to_string_pretty(&index)? + "\n";
-            fs::write(p, &updated)?;
-            eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
-            updated
-        } else {
-            let default_mirrors = OdsReleaseIndex::baked()
-                .map(|b| b.mirrors)
-                .unwrap_or_else(|_| vec![
-                    MirrorEntry {
-                        url: "https://ods.fyi/v2/ods-data".to_string(),
-                    },
-                    MirrorEntry {
-                        url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-                    },
-                ]);
-            let index = OdsReleaseIndex {
-                type_tag: "ods_release_index".to_string(),
-                index_version: 2,
-                concept_doi: None,
-                mirrors: default_mirrors,
-                releases: vec![release_row.clone()],
-            };
-            serde_json::to_string_pretty(&index)? + "\n"
-        }
+    if target_index_path.exists() {
+        let content = fs::read_to_string(&target_index_path)?;
+        let mut index: OdsReleaseIndex = serde_json::from_str(&content)?;
+        index.releases.push(release_row.clone());
+        let updated = serde_json::to_string_pretty(&index)? + "\n";
+        fs::write(&target_index_path, &updated)?;
+        eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
     } else {
         let default_mirrors = OdsReleaseIndex::baked()
             .map(|b| b.mirrors)
@@ -280,10 +267,15 @@ pub fn run(args: Args) -> Result<()> {
             mirrors: default_mirrors,
             releases: vec![release_row.clone()],
         };
-        serde_json::to_string_pretty(&index)? + "\n"
-    };
+        if let Some(parent) = target_index_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let updated = serde_json::to_string_pretty(&index)? + "\n";
+        fs::write(&target_index_path, &updated)?;
+        eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
+    }
 
-    // 5. Task 7: Generate dist/ staging directory
+    // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
     let dist_dir = args.dist.unwrap_or_else(|| {
         tool_repo
             .as_ref()
@@ -296,10 +288,7 @@ pub fn run(args: Args) -> Result<()> {
     }
     fs::create_dir_all(&dist_dir)?;
 
-    // 5a. dist/releases.json
-    fs::write(dist_dir.join("releases.json"), final_index_content)?;
-
-    // 5b. dist/v2/{repository}/blobs/sha256/{hex} (for every blob in oci/blobs/sha256/)
+    // 5a. dist/v2/{repository}/blobs/sha256/{hex} (for every blob in oci/blobs/sha256/)
     let repo_name = &args.repository;
     for entry in fs::read_dir(&blobs_dir)? {
         let entry = entry?;
@@ -373,6 +362,10 @@ pub fn perform_all_release_checks(
     // Check 10: tool_git_dirty == false
     if prov.tool_git_dirty == Some(true) {
         failures.push("tool_git_dirty is true: dataset built from a dirty working tree".to_string());
+    }
+
+    if tool_repo.is_none() {
+        failures.push("cannot locate the ods repository — data/releases.json is where a release row is reviewed\n  Pass --tool-repo, or run from inside the repo.".to_string());
     }
 
     let repo_dir = tool_repo.unwrap_or(release_dir);

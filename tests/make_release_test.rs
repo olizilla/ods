@@ -251,7 +251,7 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     })?;
 
     assert!(dist_dir.exists(), "dist/ directory must exist");
-    assert!(dist_dir.join("releases.json").exists(), "dist/releases.json must exist");
+    assert!(!dist_dir.join("releases.json").exists(), "dist/releases.json must NOT exist in dist/");
 
     let manifests_dir = dist_dir.join("v2").join("ods-data").join("manifests");
     assert!(manifests_dir.join("2026-07-31_1.0.1").exists());
@@ -278,4 +278,38 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     assert!(blob_count >= 5, "Must contain manifest blob + layer blobs");
 
     Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_when_no_repo_found() {
+    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let not_repo_tmp = TempDir::new().unwrap();
+    let not_a_repo = not_repo_tmp.path().join("not-a-repo");
+    fs::create_dir_all(&not_a_repo).unwrap();
+
+    // 1. Direct check in perform_all_release_checks
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        "1.0.1",
+        None,
+        None,
+        true,
+    ).unwrap();
+    assert!(failures.iter().any(|f| f.contains("cannot locate the ods repository")));
+
+    // 2. Full run refusal
+    let res = run(Args {
+        input: Some(rel_dir),
+        version: Some("1.0.1".to_string()),
+        repository: "ods-data".to_string(),
+        dist: None,
+        doi: None,
+        tool_repo: Some(not_a_repo),
+        index: None,
+        offline: true,
+    });
+
+    assert!(res.is_err(), "Must refuse when tool_repo is not a repo");
+    let err = format!("{:#}", res.unwrap_err());
+    assert!(err.contains("cannot locate the ods repository"));
 }

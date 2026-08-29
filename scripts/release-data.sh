@@ -38,6 +38,7 @@ note(){ echo "* $*"; }
 for c in git gh jq cargo skopeo rclone; do
   if ! command -v "$c" >/dev/null 2>&1; then
     case "$c" in
+      git)    die "git not found. Run 'brew install git'" ;;
       gh)     die "gh not found. Run 'brew install gh'" ;;
       jq)     die "jq not found. Run 'brew install jq'" ;;
       skopeo) die "skopeo not found. Run 'brew install skopeo'" ;;
@@ -46,6 +47,9 @@ for c in git gh jq cargo skopeo rclone; do
     esac
   fi
 done
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+cd "$REPO_ROOT"
 
 # 1. Ensure clean working tree on main, cargo test passes, audit passes
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — commit or stash first"
@@ -102,9 +106,9 @@ note "Publishing OCI image to ghcr.io..."
 skopeo copy "oci:$REL_DIR/oci:${DATE}_${VER}" "docker://ghcr.io/olizilla/ods-data:${DATE}_${VER}"
 skopeo copy "docker://ghcr.io/olizilla/ods-data:${DATE}_${VER}" "docker://ghcr.io/olizilla/ods-data:$DATE"
 
-# 5. Sync dist/ staging tree to R2 / ods.fyi (excluding releases.json)
+# 5. Sync dist/ staging tree to R2 / ods.fyi (holds only release objects)
 note "Syncing objects to Cloudflare R2 (ods.fyi)..."
-rclone copy dist/ r2:ods-fyi/ --exclude releases.json
+rclone copy dist/ r2:ods-fyi/
 
 # 6. Create OCI archive and attach to GitHub release
 note "Publishing GitHub release with .oci.tar..."
@@ -112,9 +116,9 @@ skopeo copy "oci:$REL_DIR/oci:${DATE}_${VER}" "oci-archive:${DATE}_${VER}.oci.ta
 gh release create "$TAG" --notes-file "$REL_DIR/NOTES.md" "${DATE}_${VER}.oci.tar"
 rm -f "${DATE}_${VER}.oci.tar"
 
-# 7. Publish releases.json to R2 (the commit point for live index)
+# 7. Publish data/releases.json to R2 (the commit point for live index)
 note "Publishing releases.json to R2..."
-rclone copy dist/releases.json r2:ods-fyi/
+rclone copyto data/releases.json r2:ods-fyi/releases.json
 ok "Release $TAG published live to ods.fyi"
 
 # 8. Commit data/releases.json, tag, and push
