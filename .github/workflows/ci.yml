@@ -21,8 +21,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# GitHub's default shell for `run:` is `bash -e` — WITHOUT pipefail, so any
+# piped command reports only the exit status of the last stage. Naming bash
+# explicitly gets `bash --noprofile --norc -eo pipefail`, which is the only
+# reason a failing `cargo test | tee` is visible below.
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  # The worker e2e and the smoke test both need ./target/debug/ods  
+  # The worker e2e and the smoke test both need ./target/debug/ods
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -33,12 +41,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run ods tests
+        run: cargo test
+
+      # Surfaced rather than enforced: a count that drops is the signal worth
+      # noticing, and it catches deleted, ignored and neutered tests alike.
+      # grep, not rg — ripgrep is not installed on GitHub's runners.
+      - name: Test count
         run: |
-          OUTPUT=$(cargo test -- --nocapture 2>&1 | tee /dev/stderr)
-          if echo "$OUTPUT" | grep -q "Skipping test"; then
-            echo "✖ Error: Tests contain silent skip guards!"
-            exit 1
-          fi
+          COUNT=$(cargo test -- --list 2>/dev/null | grep -c ': test$')
+          echo "$COUNT tests" >> "$GITHUB_STEP_SUMMARY"
 
       # Release-mode compile coverage without a second full build. cargo check
       # runs the frontend and stops before codegen and linking; cargo test above

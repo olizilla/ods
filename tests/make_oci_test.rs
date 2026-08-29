@@ -18,7 +18,8 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     {
         let outer_file = File::create(&outer_zip_path).unwrap();
         let mut outer_zip = zip::ZipWriter::new(outer_file);
-        let options = zip::write::SimpleFileOptions::default();
+        let options = zip::write::SimpleFileOptions::default()
+            .last_modified_time(zip::DateTime::from_date_and_time(2026, 7, 31, 0, 0, 0).unwrap());
         outer_zip.start_file("dummy.txt", options).unwrap();
         outer_zip.write_all(b"dummy source zip").unwrap();
         outer_zip.finish().unwrap();
