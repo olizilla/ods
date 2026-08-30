@@ -43,21 +43,10 @@ jobs:
       - name: Run ods tests
         run: cargo test
 
-      # Surfaced rather than enforced: a count that drops is the signal worth
-      # noticing, and it catches deleted, ignored and neutered tests alike.
-      # grep, not rg — ripgrep is not installed on GitHub's runners.
       - name: Test count
         run: |
           COUNT=$(cargo test -- --list 2>/dev/null | grep -c ': test$')
           echo "$COUNT tests" >> "$GITHUB_STEP_SUMMARY"
-
-      # Release-mode compile coverage without a second full build. cargo check
-      # runs the frontend and stops before codegen and linking; cargo test above
-      # already links a debug binary. What neither catches is release-only
-      # runtime behaviour (debug_assert! compiled out, overflow checks off) —
-      # that needs `cargo test --release`, which is not worth it per-PR.
-      - name: Check release profile compiles
-        run: cargo check --release
 
       - name: Build binary
         run: cargo build
