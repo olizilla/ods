@@ -245,12 +245,26 @@ pub fn run(args: Args) -> Result<()> {
     let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
     let size_mb = (total_size as f64) / (1024.0 * 1024.0);
 
+    let pub_warnings = prov.validate_publishable();
+
     if args.check {
         println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
         println!("✓ oci/ verified");
+        if !pub_warnings.is_empty() {
+            for warn in &pub_warnings {
+                println!("  {}", warn);
+            }
+            println!("  this layout is structurally valid; `ods make release` will refuse it");
+        }
     } else {
         println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
         println!("✓ oci/ written, manifest {}", manifest_digest);
+        if !pub_warnings.is_empty() {
+            for warn in &pub_warnings {
+                println!("  {}", warn);
+            }
+            println!("  this layout is structurally valid; `ods make release` will refuse it");
+        }
         println!("✓ tags {}, {}_{}", date, date, args.version);
     }
 

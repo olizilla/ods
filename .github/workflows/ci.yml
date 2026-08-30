@@ -40,6 +40,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Build binary
+        run: cargo build
+
       - name: Run ods tests
         run: cargo test
 
@@ -48,16 +51,14 @@ jobs:
           COUNT=$(cargo test -- --list 2>/dev/null | grep -c ': test$')
           echo "$COUNT tests" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build binary
-        run: cargo build
-
       - name: Test ods make oci and audit verification
         run: |
           TMP_ZIP=$(mktemp -d)/hscorgrefdataxml_data_7.0.0_20260731000001.zip
           zip -j -q "$TMP_ZIP" tests/fixtures/mock_hscorgrefdata.xml
           ./target/debug/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
-          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0 --check
           ./target/debug/ods audit --input "$TMP_ZIP" --workspace ods_data --full
+          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0
+          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0 --check
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

@@ -32,6 +32,7 @@ use crate::workspace::{self, count_records_in_parquet};
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Path to TRUD XML file or TRUD ZIP archive (defaults to ./ods_data/current/trud if omitted)
+    #[arg(long, short)]
     pub input: Option<PathBuf>,
 
     /// Workspace directory (defaults to ./ods_data if omitted)
@@ -75,6 +76,7 @@ pub struct AuditReport {
     pub source_invariants_passed: bool,
     pub sample_parity_passed: bool,
     pub derived_parity_passed: bool,
+    pub warnings: Vec<String>,
     pub discrepancies: Vec<String>,
 }
 
@@ -319,7 +321,17 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                 .to_string();
             (date_str, input_path.clone())
         } else {
-            workspace::get_active_release(&workspace_root)?
+            match workspace::get_active_release(&workspace_root) {
+                Ok(res) => res,
+                Err(_) => {
+                    let releases = workspace::list_releases(&workspace_root).unwrap_or_default();
+                    if let Some(matching) = releases.into_iter().find(|r| r.has_parquet) {
+                        (matching.date, matching.path)
+                    } else {
+                        workspace::get_active_release(&workspace_root)?
+                    }
+                }
+            }
         };
 
     let parquet_dir = if active_release_path.join("orgs.parquet").exists() {
@@ -343,6 +355,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         None
     };
 
+    let mut warnings = Vec::new();
     let mut discrepancies = Vec::new();
 
     // ------------------------------------------------------------------------
@@ -398,7 +411,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             .is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified);
 
     if !is_verified_archive {
-        discrepancies.push(
+        warnings.push(
             "Unverified local archive provenance: SHA-256 has not been verified against TRUD API"
                 .to_string(),
         );
@@ -407,6 +420,14 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     if let Some(ref prov) = workspace_prov {
         if let Err(e) = prov.validate_baseline() {
             discrepancies.push(format!("_provenance.json baseline invalid: {e}"));
+        }
+        for pub_warn in prov.validate_publishable() {
+            if pub_warn.contains("unverified") {
+                continue;
+            }
+            if !warnings.contains(&pub_warn) {
+                warnings.push(pub_warn);
+            }
         }
         if let (Some(ref file), Some(ref exp_sha)) = (&prov.trud_release_file, &prov.trud_release_sha256) {
             let archive_path = active_release_path.join("trud").join(file);
@@ -521,7 +542,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                 );
             }
         } else if !is_verified_archive {
-            println!("     ✖ Archive SHA-256: Unverified local archive provenance");
+            println!("     * Archive SHA-256: Unverified local archive provenance");
         } else {
             println!(
                 "     ✖ Data Provenance mismatch: Input {} vs Workspace {}",
@@ -906,10 +927,16 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
         if discrepancies.is_empty() {
             println!("  AUDIT: ✓ PASS");
+            for warn in &warnings {
+                println!("     * Warning: {}", warn);
+            }
         } else {
             println!("  AUDIT: ✖ FAIL ({} Discrepancies)", discrepancies.len());
             for disc in &discrepancies {
                 println!("     - {}", disc);
+            }
+            for warn in &warnings {
+                println!("     * Warning: {}", warn);
             }
         }
         println!();
@@ -934,6 +961,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         source_invariants_passed,
         sample_parity_passed,
         derived_parity_passed,
+        warnings: warnings.clone(),
         discrepancies: discrepancies.clone(),
     };
 

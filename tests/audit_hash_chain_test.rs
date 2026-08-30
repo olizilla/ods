@@ -134,12 +134,12 @@ fn test_audit_passes_on_verified_trud_release() -> Result<()> {
 }
 
 #[test]
-fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<()> {
+fn test_audit_runs_full_suite_and_succeeds_on_unverified_local_archive() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (date, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
     assert_eq!(date, "2026-07-31");
 
-    // Set trud_release_sha256_verified to false
+    // Set trud_release_sha256_verified to Unverified
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
     let mut prov: ods::provenance::OdsProvenance =
         serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
@@ -157,14 +157,8 @@ fn test_audit_runs_full_suite_and_fails_on_unverified_local_archive() -> Result<
 
     let result = ods::commands::audit::run(args);
     assert!(
-        result.is_err(),
-        "audit must fail when archive is unverified"
-    );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("unverified") || err_msg.contains("discrepanc"),
-        "error message must describe unverified archive, got: {}",
-        err_msg
+        result.is_ok(),
+        "audit must succeed on unverified local archive when data matches"
     );
     Ok(())
 }

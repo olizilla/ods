@@ -355,3 +355,58 @@ fn test_make_release_refuses_when_no_repo_found() {
     let err = format!("{:#}", res.unwrap_err());
     assert!(err.contains("cannot locate the ods repository"));
 }
+
+#[test]
+fn test_make_release_refuses_unverified_provenance() -> Result<()> {
+    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Mutate provenance to Unverified
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        "1.0.1",
+        None,
+        None,
+        true,
+    )?;
+
+    assert!(
+        failures.iter().any(|f| f.contains("trud_release_sha256_verified")),
+        "Must refuse unverified provenance, got: {:?}",
+        failures
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_implausible_filesize() -> Result<()> {
+    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Mutate provenance to 16 bytes
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.trud_release_filesize_bytes = Some(16);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        "1.0.1",
+        None,
+        None,
+        true,
+    )?;
+
+    assert!(
+        failures.iter().any(|f| f.contains("trud_release_filesize_bytes is implausibly small")),
+        "Must refuse implausible filesize, got: {:?}",
+        failures
+    );
+
+    Ok(())
+}
+

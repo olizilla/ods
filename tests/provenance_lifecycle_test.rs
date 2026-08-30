@@ -19,7 +19,7 @@ fn test_provenance_validate_baseline_missing_fields() -> Result<()> {
 }
 
 #[test]
-fn test_provenance_validate_baseline_rejects_implausible_filesize() -> Result<()> {
+fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
@@ -28,7 +28,36 @@ fn test_provenance_validate_baseline_rejects_implausible_filesize() -> Result<()
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     prov.trud_release_filesize_bytes = Some(16); // 16 bytes is implausible for TRUD zip archive
-    assert!(prov.validate_baseline().is_err(), "implausible filesize (16 bytes) must be rejected");
+    assert!(prov.validate_baseline().is_ok(), "16-byte filesize must pass structural baseline validation");
+    let pub_failures = prov.validate_publishable();
+    assert_eq!(pub_failures.len(), 1, "implausible filesize must be reported by validate_publishable");
+    assert!(
+        pub_failures[0].contains("implausibly small") && pub_failures[0].contains("16 bytes"),
+        "validate_publishable must name the filesize problem: {}",
+        pub_failures[0]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_provenance_validate_baseline_allows_unverified_and_publishable_reports_it() -> Result<()> {
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_name = Some("Release 7.0.0".to_string());
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov.trud_release_filesize_bytes = Some(37_983_173);
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
+
+    assert!(prov.validate_baseline().is_ok(), "unverified provenance must pass baseline validation");
+    let pub_failures = prov.validate_publishable();
+    assert_eq!(pub_failures.len(), 1, "unverified provenance must be reported by validate_publishable");
+    assert!(
+        pub_failures[0].contains("unverified"),
+        "validate_publishable must report unverified status: {}",
+        pub_failures[0]
+    );
 
     Ok(())
 }
@@ -54,6 +83,14 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     let input_dir = temp_dir.path().join("input");
     fs::create_dir_all(&input_dir)?;
 
+    // Write an invalid _provenance.json with mismatched date and filename
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_name = Some("Release 7.0.0".to_string());
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_file = Some("hscorgrefdataxml_data_6.0.0_20250627000001.zip".to_string());
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    fs::write(input_dir.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov)?)?;
+
     let zip_path = input_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let zip_file = fs::File::create(&zip_path)?;
     let mut zip_writer = zip::ZipWriter::new(zip_file);
@@ -67,7 +104,7 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     };
 
     let result = ods::commands::parquet::run(args);
-    assert!(result.is_err(), "ods make/parquet must fail when _provenance.json is missing");
+    assert!(result.is_err(), "ods make/parquet must fail when _provenance.json is invalid");
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("_provenance.json") || err_msg.contains("provenance"),

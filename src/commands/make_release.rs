@@ -403,7 +403,7 @@ pub fn perform_all_release_checks(
         }
     }
 
-    // Check 12: trud_release_sha256_verified == "trud_api" or "published_release"
+    // Check 12: trud_release_sha256_verified == "trud_api" or "published_release" and plausible filesize (>= 1 MB)
     match prov.trud_release_sha256_verified {
         Some(crate::provenance::TrudVerificationSource::TrudApi)
         | Some(crate::provenance::TrudVerificationSource::PublishedRelease) => {}
@@ -412,6 +412,19 @@ pub fn perform_all_release_checks(
                 "trud_release_sha256_verified is not trud_api: source was never verified against TRUD".to_string(),
             );
         }
+    }
+
+    match prov.trud_release_filesize_bytes {
+        Some(sz) if sz < 1_000_000 => {
+            failures.push(format!(
+                "trud_release_filesize_bytes is implausibly small ({} bytes, must be >= 1 MB)",
+                sz
+            ));
+        }
+        None => {
+            failures.push("Missing trud_release_filesize_bytes in _provenance.json".to_string());
+        }
+        _ => {}
     }
 
     // Check 13: dataset_version matches expected_version and parses as semver

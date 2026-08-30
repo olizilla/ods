@@ -394,3 +394,52 @@ fn test_refusal_datapackage_resource_hash_disagrees_with_layers() -> Result<()> 
     );
     Ok(())
 }
+
+#[test]
+fn test_make_oci_unverified_provenance_succeeds_and_packs() -> Result<()> {
+    let (_tmp, rel_dir) = setup_synthetic_release_dir();
+
+    // Set provenance to Unverified
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    // ods make oci succeeds (exit 0)
+    let result = run(test_args(rel_dir.clone(), "1.0.1", false));
+    assert!(result.is_ok(), "ods make oci on unverified provenance must succeed");
+
+    // oci/ written and valid
+    let oci_dir = rel_dir.join("oci");
+    assert!(oci_dir.join("oci-layout").exists());
+    assert!(oci_dir.join("index.json").exists());
+
+    // ods make oci --check also succeeds
+    let check_result = run(test_args(rel_dir.clone(), "1.0.1", true));
+    assert!(check_result.is_ok(), "ods make oci --check on unverified provenance must succeed");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_oci_refuses_missing_trud_release_sha256() -> Result<()> {
+    let (_tmp, rel_dir) = setup_synthetic_release_dir();
+
+    // Remove trud_release_sha256 from provenance
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.trud_release_sha256 = None;
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let result = run(test_args(rel_dir.clone(), "1.0.1", false));
+    assert!(result.is_err(), "ods make oci must refuse provenance missing trud_release_sha256");
+    let err_str = format!("{:#}", result.unwrap_err());
+    assert!(
+        err_str.contains("trud_release_sha256"),
+        "error message must mention missing trud_release_sha256, got: {}",
+        err_str
+    );
+
+    Ok(())
+}
+

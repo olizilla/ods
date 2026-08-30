@@ -277,22 +277,6 @@ impl OdsProvenance {
         if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
             anyhow::bail!("Missing trud_release_sha256 in _provenance.json");
         }
-        match self.trud_release_sha256_verified {
-            Some(TrudVerificationSource::TrudApi) | Some(TrudVerificationSource::PublishedRelease) => {}
-            Some(TrudVerificationSource::Unverified) => {
-                anyhow::bail!("trud_release_sha256_verified is unverified");
-            }
-            None => {
-                anyhow::bail!("Missing trud_release_sha256_verified in _provenance.json");
-            }
-        }
-
-        // Validate plausible filesize (> 1 MB)
-        if let Some(sz) = self.trud_release_filesize_bytes {
-            if sz < 1_000_000 {
-                anyhow::bail!("trud_release_filesize_bytes is implausibly small ({} bytes)", sz);
-            }
-        }
 
         // Validate release file matches version and date
         let date_digits: String = date.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -306,6 +290,29 @@ impl OdsProvenance {
         }
 
         Ok(())
+    }
+
+    pub fn validate_publishable(&self) -> Vec<String> {
+        let mut failures = Vec::new();
+        match self.trud_release_sha256_verified {
+            Some(TrudVerificationSource::TrudApi) | Some(TrudVerificationSource::PublishedRelease) => {}
+            Some(TrudVerificationSource::Unverified) => {
+                failures.push("source not verified against the TRUD API — recorded in _provenance.json as unverified".to_string());
+            }
+            None => {
+                failures.push("trud_release_sha256_verified is missing in _provenance.json".to_string());
+            }
+        }
+
+        if let Some(sz) = self.trud_release_filesize_bytes {
+            if sz < 1_000_000 {
+                failures.push(format!("trud_release_filesize_bytes is implausibly small ({} bytes)", sz));
+            }
+        } else {
+            failures.push("trud_release_filesize_bytes is missing in _provenance.json".to_string());
+        }
+
+        failures
     }
 }
 
