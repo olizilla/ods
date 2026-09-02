@@ -42,10 +42,11 @@ fn test_workspace_full_lifecycle() {
     })
     .expect("parquet run into release 1 should succeed");
 
-    ods::workspace::set_active_release(&workspace_dir, "2026-05-29").unwrap();
+    let ws = ods::workspace::Workspace::open_or_create(Some(&workspace_dir)).unwrap();
+    ws.set_active("2026-05-29").unwrap();
 
     // Verify release 1 active status
-    let (active_date, active_path) = ods::workspace::get_active_release(&workspace_dir).unwrap();
+    let (active_date, active_path) = ws.active_release().unwrap();
     assert_eq!(active_date, "2026-05-29");
     assert!(active_path.join("orgs.parquet").exists());
 
@@ -61,16 +62,16 @@ fn test_workspace_full_lifecycle() {
     })
     .expect("parquet run into release 2 should succeed");
 
-    ods::workspace::set_active_release(&workspace_dir, "2026-06-26").unwrap();
+    ws.set_active("2026-06-26").unwrap();
 
     // 3. Test release switching
-    ods::workspace::set_active_release(&workspace_dir, "2026-05-29").unwrap();
+    ws.set_active("2026-05-29").unwrap();
 
-    let (switched_date, _) = ods::workspace::get_active_release(&workspace_dir).unwrap();
+    let (switched_date, _) = ws.active_release().unwrap();
     assert_eq!(switched_date, "2026-05-29");
 
     // 4. Test auto-discovery by `ods find`
-    let discovered_parquet = ods::workspace::discover_parquet_dir(Some(&workspace_dir)).unwrap();
+    let discovered_parquet = ws.parquet_dir().unwrap();
     assert!(discovered_parquet.join("orgs.parquet").exists());
 
     let mut find_out = Vec::new();
@@ -130,7 +131,8 @@ fn test_prepare_release_dir_does_not_create_markdown_dir() {
     let workspace_dir = tmp.path().join("ods_data");
     fs::create_dir_all(&workspace_dir).unwrap();
 
-    let release_dir = ods::workspace::prepare_release_dir(&workspace_dir, "2026-07-31").unwrap();
+    let ws = ods::workspace::Workspace::open_or_create(Some(&workspace_dir)).unwrap();
+    let release_dir = ws.prepare_release("2026-07-31").unwrap();
     assert!(release_dir.join("trud").exists(), "trud directory must be created");
     assert!(!release_dir.join("markdown").exists(), "markdown directory must NOT be created unconditionally");
 }
@@ -141,7 +143,7 @@ fn test_ensure_workspace_gitignore_does_not_unignore_wiki_zip() {
     let workspace_dir = tmp.path().join("ods_data");
     fs::create_dir_all(&workspace_dir).unwrap();
 
-    ods::workspace::ensure_workspace_gitignore(&workspace_dir).unwrap();
+    let _ws = ods::workspace::Workspace::open_or_create(Some(&workspace_dir)).unwrap();
     let gitignore_content = fs::read_to_string(workspace_dir.join(".gitignore")).unwrap();
     assert!(
         !gitignore_content.contains("!releases/*/markdown/wiki.zip"),
@@ -197,8 +199,8 @@ fn test_tightened_workspace_discovery_rules() {
         "release dir with _provenance.json must resolve to enclosing workspace root"
     );
 
-    // Test start is `current` symlink
-    ods::workspace::set_active_release(&ws, "2026-07-31").unwrap();
+    let ws_obj = ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap();
+    ws_obj.set_active("2026-07-31").unwrap();
     let current_path = ws.join("current");
     assert_eq!(
         ods::workspace::find_workspace_root_from(&current_path, None),
@@ -259,6 +261,129 @@ fn test_tightened_workspace_discovery_rules() {
         "$HOME boundary must stop upward traversal before ascending past home"
     );
 }
+
+#[test]
+fn test_workspace_open_or_create_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("test_ws");
+    fs::create_dir_all(&ws_dir).unwrap();
+    assert_eq!(fs::read_dir(&ws_dir).unwrap().count(), 0);
+
+    // First run creates furniture
+    let ws1 = ods::workspace::Workspace::open_or_create(Some(&ws_dir)).unwrap();
+    assert_eq!(ws1.root(), ws_dir.as_path());
+    assert!(ws_dir.join(".gitignore").is_file());
+    assert!(ws_dir.join("README.md").is_file());
+
+    let gitignore_content_1 = fs::read_to_string(ws_dir.join(".gitignore")).unwrap();
+    let readme_content_1 = fs::read_to_string(ws_dir.join("README.md")).unwrap();
+
+    // Second run changes nothing
+    let ws2 = ods::workspace::Workspace::open_or_create(Some(&ws_dir)).unwrap();
+    assert_eq!(ws2.root(), ws_dir.as_path());
+
+    let gitignore_content_2 = fs::read_to_string(ws_dir.join(".gitignore")).unwrap();
+    let readme_content_2 = fs::read_to_string(ws_dir.join("README.md")).unwrap();
+
+    assert_eq!(gitignore_content_1, gitignore_content_2);
+    assert_eq!(readme_content_1, readme_content_2);
+}
+
+#[test]
+fn test_workspace_open_on_empty_refuses_and_creates_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let empty_dir = tmp.path().join("empty_ws");
+    fs::create_dir_all(&empty_dir).unwrap();
+    assert_eq!(fs::read_dir(&empty_dir).unwrap().count(), 0);
+
+    let err = ods::workspace::Workspace::open(Some(&empty_dir)).unwrap_err();
+    let err_str = err.to_string();
+    assert!(
+        err_str.contains("ods pull"),
+        "error must name ods pull: {}",
+        err_str
+    );
+    assert!(
+        err_str.contains("ods trud pull"),
+        "error must name ods trud pull: {}",
+        err_str
+    );
+
+    // Directory is still empty afterwards
+    assert_eq!(
+        fs::read_dir(&empty_dir).unwrap().count(),
+        0,
+        "open must create nothing on failure"
+    );
+}
+
+#[test]
+fn test_workspace_open_or_create_nonexistent_explicit_path_refuses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let typo_path = tmp.path().join("typo_directory");
+
+    let result = ods::workspace::Workspace::open_or_create(Some(&typo_path));
+    assert!(result.is_err(), "open_or_create must refuse nonexistent explicit path");
+    assert!(
+        !typo_path.exists(),
+        "open_or_create must not blindly create directory at typo path"
+    );
+}
+
+#[test]
+fn test_workspace_open_or_create_nonempty_nonworkspace_path_refuses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dirty_path = tmp.path().join("unrelated_folder");
+    fs::create_dir_all(&dirty_path).unwrap();
+    fs::write(dirty_path.join("unrelated.txt"), b"some data").unwrap();
+
+    let result = ods::workspace::Workspace::open_or_create(Some(&dirty_path));
+    assert!(
+        result.is_err(),
+        "open_or_create must refuse non-empty directory that is not an existing workspace"
+    );
+}
+
+#[test]
+fn test_resolve_parquet_input_loose_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let loose_dir = tmp.path().join("loose_dir");
+    fs::create_dir_all(&loose_dir).unwrap();
+    fs::write(loose_dir.join("orgs.parquet"), b"fake parquet").unwrap();
+
+    let resolved = ods::workspace::resolve_parquet_input(Some(&loose_dir)).unwrap();
+    assert_eq!(resolved, loose_dir);
+}
+
+#[test]
+fn test_resolve_parquet_input_release_dir_honoured_over_active() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws_dir = tmp.path().join("ods_data");
+    let rel1 = ws_dir.join("releases").join("2026-05-01");
+    let rel2 = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel1).unwrap();
+    fs::create_dir_all(&rel2).unwrap();
+
+    fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), b"{}").unwrap();
+    fs::write(rel1.join("orgs.parquet"), b"rel1 parquet").unwrap();
+
+    fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), b"{}").unwrap();
+    fs::write(rel2.join("orgs.parquet"), b"rel2 parquet").unwrap();
+
+    let ws = ods::workspace::Workspace::open_or_create(Some(&ws_dir)).unwrap();
+    ws.set_active("2026-07-31").unwrap();
+
+    // Resolving with explicit rel1 path must return rel1, NOT active rel2
+    let resolved = ods::workspace::resolve_parquet_input(Some(&rel1)).unwrap();
+    assert_eq!(resolved, rel1);
+
+    // If rel1's orgs.parquet is deleted, resolving rel1 still returns rel1 (not active rel2)
+    fs::remove_file(rel1.join("orgs.parquet")).unwrap();
+    let resolved_deleted = ods::workspace::resolve_parquet_input(Some(&rel1)).unwrap();
+    assert_eq!(resolved_deleted, rel1);
+}
+
+
 
 
 

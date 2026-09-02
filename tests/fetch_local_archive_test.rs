@@ -24,7 +24,7 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     let trud_2026 = rel_2026.join("trud");
     fs::create_dir_all(&trud_2026)?;
     create_mock_zip(&trud_2026.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), "2026-07-31")?;
-    ods::workspace::set_active_release(&workspace_root, "2026-07-31")?;
+    ods::workspace::Workspace::open_or_create(Some(&workspace_root))?.set_active("2026-07-31")?;
 
     // 2. Prepare a local archive for release 2025-05-01
     let local_archive_dir = temp_dir.path().join("local_source");
@@ -51,7 +51,7 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     assert!(!bled_zip.exists(), "2026 release dir must NOT contain 2025 zip");
 
     // 6. Assert current link was updated to 2025-05-01
-    let (active_date, active_path) = ods::workspace::get_active_release(&workspace_root)?;
+    let (active_date, active_path) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
     assert_eq!(active_date, "2025-05-01", "current release link must be updated to 2025-05-01");
     let canon_rel_2025 = fs::canonicalize(&rel_2025)?;
     let canon_active_path = fs::canonicalize(&active_path)?;

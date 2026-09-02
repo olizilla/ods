@@ -73,9 +73,8 @@ pub fn run(args: Args) -> Result<()> {
     let (old_path, new_path) = match (&args.old, &args.new) {
         (Some(o), Some(n)) => (o.clone(), n.clone()),
         _ => {
-            let workspace_root = crate::workspace::find_workspace_root(None)
-                .context("No ODS workspace found. Provide positional `[OLD] [NEW]` paths or run from an ODS workspace.")?;
-            let releases = crate::workspace::list_releases(&workspace_root)?;
+            let ws = crate::workspace::Workspace::open(None)?;
+            let releases = ws.releases()?;
             if releases.len() < 2 {
                 anyhow::bail!("At least 2 release snapshots are required in releases/ to auto-diff. Found {}.", releases.len());
             }

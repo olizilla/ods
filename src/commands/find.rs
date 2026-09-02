@@ -420,12 +420,12 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let user_input = if args.input == PathBuf::from(".") {
+    let user_input = if args.input == PathBuf::from(".") && !Path::new("orgs.parquet").exists() {
         None
     } else {
         Some(args.input.as_path())
     };
-    let resolved_input = crate::workspace::discover_parquet_dir(user_input)?;
+    let resolved_input = crate::workspace::resolve_parquet_input(user_input)?;
 
     run_with_writer(args, &mut std::io::stdout(), &resolved_input)
 }
@@ -434,13 +434,20 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let path = parquet_dir.join(file_name);
     if !path.exists() {
-        if let Some(workspace_root) = crate::workspace::find_workspace_root(None) {
-            let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
+        if args.input != PathBuf::from(".") || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+            anyhow::bail!(
+                "✖ Parquet file '{}' not found in '{}'",
+                file_name,
+                parquet_dir.display()
+            );
+        }
+        if let Ok(ws) = crate::workspace::Workspace::open(None) {
+            let releases = ws.releases().unwrap_or_default();
             if !releases.is_empty() {
                 let n = releases.len();
                 let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
                 let newest_date = &releases[0].date;
-                let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
+                let ws_name = ws.root().file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
                 anyhow::bail!(
                     "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
                     count_str,
@@ -450,7 +457,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             }
         }
         anyhow::bail!(
-            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
         );
     }
 

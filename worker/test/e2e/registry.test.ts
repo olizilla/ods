@@ -72,7 +72,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       // 1. Create source release files
       const notesContent = '# Release Notes\nEnd-to-end seam test release notes.\n';
-      const datapackageContent = '{"name": "test-dataset", "version": "1.0.1"}';
+      const datapackageContent = '{"name": "test-dataset", "version": "0.1.0"}';
       const orgsContent = Buffer.from([0x50, 0x41, 0x52, 0x31, 0x01, 0x02, 0x03, 0x04, 0x50, 0x41, 0x52, 0x31]); // valid-ish parquet magic
       const rolesContent = Buffer.from([0x50, 0x41, 0x52, 0x31, 0x05, 0x06, 0x07, 0x08, 0x50, 0x41, 0x52, 0x31]);
 
@@ -110,7 +110,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       const provenanceObj = {
         _type: 'ods_provenance',
-        dataset_version: '1.0.1',
+        dataset_version: '0.1.0',
         publication_date: '2026-07-28',
         publication_source: 'TRUD',
         publication_seq_num: '4700',
@@ -132,7 +132,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       // 3. Run ods make release on fixture release to produce dist/
       const distDir = path.join(repoDir, 'dist');
-      execFileSync(odsBin, ['make', 'release', '--input', fixtureDir, '--tool-repo', repoDir, '--dist', distDir, '--offline'], {
+      execFileSync(odsBin, ['make', 'release', '--input', fixtureDir, '--tool-repo', repoDir, '--output', distDir, '--offline'], {
         stdio: 'pipe',
       });
 

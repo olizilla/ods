@@ -162,7 +162,7 @@ fn test_task_3_acceptance_non_default_workspace_discovery() {
         index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
     };
     cached.save_to_workspace(&ws).unwrap();
-    ods::workspace::set_active_release(&ws, "2026-07-31").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
 
     // 1. Run `ods find` from inside nhs-archive/
     let out_find = ods_binary()
@@ -216,7 +216,7 @@ fn test_task_3_acceptance_non_default_workspace_discovery() {
         stderr_empty
     );
     assert!(
-        stderr_empty.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."),
+        stderr_empty.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."),
         "stderr must contain usage hint, got:\n{}",
         stderr_empty
     );
@@ -252,10 +252,10 @@ fn test_task_4_acceptance_make_does_not_move_current_pointer() {
         index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
     };
     cached.save_to_workspace(&ws).unwrap();
-    ods::workspace::set_active_release(&ws, "2026-05-29").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-05-29").unwrap();
 
     // Verify current is pinned to 2026-05-29
-    let (active_date, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_date, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(active_date, "2026-05-29");
 
     // Now run `ods make` into release B
@@ -271,7 +271,7 @@ fn test_task_4_acceptance_make_does_not_move_current_pointer() {
     assert!(rel_b.join("orgs.parquet").exists(), "release B parquet must be generated");
 
     // Assert that `current` STILL points to 2026-05-29
-    let (current_after, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (current_after, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         current_after,
         "2026-05-29",
@@ -309,7 +309,7 @@ fn test_task_6_acceptance_audit_workspace_authoritative_on_unpinned_workspace() 
     cached.save_to_workspace(&external_ws).unwrap();
 
     // Verify that the workspace has NO active release pinned
-    assert!(ods::workspace::get_active_release(&external_ws).is_err(), "workspace should be unpinned");
+    assert!(ods::workspace::Workspace::open(Some(&external_ws)).unwrap().active_release().is_err(), "workspace should be unpinned");
 
     // From a completely separate isolated working directory
     let isolated_cwd = tmp.path().join("isolated_cwd");

@@ -100,7 +100,7 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
 
     // Assert that current symlink is pinned to the newly pulled release and README exists
     assert!(workspace.join("current").exists(), "current symlink must exist");
-    let (active_date, active_dir) = ods::workspace::get_active_release(&workspace)?;
+    let (active_date, active_dir) = ods::workspace::Workspace::open(Some(&workspace))?.active_release()?;
     assert_eq!(active_date, "2026-07-31");
     assert_eq!(active_dir, std::fs::canonicalize(&rel_dir)?);
     assert!(workspace.join("README.md").exists(), "workspace README.md must exist");
@@ -499,7 +499,7 @@ fn test_pull_oci_frontier_corroborated_two_mirrors_success() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2099-01-01");
     assert!(rel_dir.exists());
     assert!(rel_dir.join("orgs.parquet").exists());
-    assert_eq!(ods::workspace::get_active_release(&workspace)?.0, "2099-01-01");
+    assert_eq!(ods::workspace::Workspace::open(Some(&workspace))?.active_release()?.0, "2099-01-01");
 
     Ok(())
 }
@@ -575,7 +575,7 @@ fn test_pull_oci_frontier_second_mirror_unreachable_uncorroborated() -> Result<(
     let rel_dir = workspace.join("releases").join("2099-01-01");
     assert!(rel_dir.exists());
     assert!(rel_dir.join("orgs.parquet").exists());
-    assert_eq!(ods::workspace::get_active_release(&workspace)?.0, "2099-01-01");
+    assert_eq!(ods::workspace::Workspace::open(Some(&workspace))?.active_release()?.0, "2099-01-01");
 
     Ok(())
 }

@@ -263,7 +263,7 @@ fn test_batch_all_cached_outputs_four_lines() {
 
     // Set an initial pin to an older release
     let initial_rel = &releases[0];
-    ods::workspace::set_active_release(&ws, &initial_rel.release_date).unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&initial_rel.release_date).unwrap();
 
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
@@ -276,7 +276,7 @@ fn test_batch_all_cached_outputs_four_lines() {
     assert!(!output.contains("current →"), "Must NOT emit current pin update when all releases are cached");
     assert_eq!(lines.len(), 2, "Output must be exactly 2 settled lines in non-interactive mode");
 
-    let (active_release, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
         initial_rel.release_date.as_str(),
@@ -609,7 +609,7 @@ fn test_batch_pin_lands_on_newest_cached_when_older_downloaded() {
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
 
-    let (active_release, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
         "2026-05-28",
@@ -627,7 +627,7 @@ fn test_batch_pin_untouched_on_total_failure() {
     // Set initial pin to an existing custom release
     let initial_rel_dir = ws.join("releases").join("2020-01-01");
     fs::create_dir_all(&initial_rel_dir).unwrap();
-    ods::workspace::set_active_release(&ws, "2020-01-01").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2020-01-01").unwrap();
 
     let releases = vec![
         TrudReleaseItem {
@@ -667,7 +667,7 @@ fn test_batch_pin_untouched_on_total_failure() {
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_err());
 
-    let (active_release, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
         "2020-01-01",
@@ -822,7 +822,7 @@ fn test_batch_pin_not_moved_to_older_when_older_downloaded() {
     fs::write(rel_dir.join(&newest_rel.archive_file_name), bytes).unwrap();
 
     // Set initial pin to 2026-05-28
-    ods::workspace::set_active_release(&ws, &newest_rel.release_date).unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&newest_rel.release_date).unwrap();
 
     // Fetcher has release 95 (cached) and release 0 (oldest: 2018-06-28 to download)
     let test_releases = vec![releases[0].clone(), releases[95].clone()];
@@ -850,7 +850,7 @@ fn test_batch_pin_not_moved_to_older_when_older_downloaded() {
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
 
-    let (active_release, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
         "2026-05-28",
@@ -876,7 +876,7 @@ fn test_batch_pin_moved_when_newer_downloaded() {
     fs::write(rel_dir.join(&rel_94.archive_file_name), bytes).unwrap();
 
     // Set initial pin to 2026-04-28
-    ods::workspace::set_active_release(&ws, &rel_94.release_date).unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&rel_94.release_date).unwrap();
 
     // Fetcher has release 94 (cached) and release 95 (newer: 2026-05-28 to download)
     let test_releases = vec![releases[94].clone(), releases[95].clone()];
@@ -904,7 +904,7 @@ fn test_batch_pin_moved_when_newer_downloaded() {
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
 
-    let (active_release, _) = ods::workspace::get_active_release(&ws).unwrap();
+    let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
         "2026-05-28",

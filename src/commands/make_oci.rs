@@ -113,9 +113,8 @@ pub fn run(args: Args) -> Result<()> {
     let release_dir = match args.input {
         Some(ref p) => p.clone(),
         None => {
-            let root = crate::workspace::find_workspace_root(None)
-                .ok_or_else(|| anyhow::anyhow!("No workspace found. Specify --input <release_dir>"))?;
-            let (_, active_path) = crate::workspace::get_active_release(&root)?;
+            let ws = crate::workspace::Workspace::open_or_create(None)?;
+            let (_, active_path) = ws.active_release()?;
             active_path
         }
     };

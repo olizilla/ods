@@ -93,7 +93,7 @@ pub struct InfoRecordJson {
 pub fn run(args: Args) -> Result<()> {
     use std::io::IsTerminal;
     let use_color = std::io::stdout().is_terminal();
-    let resolved_input = crate::workspace::discover_parquet_dir(args.input.as_deref())?;
+    let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     if let Err(e) = run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, use_color) {
         if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
             if io_err.kind() == std::io::ErrorKind::BrokenPipe {
@@ -124,8 +124,14 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
     } else if parquet_dir.join("orgs.parquet").exists() {
         parquet_dir.join("orgs.parquet")
     } else {
-        if let Some(workspace_root) = crate::workspace::find_workspace_root(None) {
-            let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
+        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+            anyhow::bail!(
+                "✖ Parquet file 'orgs.parquet' not found in '{}'",
+                parquet_dir.display()
+            );
+        }
+        if let Ok(ws) = crate::workspace::Workspace::open(None) {
+            let releases = ws.releases().unwrap_or_default();
             if !releases.is_empty() {
                 let n = releases.len();
                 let count_str = if n == 1 {
@@ -134,7 +140,10 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                     format!("{} releases", n)
                 };
                 let newest_date = &releases[0].date;
-                let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
+                let ws_name = ws.root()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
                 anyhow::bail!(
                     "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
                     count_str,
@@ -144,7 +153,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
             }
         }
         anyhow::bail!(
-            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
         );
     };
 

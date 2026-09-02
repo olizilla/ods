@@ -97,7 +97,7 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
 
     let current = workspace.join("current");
     assert!(current.exists());
-    let (active_date, path) = ods::workspace::get_active_release(&workspace)?;
+    let (active_date, path) = ods::workspace::Workspace::open(Some(&workspace))?.active_release()?;
     assert_eq!(active_date, "2026-07-31");
     assert_eq!(path, fs::canonicalize(&rel_dir)?);
 

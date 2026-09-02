@@ -43,9 +43,175 @@ pub fn validate_releases_json(dir: &Path) -> bool {
     false
 }
 
-/// Backward-compatible alias for workspace root validation.
-pub fn is_workspace_root(dir: &Path) -> bool {
+#[derive(Debug)]
+pub struct Workspace {
+    root: PathBuf,
+}
+
+impl Workspace {
+    /// Find an existing workspace. Never creates. For read commands.
+    pub fn open(explicit: Option<&Path>) -> Result<Workspace> {
+        let root = if let Some(path) = explicit {
+            if !path.exists() {
+                anyhow::bail!(
+                    "✖ no ods workspace found at '{}'\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace.",
+                    path.display()
+                );
+            }
+            if is_existing_workspace(path) {
+                path.to_path_buf()
+            } else if path.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+                if let Some(parent) = path.parent() {
+                    if parent.file_name().is_some_and(|n| n == "releases") {
+                        if let Some(gp) = parent.parent() {
+                            gp.to_path_buf()
+                        } else {
+                            parent.to_path_buf()
+                        }
+                    } else {
+                        parent.to_path_buf()
+                    }
+                } else {
+                    anyhow::bail!(
+                        "✖ no ods workspace found at '{}'\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace.",
+                        path.display()
+                    );
+                }
+            } else if let Some(found) = find_workspace_root_from(path, None) {
+                found
+            } else {
+                anyhow::bail!(
+                    "✖ no ods workspace found at '{}'\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace.",
+                    path.display()
+                );
+            }
+        } else {
+            find_workspace_root(None).ok_or_else(|| {
+                anyhow!(
+                    "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
+                )
+            })?
+        };
+        Ok(Workspace { root })
+    }
+
+    /// Find one, or establish it at `explicit` (else the default). For write commands.
+    pub fn open_or_create(explicit: Option<&Path>) -> Result<Workspace> {
+        let root = if let Some(path) = explicit {
+            if is_existing_workspace(path) {
+                path.to_path_buf()
+            } else if let Some(discovered) = find_workspace_root_from(path, None) {
+                discovered
+            } else if !path.exists() {
+                if path.file_name().is_some_and(|n| n == DEFAULT_WORKSPACE_DIR) {
+                    path.to_path_buf()
+                } else {
+                    anyhow::bail!(
+                        "✖ no ods workspace found at '{}'\n  Pass an existing workspace or empty directory to create one.",
+                        path.display()
+                    );
+                }
+            } else {
+                let is_empty = fs::read_dir(path)
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(false);
+                if !is_empty {
+                    anyhow::bail!(
+                        "✖ directory '{}' is not an ods workspace and is not empty",
+                        path.display()
+                    );
+                }
+                path.to_path_buf()
+            }
+        } else {
+            find_workspace_root(None).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR))
+        };
+
+        fs::create_dir_all(&root)
+            .with_context(|| format!("creating workspace at {}", root.display()))?;
+        ensure_workspace_gitignore(&root)?;
+        ensure_workspace_readme(&root)?;
+
+        Ok(Workspace { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn active_release(&self) -> Result<(String, PathBuf)> {
+        get_active_release(&self.root)
+    }
+
+    pub fn set_active(&self, date: &str) -> Result<()> {
+        set_active_release(&self.root, date)?;
+        let _ = generate_workspace_readme(&self.root, date, None, None);
+        Ok(())
+    }
+
+    pub fn prepare_release(&self, date: &str) -> Result<PathBuf> {
+        prepare_release_dir(&self.root, date)
+    }
+
+    pub fn releases(&self) -> Result<Vec<ReleaseInfo>> {
+        list_releases(&self.root)
+    }
+
+    pub fn parquet_dir(&self) -> Result<PathBuf> {
+        if self.root.join("orgs.parquet").exists() {
+            return Ok(self.root.clone());
+        }
+        if self.root.join("current").join("orgs.parquet").exists() {
+            return Ok(self.root.join("current"));
+        }
+        if self.root.join("parquet").join("orgs.parquet").exists() {
+            return Ok(self.root.join("parquet"));
+        }
+        if self.root.join("current").join("parquet").join("orgs.parquet").exists() {
+            return Ok(self.root.join("current").join("parquet"));
+        }
+        if let Ok((_date, active_dir)) = self.active_release() {
+            if active_dir.join("orgs.parquet").exists() {
+                return Ok(active_dir);
+            }
+            if active_dir.join("parquet").join("orgs.parquet").exists() {
+                return Ok(active_dir.join("parquet"));
+            }
+            return Ok(active_dir);
+        }
+
+        let rels = self.releases().unwrap_or_default();
+        if !rels.is_empty() {
+            let n = rels.len();
+            let count_str = if n == 1 {
+                "1 release".to_string()
+            } else {
+                format!("{} releases", n)
+            };
+            let newest_date = &rels[0].date;
+            let ws_name = self.root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(DEFAULT_WORKSPACE_DIR);
+            return Err(anyhow!(
+                "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
+                count_str,
+                ws_name,
+                newest_date
+            ));
+        }
+
+        Err(anyhow!(
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
+        ))
+    }
+}
+
+fn is_existing_workspace(dir: &Path) -> bool {
     validate_releases_json(dir)
+        || dir.join("releases").is_dir()
+        || dir.join("current").exists()
+        || (dir.join(".gitignore").is_file() && dir.join("README.md").is_file())
 }
 
 /// Resolves the root workspace directory from a specific starting path:
@@ -75,8 +241,8 @@ pub fn find_workspace_root_from_with_home(
         return Some(path.to_path_buf());
     }
 
-    // 2. start is the root. start/_releases.json validates -> root = start.
-    if validate_releases_json(start) {
+    // 2. start is the root.
+    if validate_releases_json(start) || is_existing_workspace(start) {
         return Some(start.to_path_buf());
     }
 
@@ -85,11 +251,11 @@ pub fn find_workspace_root_from_with_home(
         if let Some(parent) = start.parent() {
             if parent.file_name().is_some_and(|n| n == "releases") {
                 if let Some(grandparent) = parent.parent() {
-                    if validate_releases_json(grandparent) {
+                    if validate_releases_json(grandparent) || is_existing_workspace(grandparent) {
                         return Some(grandparent.to_path_buf());
                     }
                 }
-            } else if validate_releases_json(parent) {
+            } else if validate_releases_json(parent) || is_existing_workspace(parent) {
                 return Some(parent.to_path_buf());
             }
         }
@@ -101,7 +267,7 @@ pub fn find_workspace_root_from_with_home(
             if let Some(parent) = canon.parent() {
                 if parent.file_name().is_some_and(|n| n == "releases") {
                     if let Some(grandparent) = parent.parent() {
-                        if validate_releases_json(grandparent) {
+                        if validate_releases_json(grandparent) || is_existing_workspace(grandparent) {
                             return Some(grandparent.to_path_buf());
                         }
                     }
@@ -116,11 +282,11 @@ pub fn find_workspace_root_from_with_home(
     // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
     let mut current = Some(start);
     while let Some(a) = current {
-        if validate_releases_json(a) {
+        if validate_releases_json(a) || is_existing_workspace(a) {
             return Some(a.to_path_buf());
         }
         let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
-        if validate_releases_json(&default_ws) {
+        if validate_releases_json(&default_ws) || is_existing_workspace(&default_ws) {
             return Some(default_ws);
         }
 
@@ -136,85 +302,57 @@ pub fn find_workspace_root_from_with_home(
 }
 
 /// Resolves the root workspace directory from current working directory or explicit option.
-pub fn find_workspace_root(explicit: Option<&Path>) -> Option<PathBuf> {
+fn find_workspace_root(explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
     }
     let pwd = std::env::current_dir().ok()?;
     find_workspace_root_from(&pwd, explicit)
 }
-
-/// Legacy wrapper for discover_dataset_dir.
-pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
-    discover_dataset_dir(user_input, None)
-}
-
-/// Discovers the active dataset/parquet directory:
-/// 1. User-supplied `--input` argument (if explicit)
-/// 2. Workspace root's active release directory (or unpinned diagnostic error)
-pub fn discover_dataset_dir(
-    user_input: Option<&Path>,
-    workspace_override: Option<&Path>,
-) -> Result<PathBuf> {
-    if let Some(input) = user_input {
+/// Resolves the parquet directory for read commands (`find`, `cite`, `info`, `role`).
+///
+/// When an explicit `-i` path is given:
+/// 1. If explicit/orgs.parquet exists, return explicit directly (loose parquet dir).
+/// 2. If explicit/parquet/orgs.parquet exists, return explicit/parquet.
+/// 3. If explicit itself is a release directory (contains `_provenance.json`):
+///    - if explicit/parquet is a directory, return explicit/parquet.
+///    - otherwise return explicit directly.
+/// 4. If explicit does not exist, fail with diagnostic error.
+/// 5. Otherwise fall through to `Workspace::open(Some(explicit))?.parquet_dir()`.
+///
+/// When no explicit path is given (None):
+/// Falls back to `Workspace::open(None)?.parquet_dir()`.
+pub fn resolve_parquet_input(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(input) = explicit {
         if input.join("orgs.parquet").exists() {
             return Ok(input.to_path_buf());
-        }
-        if input.join("current").join("orgs.parquet").exists() {
-            return Ok(input.join("current"));
         }
         if input.join("parquet").join("orgs.parquet").exists() {
             return Ok(input.join("parquet"));
         }
-        if input.join("current").join("parquet").join("orgs.parquet").exists() {
-            return Ok(input.join("current").join("parquet"));
-        }
-        if input.exists() {
+        if input.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+            if input.join("parquet").is_dir() {
+                return Ok(input.join("parquet"));
+            }
             return Ok(input.to_path_buf());
         }
+        if !input.exists() {
+            anyhow::bail!(
+                "✖ no ods workspace found at '{}'\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace.",
+                input.display()
+            );
+        }
+        let ws = Workspace::open(Some(input))?;
+        return ws.parquet_dir();
     }
 
-    if let Some(workspace_root) = find_workspace_root(workspace_override) {
-        if let Ok((_date, active_dir)) = get_active_release(&workspace_root) {
-            if active_dir.join("orgs.parquet").exists() {
-                return Ok(active_dir);
-            }
-            if active_dir.join("parquet").join("orgs.parquet").exists() {
-                return Ok(active_dir.join("parquet"));
-            }
-            return Ok(active_dir);
-        }
-
-        let releases = list_releases(&workspace_root).unwrap_or_default();
-        if !releases.is_empty() {
-            let n = releases.len();
-            let count_str = if n == 1 {
-                "1 release".to_string()
-            } else {
-                format!("{} releases", n)
-            };
-            let newest_date = &releases[0].date;
-            let ws_name = workspace_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(DEFAULT_WORKSPACE_DIR);
-            return Err(anyhow!(
-                "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
-                count_str,
-                ws_name,
-                newest_date
-            ));
-        }
-    }
-
-    Err(anyhow!(
-        "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
-    ))
+    let ws = Workspace::open(None)?;
+    ws.parquet_dir()
 }
 
 /// Ensures the directory structure for a specific release date inside workspace root:
 /// `./<workspace>/releases/<date>/trud/`
-pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<PathBuf> {
+fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<PathBuf> {
     let release_dir = workspace_root.join("releases").join(release_date);
     fs::create_dir_all(release_dir.join("trud"))
         .context("Failed to create release trud directory")?;
@@ -223,7 +361,7 @@ pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<
 }
 
 /// Ensures `.gitignore` ignores heavy raw ZIP/XML files while preserving metadata/parquet artifacts.
-pub fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
+fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
     let gitignore_path = workspace_root.join(".gitignore");
     if !gitignore_path.exists() {
         let content = "# Ignore raw TRUD archive downloads and extracted XML files\nreleases/*/trud/\n*.zip\n*.xml\n";
@@ -233,8 +371,18 @@ pub fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_workspace_readme(workspace_root: &Path) -> Result<()> {
+    let readme_path = workspace_root.join("README.md");
+    if !readme_path.exists() {
+        let active = get_active_release(workspace_root).ok().map(|(d, _)| d);
+        let date_str = active.as_deref().unwrap_or("none");
+        generate_workspace_readme(workspace_root, date_str, None, None)?;
+    }
+    Ok(())
+}
+
 /// Sets or updates the `current` symlink/pointer in the workspace root to target `releases/<release_date>`.
-pub fn set_active_release(workspace_root: &Path, release_date: &str) -> Result<()> {
+fn set_active_release(workspace_root: &Path, release_date: &str) -> Result<()> {
     let target = Path::new("releases").join(release_date);
     let current_link = workspace_root.join("current");
 
@@ -262,7 +410,7 @@ pub fn set_active_release(workspace_root: &Path, release_date: &str) -> Result<(
 }
 
 /// Resolves the active release date and path from the workspace.
-pub fn get_active_release(workspace_root: &Path) -> Result<(String, PathBuf)> {
+fn get_active_release(workspace_root: &Path) -> Result<(String, PathBuf)> {
     let current_path = workspace_root.join("current");
     if !current_path.exists() && fs::symlink_metadata(&current_path).is_err() {
         return Err(anyhow!("No active release found in workspace"));
@@ -288,7 +436,7 @@ pub fn get_active_release(workspace_root: &Path) -> Result<(String, PathBuf)> {
 }
 
 /// Lists all local releases in `./<workspace>/releases/`.
-pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
+fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
     let releases_dir = workspace_root.join("releases");
     if !releases_dir.exists() {
         return Ok(Vec::new());
@@ -319,7 +467,7 @@ pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
 }
 
 /// Generates the self-documenting `README.md` file in the workspace root.
-pub fn generate_workspace_readme(
+fn generate_workspace_readme(
     workspace_root: &Path,
     release_date: &str,
     seq_num: Option<&str>,

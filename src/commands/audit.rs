@@ -27,7 +27,7 @@ use std::time::Instant;
 
 use crate::provenance::OdsProvenance;
 use crate::roles;
-use crate::workspace::{self, count_records_in_parquet};
+use crate::workspace::count_records_in_parquet;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -139,14 +139,10 @@ pub fn run(args: Args) -> Result<()> {
 
 fn run_all(args: Args) -> Result<()> {
     let start_total = Instant::now();
-    let workspace_root = match args.workspace {
-        Some(ref p) => p.clone(),
-        None => crate::workspace::find_workspace_root(None).context(
-            "No ODS workspace found. Pass `--workspace <DIR>` or run inside a workspace.",
-        )?,
-    };
+    let ws = crate::workspace::Workspace::open(args.workspace.as_deref())?;
+    let workspace_root = ws.root().to_path_buf();
 
-    let releases = crate::workspace::list_releases(&workspace_root)?;
+    let releases = ws.releases()?;
     if releases.is_empty() {
         anyhow::bail!(
             "No releases found in workspace {}",
@@ -261,19 +257,22 @@ fn run_single(args: Args) -> Result<()> {
 }
 
 fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
+    let ws = if args.input.is_none() {
+        Some(crate::workspace::Workspace::open(args.workspace.as_deref())?)
+    } else {
+        crate::workspace::Workspace::open(args.workspace.as_deref()).ok()
+    };
+
     let input_path = match args.input {
         Some(ref p) => p.clone(),
         None => {
-            if let Some(root) = crate::workspace::find_workspace_root(args.workspace.as_deref()) {
-                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
-                let trud_dir = active_dir.join("trud");
-                if trud_dir.exists() {
-                    trud_dir
-                } else {
-                    active_dir
-                }
+            let ws_ref = ws.as_ref().unwrap();
+            let (_, active_dir) = ws_ref.active_release()?;
+            let trud_dir = active_dir.join("trud");
+            if trud_dir.exists() {
+                trud_dir
             } else {
-                PathBuf::from(".")
+                active_dir
             }
         }
     };
@@ -286,14 +285,11 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let xml_path = crate::ods_xml::find_xml_file(&input_path)?;
 
     // 2. Discover workspace root and active release directory
-    let workspace_root = match crate::workspace::find_workspace_root(args.workspace.as_deref()) {
-        Some(root) => root,
-        None => {
-            anyhow::bail!(
-                "✖ No ODS workspace found.\n  Provide --workspace <dir>, or run from a workspace."
-            );
-        }
+    let ws = match ws {
+        Some(w) => w,
+        None => crate::workspace::Workspace::open(args.workspace.as_deref())?,
     };
+    let workspace_root = ws.root().to_path_buf();
 
     let (workspace_date, active_release_path) =
         if input_path.is_dir() && input_path.join("orgs.parquet").exists() {
@@ -304,10 +300,10 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                 .to_string();
             (date_str, input_path.clone())
         } else {
-            match workspace::get_active_release(&workspace_root) {
+            match ws.active_release() {
                 Ok(res) => res,
                 Err(_) => {
-                    let releases = workspace::list_releases(&workspace_root).unwrap_or_default();
+                    let releases = ws.releases().unwrap_or_default();
                     if let Some(matching) = releases.into_iter().find(|r| r.has_parquet) {
                         (matching.date, matching.path)
                     } else {

@@ -17,7 +17,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let input_dir = crate::workspace::discover_parquet_dir(args.input.as_deref())?;
+    let input_dir = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     let args_with_dir = Args {
         input: Some(input_dir),
         format: args.format,
@@ -115,7 +115,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let input_dir = match args.input {
         Some(ref dir) => dir.clone(),
-        None => crate::workspace::discover_parquet_dir(None)?,
+        None => crate::workspace::resolve_parquet_input(None)?,
     };
 
     // 1. Fail early: check if at least one expected Parquet file exists
@@ -177,7 +177,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
-        .or_else(|| crate::workspace::find_workspace_root(None));
+        .or_else(|| crate::workspace::Workspace::open(None).ok().map(|ws| ws.root().to_path_buf()));
 
     let (index, index_status) = resolve_cite_index(workspace_root.as_deref(), fetcher)?;
 

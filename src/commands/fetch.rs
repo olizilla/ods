@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::progress::{format_duration, format_size, Progress, ProgressCaps};
 use crate::provenance::{compute_file_sha256, OdsProvenance};
-use crate::workspace::{prepare_release_dir, set_active_release, DEFAULT_WORKSPACE_DIR};
+use crate::workspace::Workspace;
 
 pub const TRUD_ODS_ITEM_ID: &str = "341";
 
@@ -264,8 +264,8 @@ impl TrudFetcher for UreqTrudFetcher {
 
 pub fn run(args: Args) -> Result<()> {
     let progress = Progress::stderr(ProgressCaps::detect(args.quiet, args.verbose, args.no_progress));
-    let workspace_root = crate::workspace::find_workspace_root(args.workspace.as_deref())
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+    let ws = Workspace::open_or_create(args.workspace.as_deref())?;
+    let workspace_root = ws.root().to_path_buf();
 
     if let Some(ref local_path) = args.local_archive {
         let resp_json_path = if local_path.is_dir() {
@@ -345,7 +345,10 @@ fn display_trud_releases<W: std::io::Write>(
     progress: &Progress,
     stdout: &mut W,
 ) -> Result<()> {
-    let (active_date, _) = crate::workspace::get_active_release(workspace_root).unwrap_or_default();
+    let (active_date, _) = Workspace::open(Some(workspace_root))
+        .ok()
+        .and_then(|ws| ws.active_release().ok())
+        .unwrap_or_default();
 
     let total_count = releases.len();
     let display_limit = if args.limit > 0 { args.limit } else { 10 };
@@ -474,7 +477,8 @@ fn pull_single_release<F: TrudFetcher>(
             (out.clone(), trud, false)
         }
         None => {
-            let release_dir = prepare_release_dir(workspace_root, &target_release.release_date)?;
+            let ws = Workspace::open_or_create(Some(workspace_root))?;
+            let release_dir = ws.prepare_release(&target_release.release_date)?;
             let trud = release_dir.join("trud");
             std::fs::create_dir_all(&trud)?;
             (release_dir, trud, true)
@@ -746,7 +750,10 @@ fn pull_all_trud_releases<F: TrudFetcher>(
 
     let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let existing_active_date = crate::workspace::get_active_release(workspace_root).ok().map(|(d, _)| d);
+    let existing_active_date = Workspace::open(Some(workspace_root))
+        .ok()
+        .and_then(|ws| ws.active_release().ok())
+        .map(|(d, _)| d);
     let newest_downloaded_date = Arc::new(std::sync::Mutex::new(None));
     let cached_bytes: u64 = cached_releases.iter().map(|r| r.archive_file_size).sum();
 
@@ -817,7 +824,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                         &format!("{}  {}  downloading…", release.release_date, format_size(release.archive_file_size)),
                     );
 
-                    let release_dir = match prepare_release_dir(&ws_root, &release.release_date) {
+                    let release_dir = match Workspace::open_or_create(Some(&ws_root)).and_then(|ws| ws.prepare_release(&release.release_date)) {
                         Ok(d) => d,
                         Err(e) => {
                             progress.remove_in_flight(&release.release_date);
@@ -1129,12 +1136,13 @@ fn write_provenance_json(
 }
 
 fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
-    if let Ok((active_date, _)) = crate::workspace::get_active_release(workspace_root) {
+    let ws = Workspace::open_or_create(Some(workspace_root))?;
+    if let Ok((active_date, _)) = ws.active_release() {
         if active_date == release_date {
             return Ok(false);
         }
     }
-    set_active_release(workspace_root, release_date)?;
+    ws.set_active(release_date)?;
     Ok(true)
 }
 
@@ -1248,7 +1256,8 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
             (out.clone(), trud, false)
         }
         None => {
-            let release_dir = prepare_release_dir(workspace_root, &release_date)?;
+            let ws = Workspace::open_or_create(Some(workspace_root))?;
+            let release_dir = ws.prepare_release(&release_date)?;
             let trud = release_dir.join("trud");
             std::fs::create_dir_all(&trud)?;
             (release_dir, trud, true)

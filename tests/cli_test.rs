@@ -1,6 +1,8 @@
 //! End-to-end CLI integration tests verifying binary execution and stdout/stderr output formatting.
 
 use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -81,7 +83,7 @@ fn test_cli_cite_output_formatting() {
     )
     .unwrap();
 
-    ods::workspace::set_active_release(&ws, "2026-07-31").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
     let cached = ods::index::CachedReleaseIndex {
         fetched_at: "2026-07-31T00:00:00Z".to_string(),
         index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
@@ -233,7 +235,7 @@ fn test_cli_pull_local_release_output() {
     cached.save_to_workspace(&ws).unwrap();
 
     // Ensure starting pin is 2026-06-26 so switching to 2026-05-29 moves the pin
-    ods::workspace::set_active_release(&ws, "2026-06-26").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-06-26").unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -276,8 +278,8 @@ fn test_cli_find_empty_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."),
-        "stderr must advise passing -i/-o or running ods pull, got:\n{}",
+        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."),
+        "stderr must advise passing -i/-o or running ods pull or ods trud pull, got:\n{}",
         stderr
     );
 }
@@ -300,8 +302,8 @@ fn test_cli_cite_empty_workspace_message() {
         stderr
     );
     assert!(
-        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."),
-        "stderr must advise passing -i/-o or running ods pull, got:\n{}",
+        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."),
+        "stderr must advise passing -i/-o or running ods pull or ods trud pull, got:\n{}",
         stderr
     );
 }
@@ -418,4 +420,388 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
         stderr
     );
 }
+
+const FIXTURE_XML: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/mock_hscorgrefdata.xml"
+);
+
+fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
+    let zip_path = dir.join(filename);
+    let zip_file = fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
+    zip_writer.write_all(xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+    zip_path
+}
+
+#[test]
+fn test_read_commands_refuse_when_no_workspace_and_write_nothing() {
+    let tmp = TempDir::new().unwrap();
+    // Isolate from repository root so discovery doesn't ascend past tmp
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+    let empty_dir = tmp.path().join("empty_project");
+    fs::create_dir_all(&empty_dir).unwrap();
+
+    let read_commands: Vec<&[&str]> = vec![
+        &["cite"],
+        &["find", "sedbergh"],
+        &["info", "RAE01"],
+        &["role", "RO177"],
+        &["audit"],
+        &["diff"],
+    ];
+
+    for cmd_args in read_commands {
+        let mut cmd = ods_binary();
+        cmd.current_dir(&empty_dir);
+        for arg in cmd_args {
+            cmd.arg(arg);
+        }
+
+        let output = cmd.output().expect("Failed to execute read command");
+        assert!(
+            !output.status.success(),
+            "Command {:?} should fail when no workspace exists",
+            cmd_args
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("ods pull"),
+            "Command {:?} stderr must name 'ods pull', got:\n{}",
+            cmd_args,
+            stderr
+        );
+        assert!(
+            stderr.contains("ods trud pull"),
+            "Command {:?} stderr must name 'ods trud pull', got:\n{}",
+            cmd_args,
+            stderr
+        );
+
+        assert_eq!(
+            fs::read_dir(&empty_dir).unwrap().count(),
+            0,
+            "Command {:?} must not write anything on refusal path",
+            cmd_args
+        );
+    }
+}
+
+#[test]
+fn test_trud_pull_furniture_and_ods_make_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+    let project_dir = tmp.path().join("project");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    // 1. Run `ods trud pull --local-archive <zip>`
+    let trud_pull_output = ods_binary()
+        .current_dir(&project_dir)
+        .arg("trud")
+        .arg("pull")
+        .arg("--local-archive")
+        .arg(&mock_zip)
+        .output()
+        .expect("execute ods trud pull");
+
+    assert!(
+        trud_pull_output.status.success(),
+        "ods trud pull failed: stderr was:\n{}",
+        String::from_utf8_lossy(&trud_pull_output.stderr)
+    );
+
+    let ws_dir = project_dir.join("ods_data");
+    assert!(ws_dir.join(".gitignore").is_file(), ".gitignore must exist in workspace root after trud pull");
+    assert!(ws_dir.join("README.md").is_file(), "README.md must exist in workspace root after trud pull");
+    assert!(ws_dir.join("current").exists(), "current symlink must exist after trud pull");
+
+    // 2. Run bare `ods make` in the project directory
+    let make_output = ods_binary()
+        .current_dir(&project_dir)
+        .arg("make")
+        .output()
+        .expect("execute bare ods make");
+
+    assert!(
+        make_output.status.success(),
+        "bare ods make failed: stderr was:\n{}",
+        String::from_utf8_lossy(&make_output.stderr)
+    );
+
+    assert!(
+        ws_dir.join("current").join("orgs.parquet").is_file(),
+        "orgs.parquet must exist in current release after bare ods make"
+    );
+}
+
+#[test]
+fn test_use_cmd_repairs_missing_furniture() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("unfurnished_ws");
+    let rel_dir = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    // Export fixture XML directly into release dir so verify_release_dir passes
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let make_output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel_dir)
+        .output()
+        .expect("execute ods make into release dir");
+    assert!(make_output.status.success());
+
+    // Ensure workspace furniture is missing before `ods use`
+    assert!(!ws_dir.join(".gitignore").exists());
+    assert!(!ws_dir.join("README.md").exists());
+
+    // Run `ods use 2026-07-31 --workspace <dir>`
+    let use_output = ods_binary()
+        .arg("use")
+        .arg("2026-07-31")
+        .arg("--workspace")
+        .arg(&ws_dir)
+        .output()
+        .expect("execute ods use");
+
+    assert!(
+        use_output.status.success(),
+        "ods use failed: stderr was:\n{}",
+        String::from_utf8_lossy(&use_output.stderr)
+    );
+
+    assert!(ws_dir.join(".gitignore").is_file(), "ods use must repair .gitignore");
+    assert!(ws_dir.join("README.md").is_file(), "ods use must repair README.md");
+    assert!(ws_dir.join("current").exists(), "ods use must pin current");
+}
+
+#[test]
+fn test_bare_ods_make_in_empty_dir_fails_and_leaves_dir_empty() {
+    let tmp = TempDir::new().unwrap();
+    // Boundary to stop discovery from ascending into repository root
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+    let empty_dir = tmp.path().join("empty_project");
+    fs::create_dir_all(&empty_dir).unwrap();
+
+    let output = ods_binary()
+        .current_dir(&empty_dir)
+        .arg("make")
+        .output()
+        .expect("execute bare ods make in empty dir");
+
+    assert!(!output.status.success(), "bare ods make must fail in empty dir");
+    assert_eq!(
+        fs::read_dir(&empty_dir).unwrap().count(),
+        0,
+        "bare ods make in empty dir must leave directory completely empty (no ods_data litter)"
+    );
+}
+
+#[test]
+fn test_find_with_loose_parquet_dir() {
+    let tmp = TempDir::new().unwrap();
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    // Make into a staging dir to get orgs.parquet
+    let staging = tmp.path().join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    let make_output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&staging)
+        .output()
+        .expect("execute ods make");
+    assert!(make_output.status.success());
+
+    // Copy ONLY orgs.parquet to a loose directory with NO provenance, releases/, current, etc.
+    let loose_dir = tmp.path().join("loose_parquet");
+    fs::create_dir_all(&loose_dir).unwrap();
+    fs::copy(staging.join("orgs.parquet"), loose_dir.join("orgs.parquet")).unwrap();
+
+    // Verify it is not a workspace
+    assert!(!loose_dir.join("_provenance.json").exists());
+    assert!(!loose_dir.join("releases").exists());
+    assert!(!loose_dir.join("current").exists());
+
+    // Run `ods find Mock -i <loose_dir>`
+    let find_output = ods_binary()
+        .arg("find")
+        .arg("Mock")
+        .arg("-i")
+        .arg(&loose_dir)
+        .output()
+        .expect("execute ods find");
+
+    assert!(
+        find_output.status.success(),
+        "ods find -i <loose_dir> must succeed, stderr: {}",
+        String::from_utf8_lossy(&find_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&find_output.stdout);
+    assert!(stdout.contains("Mock"), "stdout must contain found record");
+}
+
+#[test]
+fn test_find_with_non_active_release_honours_explicit_release_dir() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("ods_data");
+    let rel1_dir = ws_dir.join("releases").join("2026-05-01");
+    let rel2_dir = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel1_dir).unwrap();
+    fs::create_dir_all(&rel2_dir).unwrap();
+
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    // Build release 1
+    let make1 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel1_dir)
+        .output()
+        .expect("make rel1");
+    assert!(make1.status.success());
+
+    // Build release 2
+    let make2 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel2_dir)
+        .output()
+        .expect("make rel2");
+    assert!(make2.status.success());
+
+    // Pin active release to release 2 (2026-07-31)
+    let use_output = ods_binary()
+        .arg("use")
+        .arg("2026-07-31")
+        .arg("--workspace")
+        .arg(&ws_dir)
+        .output()
+        .expect("ods use");
+    assert!(use_output.status.success());
+
+    // 1. Explicitly querying release 1 should succeed
+    let find_output = ods_binary()
+        .arg("find")
+        .arg("Mock")
+        .arg("-i")
+        .arg(&rel1_dir)
+        .output()
+        .expect("ods find -i rel1");
+    assert!(
+        find_output.status.success(),
+        "ods find -i <non-active-release> must succeed, stderr: {}",
+        String::from_utf8_lossy(&find_output.stderr)
+    );
+
+    // 2. Delete orgs.parquet from release 1: querying it must fail rather than silently falling back to current
+    fs::remove_file(rel1_dir.join("orgs.parquet")).unwrap();
+    let find_deleted = ods_binary()
+        .arg("find")
+        .arg("Mock")
+        .arg("-i")
+        .arg(&rel1_dir)
+        .output()
+        .expect("ods find -i rel1 with deleted orgs.parquet");
+    assert!(
+        !find_deleted.status.success(),
+        "ods find -i <non-active-release> with deleted parquet must fail, NOT fall back to active release"
+    );
+    let stderr = String::from_utf8_lossy(&find_deleted.stderr);
+    assert!(
+        stderr.contains("not found in") || stderr.contains("not found"),
+        "stderr should state parquet file not found, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_cite_with_non_active_release_honours_explicit_release_dir() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("ods_data");
+    let rel1_dir = ws_dir.join("releases").join("2026-05-01");
+    let rel2_dir = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel1_dir).unwrap();
+    fs::create_dir_all(&rel2_dir).unwrap();
+
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    let make1 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel1_dir)
+        .output()
+        .expect("make rel1");
+    assert!(make1.status.success());
+
+    let make2 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel2_dir)
+        .output()
+        .expect("make rel2");
+    assert!(make2.status.success());
+
+    // Pin active release to release 2 (2026-07-31)
+    let use_output = ods_binary()
+        .arg("use")
+        .arg("2026-07-31")
+        .arg("--workspace")
+        .arg(&ws_dir)
+        .output()
+        .expect("ods use");
+    assert!(use_output.status.success());
+
+    // Mark rel1 provenance as verified so ods cite allows it
+    let prov_path = rel1_dir.join(ods::provenance::PROVENANCE_FILENAME);
+    let mut prov = ods::provenance::OdsProvenance::load_from_dir(&rel1_dir).unwrap();
+    prov.trud_release_date = Some("2026-05-01".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+
+    // Query cite on release 1 explicitly: output should cite 2026-05-01, NOT 2026-07-31
+    let cite_output = ods_binary()
+        .arg("cite")
+        .arg("-i")
+        .arg(&rel1_dir)
+        .output()
+        .expect("ods cite -i rel1");
+    assert!(
+        cite_output.status.success(),
+        "ods cite -i <archived-release> failed, stderr: {}",
+        String::from_utf8_lossy(&cite_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&cite_output.stdout);
+    assert!(
+        stdout.contains("2026-05-01"),
+        "ods cite -i <archived-release> must cite the requested release date 2026-05-01, got:\n{}",
+        stdout
+    );
+}
+
+
+
+
 

@@ -4,15 +4,12 @@ use serde::Serialize;
 use sha2::Digest;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::index::{CachedReleaseIndex, MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
 use crate::oci::*;
 use crate::progress::{Progress, ProgressCaps};
-use crate::workspace::{
-    ensure_workspace_gitignore, find_workspace_root, generate_workspace_readme, list_releases,
-    set_active_release, verify_release_dir, DEFAULT_WORKSPACE_DIR,
-};
+use crate::workspace::{verify_release_dir, Workspace};
 
 #[derive(Debug)]
 pub struct AlreadyReported;
@@ -204,9 +201,9 @@ pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Resul
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let workspace_root = find_workspace_root(None).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+    let ws = Workspace::open_or_create(None)?;
     let fetcher = HttpOciFetcher;
-    run_with_fetcher(args, &workspace_root, &fetcher)
+    run_with_fetcher(args, ws.root(), &fetcher)
 }
 
 pub fn run_with_fetcher<F: OciBlobFetcher>(
@@ -226,9 +223,7 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
     let caps = ProgressCaps::detect(args.quiet, args.verbose, args.no_progress);
     let progress = Progress::stderr(caps);
 
-    fs::create_dir_all(workspace_root)
-        .with_context(|| format!("creating workspace at {}", workspace_root.display()))?;
-    ensure_workspace_gitignore(workspace_root)?;
+    let _ws = Workspace::open_or_create(Some(workspace_root))?;
 
     // Step 1: Resolve index
     let (index, _) = resolve_index_with_baked(workspace_root, fetcher, baked_override)?;
@@ -304,12 +299,13 @@ fn list_releases_cmd(
     args: &Args,
     progress: &Progress,
 ) -> Result<()> {
-    let local_releases = if workspace_root.exists() {
-        list_releases(workspace_root).unwrap_or_default()
+    let (local_releases, active_date) = if let Ok(ws) = Workspace::open(Some(workspace_root)) {
+        let rels = ws.releases().unwrap_or_default();
+        let active = ws.active_release().map(|(d, _)| d).unwrap_or_default();
+        (rels, active)
     } else {
-        vec![]
+        (vec![], String::new())
     };
-    let (active_date, _) = crate::workspace::get_active_release(workspace_root).unwrap_or_default();
 
     let mut items: Vec<ReleaseListItemJson> = Vec::new();
 
@@ -404,8 +400,8 @@ fn pull_all_releases_cmd<F: OciBlobFetcher>(
     }
 
     if let Some(newest_date) = succeeded.last() {
-        set_active_release(workspace_root, newest_date)?;
-        generate_workspace_readme(workspace_root, newest_date, None, None)?;
+        let ws = Workspace::open_or_create(Some(workspace_root))?;
+        ws.set_active(newest_date)?;
     }
 
     if !failed.is_empty() && succeeded.is_empty() {
@@ -431,8 +427,8 @@ fn pull_single_release<F: OciBlobFetcher>(
         match outcome {
             crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
                 if digest == &entry.manifest_digest {
-                    set_active_release(workspace_root, &entry.trud_release_date)?;
-                    generate_workspace_readme(workspace_root, &entry.trud_release_date, None, None)?;
+                    let ws = Workspace::open_or_create(Some(workspace_root))?;
+                    ws.set_active(&entry.trud_release_date)?;
                     eprintln!(
                         "✓ {} ({}) verified (cache hit)",
                         date, version
@@ -645,8 +641,8 @@ fn pull_single_release<F: OciBlobFetcher>(
         fs::rename(&temp_path, &rel_dir)?;
 
         // 5. Pin current and generate README
-        set_active_release(workspace_root, &entry.trud_release_date)?;
-        generate_workspace_readme(workspace_root, &entry.trud_release_date, None, None)?;
+        let ws = Workspace::open_or_create(Some(workspace_root))?;
+        ws.set_active(&entry.trud_release_date)?;
 
         let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
         let size_mb = (total_size as f64) / (1024.0 * 1024.0);

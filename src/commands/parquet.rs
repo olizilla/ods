@@ -69,18 +69,13 @@ pub fn run(args: Args) -> Result<PathBuf> {
     let input_path = match args.input {
         Some(p) => p,
         None => {
-            if let Some(root) = crate::workspace::find_workspace_root(None) {
-                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
-                let trud_dir = active_dir.join("trud");
-                if trud_dir.exists() {
-                    trud_dir
-                } else {
-                    active_dir
-                }
+            let ws = crate::workspace::Workspace::open(None)?;
+            let (_, active_dir) = ws.active_release()?;
+            let trud_dir = active_dir.join("trud");
+            if trud_dir.exists() {
+                trud_dir
             } else {
-                anyhow::bail!(
-                    "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
-                );
+                active_dir
             }
         }
     };
@@ -88,14 +83,9 @@ pub fn run(args: Args) -> Result<PathBuf> {
     let output_path = match args.output {
         Some(p) => p,
         None => {
-            if let Some(root) = crate::workspace::find_workspace_root(None) {
-                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
-                active_dir
-            } else {
-                anyhow::bail!(
-                    "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
-                );
-            }
+            let ws = crate::workspace::Workspace::open(None)?;
+            let (_, active_dir) = ws.active_release()?;
+            active_dir
         }
     };
 

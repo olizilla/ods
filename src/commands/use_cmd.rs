@@ -1,10 +1,7 @@
 use anyhow::{bail, Result};
 use clap::Args as ClapArgs;
 use std::path::PathBuf;
-use crate::workspace::{
-    find_workspace_root, get_active_release, set_active_release,
-    DEFAULT_WORKSPACE_DIR,
-};
+use crate::workspace::Workspace;
 
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -17,8 +14,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let workspace_root = find_workspace_root(args.workspace.as_deref())
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+    let ws = Workspace::open_or_create(args.workspace.as_deref())?;
+    let workspace_root = ws.root().to_path_buf();
 
     let release_dir = workspace_root.join("releases").join(&args.release_date);
     if !release_dir.exists() {
@@ -65,14 +62,13 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let already_active = if let Ok((active_date, _)) = get_active_release(&workspace_root) {
+    let already_active = if let Ok((active_date, _)) = ws.active_release() {
         active_date == args.release_date
     } else {
         false
     };
 
-    set_active_release(&workspace_root, &args.release_date)?;
-    crate::workspace::generate_workspace_readme(&workspace_root, &args.release_date, None, None)?;
+    ws.set_active(&args.release_date)?;
 
     if already_active {
         eprintln!("* Release {} already active", args.release_date);

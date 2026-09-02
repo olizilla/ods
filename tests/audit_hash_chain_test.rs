@@ -89,7 +89,7 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     )
     .unwrap();
 
-    ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&workspace_root)).unwrap().set_active("2026-07-31").unwrap();
 
     // Run parquet compilation
     ods::commands::parquet::run(ods::commands::parquet::Args {
@@ -136,7 +136,7 @@ fn test_audit_passes_on_verified_trud_release() -> Result<()> {
 #[test]
 fn test_audit_runs_full_suite_and_succeeds_on_unverified_local_archive() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (date, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (date, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
     assert_eq!(date, "2026-07-31");
 
     // Set trud_release_sha256_verified to Unverified
@@ -166,7 +166,7 @@ fn test_audit_runs_full_suite_and_succeeds_on_unverified_local_archive() -> Resu
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Mutate 1 byte of orgs.parquet
     let orgs_path = active_dir.join("orgs.parquet");
@@ -191,7 +191,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_unaccounted_file_in_release_dir() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Add unaccounted file to release directory
     let phantom_path = active_dir.join("phantom.parquet");
@@ -223,7 +223,7 @@ fn test_audit_runs_full_suite_and_fails_on_unaccounted_file_in_release_dir() -> 
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Mutate trud_release_sha256 in _provenance.json
     let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
@@ -253,7 +253,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -
 #[test]
 fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Create stray unaccounted file in active release directory
     let stray_path = active_dir.join("rels.parquet");
@@ -287,7 +287,7 @@ fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
 #[test]
 fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Overwrite successions.parquet with empty/different file
     let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
@@ -321,7 +321,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
 #[test]
 fn test_audit_fails_on_orphan_successions() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Create an orphan succession edge
     let record_with_orphan = ods::ods_xml::OdsRecord {
@@ -363,7 +363,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
 #[test]
 fn test_unexpected_files_detection() -> Result<()> {
     let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     assert!(ods::commands::parquet::get_unexpected_files(&active_dir).is_empty());
 
@@ -387,7 +387,7 @@ fn test_unexpected_files_detection() -> Result<()> {
 #[test]
 fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
+    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
     // Corrupt the transitive closure by re-exporting orgs with empty closures
     let record = ods::ods_xml::OdsRecord {
@@ -508,7 +508,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     )
     .unwrap();
 
-    ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&workspace_root)).unwrap().set_active("2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()),
@@ -675,7 +675,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     )
     .unwrap();
 
-    ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&workspace_root)).unwrap().set_active("2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()),
