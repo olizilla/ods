@@ -77,7 +77,7 @@ fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = Some(git_sha);
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.1".to_string());
+    prov.dataset_version = Some(ods::datapackage::dataset_version().to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -107,7 +107,6 @@ fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     // Generate OCI layout first via make oci
     ods::commands::make_oci::run(ods::commands::make_oci::Args {
         input: Some(rel_dir.clone()),
-        version: Some("1.0.1".to_string()),
         check: false,
     })
     .unwrap();
@@ -121,7 +120,6 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
 
     run(Args {
         input: Some(rel_dir.clone()),
-        version: Some("1.0.1".to_string()),
         repository: "ods-data".to_string(),
         output: None,
         doi: Some("10.5281/zenodo.12345".to_string()),
@@ -134,10 +132,11 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
 
+    let expected_ver = ods::datapackage::dataset_version();
     assert_eq!(index.releases.len(), 1);
     assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
-    assert_eq!(index.releases[0].dataset_version, "1.0.1");
-    assert_eq!(index.releases[0].tag, "2026-07-31_1.0.1");
+    assert_eq!(index.releases[0].dataset_version, expected_ver);
+    assert_eq!(index.releases[0].tag, format!("2026-07-31_{}", expected_ver));
     assert_eq!(index.releases[0].dataset_doi, Some("10.5281/zenodo.12345".to_string()));
     assert!(index.releases[0].manifest_digest.starts_with("sha256:"));
 
@@ -155,7 +154,7 @@ fn test_make_release_fails_on_dirty_working_tree() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ods::datapackage::dataset_version(),
         Some(tmp.path()),
         None,
         true,
@@ -176,7 +175,7 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ods::datapackage::dataset_version(),
         Some(tmp.path()),
         None,
         true,
@@ -190,14 +189,15 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
 fn test_make_release_fails_on_existing_git_tag() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
+    let ver = ods::datapackage::dataset_version();
     // Create the tag in git
     git_cmd(tmp.path())
-        .args(["tag", "--no-sign", "data/2026-07-31_1.0.1"])
+        .args(["tag", "--no-sign", &format!("data/2026-07-31_{}", ver)])
         .output()?;
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ver,
         Some(tmp.path()),
         None,
         true,
@@ -211,11 +211,12 @@ fn test_make_release_fails_on_existing_git_tag() -> Result<()> {
 fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
+    let ver = ods::datapackage::dataset_version();
     let mut index = ods::index::OdsReleaseIndex::baked()?;
     index.releases.push(ods::index::ReleaseIndexEntry {
         trud_release_date: "2026-07-31".to_string(),
-        dataset_version: "1.0.1".to_string(),
-        tag: "2026-07-31_1.0.1".to_string(),
+        dataset_version: ver.to_string(),
+        tag: format!("2026-07-31_{}", ver),
         manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
         trud_release_sha256: "8151248D".to_string(),
         tool_version: "0.4.3".to_string(),
@@ -225,13 +226,14 @@ fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ver,
         Some(tmp.path()),
         Some(&index),
         true,
     )?;
 
-    assert!(failures.iter().any(|f| f.contains("data/releases.json already has a row for 2026-07-31 1.0.1")));
+    let expected_msg = format!("data/releases.json already has a row for 2026-07-31 {}", ver);
+    assert!(failures.iter().any(|f| f.contains(&expected_msg)));
     Ok(())
 }
 
@@ -242,7 +244,6 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
 
     run(Args {
         input: Some(rel_dir.clone()),
-        version: None, // Test reading version from _provenance.json
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: Some("10.5281/zenodo.12345".to_string()),
@@ -254,13 +255,14 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     assert!(dist_dir.exists(), "dist/ directory must exist");
     assert!(!dist_dir.join("releases.json").exists(), "dist/releases.json must NOT exist in dist/");
 
+    let ver = ods::datapackage::dataset_version();
     let manifests_dir = dist_dir.join("v2").join("ods-data").join("manifests");
-    assert!(manifests_dir.join("2026-07-31_1.0.1").exists());
+    assert!(manifests_dir.join(format!("2026-07-31_{}", ver)).exists());
     assert!(manifests_dir.join("2026-07-31").exists());
     assert!(manifests_dir.join("latest").exists());
 
     // Check versioned and latest layer files
-    let versioned_orgs = dist_dir.join("2026-07-31").join("1.0.1").join("orgs.parquet");
+    let versioned_orgs = dist_dir.join("2026-07-31").join(ver).join("orgs.parquet");
     let latest_orgs = dist_dir.join("latest").join("orgs.parquet");
     assert!(versioned_orgs.exists());
     assert!(latest_orgs.exists());
@@ -332,7 +334,7 @@ fn test_make_release_refuses_when_no_repo_found() {
     // 1. Direct check in perform_all_release_checks
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ods::datapackage::dataset_version(),
         None,
         None,
         true,
@@ -342,7 +344,6 @@ fn test_make_release_refuses_when_no_repo_found() {
     // 2. Full run refusal
     let res = run(Args {
         input: Some(rel_dir),
-        version: Some("1.0.1".to_string()),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
@@ -368,7 +369,7 @@ fn test_make_release_refuses_unverified_provenance() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ods::datapackage::dataset_version(),
         None,
         None,
         true,
@@ -395,7 +396,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        "1.0.1",
+        ods::datapackage::dataset_version(),
         None,
         None,
         true,
@@ -407,6 +408,98 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
         failures
     );
 
+    Ok(())
+}
+
+#[test]
+fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Mutate provenance to 1.0.0, differing from tool constant 0.1.0
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.dataset_version = Some("1.0.0".to_string());
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        "1.0.0",
+        Some(tmp.path()),
+        None,
+        true,
+    )?;
+
+    let expected_ver = ods::datapackage::dataset_version();
+    let mismatch_failure = failures
+        .iter()
+        .find(|f| f.contains("Provenance dataset_version"))
+        .expect("must have dataset_version mismatch failure");
+    assert!(mismatch_failure.contains("1.0.0"));
+    assert!(mismatch_failure.contains(expected_ver));
+    assert!(mismatch_failure.contains("The release was compiled by an older tool. Re-run `ods make`"));
+
+    // Full command execution fails
+    let res = run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+        offline: true,
+    });
+    assert!(res.is_err());
+    let err = format!("{:#}", res.unwrap_err());
+    assert!(err.contains("Provenance dataset_version (1.0.0) does not match this build of ods"));
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Mutate provenance to None
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.dataset_version = None;
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let res = run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+        offline: true,
+    });
+    assert!(res.is_err());
+    let err = format!("{:#}", res.unwrap_err());
+    assert!(err.contains("Missing dataset_version in _provenance.json"));
+    assert!(err.contains("ods make"));
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.dataset_version = Some("invalid-semver".to_string());
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        "invalid-semver",
+        Some(tmp.path()),
+        None,
+        true,
+    )?;
+
+    assert!(failures.iter().any(|f| f.contains("is not valid SemVer")));
     Ok(())
 }
 

@@ -72,7 +72,7 @@ fi
 
 # 3. Run ods make release (assert the only git diff is data/releases.json)
 note "Running ods make release..."
-cargo run --release -- make release --input "$REL_DIR" --version "$VER"
+cargo run --release -- make release --input "$REL_DIR"
 
 INDEX_FILE="data/releases.json"
 [[ -f "$INDEX_FILE" ]] || die "Missing $INDEX_FILE"

@@ -20,31 +20,31 @@ describe('Derived Headers & Caching Policies', () => {
   beforeEach(async () => {
     // Populate manifest tag and blob in R2
     const manifestDigest = await sha256Hex(sampleManifestBytes);
-    await env.BUCKET.put('v2/ods-data/manifests/2026-07-31_1.0.1', sampleManifestBytes);
+    await env.BUCKET.put('v2/ods-data/manifests/2026-07-31_0.1.0', sampleManifestBytes);
     await env.BUCKET.put(`v2/ods-data/blobs/sha256/${manifestDigest}`, sampleManifestBytes);
-    await env.BUCKET.put('2026-07-31/1.0.1/orgs.parquet', new Uint8Array([1, 2, 3, 4]));
+    await env.BUCKET.put('2026-07-31/0.1.0/orgs.parquet', new Uint8Array([1, 2, 3, 4]));
     await env.BUCKET.put('latest/orgs.parquet', new Uint8Array([5, 6, 7, 8]));
     await env.BUCKET.put('releases.json', new TextEncoder().encode('{"releases":[]}'));
   });
 
   const EXPECTED_CONTRACT: Record<string, { contentType: string; cacheControl: string }> = {
-    '2026-07-31/1.0.1/NOTES.md': {
+    '2026-07-31/0.1.0/NOTES.md': {
       contentType: 'text/markdown; charset=utf-8',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    '2026-07-31/1.0.1/_provenance.json': {
+    '2026-07-31/0.1.0/_provenance.json': {
       contentType: 'application/json',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    '2026-07-31/1.0.1/datapackage.json': {
+    '2026-07-31/0.1.0/datapackage.json': {
       contentType: 'application/json',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    '2026-07-31/1.0.1/orgs.parquet': {
+    '2026-07-31/0.1.0/orgs.parquet': {
       contentType: 'application/vnd.apache.parquet',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    '2026-07-31/1.0.1/roles.parquet': {
+    '2026-07-31/0.1.0/roles.parquet': {
       contentType: 'application/vnd.apache.parquet',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -72,19 +72,19 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
+    'v2/ods-data/blobs/sha256/176ef2b7eca790bd703e9671d89b692ecddd5202c1bd3adad3d3d20afcc58b19': {
+      contentType: 'application/octet-stream',
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+    'v2/ods-data/blobs/sha256/3e007d50677067f1523a73498821d3a767ccd6e0e4d46ce18e0fc59d5c3cf946': {
+      contentType: 'application/octet-stream',
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+    'v2/ods-data/blobs/sha256/434089f072f166fade4426cfc24c1e360c0273b1c562f410832890a2bb8fd623': {
+      contentType: 'application/octet-stream',
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
     'v2/ods-data/blobs/sha256/5dd6b71bb3898e49df0c3653b6f8ad56ce5acc5ef6a24a69966b7371adb03381': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/87fa60a579ab77f8bf1d9ee24566d5afe572229299081e9e679acbee78bee23c': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/c67e925e689a477fe47d148b8213523e8dc7d96a5636726f52b58faa7ed72ed6': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/dafe84307d307fdada314a55037318b7e241336c71b6a7667b468787e99340b4': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -96,7 +96,7 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/vnd.oci.image.manifest.v1+json',
       cacheControl: 'no-cache',
     },
-    'v2/ods-data/manifests/2026-07-31_1.0.1': {
+    'v2/ods-data/manifests/2026-07-31_0.1.0': {
       contentType: 'application/vnd.oci.image.manifest.v1+json',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -130,7 +130,7 @@ describe('Derived Headers & Caching Policies', () => {
   it('Acceptance 8: manifest by digest and by tag return identical responses and manifest media type', async () => {
     const digestHex = await sha256Hex(sampleManifestBytes);
     const digestUrl = `https://ods.fyi/v2/ods-data/manifests/sha256:${digestHex}`;
-    const tagUrl = `https://ods.fyi/v2/ods-data/manifests/2026-07-31_1.0.1`;
+    const tagUrl = `https://ods.fyi/v2/ods-data/manifests/2026-07-31_0.1.0`;
 
     const resDigest = await worker.fetch(new Request(digestUrl), env);
     const resTag = await worker.fetch(new Request(tagUrl), env);
@@ -150,13 +150,13 @@ describe('Derived Headers & Caching Policies', () => {
   });
 
   it('Acceptance 12: If-None-Match returns 304 Not Modified when ETag matches', async () => {
-    const getRes = await worker.fetch(new Request('https://ods.fyi/2026-07-31/1.0.1/orgs.parquet'), env);
+    const getRes = await worker.fetch(new Request('https://ods.fyi/2026-07-31/0.1.0/orgs.parquet'), env);
     expect(getRes.status).toBe(200);
     const etag = getRes.headers.get('etag');
     expect(etag).toBeTruthy();
 
     const condRes = await worker.fetch(
-      new Request('https://ods.fyi/2026-07-31/1.0.1/orgs.parquet', {
+      new Request('https://ods.fyi/2026-07-31/0.1.0/orgs.parquet', {
         headers: { 'if-none-match': etag! },
       }),
       env

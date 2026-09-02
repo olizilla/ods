@@ -79,7 +79,7 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = Some(git_sha);
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.0".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -135,7 +135,6 @@ fn test_make_oci_real_run_packs_deterministic_manifest() -> Result<()> {
 
     run(Args {
         input: Some(rel_dir.clone()),
-        version: Some("1.0.1".to_string()),
         check: false,
     })?;
 

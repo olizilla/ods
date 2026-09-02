@@ -14,10 +14,6 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Dataset semver for this release cut (e.g. 1.0.1; defaults to _provenance.json)
-    #[arg(long, short)]
-    pub version: Option<String>,
-
     /// OCI repository name for staging keys (defaults to ods-data)
     #[arg(long, default_value = "ods-data")]
     pub repository: String,
@@ -134,12 +130,9 @@ pub fn run(args: Args) -> Result<()> {
     let prov = OdsProvenance::load_from_dir(&release_dir)
         .ok_or_else(|| anyhow::anyhow!("Missing _provenance.json in {}", release_dir.display()))?;
 
-    let version = match args.version {
-        Some(v) => v,
-        None => prov.dataset_version.clone().ok_or_else(|| {
-            anyhow::anyhow!("Missing dataset_version in _provenance.json. Pass --version <semver>")
-        })?,
-    };
+    let version = prov.dataset_version.clone().ok_or_else(|| {
+        anyhow::anyhow!("Missing dataset_version in _provenance.json\n  Run `ods make` to build the release directory.")
+    })?;
 
     let tool_repo = match args.tool_repo {
         Some(ref p) => {
@@ -155,7 +148,6 @@ pub fn run(args: Args) -> Result<()> {
     // 1. Run ods make oci first to regenerate oci/ wholesale
     crate::commands::make_oci::run(crate::commands::make_oci::Args {
         input: Some(release_dir.clone()),
-        version: Some(version.clone()),
         check: false,
     })?;
 
@@ -427,12 +419,13 @@ pub fn perform_all_release_checks(
         _ => {}
     }
 
-    // Check 13: dataset_version matches expected_version and parses as semver
+    // Check 13: dataset_version matches built-in constant and parses as semver
     if let Some(ref prov_ver) = prov.dataset_version {
-        if prov_ver != expected_version {
+        let tool_dataset_ver = crate::datapackage::dataset_version();
+        if prov_ver != tool_dataset_ver {
             failures.push(format!(
-                "Provenance dataset_version ({}) != expected version ({})",
-                prov_ver, expected_version
+                "Provenance dataset_version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
+                prov_ver, tool_dataset_ver
             ));
         }
         if let Err(e) = parse_semver(expected_version) {

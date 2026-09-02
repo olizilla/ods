@@ -57,8 +57,8 @@ jobs:
           zip -j -q "$TMP_ZIP" tests/fixtures/mock_hscorgrefdata.xml
           ./target/debug/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
           ./target/debug/ods audit --input "$TMP_ZIP" --workspace ods_data --full
-          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0
-          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --version 0.1.0 --check
+          ./target/debug/ods make oci --input ods_data/releases/2026-07-31
+          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --check
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

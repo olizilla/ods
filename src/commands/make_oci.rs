@@ -14,10 +14,6 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Dataset semver for this release cut (e.g. 1.0.1; defaults to _provenance.json)
-    #[arg(long, short)]
-    pub version: Option<String>,
-
     /// Verify existing OCI layout without rebuilding
     #[arg(long)]
     pub check: bool,
@@ -135,10 +131,9 @@ pub fn run(args: Args) -> Result<()> {
         ),
     };
 
-    let version = match args.version {
-        Some(v) => v,
-        None => prov.dataset_version.clone().unwrap_or_else(|| crate::datapackage::dataset_version().to_string()),
-    };
+    let version = prov.dataset_version.clone().ok_or_else(|| {
+        anyhow::anyhow!("Missing dataset_version in _provenance.json\n  Run `ods make` to build the release directory.")
+    })?;
 
     let date = prov
         .trud_release_date

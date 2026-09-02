@@ -157,7 +157,7 @@ When publishing a monthly dataset cut or republishing a fix:
    ```
 2. Build and verify the OCI bundle, checking preconditions:
    ```console
-   $ ods make release --version <version>
+   $ ods make release
    ```
    This performs structural checks, verifies git tags, stages the release's objects into `dist/`, and appends the release row to `data/releases.json`.
 
