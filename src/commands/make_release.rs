@@ -23,8 +23,8 @@ pub struct Args {
     pub repository: String,
 
     /// Output path for the staging directory (defaults to dist/)
-    #[arg(long)]
-    pub dist: Option<PathBuf>,
+    #[arg(long, short)]
+    pub output: Option<PathBuf>,
 
     /// Optional Zenodo DOI for the dataset release
     #[arg(long)]
@@ -120,7 +120,7 @@ pub fn run(args: Args) -> Result<()> {
     let release_dir = match args.input {
         Some(ref p) => p.clone(),
         None => {
-            let root = crate::workspace::find_workspace_root()
+            let root = crate::workspace::find_workspace_root(None)
                 .ok_or_else(|| anyhow::anyhow!("No workspace found. Specify --input <release_dir>"))?;
             let (_, active_path) = crate::workspace::get_active_release(&root)?;
             active_path
@@ -154,8 +154,8 @@ pub fn run(args: Args) -> Result<()> {
 
     // 1. Run ods make oci first to regenerate oci/ wholesale
     crate::commands::make_oci::run(crate::commands::make_oci::Args {
-        input: release_dir.clone(),
-        version: version.clone(),
+        input: Some(release_dir.clone()),
+        version: Some(version.clone()),
         check: false,
     })?;
 
@@ -276,7 +276,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
-    let dist_dir = args.dist.unwrap_or_else(|| {
+    let dist_dir = args.output.unwrap_or_else(|| {
         tool_repo
             .as_ref()
             .map(|tr| tr.join("dist"))

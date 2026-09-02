@@ -1,5 +1,5 @@
 use ods::commands::info::{self, Args, OutputFormat};
-use ods::commands::ndjson::{
+use ods::ods_xml::{
     Location, OdsContact, OdsDate, OdsRecord, OdsRelationship, OdsRelationshipTarget, OdsRole,
     OdsSuccessor,
 };

@@ -500,7 +500,7 @@ fn test_extract_manifest_header_from_nested_real_trud_fixture() {
     let tmp = TempDir::new().unwrap();
     let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
 
-    let header = ods::commands::ndjson::extract_manifest_header(&fixture_zip)
+    let header = ods::ods_xml::extract_manifest_header(&fixture_zip)
         .expect("extract_manifest_header must succeed on real TRUD zip-of-zips fixture");
 
     assert_eq!(header.publication_date.as_deref(), Some("2026-07-28"));
@@ -523,7 +523,7 @@ fn test_extract_manifest_header_fails_on_archive_without_xml() {
     zip.write_all(b"dummy pdf content").unwrap();
     zip.finish().unwrap();
 
-    let res = ods::commands::ndjson::extract_manifest_header(&bad_zip);
+    let res = ods::ods_xml::extract_manifest_header(&bad_zip);
     assert!(res.is_err(), "extract_manifest_header must return Err when no XML exists in archive");
 }
 

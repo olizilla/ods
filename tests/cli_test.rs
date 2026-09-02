@@ -82,6 +82,11 @@ fn test_cli_cite_output_formatting() {
     .unwrap();
 
     ods::workspace::set_active_release(&ws, "2026-07-31").unwrap();
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-07-31T00:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
+    };
+    cached.save_to_workspace(&ws).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -266,13 +271,13 @@ fn test_cli_find_empty_workspace_message() {
     assert!(!output.status.success(), "find must exit non-zero on empty workspace");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("✖ No dataset found in ods_data/current"),
-        "stderr must contain '✖ No dataset found in ods_data/current', got:\n{}",
+        stderr.contains("✖ no ods workspace found here"),
+        "stderr must contain '✖ no ods workspace found here', got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("Run `ods pull` to download a release, then `ods use <date>` to pin it"),
-        "stderr must advise running ods pull and ods use, got:\n{}",
+        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."),
+        "stderr must advise passing -i/-o or running ods pull, got:\n{}",
         stderr
     );
 }
@@ -290,13 +295,13 @@ fn test_cli_cite_empty_workspace_message() {
     assert!(!output.status.success(), "cite must exit non-zero on empty workspace");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("✖ No dataset found in ods_data/current"),
-        "stderr must contain '✖ No dataset found in ods_data/current', got:\n{}",
+        stderr.contains("✖ no ods workspace found here"),
+        "stderr must contain '✖ no ods workspace found here', got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("Run `ods pull` to download a release, then `ods use <date>` to pin it"),
-        "stderr must advise running ods pull and ods use, got:\n{}",
+        stderr.contains("Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."),
+        "stderr must advise passing -i/-o or running ods pull, got:\n{}",
         stderr
     );
 }
@@ -308,6 +313,12 @@ fn test_cli_find_unpinned_workspace_message() {
     let trud_dir = ws.join("releases").join("2026-07-31").join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
+
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-07-31T00:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
+    };
+    cached.save_to_workspace(&ws).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -343,6 +354,12 @@ fn test_cli_cite_unpinned_workspace_message() {
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
 
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-07-31T00:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
+    };
+    cached.save_to_workspace(&ws).unwrap();
+
     let output = ods_binary()
         .current_dir(tmp.path())
         .arg("cite")
@@ -374,6 +391,12 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(ws.join("releases").join("2026-05-29").join("trud")).unwrap();
     fs::create_dir_all(ws.join("releases").join("2026-07-31").join("trud")).unwrap();
+
+    let cached = ods::index::CachedReleaseIndex {
+        fetched_at: "2026-07-31T00:00:00Z".to_string(),
+        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
+    };
+    cached.save_to_workspace(&ws).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())

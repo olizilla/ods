@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::progress::{format_duration, format_size, Progress, ProgressCaps};
 use crate::provenance::{compute_file_sha256, OdsProvenance};
-use crate::workspace::{find_workspace_root, prepare_release_dir, set_active_release, DEFAULT_WORKSPACE_DIR};
+use crate::workspace::{prepare_release_dir, set_active_release, DEFAULT_WORKSPACE_DIR};
 
 pub const TRUD_ODS_ITEM_ID: &str = "341";
 
@@ -264,10 +264,7 @@ impl TrudFetcher for UreqTrudFetcher {
 
 pub fn run(args: Args) -> Result<()> {
     let progress = Progress::stderr(ProgressCaps::detect(args.quiet, args.verbose, args.no_progress));
-    let workspace_root = args
-        .workspace
-        .clone()
-        .or_else(find_workspace_root)
+    let workspace_root = crate::workspace::find_workspace_root(args.workspace.as_deref())
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
 
     if let Some(ref local_path) = args.local_archive {
@@ -521,7 +518,7 @@ fn pull_single_release<F: TrudFetcher>(
                     trud_release_sha256: Some(target_release.archive_file_sha256.clone()),
                     trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                     status: "cached".to_string(),
-                    path: Some(format!("ods_data/releases/{}", target_release.release_date)),
+                    path: Some(dest_dir.display().to_string()),
                     error: None,
                 });
             }
@@ -632,7 +629,7 @@ fn pull_single_release<F: TrudFetcher>(
             trud_release_sha256: Some(local_sha256),
             trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
             status: "downloaded".to_string(),
-            path: Some(format!("ods_data/releases/{}", target_release.release_date)),
+            path: Some(dest_dir.display().to_string()),
             error: None,
         });
     }
@@ -719,7 +716,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                     trud_release_sha256: Some(r.archive_file_sha256.clone()),
                     trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                     status: "cached".to_string(),
-                    path: Some(format!("ods_data/releases/{}", r.release_date)),
+                    path: Some(workspace_root.join("releases").join(&r.release_date).display().to_string()),
                     error: None,
                 });
             }
@@ -998,7 +995,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         trud_release_sha256: Some(local_sha),
                                         trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                                         status: "downloaded".to_string(),
-                                        path: Some(format!("ods_data/releases/{}", release.release_date)),
+                                        path: Some(workspace_root.join("releases").join(&release.release_date).display().to_string()),
                                         error: None,
                                     },
                                     is_success: true,
@@ -1033,7 +1030,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                 trud_release_sha256: Some(r.archive_file_sha256.clone()),
                 trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
                 status: "cached".to_string(),
-                path: Some(format!("ods_data/releases/{}", r.release_date)),
+                path: Some(workspace_root.join("releases").join(&r.release_date).display().to_string()),
                 error: None,
             });
         }
@@ -1329,10 +1326,10 @@ fn write_provenance_json_with_verification(
 ) -> Result<()> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
     let trud_dir = release_dir.join("trud");
-    let header = crate::commands::ndjson::extract_manifest_header(&trud_dir)?;
+    let header = crate::ods_xml::extract_manifest_header(&trud_dir)?;
 
     let prov = OdsProvenance {
-        type_tag: crate::provenance::NDJSON_TYPE_TAG.to_string(),
+        type_tag: crate::provenance::PROVENANCE_TYPE_TAG.to_string(),
         trud_release_name: release.name.clone(),
         trud_release_date: Some(release.release_date.clone()),
         trud_release_sha256: Some(release.archive_file_sha256.clone()),

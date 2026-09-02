@@ -1,17 +1,17 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 pub struct MakeArgs {
     #[command(subcommand)]
     pub command: Option<MakeCommand>,
 
-    /// Input XML or ZIP file path when running default make
+    /// TRUD XML file or ZIP archive input path [default: active release in workspace]
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Output workspace or directory path
+    /// Output release directory path [default: active release in workspace]
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 }
@@ -26,74 +26,23 @@ pub enum MakeCommand {
 
     /// Cut and validate a publishable release row for data/releases.json
     Release(crate::commands::make_release::Args),
-
-    /// Generate canonical NDJSON document stream from TRUD XML (hidden)
-    #[command(hide = true)]
-    Ndjson(crate::commands::ndjson::Args),
 }
 
 pub fn run(args: MakeArgs) -> Result<()> {
     match args.command {
-        Some(MakeCommand::Parquet(parquet_args)) => run_make_parquet(parquet_args),
+        Some(MakeCommand::Parquet(parquet_args)) => run_make_parquet(parquet_args).map(|_| ()),
         Some(MakeCommand::Oci(oci_args)) => crate::commands::make_oci::run(oci_args),
         Some(MakeCommand::Release(release_args)) => crate::commands::make_release::run(release_args),
-        Some(MakeCommand::Ndjson(ndjson_args)) => crate::commands::ndjson::run(ndjson_args),
-        None => {
-            // Bare `ods make` is an alias for `ods make parquet`
-            let input = args.input.unwrap_or_else(|| {
-                if let Some(root) = crate::workspace::find_workspace_root() {
-                    let trud_dir = root.join("current").join("trud");
-                    if trud_dir.exists() {
-                        return trud_dir;
-                    }
-                }
-                PathBuf::from(".")
-            });
-            let output = args.output.unwrap_or_else(|| {
-                if let Some(root) = crate::workspace::find_workspace_root() {
-                    root.join("current")
-                } else {
-                    PathBuf::from(".")
-                }
-            });
-            run_make_parquet(crate::commands::parquet::Args { input, output })
-        }
+        None => run_make_parquet(crate::commands::parquet::Args {
+            input: args.input,
+            output: args.output,
+        }).map(|_| ()),
     }
 }
 
-pub fn run_make_parquet(mut args: crate::commands::parquet::Args) -> Result<()> {
+pub fn run_make_parquet(args: crate::commands::parquet::Args) -> Result<PathBuf> {
     eprintln!("Generating dataset target projections (Parquet)...");
-
-    if (args.input == Path::new("./ods.ndjson") || args.input == Path::new(".")) && !args.input.exists() {
-        if let Some(root) = crate::workspace::find_workspace_root() {
-            let trud_dir = root.join("current").join("trud");
-            if trud_dir.exists() {
-                args.input = trud_dir;
-            }
-        }
-    }
-    if args.output == Path::new(".") {
-        if let Some(root) = crate::workspace::find_workspace_root() {
-            args.output = root.join("current");
-        }
-    }
-
-    // 1. Generate Parquet
-    let parquet_out = args.output.clone();
-    crate::commands::parquet::run(args)?;
-
-    // 2. Write enriched Frictionless datapackage.json into release directory
-    let prov = crate::provenance::OdsProvenance::load_from_dir(&parquet_out);
-    let release_pkg = crate::datapackage::generate_release_datapackage(&parquet_out, prov.as_ref(), None, None);
-    let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
-    std::fs::write(parquet_out.join("datapackage.json"), pkg_json)
-        .context("writing datapackage.json to release directory")?;
-
-    // 3. Update _provenance.json with tool_* and dataset_*
-    crate::provenance::update_provenance(&parquet_out, None)?;
-
-    crate::commands::parquet::warn_unexpected_files(&parquet_out);
-
+    let output_dir = crate::commands::parquet::run(args)?;
     eprintln!("✓ Dataset target projections generated successfully.");
-    Ok(())
+    Ok(output_dir)
 }

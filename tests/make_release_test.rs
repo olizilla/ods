@@ -106,8 +106,8 @@ fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     // Generate OCI layout first via make oci
     ods::commands::make_oci::run(ods::commands::make_oci::Args {
-        input: rel_dir.clone(),
-        version: "1.0.1".to_string(),
+        input: Some(rel_dir.clone()),
+        version: Some("1.0.1".to_string()),
         check: false,
     })
     .unwrap();
@@ -123,7 +123,7 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
         input: Some(rel_dir.clone()),
         version: Some("1.0.1".to_string()),
         repository: "ods-data".to_string(),
-        dist: None,
+        output: None,
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
@@ -244,7 +244,7 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
         input: Some(rel_dir.clone()),
         version: None, // Test reading version from _provenance.json
         repository: "ods-data".to_string(),
-        dist: Some(dist_dir.clone()),
+        output: Some(dist_dir.clone()),
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
@@ -344,7 +344,7 @@ fn test_make_release_refuses_when_no_repo_found() {
         input: Some(rel_dir),
         version: Some("1.0.1".to_string()),
         repository: "ods-data".to_string(),
-        dist: None,
+        output: None,
         doi: None,
         tool_repo: Some(not_a_repo),
         index: None,

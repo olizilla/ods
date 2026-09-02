@@ -17,9 +17,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let workspace_root = args.workspace.unwrap_or_else(|| {
-        find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR))
-    });
+    let workspace_root = find_workspace_root(args.workspace.as_deref())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
 
     let release_dir = workspace_root.join("releases").join(&args.release_date);
     if !release_dir.exists() {

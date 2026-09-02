@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ods::commands::ndjson::{convert_parsed_orgs, ParsedOrg, OdsRole, OdsRelationship, OdsRelationshipTarget, ParentOrganisation};
+use ods::ods_xml::{convert_parsed_orgs, ParsedOrg, OdsRole, OdsRelationship, OdsRelationshipTarget, ParentOrganisation};
 use std::collections::HashMap;
 
 fn create_mock_records(count: usize) -> HashMap<String, ParsedOrg> {

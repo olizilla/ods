@@ -55,21 +55,23 @@ pub fn run(args: Args) -> Result<()> {
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
-        if let Some(workspace_root) = crate::workspace::find_workspace_root() {
+        if let Some(workspace_root) = crate::workspace::find_workspace_root(None) {
             let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
             if !releases.is_empty() {
                 let n = releases.len();
                 let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
                 let newest_date = &releases[0].date;
+                let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
                 anyhow::bail!(
-                    "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
+                    "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
                     count_str,
+                    ws_name,
                     newest_date
                 );
             }
         }
         anyhow::bail!(
-            "✖ No dataset found in ods_data/current\n  Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
         );
     }
 

@@ -10,15 +10,152 @@ pub struct ReleaseInfo {
     pub path: PathBuf,
     pub is_active: bool,
     pub has_parquet: bool,
-    pub has_ndjson: bool,
 }
 
-/// Discovers the active Parquet directory based on the 4-tier hierarchy:
-/// 1. User-supplied `--input` argument (if explicit)
-/// 2. Local workspace `./ods_data/current/parquet/`
-/// 3. Parent directory traversal `../ods_data/current/parquet/`
-/// 4. Local directory `./parquet/` or `./`
+/// Validates whether a directory contains a valid `_releases.json` file.
+pub fn validate_releases_json(dir: &Path) -> bool {
+    let path = dir.join("_releases.json");
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(bytes) = fs::read(&path) else {
+        return false;
+    };
+    if serde_json::from_slice::<crate::index::CachedReleaseIndex>(&bytes).is_ok() {
+        return true;
+    }
+    if serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes).is_ok() {
+        return true;
+    }
+    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+        if val.get("_type").and_then(|t| t.as_str()) == Some("ods_release_index") {
+            return true;
+        }
+        if val
+            .get("index")
+            .and_then(|i| i.get("_type"))
+            .and_then(|t| t.as_str())
+            == Some("ods_release_index")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Backward-compatible alias for workspace root validation.
+pub fn is_workspace_root(dir: &Path) -> bool {
+    validate_releases_json(dir)
+}
+
+/// Resolves the root workspace directory from a specific starting path:
+/// 1. Explicit wins. A path from --workspace / -i / -o is the root. No further checks.
+/// 2. start is the root. start/_releases.json validates -> root = start.
+/// 3. start is a release dir. start/_provenance.json exists and start's parent is named releases and start/../../_releases.json validates -> root = start/../..
+/// 4. Walk up. For each ancestor a, starting at start and ascending:
+///    a/_releases.json validates -> root = a.
+///    a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
+///    Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
+/// Returns None if no workspace root was found.
+pub fn find_workspace_root_from(start: &Path, explicit: Option<&Path>) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    find_workspace_root_from_with_home(start, explicit, home.as_deref())
+}
+
+/// Inner resolver function allowing custom home boundary for unit testing.
+pub fn find_workspace_root_from_with_home(
+    start: &Path,
+    explicit: Option<&Path>,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    // 1. Explicit wins. No further checks.
+    if let Some(path) = explicit {
+        return Some(path.to_path_buf());
+    }
+
+    // 2. start is the root. start/_releases.json validates -> root = start.
+    if validate_releases_json(start) {
+        return Some(start.to_path_buf());
+    }
+
+    // 3. start is a release dir. start/_provenance.json exists and start's parent is named releases and start/../../_releases.json validates -> root = start/../..
+    if start.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if let Some(parent) = start.parent() {
+            if parent.file_name().is_some_and(|n| n == "releases") {
+                if let Some(grandparent) = parent.parent() {
+                    if validate_releases_json(grandparent) {
+                        return Some(grandparent.to_path_buf());
+                    }
+                }
+            } else if validate_releases_json(parent) {
+                return Some(parent.to_path_buf());
+            }
+        }
+    }
+
+    // Also check canonicalized start for symlink pointers (like `current`)
+    if let Ok(canon) = start.canonicalize() {
+        if canon != start && canon.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+            if let Some(parent) = canon.parent() {
+                if parent.file_name().is_some_and(|n| n == "releases") {
+                    if let Some(grandparent) = parent.parent() {
+                        if validate_releases_json(grandparent) {
+                            return Some(grandparent.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Walk up. For each ancestor a, starting at start and ascending:
+    // a/_releases.json validates -> root = a.
+    // a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
+    // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
+    let mut current = Some(start);
+    while let Some(a) = current {
+        if validate_releases_json(a) {
+            return Some(a.to_path_buf());
+        }
+        let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
+        if validate_releases_json(&default_ws) {
+            return Some(default_ws);
+        }
+
+        // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
+        if a.join(".git").exists() || home.is_some_and(|h| a == h) {
+            break;
+        }
+
+        current = a.parent();
+    }
+
+    None
+}
+
+/// Resolves the root workspace directory from current working directory or explicit option.
+pub fn find_workspace_root(explicit: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(path.to_path_buf());
+    }
+    let pwd = std::env::current_dir().ok()?;
+    find_workspace_root_from(&pwd, explicit)
+}
+
+/// Legacy wrapper for discover_dataset_dir.
 pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
+    discover_dataset_dir(user_input, None)
+}
+
+/// Discovers the active dataset/parquet directory:
+/// 1. User-supplied `--input` argument (if explicit)
+/// 2. Workspace root's active release directory (or unpinned diagnostic error)
+pub fn discover_dataset_dir(
+    user_input: Option<&Path>,
+    workspace_override: Option<&Path>,
+) -> Result<PathBuf> {
     if let Some(input) = user_input {
         if input.join("orgs.parquet").exists() {
             return Ok(input.to_path_buf());
@@ -32,87 +169,51 @@ pub fn discover_parquet_dir(user_input: Option<&Path>) -> Result<PathBuf> {
         if input.join("current").join("parquet").join("orgs.parquet").exists() {
             return Ok(input.join("current").join("parquet"));
         }
-        if input.join(DEFAULT_WORKSPACE_DIR).join("current").join("orgs.parquet").exists() {
-            return Ok(input.join(DEFAULT_WORKSPACE_DIR).join("current"));
-        }
         if input.exists() {
             return Ok(input.to_path_buf());
         }
     }
 
-    let cwd = std::env::current_dir().context("Failed to get current working directory")?;
-
-    // Check local `./ods_data/current/`
-    let local_current = cwd.join(DEFAULT_WORKSPACE_DIR).join("current");
-    if local_current.join("orgs.parquet").exists() {
-        return Ok(local_current);
-    }
-    if local_current.join("parquet").join("orgs.parquet").exists() {
-        return Ok(local_current.join("parquet"));
-    }
-
-    // Check parent directory traversal `../ods_data/current/`
-    if let Some(parent) = cwd.parent() {
-        let parent_current = parent.join(DEFAULT_WORKSPACE_DIR).join("current");
-        if parent_current.join("orgs.parquet").exists() {
-            return Ok(parent_current);
+    if let Some(workspace_root) = find_workspace_root(workspace_override) {
+        if let Ok((_date, active_dir)) = get_active_release(&workspace_root) {
+            if active_dir.join("orgs.parquet").exists() {
+                return Ok(active_dir);
+            }
+            if active_dir.join("parquet").join("orgs.parquet").exists() {
+                return Ok(active_dir.join("parquet"));
+            }
+            return Ok(active_dir);
         }
-        if parent_current.join("parquet").join("orgs.parquet").exists() {
-            return Ok(parent_current.join("parquet"));
-        }
-    }
 
-    // Check fallback `./parquet/`
-    let local_parquet = cwd.join("parquet");
-    if local_parquet.join("orgs.parquet").exists() {
-        return Ok(local_parquet);
-    }
-
-    // Check current directory directly `./orgs.parquet`
-    if cwd.join("orgs.parquet").exists() {
-        return Ok(cwd);
-    }
-
-    // Check if workspace exists with unpinned releases
-    if let Some(workspace_root) = find_workspace_root() {
         let releases = list_releases(&workspace_root).unwrap_or_default();
         if !releases.is_empty() {
             let n = releases.len();
-            let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
+            let count_str = if n == 1 {
+                "1 release".to_string()
+            } else {
+                format!("{} releases", n)
+            };
             let newest_date = &releases[0].date;
+            let ws_name = workspace_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(DEFAULT_WORKSPACE_DIR);
             return Err(anyhow!(
-                "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods use {}",
+                "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
                 count_str,
+                ws_name,
                 newest_date
             ));
         }
     }
 
     Err(anyhow!(
-        "✖ No dataset found in ods_data/current\n\
-         Run `ods pull` to download a release, then `ods use <date>` to pin it, or `ods make` to compile from source."
+        "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
     ))
 }
 
-/// Resolves the root workspace directory (`./ods_data/` or parent).
-pub fn find_workspace_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    if cwd.join(DEFAULT_WORKSPACE_DIR).is_dir() {
-        return Some(cwd.join(DEFAULT_WORKSPACE_DIR));
-    }
-    if let Some(parent) = cwd.parent() {
-        if parent.join(DEFAULT_WORKSPACE_DIR).is_dir() {
-            return Some(parent.join(DEFAULT_WORKSPACE_DIR));
-        }
-    }
-    None
-}
-
 /// Ensures the directory structure for a specific release date inside workspace root:
-/// `./ods_data/releases/<date>/parquet/`
-/// `./ods_data/releases/<date>/ndjson/`
-/// Ensures the directory structure for a specific release date inside workspace root:
-/// `./ods_data/releases/<date>/trud/`
+/// `./<workspace>/releases/<date>/trud/`
 pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<PathBuf> {
     let release_dir = workspace_root.join("releases").join(release_date);
     fs::create_dir_all(release_dir.join("trud"))
@@ -121,7 +222,7 @@ pub fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<
     Ok(release_dir)
 }
 
-/// Ensures `./ods_data/.gitignore` ignores heavy raw ZIP/XML files while preserving metadata/parquet artifacts.
+/// Ensures `.gitignore` ignores heavy raw ZIP/XML files while preserving metadata/parquet artifacts.
 pub fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
     let gitignore_path = workspace_root.join(".gitignore");
     if !gitignore_path.exists() {
@@ -186,7 +287,7 @@ pub fn get_active_release(workspace_root: &Path) -> Result<(String, PathBuf)> {
     Ok((release_date, real_path))
 }
 
-/// Lists all local releases in `./ods_data/releases/`.
+/// Lists all local releases in `./<workspace>/releases/`.
 pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
     let releases_dir = workspace_root.join("releases");
     if !releases_dir.exists() {
@@ -203,13 +304,11 @@ pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
             if let Some(date) = path.file_name().and_then(|n| n.to_str()) {
                 let is_active = active_date.as_deref() == Some(date);
                 let has_parquet = path.join("orgs.parquet").exists() || path.join("parquet").join("orgs.parquet").exists();
-                let has_ndjson = path.join("ods.ndjson").exists() || path.join("ndjson").join("ods.ndjson").exists();
                 releases.push(ReleaseInfo {
                     date: date.to_string(),
                     path,
                     is_active,
                     has_parquet,
-                    has_ndjson,
                 });
             }
         }
@@ -219,7 +318,7 @@ pub fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
     Ok(releases)
 }
 
-/// Generates the self-documenting `./ods_data/README.md` file.
+/// Generates the self-documenting `README.md` file in the workspace root.
 pub fn generate_workspace_readme(
     workspace_root: &Path,
     release_date: &str,
@@ -229,34 +328,35 @@ pub fn generate_workspace_readme(
     let readme_path = workspace_root.join("README.md");
     let seq_info = seq_num.map(|s| format!(" (TRUD Sequence #{s})")).unwrap_or_default();
     let count_info = entity_count.map(|c| format!("{c} entities")).unwrap_or_else(|| "Active dataset".to_string());
+    let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(DEFAULT_WORKSPACE_DIR);
 
     let content = format!(
         "# NHS Organisation Data Service (ODS) Workspace\n\n\
          This directory contains versioned NHS Organisation Data managed by the `ods` CLI.\n\n\
          - **Active Release**: {release_date}{seq_info}\n\
-         - **Status**: {count_info} indexed in `current/parquet/`\n\n\
+         - **Status**: {count_info} indexed in `current/`\n\n\
          ## Directory Structure\n\n\
-         - `current/`: Symlink pointing to active release\n\
-         - `releases/`: Dated release snapshots containing `parquet/`, `ndjson/`, and `markdown/`\n\n\
+         - `_releases.json`: Cached release index\n\
+         - `current`: Symlink pointing to active release\n\
+         - `releases/`: Dated release directories containing Parquet tables, Frictionless datapackage, and metadata\n\n\
          ## Quick Start: Querying with DuckDB\n\n\
          ```sql\n\
          -- Query active GP practices in Sedbergh\n\
          SELECT name, ods_code, postcode, telephone\n\
-         FROM 'ods_data/current/parquet/orgs.parquet'\n\
+         FROM '{ws_name}/current/orgs.parquet'\n\
          WHERE status = 'active' AND town = 'SEDBERGH';\n\
          ```\n\n\
          ## Python Integration\n\n\
          ```python\n\
          import duckdb\n\
          con = duckdb.connect()\n\
-         df = con.execute(\"SELECT * FROM 'ods_data/current/parquet/orgs.parquet' WHERE status = 'active'\").df()\n\
+         df = con.execute(\"SELECT * FROM '{ws_name}/current/orgs.parquet'\").df()\n\
+         print(df.head())\n\
          ```\n\n\
          ## CLI Commands\n\n\
          - `ods find <query>`: Fast terminal lookup\n\
-         - `ods status`: Inspect local workspace release versions\n\
-         - `ods switch <date>`: Switch active release pin\n\
-         - `ods diff`: Diffs active release against previous release\n\
-         - `ods cite`: Output APA and BibTeX academic citations\n"
+         - `ods cite`: Output APA and BibTeX academic citations\n\
+         - `ods diff`: Diff active release against previous release\n"
     );
 
     fs::write(readme_path, content).context("Failed to write workspace README.md")?;

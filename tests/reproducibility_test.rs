@@ -38,14 +38,14 @@ fn test_synthetic_parquet_hash_stability() {
     let zip_path = create_mock_trud_zip(tmp1.path(), &xml_path);
 
     parquet::run(parquet::Args {
-        input: zip_path.clone(),
-        output: tmp1.path().to_path_buf(),
+        input: Some(zip_path.clone()),
+        output: Some(tmp1.path().to_path_buf()),
     })
     .expect("run 1 should succeed");
 
     parquet::run(parquet::Args {
-        input: zip_path,
-        output: tmp2.path().to_path_buf(),
+        input: Some(zip_path),
+        output: Some(tmp2.path().to_path_buf()),
     })
     .expect("run 2 should succeed");
 
@@ -88,14 +88,14 @@ fn test_real_trud_parquet_hash_stability() {
     let tmp2 = TempDir::new().unwrap();
 
     parquet::run(parquet::Args {
-        input: zip_path.clone(),
-        output: tmp1.path().to_path_buf(),
+        input: Some(zip_path.clone()),
+        output: Some(tmp1.path().to_path_buf()),
     })
     .expect("run 1 on real TRUD zip should succeed");
 
     parquet::run(parquet::Args {
-        input: zip_path,
-        output: tmp2.path().to_path_buf(),
+        input: Some(zip_path),
+        output: Some(tmp2.path().to_path_buf()),
     })
     .expect("run 2 on real TRUD zip should succeed");
 

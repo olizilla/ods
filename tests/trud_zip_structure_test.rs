@@ -24,7 +24,7 @@ fn test_find_xml_file_succeeds_for_expected_trud_xml_filepath() -> Result<()> {
     zip.write_all(xml_content.as_bytes())?;
     zip.finish()?;
 
-    let extracted_xml = ods::commands::ndjson::find_xml_file(&zip_path)?;
+    let extracted_xml = ods::ods_xml::find_xml_file(&zip_path)?;
     assert!(extracted_xml.exists(), "extracted XML file must exist");
     assert!(
         extracted_xml.file_name().unwrap().to_str().unwrap().contains("HSCOrgRefData"),
@@ -47,7 +47,7 @@ fn test_find_xml_file_fails_when_expected_xml_absent() -> Result<()> {
     zip.write_all(b"Hello World")?;
     zip.finish()?;
 
-    let result = ods::commands::ndjson::find_xml_file(&zip_path);
+    let result = ods::ods_xml::find_xml_file(&zip_path);
     assert!(result.is_err(), "find_xml_file must fail when no TRUD XML is in the zip");
 
     let err_msg = result.unwrap_err().to_string();
@@ -88,7 +88,7 @@ fn test_find_xml_file_fails_when_zip_contains_only_archive_zip() -> Result<()> {
     outer_zip.write_all(&inner_zip_bytes)?;
     outer_zip.finish()?;
 
-    let result = ods::commands::ndjson::find_xml_file(&outer_zip_path);
+    let result = ods::ods_xml::find_xml_file(&outer_zip_path);
     assert!(result.is_err(), "find_xml_file must fail when ZIP contains only archive.zip");
 
     let err_msg = result.unwrap_err().to_string();

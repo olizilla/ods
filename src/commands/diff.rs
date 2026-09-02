@@ -7,15 +7,15 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use super::ndjson::{OdsRecord, parse_single_pass, convert_parsed_orgs, find_xml_file};
+use crate::ods_xml::{convert_parsed_orgs, find_xml_file, parse_single_pass, OdsRecord};
 use crate::provenance::OdsProvenance;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Baseline NDJSON, TRUD XML file, or release date tag (defaults to previous release in workspace)
+    /// Baseline Parquet, TRUD XML file, or release date tag (defaults to previous release in workspace)
     pub old: Option<PathBuf>,
 
-    /// Target NDJSON, TRUD XML file, or release date tag (defaults to current release in workspace)
+    /// Target Parquet, TRUD XML file, or release date tag (defaults to current release in workspace)
     pub new: Option<PathBuf>,
 
     /// Output format: summary (default TUI), json, patch, csv, markdown
@@ -37,6 +37,18 @@ pub struct Args {
     /// Write diff output to file instead of stdout
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DiffSummary {
+    pub baseline_release: Option<String>,
+    pub target_release: Option<String>,
+    pub baseline_count: usize,
+    pub target_count: usize,
+    pub added_count: usize,
+    pub removed_count: usize,
+    pub modified_count: usize,
+    pub unchanged_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -61,11 +73,11 @@ pub fn run(args: Args) -> Result<()> {
     let (old_path, new_path) = match (&args.old, &args.new) {
         (Some(o), Some(n)) => (o.clone(), n.clone()),
         _ => {
-            let workspace_root = crate::workspace::find_workspace_root()
-                .context("No ODS workspace found. Provide positional `[OLD] [NEW]` paths or populate `./ods_data/`.")?;
+            let workspace_root = crate::workspace::find_workspace_root(None)
+                .context("No ODS workspace found. Provide positional `[OLD] [NEW]` paths or run from an ODS workspace.")?;
             let releases = crate::workspace::list_releases(&workspace_root)?;
             if releases.len() < 2 {
-                anyhow::bail!("At least 2 release snapshots are required in `./ods_data/releases/` to auto-diff. Found {}.", releases.len());
+                anyhow::bail!("At least 2 release snapshots are required in releases/ to auto-diff. Found {}.", releases.len());
             }
             let new_p = args.new.clone().unwrap_or_else(|| releases[0].path.clone());
             let old_p = args.old.clone().unwrap_or_else(|| releases[1].path.clone());
@@ -143,10 +155,6 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
             return load_parquet(&pfile);
         }
 
-        let ndjson_file = path.join("ods.ndjson");
-        if ndjson_file.exists() {
-            return load_ndjson(&ndjson_file);
-        }
         return load_xml(path);
     }
 
@@ -199,7 +207,7 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
                 if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
             });
             let geo_loc = if town.is_some() || postcode.is_some() {
-                Some(crate::commands::ndjson::Location {
+                Some(crate::ods_xml::Location {
                     town,
                     postcode,
                     ..Default::default()
@@ -236,9 +244,11 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
             continue;
         }
         if provenance.is_none() {
-            if let Some(prov) = crate::provenance::try_parse_provenance_line(&line) {
-                provenance = Some(prov);
-                continue;
+            if let Ok(prov) = serde_json::from_str::<OdsProvenance>(&line) {
+                if prov.type_tag == crate::provenance::PROVENANCE_TYPE_TAG {
+                    provenance = Some(prov);
+                    continue;
+                }
             }
         }
         let record: OdsRecord = serde_json::from_str(&line)

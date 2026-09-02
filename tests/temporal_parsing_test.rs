@@ -13,7 +13,8 @@
 //! never exist, so every date in the source was silently discarded and every
 //! role and relationship was reported `active`.
 
-use ods::commands::{ndjson, parquet};
+use ods::commands::parquet;
+use ods::ods_xml;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -22,20 +23,20 @@ const FIXTURE_XML: &str = concat!(
     "/tests/fixtures/mock_temporal.xml"
 );
 
-fn parse_fixture() -> Vec<ndjson::OdsRecord> {
-    let (_prov, _cmap, parsed) = ndjson::parse_single_pass(Path::new(FIXTURE_XML)).expect("parse_single_pass should succeed");
-    let resolved = ndjson::convert_parsed_orgs(parsed);
+fn parse_fixture() -> Vec<ods_xml::OdsRecord> {
+    let (_prov, _cmap, parsed) = ods_xml::parse_single_pass(Path::new(FIXTURE_XML)).expect("parse_single_pass should succeed");
+    let resolved = ods_xml::convert_parsed_orgs(parsed);
     resolved.into_values().collect()
 }
 
-fn record<'a>(records: &'a [ndjson::OdsRecord], code: &str) -> &'a ndjson::OdsRecord {
+fn record<'a>(records: &'a [ods_xml::OdsRecord], code: &str) -> &'a ods_xml::OdsRecord {
     records
         .iter()
         .find(|r| r.ods_code == code)
         .unwrap_or_else(|| panic!("fixture record {code} not found"))
 }
 
-fn date_of<'a>(dates: &'a [ndjson::OdsDate], kind: &str) -> &'a ndjson::OdsDate {
+fn date_of<'a>(dates: &'a [ods_xml::OdsDate], kind: &str) -> &'a ods_xml::OdsDate {
     dates
         .iter()
         .find(|d| d.date_type.eq_ignore_ascii_case(kind))
@@ -233,8 +234,8 @@ fn parquet_projection_populates_date_columns() {
     let out_dir = tmp.path().join("parquet_out");
 
     parquet::run(parquet::Args {
-        input: zip_path,
-        output: out_dir.clone(),
+        input: Some(zip_path),
+        output: Some(out_dir.clone()),
     })
     .expect("parquet::run should succeed");
 

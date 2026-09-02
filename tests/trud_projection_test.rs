@@ -56,8 +56,8 @@ fn test_trud_zip_selection_prioritizes_full_over_archive() {
     // Run parquet export
     let out_dir = tmp.path().join("parquet_out");
     parquet::run(parquet::Args {
-        input: outer_zip_path,
-        output: out_dir.clone(),
+        input: Some(outer_zip_path),
+        output: Some(out_dir.clone()),
     })
     .expect("parquet run on dual-archive zip should succeed");
 
@@ -113,8 +113,8 @@ fn test_status_scoping_prevents_role_status_leak() {
 
     let out_dir = tmp.path().join("parquet_out");
     parquet::run(parquet::Args {
-        input: zip_path,
-        output: out_dir.clone(),
+        input: Some(zip_path),
+        output: Some(out_dir.clone()),
     })
     .unwrap();
 

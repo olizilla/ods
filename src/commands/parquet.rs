@@ -7,23 +7,22 @@ use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::commands::ndjson::OdsRecord;
+use crate::ods_xml::OdsRecord;
 
 const BATCH_SIZE: usize = 50_000;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// NDJSON input file
-    #[arg(long, short, default_value = "./ods.ndjson")]
-    pub input: PathBuf,
+    /// TRUD XML file or ZIP archive input path [default: the active release]
+    #[arg(long, short)]
+    pub input: Option<PathBuf>,
 
-    /// Output Parquet directory path
-    #[arg(long, short, default_value = ".")]
-    pub output: PathBuf,
+    /// Output Parquet directory path [default: the active release]
+    #[arg(long, short)]
+    pub output: Option<PathBuf>,
 }
 
 fn embed_metadata(
@@ -66,125 +65,125 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
         .build()
 }
 
-pub fn run(args: Args) -> Result<()> {
-    let (provenance, records): (Option<crate::provenance::OdsProvenance>, Vec<OdsRecord>) = if args
-        .input
-        .extension()
-        .is_some_and(|ext| ext == "ndjson")
-    {
-        let input_file = File::open(&args.input)
-            .with_context(|| format!("opening NDJSON input: {}", args.input.display()))?;
-        let reader = std::io::BufReader::new(input_file);
-        let mut recs = Vec::new();
-        let mut _prov = None;
-        for line in reader.lines() {
-            let line = line.context("reading line from NDJSON")?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if _prov.is_none() {
-                if let Some(p) = crate::provenance::try_parse_provenance_line(trimmed) {
-                    _prov = Some(p);
-                    continue;
-                }
-            }
-            let record: OdsRecord = serde_json::from_str(trimmed)
-                .with_context(|| format!("parsing JSON line: {}", trimmed))?;
-            recs.push(record);
-        }
-        if let Some(ref mut p) = _prov {
-            if p.dataset_version.is_none() {
-                p.dataset_version = Some(crate::datapackage::dataset_version().to_string());
-            }
-        }
-        (_prov, recs)
-    } else {
-        let archive_info = crate::archive::resolve_trud_archive(&args.input)?;
-
-        let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
-            .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
-            .or_else(|| {
-                crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
-                    &archive_info.archive_path,
-                )
-            });
-
-        if args.input.is_dir() {
-            if let Some(ref prov) = parent_prov {
-                if let Err(e) = prov.validate_baseline() {
-                    anyhow::bail!("Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?", args.input.display(), e);
+pub fn run(args: Args) -> Result<PathBuf> {
+    let input_path = match args.input {
+        Some(p) => p,
+        None => {
+            if let Some(root) = crate::workspace::find_workspace_root(None) {
+                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
+                let trud_dir = active_dir.join("trud");
+                if trud_dir.exists() {
+                    trud_dir
+                } else {
+                    active_dir
                 }
             } else {
-                anyhow::bail!("Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?", args.input.display());
-            }
-        }
-
-        let xml_path = crate::commands::ndjson::find_xml_file(&archive_info.archive_path)?;
-        let (mut prov, _concept_map, parsed) =
-            crate::commands::ndjson::parse_single_pass(&xml_path)?;
-
-        let actual_parsed_count = parsed.len();
-        if let Some(declared_count) = prov.publication_record_count {
-            if declared_count != actual_parsed_count {
                 anyhow::bail!(
-                    "✖ Manifest record count mismatch: declared {} != parsed {}",
-                    declared_count,
-                    actual_parsed_count
+                    "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
                 );
             }
         }
-
-        if let Some(parent) = parent_prov {
-            if let Some(ref parent_date) = parent.trud_release_date {
-                if parent_date != &archive_info.release_date {
-                    anyhow::bail!(
-                        "✖ Release date mismatch: _provenance.json specifies '{}' but archive filename specifies '{}'",
-                        parent_date,
-                        archive_info.release_date
-                    );
-                }
-            }
-            prov.trud_release_date = Some(archive_info.release_date);
-            prov.trud_release_name = parent.trud_release_name.or(Some(archive_info.release_name));
-            prov.trud_release_file = parent.trud_release_file.or(Some(archive_info.filename));
-            if parent.trud_release_sha256.is_some() {
-                prov.trud_release_sha256 = parent.trud_release_sha256;
-            }
-            if parent.trud_release_sha256_verified.is_some() {
-                prov.trud_release_sha256_verified = parent.trud_release_sha256_verified;
-            }
-            if parent.trud_release_filesize_bytes.is_some() {
-                prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
-            }
-            prov.dataset_version = parent.dataset_version.or_else(|| Some(crate::datapackage::dataset_version().to_string()));
-        } else {
-            prov.trud_release_date = Some(archive_info.release_date);
-            prov.trud_release_name = Some(archive_info.release_name);
-            prov.trud_release_file = Some(archive_info.filename);
-            prov.dataset_version = Some(crate::datapackage::dataset_version().to_string());
-            if let Ok(meta) = std::fs::metadata(&archive_info.archive_path) {
-                prov.trud_release_filesize_bytes = Some(meta.len());
-            }
-            if let Ok(hash) = crate::provenance::compute_file_sha256(&archive_info.archive_path) {
-                prov.trud_release_sha256 = Some(hash);
-                prov.trud_release_sha256_verified =
-                    Some(crate::provenance::TrudVerificationSource::TrudApi);
-            }
-        }
-        let resolved = crate::commands::ndjson::convert_parsed_orgs(parsed);
-        (Some(prov), resolved.into_values().collect())
     };
 
-    std::fs::create_dir_all(&args.output)
-        .with_context(|| format!("creating output directory: {}", args.output.display()))?;
+    let output_path = match args.output {
+        Some(p) => p,
+        None => {
+            if let Some(root) = crate::workspace::find_workspace_root(None) {
+                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
+                active_dir
+            } else {
+                anyhow::bail!(
+                    "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
+                );
+            }
+        }
+    };
+
+    let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
+
+    let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&input_path)
+        .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
+        .or_else(|| {
+            crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
+                &archive_info.archive_path,
+            )
+        });
+
+    if input_path.is_dir() {
+        if let Some(ref prov) = parent_prov {
+            if let Err(e) = prov.validate_baseline() {
+                anyhow::bail!("Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?", input_path.display(), e);
+            }
+        } else {
+            anyhow::bail!("Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?", input_path.display());
+        }
+    }
+
+    let xml_path = crate::ods_xml::find_xml_file(&archive_info.archive_path)?;
+    let (mut prov, _concept_map, parsed) =
+        crate::ods_xml::parse_single_pass(&xml_path)?;
+
+    let actual_parsed_count = parsed.len();
+    if let Some(declared_count) = prov.publication_record_count {
+        if declared_count != actual_parsed_count {
+            anyhow::bail!(
+                "✖ Manifest record count mismatch: declared {} != parsed {}",
+                declared_count,
+                actual_parsed_count
+            );
+        }
+    }
+
+    if let Some(parent) = parent_prov {
+        if let Some(ref parent_date) = parent.trud_release_date {
+            if parent_date != &archive_info.release_date {
+                anyhow::bail!(
+                    "✖ Release date mismatch: _provenance.json specifies '{}' but archive filename specifies '{}'",
+                    parent_date,
+                    archive_info.release_date
+                );
+            }
+        }
+        prov.trud_release_date = Some(archive_info.release_date);
+        prov.trud_release_name = parent.trud_release_name.or(Some(archive_info.release_name));
+        prov.trud_release_file = parent.trud_release_file.or(Some(archive_info.filename));
+        if parent.trud_release_sha256.is_some() {
+            prov.trud_release_sha256 = parent.trud_release_sha256;
+        }
+        if parent.trud_release_sha256_verified.is_some() {
+            prov.trud_release_sha256_verified = parent.trud_release_sha256_verified;
+        }
+        if parent.trud_release_filesize_bytes.is_some() {
+            prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
+        }
+        prov.dataset_version = parent.dataset_version.or_else(|| Some(crate::datapackage::dataset_version().to_string()));
+    } else {
+        prov.trud_release_date = Some(archive_info.release_date);
+        prov.trud_release_name = Some(archive_info.release_name);
+        prov.trud_release_file = Some(archive_info.filename);
+        prov.dataset_version = Some(crate::datapackage::dataset_version().to_string());
+        if let Ok(meta) = std::fs::metadata(&archive_info.archive_path) {
+            prov.trud_release_filesize_bytes = Some(meta.len());
+        }
+        if let Ok(hash) = crate::provenance::compute_file_sha256(&archive_info.archive_path) {
+            prov.trud_release_sha256 = Some(hash);
+            prov.trud_release_sha256_verified =
+                Some(crate::provenance::TrudVerificationSource::TrudApi);
+        }
+    }
+    let resolved = crate::ods_xml::convert_parsed_orgs(parsed);
+    let (provenance, records): (Option<crate::provenance::OdsProvenance>, Vec<OdsRecord>) =
+        (Some(prov), resolved.into_values().collect());
+
+    std::fs::create_dir_all(&output_path)
+        .with_context(|| format!("creating output directory: {}", output_path.display()))?;
 
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
     // 1. Export orgs.parquet (Active only)
     export_orgs(
-        &args.output,
+        &output_path,
         &records,
         &successor_closures,
         &predecessor_closures,
@@ -193,7 +192,7 @@ pub fn run(args: Args) -> Result<()> {
 
     // 2. Export orgs_all.parquet (All records)
     export_orgs_all(
-        &args.output,
+        &output_path,
         &records,
         &successor_closures,
         &predecessor_closures,
@@ -201,35 +200,39 @@ pub fn run(args: Args) -> Result<()> {
     )?;
 
     // 3. Export roles.parquet (one per organisation per role holding)
-    export_roles(&args.output, &records, provenance.as_ref())?;
+    export_roles(&output_path, &records, provenance.as_ref())?;
 
     // 4. Export relationships.parquet
-    export_relationships(&args.output, &records, provenance.as_ref())?;
+    export_relationships(&output_path, &records, provenance.as_ref())?;
 
     // 5. Export successions.parquet
-    export_successions(&args.output, &records, provenance.as_ref())?;
+    export_successions(&output_path, &records, provenance.as_ref())?;
 
-    // 6. Ship the datapackage.json alongside the data so the schema and metadata
-    //    are reproducible from a release alone, without the tool.
-    let release_pkg =
-        crate::datapackage::generate_release_datapackage(&args.output, provenance.as_ref(), None, None);
-    let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
-    std::fs::write(args.output.join("datapackage.json"), pkg_json)
-        .context("writing datapackage.json")?;
-
-    // 7. Write updated _provenance.json to output directory
+    // 6. Write initial _provenance.json to output directory if present
     if let Some(ref p) = provenance {
         if let Ok(prov_json) = serde_json::to_string_pretty(p) {
             let _ = std::fs::write(
-                args.output.join(crate::provenance::PROVENANCE_FILENAME),
+                output_path.join(crate::provenance::PROVENANCE_FILENAME),
                 prov_json,
             );
         }
     }
 
-    warn_unexpected_files(&args.output);
+    // 7. Enrich _provenance.json with tool_* and dataset_* metadata
+    crate::provenance::update_provenance(&output_path, None)?;
 
-    Ok(())
+    // 8. Ship the datapackage.json alongside the data so the schema and metadata
+    //    are reproducible from a release alone, without the tool.
+    let enriched_prov = crate::provenance::OdsProvenance::load_from_dir(&output_path);
+    let release_pkg =
+        crate::datapackage::generate_release_datapackage(&output_path, enriched_prov.as_ref(), None, None);
+    let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
+    std::fs::write(output_path.join("datapackage.json"), pkg_json)
+        .context("writing datapackage.json")?;
+
+    warn_unexpected_files(&output_path);
+
+    Ok(output_path)
 }
 
 pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
@@ -315,7 +318,7 @@ fn append_date(builder: &mut Date32Builder, val: Option<&str>) {
 }
 
 fn extract_dates(
-    dates: &[crate::commands::ndjson::OdsDate],
+    dates: &[crate::ods_xml::OdsDate],
 ) -> (
     Option<String>,
     Option<String>,
@@ -1124,7 +1127,7 @@ pub fn export_successions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::ndjson::Location;
+    use crate::ods_xml::Location;
 
     #[test]
     fn test_address_consolidation() {
@@ -1140,12 +1143,12 @@ mod tests {
             record_class: "site".to_string(),
             last_change_date: None,
             dates: vec![
-                crate::commands::ndjson::OdsDate {
+                crate::ods_xml::OdsDate {
                     date_type: "Legal".to_string(),
                     start: Some("2006-10-01".to_string()),
                     end: Some("2013-03-31".to_string()),
                 },
-                crate::commands::ndjson::OdsDate {
+                crate::ods_xml::OdsDate {
                     date_type: "Operational".to_string(),
                     start: Some("2006-10-01".to_string()),
                     end: Some("2022-09-30".to_string()),
@@ -1166,15 +1169,15 @@ mod tests {
             contacts: vec![],
             roles: vec![],
             relationships: vec![],
-            successors: vec![crate::commands::ndjson::OdsSuccessor {
+            successors: vec![crate::ods_xml::OdsSuccessor {
                 unique_succ_id: "777".to_string(),
                 succ_type: "Predecessor".to_string(),
-                dates: vec![crate::commands::ndjson::OdsDate {
+                dates: vec![crate::ods_xml::OdsDate {
                     date_type: "Legal".to_string(),
                     start: Some("2006-10-01".to_string()),
                     end: None,
                 }],
-                target: crate::commands::ndjson::OdsRelationshipTarget {
+                target: crate::ods_xml::OdsRelationshipTarget {
                     ods_code: "5FD51".to_string(),
                     name: Some("NHS Predecessor Org".to_string()),
                     root: None,
@@ -1256,15 +1259,15 @@ mod tests {
             OdsRecord {
                 ods_code: "0AF".to_string(),
                 status: "inactive".to_string(),
-                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                successors: vec![crate::ods_xml::OdsSuccessor {
                     unique_succ_id: "101".to_string(),
                     succ_type: "Successor".to_string(),
-                    dates: vec![crate::commands::ndjson::OdsDate {
+                    dates: vec![crate::ods_xml::OdsDate {
                         date_type: "Legal".to_string(),
                         start: Some("2002-04-01".to_string()),
                         end: None,
                     }],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                    target: crate::ods_xml::OdsRelationshipTarget {
                         ods_code: "0CE".to_string(),
                         ..Default::default()
                     },
@@ -1274,11 +1277,11 @@ mod tests {
             OdsRecord {
                 ods_code: "0AN".to_string(),
                 status: "inactive".to_string(),
-                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                successors: vec![crate::ods_xml::OdsSuccessor {
                     unique_succ_id: "102".to_string(),
                     succ_type: "Successor".to_string(),
                     dates: vec![],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                    target: crate::ods_xml::OdsRelationshipTarget {
                         ods_code: "0CE".to_string(),
                         ..Default::default()
                     },
@@ -1290,24 +1293,24 @@ mod tests {
                 status: "inactive".to_string(),
                 successors: vec![
                     // Stated from both ends! Same unique_succ_id "101"
-                    crate::commands::ndjson::OdsSuccessor {
+                    crate::ods_xml::OdsSuccessor {
                         unique_succ_id: "101".to_string(),
                         succ_type: "Predecessor".to_string(),
-                        dates: vec![crate::commands::ndjson::OdsDate {
+                        dates: vec![crate::ods_xml::OdsDate {
                             date_type: "Legal".to_string(),
                             start: Some("2002-04-01".to_string()),
                             end: None,
                         }],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
+                        target: crate::ods_xml::OdsRelationshipTarget {
                             ods_code: "0AF".to_string(),
                             ..Default::default()
                         },
                     },
-                    crate::commands::ndjson::OdsSuccessor {
+                    crate::ods_xml::OdsSuccessor {
                         unique_succ_id: "103".to_string(),
                         succ_type: "Successor".to_string(),
                         dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
+                        target: crate::ods_xml::OdsRelationshipTarget {
                             ods_code: "0CY".to_string(),
                             ..Default::default()
                         },
@@ -1318,11 +1321,11 @@ mod tests {
             OdsRecord {
                 ods_code: "0AJ".to_string(),
                 status: "inactive".to_string(),
-                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                successors: vec![crate::ods_xml::OdsSuccessor {
                     unique_succ_id: "104".to_string(),
                     succ_type: "Successor".to_string(),
                     dates: vec![],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                    target: crate::ods_xml::OdsRelationshipTarget {
                         ods_code: "0CY".to_string(),
                         ..Default::default()
                     },
@@ -1332,11 +1335,11 @@ mod tests {
             OdsRecord {
                 ods_code: "0CY".to_string(),
                 status: "inactive".to_string(),
-                successors: vec![crate::commands::ndjson::OdsSuccessor {
+                successors: vec![crate::ods_xml::OdsSuccessor {
                     unique_succ_id: "105".to_string(),
                     succ_type: "Successor".to_string(),
                     dates: vec![],
-                    target: crate::commands::ndjson::OdsRelationshipTarget {
+                    target: crate::ods_xml::OdsRelationshipTarget {
                         ods_code: "YDDTR".to_string(),
                         ..Default::default()
                     },
@@ -1402,13 +1405,13 @@ mod tests {
         let record = OdsRecord {
             ods_code: "0AF".to_string(),
             name: "Bury HA".to_string(),
-            relationships: vec![crate::commands::ndjson::OdsRelationship {
+            relationships: vec![crate::ods_xml::OdsRelationship {
                 id: "RE4".to_string(),
                 display_name: Some("IS COMMISSIONED BY".to_string()),
                 unique_rel_id: "999".to_string(),
                 status: "active".to_string(),
                 dates: vec![],
-                target: crate::commands::ndjson::OdsRelationshipTarget {
+                target: crate::ods_xml::OdsRelationshipTarget {
                     ods_code: "QE1".to_string(),
                     ..Default::default()
                 },

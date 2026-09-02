@@ -204,7 +204,7 @@ pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Resul
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let workspace_root = find_workspace_root().unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
+    let workspace_root = find_workspace_root(None).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR));
     let fetcher = HttpOciFetcher;
     run_with_fetcher(args, &workspace_root, &fetcher)
 }

@@ -1,25 +1,13 @@
 use anyhow::{Context, Result};
-use clap::Parser;
 use quick_xml::events::{Event, BytesStart};
 use quick_xml::reader::Reader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, Write};
+use std::io::{BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-
-#[derive(Parser, Debug)]
-pub struct Args {
-    /// Input directory or XML file containing HSCOrgRefData
-    #[arg(long, short)]
-    pub input: PathBuf,
-
-    /// Output NDJSON file path (defaults to active workspace release if omitted)
-    #[arg(long, short)]
-    pub output: Option<PathBuf>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct OdsDate {
@@ -523,92 +511,6 @@ pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
         input_path.display(),
         failures.join("\n")
     )
-}
-
-pub fn run(args: Args) -> Result<()> {
-    // Resolve TRUD archive input
-    let archive_info = crate::archive::resolve_trud_archive(&args.input)?;
-    let xml_path = find_xml_file(&archive_info.archive_path)?;
-    eprintln!("Found XML file: {}", xml_path.display());
-
-    let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&args.input)
-        .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
-        .or_else(|| crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(&archive_info.archive_path));
-
-    eprintln!("Compiling ODS database into NDJSON stream (single pass)...");
-    let start_compile = std::time::Instant::now();
-    let (mut provenance, concept_map, records) = parse_single_pass(&xml_path)?;
-    provenance.trud_release_date = Some(archive_info.release_date.clone());
-    provenance.trud_release_name = Some(archive_info.release_name);
-    provenance.trud_release_file = Some(archive_info.filename);
-
-    if let Some(parent) = parent_prov {
-        if parent.trud_release_sha256.is_some() {
-            provenance.trud_release_sha256 = parent.trud_release_sha256;
-        }
-        if parent.trud_release_sha256_verified.is_some() {
-            provenance.trud_release_sha256_verified = parent.trud_release_sha256_verified;
-        }
-        if parent.trud_release_filesize_bytes.is_some() {
-            provenance.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
-        }
-    }
-    eprintln!(
-        "Parsing complete. Found {} concept mappings and {} organisations. Took {:?}",
-        concept_map.len(),
-        records.len(),
-        start_compile.elapsed()
-    );
-
-    let pub_date = provenance.trud_release_date.as_deref().unwrap_or("unknown");
-
-    // Resolve output path
-    let output_path = match args.output {
-        Some(out) => out,
-        None => {
-            if let Some(workspace_root) = crate::workspace::find_workspace_root() {
-                let release_dir = crate::workspace::prepare_release_dir(&workspace_root, pub_date)?;
-                release_dir.join("ndjson").join("ods.ndjson")
-            } else {
-                PathBuf::from("./ods.ndjson")
-            }
-        }
-    };
-
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating directory for output: {}", parent.display()))?;
-        }
-    }
-    let output_file = File::create(&output_path)
-        .with_context(|| format!("cannot create or write to output file: {}", output_path.display()))?;
-
-    // Convert parsed records
-    eprintln!("Converting parsed organisation records...");
-    let start_convert = std::time::Instant::now();
-    let converted_records = convert_parsed_orgs(records);
-    eprintln!("Record conversion complete. Took {:?}", start_convert.elapsed());
-
-    // Write to NDJSON
-    eprintln!("Writing compiled NDJSON to {}...", output_path.display());
-    let start_write = std::time::Instant::now();
-    let mut writer = BufWriter::new(output_file);
-
-    // Line 1: Dataset & Build Provenance Header
-    let prov_json = serde_json::to_string(&provenance)?;
-    writer.write_all(prov_json.as_bytes())?;
-    writer.write_all(b"\n")?;
-
-    for record in converted_records.values() {
-        let serialized = serde_json::to_string(record)?;
-        writer.write_all(serialized.as_bytes())?;
-        writer.write_all(b"\n")?;
-    }
-    writer.flush()?;
-    eprintln!("NDJSON compiled successfully. Took {:?}", start_write.elapsed());
-
-    Ok(())
 }
 
 pub fn convert_parsed_orgs(parsed: HashMap<String, ParsedOrg>) -> std::collections::BTreeMap<String, OdsRecord> {

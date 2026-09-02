@@ -99,8 +99,8 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     zip_writer.finish()?;
 
     let args = ods::commands::parquet::Args {
-        input: input_dir.clone(),
-        output: temp_dir.path().join("output"),
+        input: Some(input_dir.clone()),
+        output: Some(temp_dir.path().join("output")),
     };
 
     let result = ods::commands::parquet::run(args);
@@ -348,7 +348,7 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
 </un:OrganisationManifest>"#;
 
     fs::write(&xml_path, xml_content)?;
-    let header = ods::commands::ndjson::extract_manifest_header(&xml_path)?;
+    let header = ods::ods_xml::extract_manifest_header(&xml_path)?;
 
     let scope = header.primary_role_scope.expect("primary_role_scope must be parsed");
     assert_eq!(scope, vec!["RO180".to_string(), "RO198".to_string()]);
@@ -528,8 +528,8 @@ fn test_reproducibility_two_different_working_directories_produce_identical_mani
 
         let out_dir = tmp.path().join("out");
         let args = ods::commands::parquet::Args {
-            input: zip_path,
-            output: out_dir.clone(),
+            input: Some(zip_path),
+            output: Some(out_dir.clone()),
         };
         ods::commands::parquet::run(args)?;
         ods::provenance::update_provenance(&out_dir, Some("0.1.0"))?;
@@ -609,7 +609,7 @@ fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -
 
         let handle1 = thread::spawn(move || -> Result<()> {
             b1.wait();
-            let extracted = ods::commands::ndjson::extract_xml_from_zip(&p1)?;
+            let extracted = ods::ods_xml::extract_xml_from_zip(&p1)?;
             let content = fs::read_to_string(&extracted)?;
             assert!(content.contains("1111"), "thread 1 must contain its own sequence number 1111");
             assert!(!content.contains("2222"), "thread 1 must NOT contain thread 2 sequence number 2222");
@@ -618,7 +618,7 @@ fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -
 
         let handle2 = thread::spawn(move || -> Result<()> {
             b2.wait();
-            let extracted = ods::commands::ndjson::extract_xml_from_zip(&p2)?;
+            let extracted = ods::ods_xml::extract_xml_from_zip(&p2)?;
             let content = fs::read_to_string(&extracted)?;
             assert!(content.contains("2222"), "thread 2 must contain its own sequence number 2222");
             assert!(!content.contains("1111"), "thread 2 must NOT contain thread 1 sequence number 1111");

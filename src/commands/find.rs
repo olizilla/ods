@@ -434,21 +434,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let path = parquet_dir.join(file_name);
     if !path.exists() {
-        if let Some(workspace_root) = crate::workspace::find_workspace_root() {
+        if let Some(workspace_root) = crate::workspace::find_workspace_root(None) {
             let releases = crate::workspace::list_releases(&workspace_root).unwrap_or_default();
             if !releases.is_empty() {
                 let n = releases.len();
                 let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
                 let newest_date = &releases[0].date;
+                let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
                 anyhow::bail!(
-                    "✖ No active release pinned\n  {} in ods_data/releases/, none active.\n  Pin one:  ods pull {}",
+                    "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
                     count_str,
+                    ws_name,
                     newest_date
                 );
             }
         }
         anyhow::bail!(
-            "✖ No dataset found in ods_data/current\n  Run `ods pull` to download the latest pre-built NHS ODS dataset release, or `ods make` to compile from source."
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` to create a workspace."
         );
     }
 
@@ -1086,13 +1088,13 @@ mod tests {
 
         // Create synthetic OdsRecord list
         let records = vec![
-            crate::commands::ndjson::OdsRecord {
+            crate::ods_xml::OdsRecord {
                 ods_code: "A101".to_string(),
                 name: "Alpha Health Centre".to_string(),
                 status: "active".to_string(),
                 role: "prescribing cost centre".to_string(),
                 record_class: "org".to_string(),
-                geo_loc: Some(crate::commands::ndjson::Location {
+                geo_loc: Some(crate::ods_xml::Location {
                     address_lines: vec!["1 Main Street".to_string()],
                     town: Some("London".to_string()),
                     county: Some("Greater London".to_string()),
@@ -1101,7 +1103,7 @@ mod tests {
                     uprn: Some("10001".to_string()),
                 }),
                 roles: vec![
-                    crate::commands::ndjson::OdsRole {
+                    crate::ods_xml::OdsRole {
                         id: "RO177".to_string(),
                         code: None,
                         display_name: Some("prescribing cost centre".to_string()),
@@ -1110,7 +1112,7 @@ mod tests {
                         status: "active".to_string(),
                         dates: vec![],
                     },
-                    crate::commands::ndjson::OdsRole {
+                    crate::ods_xml::OdsRole {
                         id: "RO76".to_string(),
                         code: None,
                         display_name: Some("gp practice".to_string()),
@@ -1121,13 +1123,13 @@ mod tests {
                     },
                 ],
                 relationships: vec![
-                    crate::commands::ndjson::OdsRelationship {
+                    crate::ods_xml::OdsRelationship {
                         id: "RE4".to_string(),
                         display_name: Some("IS COMMISSIONED BY".to_string()),
                         unique_rel_id: "1001".to_string(),
                         status: "active".to_string(),
                         dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
+                        target: crate::ods_xml::OdsRelationshipTarget {
                             ods_code: "00A".to_string(),
                             name: Some("NHS London ICB".to_string()),
                             ..Default::default()
@@ -1136,13 +1138,13 @@ mod tests {
                 ],
                 ..Default::default()
             },
-            crate::commands::ndjson::OdsRecord {
+            crate::ods_xml::OdsRecord {
                 ods_code: "B202".to_string(),
                 name: "Beta Surgery".to_string(),
                 status: "inactive".to_string(),
                 role: "branch surgery".to_string(),
                 record_class: "site".to_string(),
-                geo_loc: Some(crate::commands::ndjson::Location {
+                geo_loc: Some(crate::ods_xml::Location {
                     address_lines: vec!["2 High Street".to_string()],
                     town: Some("Manchester".to_string()),
                     county: None,
@@ -1151,11 +1153,11 @@ mod tests {
                     uprn: None,
                 }),
                 successors: vec![
-                    crate::commands::ndjson::OdsSuccessor {
+                    crate::ods_xml::OdsSuccessor {
                         unique_succ_id: "1".to_string(),
                         succ_type: "Successor".to_string(),
                         dates: vec![],
-                        target: crate::commands::ndjson::OdsRelationshipTarget {
+                        target: crate::ods_xml::OdsRelationshipTarget {
                             ods_code: "A101".to_string(),
                             name: Some("Alpha Health Centre".to_string()),
                             root: None,

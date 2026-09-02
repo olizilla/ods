@@ -10,13 +10,13 @@ use crate::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME}
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Path to compiled release directory
+    /// Path to compiled release directory (defaults to active release)
     #[arg(long, short)]
-    pub input: PathBuf,
+    pub input: Option<PathBuf>,
 
-    /// Dataset semver for this release cut (e.g. 1.0.1)
+    /// Dataset semver for this release cut (e.g. 1.0.1; defaults to _provenance.json)
     #[arg(long, short)]
-    pub version: String,
+    pub version: Option<String>,
 
     /// Verify existing OCI layout without rebuilding
     #[arg(long)]
@@ -114,17 +114,30 @@ pub fn build_manifest_from_dir(
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let release_dir = &args.input;
+    let release_dir = match args.input {
+        Some(ref p) => p.clone(),
+        None => {
+            let root = crate::workspace::find_workspace_root(None)
+                .ok_or_else(|| anyhow::anyhow!("No workspace found. Specify --input <release_dir>"))?;
+            let (_, active_path) = crate::workspace::get_active_release(&root)?;
+            active_path
+        }
+    };
     if !release_dir.exists() {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let mut prov = match OdsProvenance::load_from_dir(release_dir) {
+    let mut prov = match OdsProvenance::load_from_dir(&release_dir) {
         Some(p) => p,
         None => bail!(
             "Missing or unreadable _provenance.json in {}",
             release_dir.display()
         ),
+    };
+
+    let version = match args.version {
+        Some(v) => v,
+        None => prov.dataset_version.clone().unwrap_or_else(|| crate::datapackage::dataset_version().to_string()),
     };
 
     let date = prov
@@ -146,17 +159,17 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         // Step 1: Update dataset_version in _provenance.json on disk
-        prov.dataset_version = Some(args.version.clone());
+        prov.dataset_version = Some(version.clone());
         let prov_path = release_dir.join(PROVENANCE_FILENAME);
         let updated_prov_json = serde_json::to_string_pretty(&prov)?;
         fs::write(&prov_path, updated_prov_json)?;
 
         // Step 1b: Regenerate datapackage.json with the full dataset SemVer
         let pkg = crate::datapackage::generate_release_datapackage(
-            release_dir,
+            &release_dir,
             Some(&prov),
             None,
-            Some(&args.version),
+            Some(&version),
         );
         fs::write(
             release_dir.join("datapackage.json"),
@@ -164,7 +177,7 @@ pub fn run(args: Args) -> Result<()> {
         )?;
 
         // Step 2: Build OciManifest from disk
-        let (manifest, manifest_bytes) = build_manifest_from_dir(release_dir, &prov, &args.version)?;
+        let (manifest, manifest_bytes) = build_manifest_from_dir(&release_dir, &prov, &version)?;
         let manifest_digest = manifest.digest()?;
 
         // Step 3: Write oci/ layout
@@ -182,7 +195,7 @@ pub fn run(args: Args) -> Result<()> {
         ann_date.insert(ANNOTATION_REF_NAME.to_string(), date.clone());
 
         let mut ann_versioned = BTreeMap::new();
-        ann_versioned.insert(ANNOTATION_REF_NAME.to_string(), format!("{}_{}", date, args.version));
+        ann_versioned.insert(ANNOTATION_REF_NAME.to_string(), format!("{}_{}", date, version));
 
         let entry_date = OciIndexManifestEntry {
             media_type: MEDIA_TYPE_MANIFEST.to_string(),
@@ -226,7 +239,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Step 5: Perform structural checks 1-8
-    let failures = perform_structural_checks(release_dir, &args.version)?;
+    let failures = perform_structural_checks(&release_dir, &version)?;
 
     if !failures.is_empty() {
         for failure in &failures {
@@ -265,7 +278,7 @@ pub fn run(args: Args) -> Result<()> {
             }
             println!("  this layout is structurally valid; `ods make release` will refuse it");
         }
-        println!("✓ tags {}, {}_{}", date, date, args.version);
+        println!("✓ tags {}, {}_{}", date, date, version);
     }
 
     Ok(())

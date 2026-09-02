@@ -56,8 +56,8 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
 
 fn test_args(input: PathBuf, version: &str, check: bool) -> Args {
     Args {
-        input,
-        version: version.to_string(),
+        input: Some(input),
+        version: Some(version.to_string()),
         check,
     }
 }

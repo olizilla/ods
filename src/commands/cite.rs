@@ -177,7 +177,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
-        .or_else(crate::workspace::find_workspace_root);
+        .or_else(|| crate::workspace::find_workspace_root(None));
 
     let (index, index_status) = resolve_cite_index(workspace_root.as_deref(), fetcher)?;
 

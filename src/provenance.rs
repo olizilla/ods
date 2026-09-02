@@ -6,10 +6,10 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-pub const NDJSON_TYPE_TAG: &str = "ods_provenance";
+pub const PROVENANCE_TYPE_TAG: &str = "ods_provenance";
 
 fn default_type_tag() -> String {
-    NDJSON_TYPE_TAG.to_string()
+    PROVENANCE_TYPE_TAG.to_string()
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub enum TrudVerificationSource {
     Unverified,
 }
 
-/// Unified dataset and build provenance metadata emitted as line 1 of canonical `ods.ndjson`
+/// Unified dataset and build provenance metadata stored in `_provenance.json`
 /// and saved as `_provenance.json` in workspace release directories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OdsProvenance {
@@ -87,7 +87,7 @@ pub const PROVENANCE_FILENAME: &str = "_provenance.json";
 impl Default for OdsProvenance {
     fn default() -> Self {
         Self {
-            type_tag: NDJSON_TYPE_TAG.to_string(),
+            type_tag: PROVENANCE_TYPE_TAG.to_string(),
             trud_release_name: None,
             trud_release_date: None,
             trud_release_file: None,
@@ -241,7 +241,7 @@ impl OdsProvenance {
     ) -> Self {
         let source_file = source_path.and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
         Self {
-            type_tag: NDJSON_TYPE_TAG.to_string(),
+            type_tag: PROVENANCE_TYPE_TAG.to_string(),
             trud_release_name: None,
             trud_release_date: None,
             trud_release_file: source_file,
@@ -316,13 +316,6 @@ impl OdsProvenance {
     }
 }
 
-pub fn try_parse_provenance_line(line: &str) -> Option<OdsProvenance> {
-    if !line.contains(NDJSON_TYPE_TAG) {
-        return None;
-    }
-    serde_json::from_str::<OdsProvenance>(line).ok()
-}
-
 pub fn compute_file_sha256(path: &Path) -> Result<String> {
     let file = File::open(path).with_context(|| format!("opening file for sha256: {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -368,7 +361,7 @@ pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Re
     }
 
     // Freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
-    if let Ok(header) = crate::commands::ndjson::extract_manifest_header(output_dir) {
+    if let Ok(header) = crate::ods_xml::extract_manifest_header(output_dir) {
         if header.publication_date.is_some() {
             prov.publication_date = header.publication_date;
         }
@@ -390,7 +383,7 @@ pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Re
     }
 
     if prov.type_tag.is_empty() {
-        prov.type_tag = NDJSON_TYPE_TAG.to_string();
+        prov.type_tag = PROVENANCE_TYPE_TAG.to_string();
     }
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = option_env!("ODS_GIT_SHA").map(|s| s.to_string());
@@ -427,7 +420,7 @@ mod tests {
         assert!(json.contains("ods_provenance"));
         assert!(json.contains("2026-07-31"));
 
-        let parsed = try_parse_provenance_line(&json).unwrap();
+        let parsed: OdsProvenance = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.publication_date, Some("2026-07-31".to_string()));
     }
 

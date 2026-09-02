@@ -134,8 +134,8 @@ fn test_make_oci_real_run_packs_deterministic_manifest() -> Result<()> {
     let (_tmp, rel_dir) = setup_golden_release_dir();
 
     run(Args {
-        input: rel_dir.clone(),
-        version: "1.0.1".to_string(),
+        input: Some(rel_dir.clone()),
+        version: Some("1.0.1".to_string()),
         check: false,
     })?;
 

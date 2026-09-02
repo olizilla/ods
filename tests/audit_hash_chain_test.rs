@@ -93,8 +93,8 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
 
     // Run parquet compilation
     ods::commands::parquet::run(ods::commands::parquet::Args {
-        input: rel_dir.clone(),
-        output: rel_dir.clone(),
+        input: Some(rel_dir.clone()),
+        output: Some(rel_dir.clone()),
     })
     .unwrap();
 
@@ -290,7 +290,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
     // Overwrite successions.parquet with empty/different file
-    let empty_records: Vec<ods::commands::ndjson::OdsRecord> = Vec::new();
+    let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
     ods::provenance::update_provenance(&active_dir, None)?;
@@ -324,15 +324,15 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
     // Create an orphan succession edge
-    let record_with_orphan = ods::commands::ndjson::OdsRecord {
+    let record_with_orphan = ods::ods_xml::OdsRecord {
         ods_code: "A100".to_string(),
         name: "TEST".to_string(),
         status: "active".to_string(),
-        successors: vec![ods::commands::ndjson::OdsSuccessor {
+        successors: vec![ods::ods_xml::OdsSuccessor {
             unique_succ_id: "999".to_string(),
             succ_type: "Predecessor".to_string(),
             dates: Vec::new(),
-            target: ods::commands::ndjson::OdsRelationshipTarget {
+            target: ods::ods_xml::OdsRelationshipTarget {
                 ods_code: "NONEXISTENT_ORG_999".to_string(),
                 ..Default::default()
             },
@@ -390,12 +390,12 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     let (_, active_dir) = ods::workspace::get_active_release(&workspace_root)?;
 
     // Corrupt the transitive closure by re-exporting orgs with empty closures
-    let record = ods::commands::ndjson::OdsRecord {
+    let record = ods::ods_xml::OdsRecord {
         ods_code: "A100".to_string(),
         name: "TEST PRACTICE".to_string(),
         status: "active".to_string(),
         record_class: "org".to_string(),
-        roles: vec![ods::commands::ndjson::OdsRole {
+        roles: vec![ods::ods_xml::OdsRole {
             id: "RO177".to_string(),
             code: None,
             display_name: Some("Prescribing Cost Centre".to_string()),
@@ -510,8 +510,8 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 
     ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
-        input: rel_dir.clone(),
-        output: rel_dir.clone(),
+        input: Some(rel_dir.clone()),
+        output: Some(rel_dir.clone()),
     })
     .unwrap();
     ods::provenance::update_provenance(&rel_dir, None).unwrap();
@@ -677,8 +677,8 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
 
     ods::workspace::set_active_release(&workspace_root, "2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
-        input: rel_dir.clone(),
-        output: rel_dir.clone(),
+        input: Some(rel_dir.clone()),
+        output: Some(rel_dir.clone()),
     })
     .unwrap();
     ods::provenance::update_provenance(&rel_dir, None).unwrap();

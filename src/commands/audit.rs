@@ -141,7 +141,7 @@ fn run_all(args: Args) -> Result<()> {
     let start_total = Instant::now();
     let workspace_root = match args.workspace {
         Some(ref p) => p.clone(),
-        None => crate::workspace::find_workspace_root().context(
+        None => crate::workspace::find_workspace_root(None).context(
             "No ODS workspace found. Pass `--workspace <DIR>` or run inside a workspace.",
         )?,
     };
@@ -264,12 +264,13 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let input_path = match args.input {
         Some(ref p) => p.clone(),
         None => {
-            if let Some(root) = crate::workspace::find_workspace_root() {
-                let trud_dir = root.join("current").join("trud");
+            if let Some(root) = crate::workspace::find_workspace_root(args.workspace.as_deref()) {
+                let (_, active_dir) = crate::workspace::get_active_release(&root)?;
+                let trud_dir = active_dir.join("trud");
                 if trud_dir.exists() {
                     trud_dir
                 } else {
-                    root.join("current")
+                    active_dir
                 }
             } else {
                 PathBuf::from(".")
@@ -282,34 +283,16 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     }
 
     // 1. Locate XML source file
-    let xml_path = crate::commands::ndjson::find_xml_file(&input_path)?;
+    let xml_path = crate::ods_xml::find_xml_file(&input_path)?;
 
     // 2. Discover workspace root and active release directory
-    let discovered_dir = workspace::discover_parquet_dir(args.workspace.as_deref())
-        .context("Failed to locate workspace parquet directory")?;
-
-    let workspace_root = if discovered_dir.join("current").exists() {
-        discovered_dir.clone()
-    } else if discovered_dir
-        .parent()
-        .map(|p| p.join("current").exists())
-        .unwrap_or(false)
-    {
-        discovered_dir.parent().unwrap().to_path_buf()
-    } else if discovered_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("current").exists())
-        .unwrap_or(false)
-    {
-        discovered_dir
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
-    } else {
-        std::env::current_dir()?.join(workspace::DEFAULT_WORKSPACE_DIR)
+    let workspace_root = match crate::workspace::find_workspace_root(args.workspace.as_deref()) {
+        Some(root) => root,
+        None => {
+            anyhow::bail!(
+                "✖ No ODS workspace found.\n  Provide --workspace <dir>, or run from a workspace."
+            );
+        }
     };
 
     let (workspace_date, active_release_path) =
@@ -328,7 +311,10 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                     if let Some(matching) = releases.into_iter().find(|r| r.has_parquet) {
                         (matching.date, matching.path)
                     } else {
-                        workspace::get_active_release(&workspace_root)?
+                        anyhow::bail!(
+                            "No compiled release found in workspace {}",
+                            workspace_root.display()
+                        );
                     }
                 }
             }
@@ -364,7 +350,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let input_prov = OdsProvenance::load_from_dir(&input_path)
         .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
         .unwrap_or_else(|| {
-            crate::commands::ndjson::parse_single_pass(&xml_path)
+            crate::ods_xml::parse_single_pass(&xml_path)
                 .map(|(p, _, _)| p)
                 .unwrap_or_default()
         });
@@ -1543,8 +1529,8 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
         }
     }
 
-    // Now populate full succession graph edges from ndjson parse if available or from fast pass
-    if let Ok((_, _, parsed_orgs)) = crate::commands::ndjson::parse_single_pass(xml_path) {
+    // Now populate full succession graph edges from XML parse if available or from fast pass
+    if let Ok((_, _, parsed_orgs)) = crate::ods_xml::parse_single_pass(xml_path) {
         for org in parsed_orgs.values() {
             for succ in &org.successors {
                 let is_pred = succ.succ_type.eq_ignore_ascii_case("predecessor");
