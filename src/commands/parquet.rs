@@ -81,7 +81,19 @@ pub fn run(args: Args) -> Result<PathBuf> {
     };
 
     let output_path = match args.output {
-        Some(p) => p,
+        Some(p) => {
+            // If output path is <root>/releases/<date>, derive <root> and ensure workspace root furniture & marker.
+            // Deriving <root> from an explicit output argument is parsing an argument you were given,
+            // not discovery — a different operation from walking up looking for a workspace.
+            if let Some(parent) = p.parent() {
+                if parent.file_name().and_then(|n| n.to_str()) == Some("releases") {
+                    if let Some(root) = parent.parent() {
+                        let _ = crate::workspace::ensure_workspace_marker(root);
+                    }
+                }
+            }
+            p
+        }
         None => {
             let ws = crate::workspace::Workspace::open(None)?;
             let (_, active_dir) = ws.active_release()?;

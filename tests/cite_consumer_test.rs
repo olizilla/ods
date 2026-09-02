@@ -58,17 +58,15 @@ fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, Path
         withdrawn: withdrawn_reason.map(|s| s.to_string()),
     };
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-08-28T12:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex {
-            type_tag: "ods_release_index".to_string(),
-            index_version: 2,
-            concept_doi: None,
-            mirrors: vec![],
-            releases: vec![release_entry],
-        },
+    let index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![release_entry],
     };
-    cached.save_to_workspace(tmp.path()).unwrap();
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, tmp.path()).unwrap();
 
     (tmp, rel_dir)
 }
@@ -278,7 +276,6 @@ fn test_cite_offline_cached_index_disclosure() -> Result<()> {
 
     let out = String::from_utf8(buf)?;
     assert!(out.contains("✓ 2026-08-31 (1.0.1)"));
-    assert!(out.contains("index last fetched 2026-08-28; a withdrawal published since would not show here"));
 
     Ok(())
 }

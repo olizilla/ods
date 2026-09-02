@@ -329,20 +329,51 @@ fn test_mirror_urls_and_host() {
 }
 
 #[test]
-fn test_cached_release_index_save_and_load() -> Result<()> {
+fn test_workspace_release_index_save_and_load() -> Result<()> {
     let tmp = tempfile::TempDir::new()?;
     let baked = OdsReleaseIndex::baked()?;
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-08-28T12:00:00Z".to_string(),
-        index: baked.clone(),
-    };
 
-    assert!(ods::index::CachedReleaseIndex::load_from_workspace(tmp.path())?.is_none());
-    cached.save_to_workspace(tmp.path())?;
+    assert!(ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.is_none());
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(ods::index::BAKED_RELEASES_JSON_BYTES, tmp.path())?;
 
-    let loaded = ods::index::CachedReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
-    assert_eq!(loaded.fetched_at, "2026-08-28T12:00:00Z");
-    assert_eq!(loaded.index.index_version, baked.index_version);
+    let loaded = ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
+    assert_eq!(loaded.index_version, baked.index_version);
+    assert_eq!(loaded.type_tag, "ods_release_index");
     Ok(())
+}
+
+#[test]
+fn test_index_staleness_calculation() {
+    let mut index = OdsReleaseIndex::default();
+    index.type_tag = "ods_release_index".to_string();
+    index.index_version = 2;
+    index.releases = vec![
+        ods::index::ReleaseIndexEntry {
+            trud_release_date: "2026-07-31".to_string(),
+            dataset_version: "0.1.0".to_string(),
+            tag: "2026-07-31_0.1.0".to_string(),
+            manifest_digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            trud_release_sha256: "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            tool_version: "0.1.0".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }
+    ];
+
+    // Empty index: does not panic
+    let empty_index = OdsReleaseIndex::default();
+    assert_eq!(empty_index.staleness(chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()), None);
+
+    // 44 days old: below threshold of 45 (quiet)
+    let day_44 = chrono::NaiveDate::from_ymd_opt(2026, 9, 13).unwrap(); // July 31 + 44 days = Sept 13
+    let res_44 = index.staleness(day_44);
+    assert_eq!(res_44, Some(("2026-07-31".to_string(), 44)));
+    assert!(res_44.unwrap().1 <= ods::index::STALENESS_THRESHOLD_DAYS);
+
+    // 46 days old: above threshold of 45 (nudges)
+    let day_46 = chrono::NaiveDate::from_ymd_opt(2026, 9, 15).unwrap(); // July 31 + 46 days = Sept 15
+    let res_46 = index.staleness(day_46);
+    assert_eq!(res_46, Some(("2026-07-31".to_string(), 46)));
+    assert!(res_46.unwrap().1 > ods::index::STALENESS_THRESHOLD_DAYS);
 }
 

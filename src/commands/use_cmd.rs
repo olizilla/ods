@@ -27,9 +27,9 @@ pub fn run(args: Args) -> Result<()> {
         );
     }
 
-    let index = if let Ok(Some(cached)) = crate::index::CachedReleaseIndex::load_from_workspace(&workspace_root) {
-        let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_else(|_| cached.index.clone());
-        baked.merge(&cached.index).unwrap_or(baked)
+    let index = if let Ok(Some(loaded)) = crate::index::OdsReleaseIndex::load_from_workspace(&workspace_root) {
+        let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_else(|_| loaded.clone());
+        baked.merge(&loaded).unwrap_or(baked)
     } else {
         crate::index::OdsReleaseIndex::baked().unwrap_or_default()
     };

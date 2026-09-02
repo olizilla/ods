@@ -41,7 +41,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexFetchStatus {
     JustNow,
-    Cached(String),
+    Workspace,
     Baked,
 }
 
@@ -56,13 +56,11 @@ pub fn resolve_cite_index<F: crate::commands::pull::OciBlobFetcher>(
         Ok(Some(fetched)) => {
             match baked.merge(&fetched) {
                 Ok(merged) => {
-                    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
                     if let Some(ws) = workspace_root {
-                        let cached = crate::index::CachedReleaseIndex {
-                            fetched_at: now_rfc3339,
-                            index: merged.clone(),
-                        };
-                        let _ = cached.save_to_workspace(ws);
+                        let raw = fetcher.fetch_release_index_raw()?.unwrap_or_else(|| {
+                            serde_json::to_vec_pretty(&merged).unwrap_or_default()
+                        });
+                        let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw, ws);
                     }
                     return Ok((merged, IndexFetchStatus::JustNow));
                 }
@@ -83,9 +81,9 @@ pub fn resolve_cite_index<F: crate::commands::pull::OciBlobFetcher>(
 
     // 2. Try loading cached index from workspace
     if let Some(ws) = workspace_root {
-        if let Ok(Some(cached)) = crate::index::CachedReleaseIndex::load_from_workspace(ws) {
-            match baked.merge(&cached.index) {
-                Ok(merged) => return Ok((merged, IndexFetchStatus::Cached(cached.fetched_at))),
+        if let Ok(Some(loaded)) = crate::index::OdsReleaseIndex::load_from_workspace(ws) {
+            match baked.merge(&loaded) {
+                Ok(merged) => return Ok((merged, IndexFetchStatus::Workspace)),
                 Err(e) => {
                     if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
                         return Err(e);
@@ -363,11 +361,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 IndexFetchStatus::JustNow => {
                     writeln!(writer, "✓ {} ({}) — checked against the index just now\n", d_tag, dataset_version)?;
                 }
-                IndexFetchStatus::Cached(ref fetched_at) => {
-                    let fetched_day = fetched_at.split('T').next().unwrap_or(fetched_at);
-                    writeln!(writer, "✓ {} ({})\n  index last fetched {}; a withdrawal published since would not show here\n", d_tag, dataset_version, fetched_day)?;
-                }
-                IndexFetchStatus::Baked => {
+                IndexFetchStatus::Workspace | IndexFetchStatus::Baked => {
                     writeln!(writer, "✓ {} ({})\n", d_tag, dataset_version)?;
                 }
             }
@@ -433,6 +427,9 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             )?;
         }
     }
+
+    let is_machine = args.format == "json" || args.format == "csljson" || args.format == "bibtex";
+    crate::workspace::check_and_emit_staleness_nudge(&index, is_machine);
 
     Ok(())
 }

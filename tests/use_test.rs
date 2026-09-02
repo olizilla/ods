@@ -49,17 +49,15 @@ fn test_use_refuses_when_release_unverified() {
         dataset_doi: None,
         withdrawn: None,
     };
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-08-28T12:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex {
-            type_tag: "ods_release_index".to_string(),
-            index_version: 2,
-            concept_doi: None,
-            mirrors: vec![],
-            releases: vec![release_entry],
-        },
+    let index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![release_entry],
     };
-    cached.save_to_workspace(&workspace).unwrap();
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &workspace).unwrap();
 
     let res = use_run(UseArgs {
         release_date: "2026-07-31".to_string(),

@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use crate::index::{CachedReleaseIndex, MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use crate::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
 use crate::oci::*;
 use crate::progress::{Progress, ProgressCaps};
 use crate::workspace::{verify_release_dir, Workspace};
@@ -68,6 +68,14 @@ pub struct ReleaseListItemJson {
 pub trait OciBlobFetcher: Send + Sync {
     fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>>;
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
+        if let Some(bytes) = self.fetch_release_index_raw()? {
+            if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+                return Ok(Some(idx));
+            }
+        }
+        Ok(None)
+    }
+    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
 }
@@ -79,7 +87,7 @@ impl OciBlobFetcher for HttpOciFetcher {
         download_bytes_with_auth(url, None)
     }
 
-    fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
+    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
         // Test/dev hook: allow pointing release index fetcher to a custom URL (e.g. local Miniflare test server)
         let custom_url = std::env::var("ODS_RELEASE_INDEX_URL").ok();
         let default_urls = [
@@ -94,9 +102,18 @@ impl OciBlobFetcher for HttpOciFetcher {
         }
         for url in &index_urls {
             if let Ok(bytes) = download_bytes_with_auth(url, None) {
-                if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
-                    return Ok(Some(idx));
+                if serde_json::from_slice::<OdsReleaseIndex>(&bytes).is_ok() {
+                    return Ok(Some(bytes));
                 }
+            }
+        }
+        Ok(None)
+    }
+
+    fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
+        if let Some(bytes) = self.fetch_release_index_raw()? {
+            if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+                return Ok(Some(idx));
             }
         }
         Ok(None)
@@ -252,12 +269,10 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
         Ok(Some(fetched)) => {
             match baked.merge(&fetched) {
                 Ok(merged) => {
-                    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
-                    let cached = CachedReleaseIndex {
-                        fetched_at: now_rfc3339,
-                        index: merged.clone(),
-                    };
-                    let _ = cached.save_to_workspace(workspace_root);
+                    let raw = fetcher.fetch_release_index_raw()?.unwrap_or_else(|| {
+                        serde_json::to_vec_pretty(&merged).unwrap_or_default()
+                    });
+                    let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw, workspace_root);
                     return Ok((merged, Some("just now".to_string())));
                 }
                 Err(e) => {
@@ -278,9 +293,9 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
     }
 
     // 2. Try loading cached index from workspace
-    if let Ok(Some(cached)) = CachedReleaseIndex::load_from_workspace(workspace_root) {
-        match baked.merge(&cached.index) {
-            Ok(merged) => return Ok((merged, Some(cached.fetched_at))),
+    if let Ok(Some(loaded)) = OdsReleaseIndex::load_from_workspace(workspace_root) {
+        match baked.merge(&loaded) {
+            Ok(merged) => return Ok((merged, None)),
             Err(e) => {
                 if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
                     return Err(e);
@@ -290,6 +305,7 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
     }
 
     // 3. Fall back to baked index
+    let _ = crate::workspace::ensure_workspace_marker(workspace_root);
     Ok((baked, None))
 }
 

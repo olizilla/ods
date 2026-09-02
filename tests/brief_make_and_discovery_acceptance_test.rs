@@ -157,11 +157,7 @@ fn test_task_3_acceptance_non_default_workspace_discovery() {
         serde_json::to_string_pretty(&prov).unwrap(),
     ).unwrap();
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
 
     // 1. Run `ods find` from inside nhs-archive/
@@ -247,11 +243,7 @@ fn test_task_4_acceptance_make_does_not_move_current_pointer() {
         .output()
         .expect("make A");
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-05-29T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-05-29").unwrap();
 
     // Verify current is pinned to 2026-05-29
@@ -302,11 +294,7 @@ fn test_task_6_acceptance_audit_workspace_authoritative_on_unpinned_workspace() 
         .expect("make into external workspace");
     assert!(res_make.status.success());
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&external_ws).unwrap();
+    fs::write(external_ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     // Verify that the workspace has NO active release pinned
     assert!(ods::workspace::Workspace::open(Some(&external_ws)).unwrap().active_release().is_err(), "workspace should be unpinned");

@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub const RELEASES_JSON: &str = include_str!("../data/releases.json");
+pub const BAKED_RELEASES_JSON_BYTES: &[u8] = include_bytes!("../data/releases.json");
+pub const RELEASES_JSON_FILENAME: &str = "_releases.json";
+
+/// Maximum days before an index is considered stale.
+/// TRUD publishes ODS every four weeks, with observed gaps between 21 and 42 days:
+/// 2025-06-27 … 2026-07-31: +35 +28 +28 +35 +28 +21 +42 +28 +28 +28 +35 +28 +35
+/// Modal 28 days, range 21–42. 45 days exceeds the longest observed gap (42 days),
+/// ensuring normal gaps do not trigger false alerts while catching genuinely stale indices.
+pub const STALENESS_THRESHOLD_DAYS: i64 = 45;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OdsReleaseIndex {
@@ -36,34 +45,6 @@ impl MirrorEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CachedReleaseIndex {
-    pub fetched_at: String,
-    pub index: OdsReleaseIndex,
-}
-
-impl CachedReleaseIndex {
-    pub fn load_from_workspace(workspace_root: &std::path::Path) -> Result<Option<Self>> {
-        let path = workspace_root.join("_releases.json");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("reading cached index at {}", path.display()))?;
-        let cached: CachedReleaseIndex = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing cached index at {}", path.display()))?;
-        Ok(Some(cached))
-    }
-
-    pub fn save_to_workspace(&self, workspace_root: &std::path::Path) -> Result<()> {
-        let path = workspace_root.join("_releases.json");
-        let bytes = serde_json::to_vec_pretty(self)
-            .context("serializing cached release index")?;
-        std::fs::write(&path, bytes)
-            .with_context(|| format!("writing cached index to {}", path.display()))?;
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseIndexEntry {
@@ -114,6 +95,47 @@ impl std::fmt::Display for SecurityError {
 impl std::error::Error for SecurityError {}
 
 impl OdsReleaseIndex {
+    /// Loads and validates the release index from a workspace directory.
+    pub fn load_from_workspace(workspace_root: &std::path::Path) -> Result<Option<Self>> {
+        let path = workspace_root.join(RELEASES_JSON_FILENAME);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("reading index at {}", path.display()))?;
+        let index: OdsReleaseIndex = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing index at {}", path.display()))?;
+        index.validate()?;
+        Ok(Some(index))
+    }
+
+    /// Saves raw index bytes verbatim to `_releases.json` in the workspace directory.
+    pub fn save_to_workspace_bytes(bytes: &[u8], workspace_root: &std::path::Path) -> Result<()> {
+        let path = workspace_root.join(RELEASES_JSON_FILENAME);
+        std::fs::write(&path, bytes)
+            .with_context(|| format!("writing index to {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Calculates how many days have elapsed since the newest `trud_release_date` in the index.
+    /// Returns `Some((newest_date, days_old))` if releases exist and have valid dates, or `None` if empty.
+    pub fn staleness(&self, today: chrono::NaiveDate) -> Option<(String, i64)> {
+        let mut max_date: Option<(chrono::NaiveDate, &str)> = None;
+        for rel in &self.releases {
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(&rel.trud_release_date, "%Y-%m-%d") {
+                match max_date {
+                    Some((cur, _)) if d > cur => max_date = Some((d, &rel.trud_release_date)),
+                    None => max_date = Some((d, &rel.trud_release_date)),
+                    _ => {}
+                }
+            }
+        }
+        max_date.map(|(d, str_val)| {
+            let days = (today - d).num_days();
+            (str_val.to_string(), days)
+        })
+    }
+
     /// Loads and validates the checked-in baked release index.
     pub fn baked() -> Result<Self> {
         let index: Self = serde_json::from_str(RELEASES_JSON)

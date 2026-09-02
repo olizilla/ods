@@ -13,32 +13,18 @@ pub struct ReleaseInfo {
 }
 
 /// Validates whether a directory contains a valid `_releases.json` file.
+///
+/// Reduces to one accepted shape: parses as `OdsReleaseIndex`, and its `_type` is `ods_release_index`.
 pub fn validate_releases_json(dir: &Path) -> bool {
-    let path = dir.join("_releases.json");
+    let path = dir.join(crate::index::RELEASES_JSON_FILENAME);
     if !path.is_file() {
         return false;
     }
     let Ok(bytes) = fs::read(&path) else {
         return false;
     };
-    if serde_json::from_slice::<crate::index::CachedReleaseIndex>(&bytes).is_ok() {
-        return true;
-    }
-    if serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes).is_ok() {
-        return true;
-    }
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-        if val.get("_type").and_then(|t| t.as_str()) == Some("ods_release_index") {
-            return true;
-        }
-        if val
-            .get("index")
-            .and_then(|i| i.get("_type"))
-            .and_then(|t| t.as_str())
-            == Some("ods_release_index")
-        {
-            return true;
-        }
+    if let Ok(idx) = serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes) {
+        return idx.type_tag == "ods_release_index";
     }
     false
 }
@@ -58,25 +44,8 @@ impl Workspace {
                     path.display()
                 );
             }
-            if is_existing_workspace(path) {
+            if validate_releases_json(path) {
                 path.to_path_buf()
-            } else if path.join(crate::provenance::PROVENANCE_FILENAME).exists() {
-                if let Some(parent) = path.parent() {
-                    if parent.file_name().is_some_and(|n| n == "releases") {
-                        if let Some(gp) = parent.parent() {
-                            gp.to_path_buf()
-                        } else {
-                            parent.to_path_buf()
-                        }
-                    } else {
-                        parent.to_path_buf()
-                    }
-                } else {
-                    anyhow::bail!(
-                        "✖ no ods workspace found at '{}'\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace.",
-                        path.display()
-                    );
-                }
             } else if let Some(found) = find_workspace_root_from(path, None) {
                 found
             } else {
@@ -98,10 +67,11 @@ impl Workspace {
     /// Find one, or establish it at `explicit` (else the default). For write commands.
     pub fn open_or_create(explicit: Option<&Path>) -> Result<Workspace> {
         let root = if let Some(path) = explicit {
-            if is_existing_workspace(path) {
+            if validate_releases_json(path) {
                 path.to_path_buf()
-            } else if let Some(discovered) = find_workspace_root_from(path, None) {
-                discovered
+            } else if path.join("releases").is_dir() || path.file_name().is_some_and(|n| n == DEFAULT_WORKSPACE_DIR) {
+                // An explicit workspace path missing the marker: that is the root, seed marker if absent
+                path.to_path_buf()
             } else if !path.exists() {
                 if path.file_name().is_some_and(|n| n == DEFAULT_WORKSPACE_DIR) {
                     path.to_path_buf()
@@ -129,8 +99,7 @@ impl Workspace {
 
         fs::create_dir_all(&root)
             .with_context(|| format!("creating workspace at {}", root.display()))?;
-        ensure_workspace_gitignore(&root)?;
-        ensure_workspace_readme(&root)?;
+        ensure_workspace_root(&root)?;
 
         Ok(Workspace { root })
     }
@@ -146,6 +115,7 @@ impl Workspace {
     pub fn set_active(&self, date: &str) -> Result<()> {
         set_active_release(&self.root, date)?;
         let _ = generate_workspace_readme(&self.root, date, None, None);
+        ensure_workspace_root(&self.root)?;
         Ok(())
     }
 
@@ -207,18 +177,9 @@ impl Workspace {
     }
 }
 
-fn is_existing_workspace(dir: &Path) -> bool {
-    validate_releases_json(dir)
-        || dir.join("releases").is_dir()
-        || dir.join("current").exists()
-        || (dir.join(".gitignore").is_file() && dir.join("README.md").is_file())
-}
-
 /// Resolves the root workspace directory from a specific starting path:
 /// 1. Explicit wins. A path from --workspace / -i / -o is the root. No further checks.
-/// 2. start is the root. start/_releases.json validates -> root = start.
-/// 3. start is a release dir. start/_provenance.json exists and start's parent is named releases and start/../../_releases.json validates -> root = start/../..
-/// 4. Walk up. For each ancestor a, starting at start and ascending:
+/// 2. Walk up. For each ancestor a, starting at start and ascending:
 ///    a/_releases.json validates -> root = a.
 ///    a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
 ///    Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
@@ -241,52 +202,17 @@ pub fn find_workspace_root_from_with_home(
         return Some(path.to_path_buf());
     }
 
-    // 2. start is the root.
-    if validate_releases_json(start) || is_existing_workspace(start) {
-        return Some(start.to_path_buf());
-    }
-
-    // 3. start is a release dir. start/_provenance.json exists and start's parent is named releases and start/../../_releases.json validates -> root = start/../..
-    if start.join(crate::provenance::PROVENANCE_FILENAME).exists() {
-        if let Some(parent) = start.parent() {
-            if parent.file_name().is_some_and(|n| n == "releases") {
-                if let Some(grandparent) = parent.parent() {
-                    if validate_releases_json(grandparent) || is_existing_workspace(grandparent) {
-                        return Some(grandparent.to_path_buf());
-                    }
-                }
-            } else if validate_releases_json(parent) || is_existing_workspace(parent) {
-                return Some(parent.to_path_buf());
-            }
-        }
-    }
-
-    // Also check canonicalized start for symlink pointers (like `current`)
-    if let Ok(canon) = start.canonicalize() {
-        if canon != start && canon.join(crate::provenance::PROVENANCE_FILENAME).exists() {
-            if let Some(parent) = canon.parent() {
-                if parent.file_name().is_some_and(|n| n == "releases") {
-                    if let Some(grandparent) = parent.parent() {
-                        if validate_releases_json(grandparent) || is_existing_workspace(grandparent) {
-                            return Some(grandparent.to_path_buf());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 4. Walk up. For each ancestor a, starting at start and ascending:
+    // 2. Walk up. For each ancestor a, starting at start and ascending:
     // a/_releases.json validates -> root = a.
     // a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
     // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
     let mut current = Some(start);
     while let Some(a) = current {
-        if validate_releases_json(a) || is_existing_workspace(a) {
+        if validate_releases_json(a) {
             return Some(a.to_path_buf());
         }
         let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
-        if validate_releases_json(&default_ws) || is_existing_workspace(&default_ws) {
+        if validate_releases_json(&default_ws) {
             return Some(default_ws);
         }
 
@@ -356,8 +282,30 @@ fn prepare_release_dir(workspace_root: &Path, release_date: &str) -> Result<Path
     let release_dir = workspace_root.join("releases").join(release_date);
     fs::create_dir_all(release_dir.join("trud"))
         .context("Failed to create release trud directory")?;
-    ensure_workspace_gitignore(workspace_root)?;
+    ensure_workspace_root(workspace_root)?;
     Ok(release_dir)
+}
+
+/// Ensures all workspace root furniture exists (gitignore, readme, and _releases.json marker).
+pub fn ensure_workspace_root(workspace_root: &Path) -> Result<()> {
+    fs::create_dir_all(workspace_root)
+        .with_context(|| format!("creating workspace root directory at {}", workspace_root.display()))?;
+    ensure_workspace_gitignore(workspace_root)?;
+    ensure_workspace_readme(workspace_root)?;
+    ensure_workspace_marker(workspace_root)?;
+    Ok(())
+}
+
+/// Seeds the workspace marker `_releases.json` from the baked index verbatim if absent.
+pub fn ensure_workspace_marker(workspace_root: &Path) -> Result<()> {
+    fs::create_dir_all(workspace_root)
+        .with_context(|| format!("creating directory at {}", workspace_root.display()))?;
+    let marker_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
+    if !marker_path.exists() {
+        fs::write(&marker_path, crate::index::BAKED_RELEASES_JSON_BYTES)
+            .with_context(|| format!("writing workspace marker to {}", marker_path.display()))?;
+    }
+    Ok(())
 }
 
 /// Ensures `.gitignore` ignores heavy raw ZIP/XML files while preserving metadata/parquet artifacts.
@@ -379,6 +327,29 @@ fn ensure_workspace_readme(workspace_root: &Path) -> Result<()> {
         generate_workspace_readme(workspace_root, date_str, None, None)?;
     }
     Ok(())
+}
+
+static NUDGE_EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Emits a one-line staleness nudge to stderr if the newest release in the index is older than 45 days.
+/// At most once per process invocation.
+/// Strictly suppressed on machine-readable formats (`json`, `csv`, `tsv`, `ndjson`).
+pub fn check_and_emit_staleness_nudge(index: &crate::index::OdsReleaseIndex, is_machine_readable: bool) {
+    if is_machine_readable {
+        return;
+    }
+    if NUDGE_EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let today = chrono::Utc::now().date_naive();
+    if let Some((newest_date, days)) = index.staleness(today) {
+        if days > crate::index::STALENESS_THRESHOLD_DAYS {
+            eprintln!(
+                "  {} is {} days old. TRUD ships roughly every 4 weeks\n  Check with: ods pull",
+                newest_date, days
+            );
+        }
+    }
 }
 
 /// Sets or updates the `current` symlink/pointer in the workspace root to target `releases/<release_date>`.

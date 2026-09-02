@@ -574,6 +574,7 @@ fn test_audit_all_skips_unmade_releases() -> Result<()> {
 fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace_root = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_root(&workspace_root).unwrap();
 
     // Create 2 releases that both have trud/ and _provenance.json but NO derived parquet files
     for date in &["2020-01-01", "2020-02-01"] {

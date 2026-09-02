@@ -84,11 +84,7 @@ fn test_cli_cite_output_formatting() {
     .unwrap();
 
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -201,38 +197,36 @@ fn test_cli_pull_local_release_output() {
     let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2, &prov2, "1.0.1").unwrap();
     let d2 = m2.digest().unwrap();
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-08-28T12:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex {
-            type_tag: "ods_release_index".to_string(),
-            index_version: 2,
-            concept_doi: None,
-            mirrors: vec![],
-            releases: vec![
-                ods::index::ReleaseIndexEntry {
-                    trud_release_date: "2026-05-29".to_string(),
-                    dataset_version: "1.0.1".to_string(),
-                    tag: "2026-05-29_1.0.1".to_string(),
-                    manifest_digest: d1,
-                    trud_release_sha256: "AAAA".to_string(),
-                    tool_version: "0.4.3".to_string(),
-                    dataset_doi: None,
-                    withdrawn: None,
-                },
-                ods::index::ReleaseIndexEntry {
-                    trud_release_date: "2026-06-26".to_string(),
-                    dataset_version: "1.0.1".to_string(),
-                    tag: "2026-06-26_1.0.1".to_string(),
-                    manifest_digest: d2,
-                    trud_release_sha256: "BBBB".to_string(),
-                    tool_version: "0.4.3".to_string(),
-                    dataset_doi: None,
-                    withdrawn: None,
-                },
-            ],
-        },
+    let index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![
+            ods::index::ReleaseIndexEntry {
+                trud_release_date: "2026-05-29".to_string(),
+                dataset_version: "1.0.1".to_string(),
+                tag: "2026-05-29_1.0.1".to_string(),
+                manifest_digest: d1,
+                trud_release_sha256: "AAAA".to_string(),
+                tool_version: "0.4.3".to_string(),
+                dataset_doi: None,
+                withdrawn: None,
+            },
+            ods::index::ReleaseIndexEntry {
+                trud_release_date: "2026-06-26".to_string(),
+                dataset_version: "1.0.1".to_string(),
+                tag: "2026-06-26_1.0.1".to_string(),
+                manifest_digest: d2,
+                trud_release_sha256: "BBBB".to_string(),
+                tool_version: "0.4.3".to_string(),
+                dataset_doi: None,
+                withdrawn: None,
+            },
+        ],
     };
-    cached.save_to_workspace(&ws).unwrap();
+    let bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&bytes, &ws).unwrap();
 
     // Ensure starting pin is 2026-06-26 so switching to 2026-05-29 moves the pin
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-06-26").unwrap();
@@ -316,11 +310,7 @@ fn test_cli_find_unpinned_workspace_message() {
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -356,11 +346,7 @@ fn test_cli_cite_unpinned_workspace_message() {
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -394,11 +380,7 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
     fs::create_dir_all(ws.join("releases").join("2026-05-29").join("trud")).unwrap();
     fs::create_dir_all(ws.join("releases").join("2026-07-31").join("trud")).unwrap();
 
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -522,6 +504,7 @@ fn test_trud_pull_furniture_and_ods_make_succeeds() {
     let ws_dir = project_dir.join("ods_data");
     assert!(ws_dir.join(".gitignore").is_file(), ".gitignore must exist in workspace root after trud pull");
     assert!(ws_dir.join("README.md").is_file(), "README.md must exist in workspace root after trud pull");
+    assert!(ws_dir.join("_releases.json").is_file(), "_releases.json must exist in workspace root after trud pull");
     assert!(ws_dir.join("current").exists(), "current symlink must exist after trud pull");
 
     // 2. Run bare `ods make` in the project directory
@@ -800,6 +783,155 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
         stdout
     );
 }
+
+#[test]
+fn test_ods_make_explicit_output_seeds_releases_json() {
+    let tmp = TempDir::new().unwrap();
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let custom_ws = tmp.path().join("custom_root");
+    let rel_dir = custom_ws.join("releases").join("2026-07-31");
+
+    let make_output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel_dir)
+        .output()
+        .expect("ods make -o custom_ws/releases/2026-07-31");
+
+    assert!(make_output.status.success());
+    let seeded_marker = custom_ws.join("_releases.json");
+    assert!(seeded_marker.is_file(), "_releases.json must be seeded in custom root");
+    let bytes = fs::read(&seeded_marker).unwrap();
+    assert_eq!(bytes, ods::index::BAKED_RELEASES_JSON_BYTES, "_releases.json must be byte-identical to baked index");
+}
+
+#[test]
+fn test_ods_use_seeds_missing_marker() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("ods_data");
+    let rel_dir = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let make_output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel_dir)
+        .output()
+        .expect("ods make");
+    assert!(make_output.status.success());
+
+    // Explicitly remove the marker if created, to test that `ods use` seeds it if missing
+    let marker = ws_dir.join("_releases.json");
+    if marker.exists() {
+        fs::remove_file(&marker).unwrap();
+    }
+    assert!(!marker.exists());
+
+    let use_output = ods_binary()
+        .arg("use")
+        .arg("2026-07-31")
+        .arg("--workspace")
+        .arg(&ws_dir)
+        .output()
+        .expect("ods use");
+
+    assert!(use_output.status.success());
+    assert!(marker.is_file(), "ods use must seed missing _releases.json");
+    assert_eq!(fs::read(&marker).unwrap(), ods::index::BAKED_RELEASES_JSON_BYTES);
+}
+
+#[test]
+fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
+    let tmp = TempDir::new().unwrap();
+    let ws_dir = tmp.path().join("ods_data");
+    let rel_dir = ws_dir.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let make_output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&mock_zip)
+        .arg("-o")
+        .arg(&rel_dir)
+        .output()
+        .expect("ods make");
+    assert!(make_output.status.success());
+
+    let use_output = ods_binary()
+        .arg("use")
+        .arg("2026-07-31")
+        .arg("--workspace")
+        .arg(&ws_dir)
+        .output()
+        .expect("ods use");
+    assert!(use_output.status.success());
+
+    // Create an old release index (e.g. from 2020-01-01) so it is definitely stale (>45 days)
+    let stale_index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![
+            ods::index::ReleaseIndexEntry {
+                trud_release_date: "2020-01-01".to_string(),
+                dataset_version: "0.1.0".to_string(),
+                tag: "2020-01-01_0.1.0".to_string(),
+                manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                trud_release_sha256: "0000".to_string(),
+                tool_version: "0.1.0".to_string(),
+                dataset_doi: None,
+                withdrawn: None,
+            },
+        ],
+    };
+    let stale_bytes = serde_json::to_vec_pretty(&stale_index).unwrap();
+    fs::write(ws_dir.join("_releases.json"), &stale_bytes).unwrap();
+
+    // 1. Table format (human): nudge MUST be emitted to stderr
+    let find_table = ods_binary()
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("Sedbergh")
+        .output()
+        .expect("ods find");
+    assert!(find_table.status.success());
+    let stderr_table = String::from_utf8_lossy(&find_table.stderr);
+    assert!(
+        stderr_table.contains("2020-01-01 is") && stderr_table.contains("days old. TRUD ships roughly every 4 weeks"),
+        "stderr must contain staleness nudge, got:\n{}",
+        stderr_table
+    );
+    assert!(
+        stderr_table.contains("Check with: ods pull"),
+        "stderr must contain 'Check with: ods pull', got:\n{}",
+        stderr_table
+    );
+
+    // 2. JSON format (machine-readable): nudge MUST be suppressed
+    let find_json = ods_binary()
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("Sedbergh")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("ods find --format json");
+    assert!(find_json.status.success());
+    let stderr_json = String::from_utf8_lossy(&find_json.stderr);
+    assert!(
+        !stderr_json.contains("days old. TRUD ships roughly every 4 weeks"),
+        "machine-readable JSON format must NOT output staleness nudge, got:\n{}",
+        stderr_json
+    );
+}
+
 
 
 

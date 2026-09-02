@@ -1073,6 +1073,21 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         }
     }
 
+    // Staleness nudge: check index age if human-readable output
+    let is_machine = args.format == OutputFormat::Json
+        || args.format == OutputFormat::Csv
+        || args.format == OutputFormat::Tsv;
+    if !is_machine {
+        let ws_root = crate::workspace::find_workspace_root_from(parquet_dir, None);
+        let index_opt = ws_root
+            .as_deref()
+            .and_then(|r| crate::index::OdsReleaseIndex::load_from_workspace(r).ok().flatten())
+            .or_else(|| crate::index::OdsReleaseIndex::baked().ok());
+        if let Some(index) = index_opt {
+            crate::workspace::check_and_emit_staleness_nudge(&index, false);
+        }
+    }
+
     Ok(())
 }
 

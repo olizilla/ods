@@ -172,11 +172,7 @@ fn test_tightened_workspace_discovery_rules() {
     // 2. start is root when start/_releases.json validates
     let ws = tmp.path().join("my-ws");
     fs::create_dir_all(&ws).unwrap();
-    let cached = ods::index::CachedReleaseIndex {
-        fetched_at: "2026-07-31T00:00:00Z".to_string(),
-        index: ods::index::OdsReleaseIndex::baked().unwrap_or_default(),
-    };
-    cached.save_to_workspace(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     assert_eq!(
         ods::workspace::find_workspace_root_from(&ws, None),
@@ -184,7 +180,7 @@ fn test_tightened_workspace_discovery_rules() {
         "start must be recognized as root when _releases.json validates"
     );
 
-    // 3. start is a release dir: start/_provenance.json exists, parent named releases, grandparent _releases.json validates
+    // 3. start is a release dir: discovery ascends to enclosing workspace root with _releases.json
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
     let prov = ods::provenance::OdsProvenance::default();
@@ -222,7 +218,7 @@ fn test_tightened_workspace_discovery_rules() {
     let repo_dir = tmp.path().join("my-repo");
     let repo_ods_data = repo_dir.join("ods_data");
     fs::create_dir_all(&repo_ods_data).unwrap();
-    cached.save_to_workspace(&repo_ods_data).unwrap();
+    fs::write(repo_ods_data.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     let repo_child = repo_dir.join("src").join("commands");
     fs::create_dir_all(&repo_child).unwrap();
 
@@ -235,7 +231,7 @@ fn test_tightened_workspace_discovery_rules() {
     // 4c. Stop boundary: .git entry prevents ascending past repo
     let outer_dir = tmp.path().join("outer_with_ws");
     fs::create_dir_all(&outer_dir).unwrap();
-    cached.save_to_workspace(&outer_dir).unwrap();
+    fs::write(outer_dir.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     let inner_repo = outer_dir.join("inner_git_repo");
     let inner_child = inner_repo.join("sub").join("dir");
@@ -382,6 +378,108 @@ fn test_resolve_parquet_input_release_dir_honoured_over_active() {
     let resolved_deleted = ods::workspace::resolve_parquet_input(Some(&rel1)).unwrap();
     assert_eq!(resolved_deleted, rel1);
 }
+
+#[test]
+fn test_validate_releases_json_shapes() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // 1. Missing file -> false
+    let dir_missing = tmp.path().join("missing");
+    fs::create_dir_all(&dir_missing).unwrap();
+    assert!(!ods::workspace::validate_releases_json(&dir_missing));
+
+    // 2. Malformed JSON -> false
+    let dir_malformed = tmp.path().join("malformed");
+    fs::create_dir_all(&dir_malformed).unwrap();
+    fs::write(dir_malformed.join("_releases.json"), b"{ invalid json").unwrap();
+    assert!(!ods::workspace::validate_releases_json(&dir_malformed));
+
+    // 3. Nested fetched_at / index (old cached wrapper shape) -> false
+    let dir_nested = tmp.path().join("nested");
+    fs::create_dir_all(&dir_nested).unwrap();
+    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"_type": "ods_release_index", "index_version": 2, "mirrors": [], "releases": []}}"#;
+    fs::write(dir_nested.join("_releases.json"), nested_json).unwrap();
+    assert!(!ods::workspace::validate_releases_json(&dir_nested));
+
+    // 4. Loose JSON with only root _type -> false (fails to parse full OdsReleaseIndex)
+    let dir_root_type_only = tmp.path().join("root_type_only");
+    fs::create_dir_all(&dir_root_type_only).unwrap();
+    fs::write(dir_root_type_only.join("_releases.json"), r#"{"_type": "ods_release_index"}"#).unwrap();
+    assert!(!ods::workspace::validate_releases_json(&dir_root_type_only));
+
+    // 5. Loose JSON with only index._type -> false
+    let dir_index_type_only = tmp.path().join("index_type_only");
+    fs::create_dir_all(&dir_index_type_only).unwrap();
+    fs::write(dir_index_type_only.join("_releases.json"), r#"{"index": {"_type": "ods_release_index"}}"#).unwrap();
+    assert!(!ods::workspace::validate_releases_json(&dir_index_type_only));
+
+    // 6. Valid OdsReleaseIndex -> true
+    let dir_valid = tmp.path().join("valid");
+    fs::create_dir_all(&dir_valid).unwrap();
+    fs::write(dir_valid.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    assert!(ods::workspace::validate_releases_json(&dir_valid));
+}
+
+#[test]
+fn test_find_workspace_root_rejects_nested_index_shape() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("nested_ws");
+    fs::create_dir_all(&ws).unwrap();
+    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"_type": "ods_release_index", "index_version": 2, "mirrors": [], "releases": []}}"#;
+    fs::write(ws.join("_releases.json"), nested_json).unwrap();
+
+    // Must return None because the shape is rejected
+    assert_eq!(ods::workspace::find_workspace_root_from(&ws, None), None);
+}
+
+#[test]
+fn test_release_dir_with_no_releases_json_is_not_discovered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws_without_marker");
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    let prov = ods::provenance::OdsProvenance::default();
+    fs::write(
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    ).unwrap();
+
+    // In a directory structure where ws has NO _releases.json, discovering from inside releases/2026-07-31 must fail
+    // Boundary .git prevents discovery from escaping to repo root
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None), None);
+
+    // Now seed the marker in ws, and discovery succeeds
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None), Some(ws));
+}
+
+#[test]
+fn test_ensure_workspace_root_is_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("idempotent_ws");
+    fs::create_dir_all(&ws).unwrap();
+
+    ods::workspace::ensure_workspace_root(&ws).unwrap();
+
+    let marker_1 = fs::read(ws.join("_releases.json")).unwrap();
+    let readme_1 = fs::read_to_string(ws.join("README.md")).unwrap();
+    let gitignore_1 = fs::read_to_string(ws.join(".gitignore")).unwrap();
+
+    assert_eq!(marker_1, ods::index::BAKED_RELEASES_JSON_BYTES);
+
+    // Call second time
+    ods::workspace::ensure_workspace_root(&ws).unwrap();
+
+    let marker_2 = fs::read(ws.join("_releases.json")).unwrap();
+    let readme_2 = fs::read_to_string(ws.join("README.md")).unwrap();
+    let gitignore_2 = fs::read_to_string(ws.join(".gitignore")).unwrap();
+
+    assert_eq!(marker_1, marker_2, "_releases.json must be byte-identical after second call");
+    assert_eq!(readme_1, readme_2, "README.md must be unchanged after second call");
+    assert_eq!(gitignore_1, gitignore_2, ".gitignore must be unchanged after second call");
+}
+
 
 
 
