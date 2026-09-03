@@ -425,8 +425,98 @@ pub fn run(args: Args) -> Result<()> {
     run_with_writer(args, &mut std::io::stdout(), &resolved_input)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFooterTable {
+    pub table: String,
+    pub overflow_hint: Option<String>,
+}
+
+/// Renders a comfy-table with a boxed footer row derived from the bottom border.
+///
+/// Pops the rendered bottom border (`└───┴───┘`) and produces three lines:
+/// 1. merge: bottom border with `└`->`├` and `┘`->`┤`, leaving all `┴` dividers untouched.
+/// 2. footer: `│ ` + left + padding + right + ` │`, measuring display width with `unicode_width`.
+/// 3. bottom: bottom border with every `┴`->`─`.
+///
+/// If `left`, `right`, and a single-space gap do not fit `inner_width`, the right-hand hint
+/// is dropped from the footer and returned as `overflow_hint` to be printed as a `*` line below.
+pub fn render_with_footer(table: &comfy_table::Table, left: &str, right: &str) -> RenderedFooterTable {
+    use unicode_width::UnicodeWidthStr;
+
+    let rendered = table.to_string();
+    let mut lines: Vec<&str> = rendered.lines().collect();
+    if lines.is_empty() {
+        return RenderedFooterTable {
+            table: rendered,
+            overflow_hint: None,
+        };
+    }
+
+    let bottom_border = lines.pop().unwrap();
+    let border_width = bottom_border.width();
+
+    // 1. Merge line: └ -> ├, ┘ -> ┤, ┴ untouched
+    let mut merge_chars: Vec<char> = bottom_border.chars().collect();
+    if let Some(first) = merge_chars.first_mut() {
+        if *first == '└' {
+            *first = '├';
+        }
+    }
+    if let Some(last) = merge_chars.last_mut() {
+        if *last == '┘' {
+            *last = '┤';
+        }
+    }
+    let merge_line: String = merge_chars.into_iter().collect();
+
+    // 2. Bottom line: every ┴ -> ─
+    let bottom_line = bottom_border.replace('┴', "─");
+
+    // 3. Footer line & overflow hint
+    // Box borders: "│ " (2) and " │" (2) -> 4 columns total
+    let inner_width = border_width.saturating_sub(4);
+    let left_width = left.width();
+    let right_width = right.width();
+
+    let (footer_line, overflow_hint) = if left_width + 1 + right_width <= inner_width {
+        let padding = inner_width - left_width - right_width;
+        (
+            format!("│ {}{}{} │", left, " ".repeat(padding), right),
+            None,
+        )
+    } else {
+        let padding = inner_width.saturating_sub(left_width);
+        (
+            format!("│ {}{} │", left, " ".repeat(padding)),
+            Some(right.to_string()),
+        )
+    };
+
+    let mut result = lines.join("\n");
+    if !result.is_empty() {
+        result.push('\n');
+    }
+    result.push_str(&merge_line);
+    result.push('\n');
+    result.push_str(&footer_line);
+    result.push('\n');
+    result.push_str(&bottom_line);
+
+    RenderedFooterTable {
+        table: result,
+        overflow_hint,
+    }
+}
+
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
+    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
+        .and_then(|p| p.trud_release_date)
+        .or_else(|| {
+            crate::workspace::find_workspace_root_from(parquet_dir, None)
+                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
+                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
+        });
     let path = parquet_dir.join(file_name);
     if !path.exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
@@ -990,7 +1080,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 } else {
                     table.load_preset(presets::UTF8_FULL_CONDENSED);
                     table.set_content_arrangement(ContentArrangement::Dynamic);
-                    if std::io::stdout().is_terminal() {
+                    if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
+                        table.set_width(col_env);
+                    } else if std::io::stdout().is_terminal() {
                         if let Ok((cols, _)) = crossterm::terminal::size() {
                             table.set_width(cols);
                         }
@@ -1026,33 +1118,94 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     }
                 }
 
-                for notice in &alias_notices {
-                    writeln!(writer, "{}", notice)?;
-                }
-
-                writeln!(writer, "{}", table)?;
-
-                if let Some(lvl) = matched_loc_level {
-                    writeln!(
-                        writer,
-                        "\n* matched {} — {} organisations",
-                        lvl.name(),
-                        matched_count
-                    )?;
-                }
-
-                if args.all {
-                    writeln!(
-                        writer,
-                        "\nFound {} matching records in '{}' (including inactive/closed history).",
-                        matched_count, file_name
-                    )?;
+                if args.format == OutputFormat::Markdown {
+                    for notice in &alias_notices {
+                        writeln!(writer, "{}", notice)?;
+                    }
+                    writeln!(writer, "{}", table)?;
                 } else {
-                    writeln!(
-                        writer,
-                        "\nFound {} matching active records in '{}'. Pass --all to include inactive/closed history.",
-                        matched_count, file_name
-                    )?;
+                    // OutputFormat::Table
+                    // 1. Search line
+                    let search_desc = match (&args.query, &args.location, matched_loc_level) {
+                        (Some(q), Some(loc), Some(lvl)) => format!("\"{}\" in name, \"{}\" in {}", q, loc, lvl.name()),
+                        (Some(q), Some(loc), None) => format!("\"{}\" in name, \"{}\" in location", q, loc),
+                        (None, Some(loc), Some(lvl)) => format!("\"{}\" in {}", loc, lvl.name()),
+                        (None, Some(loc), None) => format!("\"{}\" in location", loc),
+                        (Some(q), None, _) => format!("\"{}\" in name", q),
+                        (None, None, _) => {
+                            if !args.code.is_empty() {
+                                format!("\"{}\" in code", args.code.join(", "))
+                            } else if !args.role.is_empty() {
+                                format!("\"{}\" in role", args.role.join(", "))
+                            } else if args.gp {
+                                "GP practices".to_string()
+                            } else if args.dentist {
+                                "Dental practices".to_string()
+                            } else {
+                                "all".to_string()
+                            }
+                        }
+                    };
+                    writeln!(writer, "* Search: {}", search_desc)?;
+
+                    // 2. Source line
+                    let source_rel = if let Some(ref d) = release_date {
+                        format!("releases/{}/{}", d, file_name)
+                    } else {
+                        let ws_root = crate::workspace::find_workspace_root_from(parquet_dir, None);
+                        if let Some(ref root) = ws_root {
+                            parquet_dir.strip_prefix(root).unwrap_or(parquet_dir).join(file_name).display().to_string()
+                        } else {
+                            parquet_dir.join(file_name).display().to_string()
+                        }
+                    };
+                    writeln!(writer, "* Source: {}", source_rel)?;
+
+                    // 3. Disagreement notice (!) directly under Source
+                    if let Some(ref d) = release_date {
+                        if let crate::workspace::ReleaseResolution::Disagreement { ref cwd_date } =
+                            crate::workspace::check_release_resolution(d, Some(parquet_dir))
+                        {
+                            writeln!(
+                                writer,
+                                "! Run from releases/{}. Change source with: ods use {}",
+                                cwd_date, cwd_date
+                            )?;
+                        }
+                    }
+
+                    // 4. Any alias notices
+                    for notice in &alias_notices {
+                        writeln!(writer, "{}", notice)?;
+                    }
+
+                    // 5. Render table with footer
+                    let n = matched_count;
+                    let (left, right) = if args.all {
+                        let active_count = matches.iter().filter(|r| r.status.eq_ignore_ascii_case("active")).count();
+                        let inactive_count = n.saturating_sub(active_count);
+                        let left_str = if n == 1 {
+                            "1 record".to_string()
+                        } else {
+                            format!("{} records", n)
+                        };
+                        let right_str = format!("{} active · {} inactive", active_count, inactive_count);
+                        (left_str, right_str)
+                    } else {
+                        let left_str = if n == 1 {
+                            "1 active record".to_string()
+                        } else {
+                            format!("{} active records", n)
+                        };
+                        let right_str = "Use --all to include inactive".to_string();
+                        (left_str, right_str)
+                    };
+
+                    let rendered_footer = render_with_footer(&table, &left, &right);
+                    writeln!(writer, "{}", rendered_footer.table)?;
+                    if let Some(hint) = rendered_footer.overflow_hint {
+                        writeln!(writer, "* {}", hint)?;
+                    }
                 }
             }
         }
@@ -1068,21 +1221,9 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         }
     }
 
-    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
-        .and_then(|p| p.trud_release_date)
-        .or_else(|| {
-            crate::workspace::find_workspace_root_from(parquet_dir, None)
-                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
-                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
-        });
-
     let is_machine = args.format == OutputFormat::Json
         || args.format == OutputFormat::Csv
         || args.format == OutputFormat::Tsv;
-
-    if let Some(ref d) = release_date {
-        crate::workspace::report_release_resolution(d, Some(parquet_dir), is_machine);
-    }
 
     // Staleness nudge: check index age if human-readable output
     if !is_machine {
@@ -1498,6 +1639,117 @@ mod tests {
             csv_headers, json_keys,
             "CSV output headers do not match JSON key sequence!"
         );
+    }
+
+    #[test]
+    fn test_render_with_footer_display_width_consistency_with_accents() {
+        use comfy_table::{Table, presets, ContentArrangement};
+        use unicode_width::UnicodeWidthStr;
+
+        let mut table = Table::new();
+        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.set_content_arrangement(ContentArrangement::Disabled);
+        table.set_header(vec!["ODS Code", "Name", "Postcode"]);
+        table.add_row(vec!["H01", "Hôpital Sainte-Thérèse d'Avila", "SW1A 1AA"]);
+
+        let left = "1 active record";
+        let right = "Use --all to include inactive";
+        let rendered = render_with_footer(&table, left, right);
+
+        let lines: Vec<&str> = rendered.table.lines().collect();
+        assert!(!lines.is_empty());
+        let expected_width = lines[0].width();
+
+        for (idx, line) in lines.iter().enumerate() {
+            assert_eq!(
+                line.width(),
+                expected_width,
+                "Line {} does not match expected display width {}: '{}'",
+                idx,
+                expected_width,
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_with_footer_divider_alignment() {
+        use comfy_table::{Table, presets, ContentArrangement};
+
+        let mut table = Table::new();
+        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.set_content_arrangement(ContentArrangement::Disabled);
+        table.set_header(vec!["Col A", "Column B", "Col C", "Column D"]);
+        table.add_row(vec!["123", "Example item", "Test", "More content"]);
+
+        let original_render = table.to_string();
+        let orig_bottom = original_render.lines().last().unwrap();
+        let orig_divider_indices: Vec<usize> = orig_bottom
+            .char_indices()
+            .filter_map(|(i, c)| if c == '┴' { Some(i) } else { None })
+            .collect();
+
+        let rendered = render_with_footer(&table, "1 record", "1 active · 0 inactive");
+        let lines: Vec<&str> = rendered.table.lines().collect();
+        // The merge line is 3rd from the bottom (above footer and bottom line)
+        let merge_line = lines[lines.len() - 3];
+        let merge_divider_indices: Vec<usize> = merge_line
+            .char_indices()
+            .filter_map(|(i, c)| if c == '┴' { Some(i) } else { None })
+            .collect();
+
+        assert_eq!(
+            orig_divider_indices, merge_divider_indices,
+            "Merge line ┴ dividers do not match original bottom border!"
+        );
+        assert!(merge_line.starts_with('├'));
+        assert!(merge_line.ends_with('┤'));
+
+        let bottom_line = lines.last().unwrap();
+        assert!(bottom_line.starts_with('└'));
+        assert!(bottom_line.ends_with('┘'));
+        assert!(!bottom_line.contains('┴'), "Bottom line must have ┴ replaced by ─");
+    }
+
+    #[test]
+    fn test_render_with_footer_narrow_overflow() {
+        use comfy_table::{Table, presets, ContentArrangement};
+        use unicode_width::UnicodeWidthStr;
+
+        let mut table = Table::new();
+        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_width(40);
+        table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
+        table.add_row(vec![
+            "A82608",
+            "SEDBERGH MEDICAL PRACTICE",
+            "LA10 5DL",
+            "GP Practice +1",
+            "org",
+        ]);
+
+        let left = "6 active records";
+        let right = "Use --all to include inactive";
+        let rendered = render_with_footer(&table, left, right);
+
+        assert_eq!(
+            rendered.overflow_hint,
+            Some("Use --all to include inactive".to_string()),
+            "Hint should overflow on narrow box"
+        );
+
+        let lines: Vec<&str> = rendered.table.lines().collect();
+        let expected_width = lines[0].width();
+        for (idx, line) in lines.iter().enumerate() {
+            assert_eq!(
+                line.width(),
+                expected_width,
+                "Line {} display width mismatch: '{}'",
+                idx,
+                line
+            );
+        }
     }
 }
 

@@ -21,6 +21,7 @@ sha2 = "0.10"
 ureq = { version = "2.9", features = ["json"] }
 crossterm = "0.28"
 comfy-table = "7.1"
+unicode-width = "0.2"
 
 [dev-dependencies]
 criterion = "0.5"

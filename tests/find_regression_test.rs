@@ -43,8 +43,8 @@ fn test_find_sedbergh_output_matches_good_binary() {
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("Found 14 matching active records")),
-        "Expected 'Found 14 matching active records', got:\n{}",
+            .any(|l| l.contains("14 active records")),
+        "Expected '14 active records' in footer, got:\n{}",
         output_str
     );
 

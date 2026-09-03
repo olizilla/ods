@@ -345,7 +345,7 @@ pub fn check_and_emit_staleness_nudge(index: &crate::index::OdsReleaseIndex, is_
     if let Some((newest_date, days)) = index.staleness(today) {
         if days > crate::index::STALENESS_THRESHOLD_DAYS {
             eprintln!(
-                "  {} is {} days old. TRUD ships roughly every 4 weeks\n  Check with: ods pull",
+                "! {} is {} days old. TRUD ships roughly every 4 weeks\n  Check with: ods pull",
                 newest_date, days
             );
         }
@@ -393,6 +393,35 @@ pub fn workspace_active_release(dir: Option<&Path>) -> Option<String> {
     None
 }
 
+/// Resolution state of a command's release against workspace active release and cwd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseResolution {
+    /// Resolved release equals workspace's active release, and cwd is not a different release directory.
+    Current,
+    /// Resolved release equals workspace's active release, but cwd is a different release directory.
+    Disagreement { cwd_date: String },
+    /// Resolved release does not equal workspace's active release (e.g. explicit -i to an archived release).
+    ExplicitNonCurrent,
+}
+
+/// Checks the resolution state of `release_date` relative to the workspace's active release and cwd.
+pub fn check_release_resolution(release_date: &str, release_dir: Option<&Path>) -> ReleaseResolution {
+    let is_current = workspace_active_release(release_dir)
+        .map(|act| act == release_date)
+        .unwrap_or(false);
+
+    if is_current {
+        if let Some(cwd_date) = detect_cwd_release() {
+            if cwd_date != release_date {
+                return ReleaseResolution::Disagreement { cwd_date };
+            }
+        }
+        ReleaseResolution::Current
+    } else {
+        ReleaseResolution::ExplicitNonCurrent
+    }
+}
+
 /// Reports the release date read from to stderr in the two-space gutter.
 /// Appends `(current)` only when the resolved release equals the workspace's active release;
 /// otherwise prints the date bare.
@@ -406,21 +435,17 @@ pub fn report_release_resolution(
     if is_machine_readable {
         return;
     }
-    let is_current = workspace_active_release(release_dir)
-        .map(|act| act == release_date)
-        .unwrap_or(false);
-
-    if is_current {
-        if let Some(cwd_date) = detect_cwd_release() {
-            if cwd_date != release_date {
-                eprintln!("  {} (current), not the {} you're in", release_date, cwd_date);
-                eprintln!("  Switch with: ods use {}", cwd_date);
-                return;
-            }
+    match check_release_resolution(release_date, release_dir) {
+        ReleaseResolution::Current => {
+            eprintln!("  {} (current)", release_date);
         }
-        eprintln!("  {} (current)", release_date);
-    } else {
-        eprintln!("  {}", release_date);
+        ReleaseResolution::Disagreement { cwd_date } => {
+            eprintln!("  {} (current), not the {} you're in", release_date, cwd_date);
+            eprintln!("  Switch with: ods use {}", cwd_date);
+        }
+        ReleaseResolution::ExplicitNonCurrent => {
+            eprintln!("  {}", release_date);
+        }
     }
 }
 

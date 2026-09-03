@@ -42,8 +42,8 @@ fn test_find_in_location_precedence_county_over_town() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("* matched county"),
-        "Expected Surrey to match county level, got:\n{}",
+        output_str.contains("* Search: \"Surrey\" in county"),
+        "Expected Surrey to match county in Search header, got:\n{}",
         output_str
     );
 }
@@ -81,8 +81,10 @@ fn test_find_in_postcode_stripping_spaces() {
 
     assert!(s1.contains("SEDBERGH MEDICAL PRACTICE"));
     assert!(s2.contains("SEDBERGH MEDICAL PRACTICE"));
+    let t1 = s1.lines().skip(1).collect::<Vec<_>>().join("\n");
+    let t2 = s2.lines().skip(1).collect::<Vec<_>>().join("\n");
     assert_eq!(
-        s1, s2,
+        t1, t2,
         "Spaced and unspaced postcode queries must produce identical results"
     );
 }
@@ -129,8 +131,8 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
 
     let s_ely = String::from_utf8(out_ely).unwrap();
     assert!(
-        s_ely.contains("matched town"),
-        "Expected ELY to match town, got:\n{}",
+        s_ely.contains("* Search: \"ELY\" in town"),
+        "Expected ELY to match town in Search header, got:\n{}",
         s_ely
     );
 
@@ -148,7 +150,7 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
 
     let s_ayr = String::from_utf8(out_ayr).unwrap();
     assert!(
-        s_ayr.contains("matched county") || s_ayr.contains("matched town"),
+        s_ayr.contains("* Search: \"AYR\" in county") || s_ayr.contains("* Search: \"AYR\" in town"),
         "Expected AYR to match county or town, got:\n{}",
         s_ayr
     );
@@ -253,8 +255,10 @@ fn test_find_normalization_apostrophes_and_punctuation() {
         "Output must contain code RJZ, got:\n{}",
         s1
     );
+    let t1 = s1.lines().skip(1).collect::<Vec<_>>().join("\n");
+    let t2 = s2.lines().skip(1).collect::<Vec<_>>().join("\n");
     assert_eq!(
-        s1, s2,
+        t1, t2,
         "kings college and king's college queries must produce identical results"
     );
 }

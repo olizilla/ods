@@ -93,7 +93,7 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task1_find_reports_release_to_stderr_and_leaves_stdout_untouched() {
+fn test_task1_find_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -105,18 +105,14 @@ fn test_task1_find_reports_release_to_stderr_and_leaves_stdout_untouched() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Stderr contains release date in gutter
+    // Stdout contains Source line naming active release
     assert!(
-        stderr.contains("  2026-07-31 (current)"),
-        "stderr should report active release, got:\n{}",
-        stderr
+        stdout.contains("* Source: releases/2026-07-31/orgs.parquet"),
+        "stdout should report active release in * Source: line, got:\n{}",
+        stdout
     );
-
-    // Stdout contains table and NOT the gutter release notice
     assert!(stdout.contains("SEDBERGH MEDICAL PRACTICE"));
-    assert!(!stdout.contains("2026-07-31 (current)"));
 }
 
 #[test]
@@ -202,13 +198,13 @@ fn test_task2_running_from_inside_older_release_reads_current_and_resolves_works
         .expect("run ods find");
 
     assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Results must be read from current (2026-07-31), NOT 2026-06-26
     assert!(
-        stderr.contains("2026-07-31 (current)"),
+        stdout.contains("* Source: releases/2026-07-31/orgs.parquet"),
         "must read from current release, got:\n{}",
-        stderr
+        stdout
     );
 }
 
@@ -221,7 +217,7 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
     let (_tmp, ws_root) = setup_two_release_workspace();
     let older_rel_dir = ws_root.join("releases").join("2026-06-26");
 
-    // 1. Run from inside older release: must show disagreement lines and suggestion
+    // 1. Run from inside older release: must show ! disagreement line directly under Source
     let output_disagree = ods_binary()
         .current_dir(&older_rel_dir)
         .arg("find")
@@ -230,20 +226,15 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
         .expect("run ods find");
 
     assert!(output_disagree.status.success());
-    let stderr_disagree = String::from_utf8_lossy(&output_disagree.stderr);
+    let stdout_disagree = String::from_utf8_lossy(&output_disagree.stdout);
 
     assert!(
-        stderr_disagree.contains("  2026-07-31 (current), not the 2026-06-26 you're in"),
-        "must name the disagreement, got:\n{}",
-        stderr_disagree
-    );
-    assert!(
-        stderr_disagree.contains("  Switch with: ods use 2026-06-26"),
-        "must offer switch with the release standing in, got:\n{}",
-        stderr_disagree
+        stdout_disagree.contains("! Run from releases/2026-06-26. Change source with: ods use 2026-06-26"),
+        "must name the disagreement with ! sigil, got:\n{}",
+        stdout_disagree
     );
 
-    // 2. Run from workspace root: normal run, NO disagreement lines
+    // 2. Run from workspace root: normal run, NO disagreement line
     let output_normal = ods_binary()
         .current_dir(&ws_root)
         .arg("find")
@@ -252,11 +243,12 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
         .expect("run ods find");
 
     assert!(output_normal.status.success());
+    let stdout_normal = String::from_utf8_lossy(&output_normal.stdout);
     let stderr_normal = String::from_utf8_lossy(&output_normal.stderr);
     assert!(
-        stderr_normal.contains("  2026-07-31 (current)"),
-        "got:\n{}",
-        stderr_normal
+        !stdout_normal.contains("! Run from releases/"),
+        "normal run must not contain disagreement line, got:\n{}",
+        stdout_normal
     );
     assert!(
         !stderr_normal.contains("not the"),
@@ -415,16 +407,16 @@ fn test_explicit_input_to_non_current_release_prints_bare_date_without_current()
         .expect("run ods find with explicit -i");
 
     assert!(find_output.status.success());
-    let find_stderr = String::from_utf8_lossy(&find_output.stderr);
+    let find_stdout = String::from_utf8_lossy(&find_output.stdout);
     assert!(
-        find_stderr.contains("  2026-06-26"),
-        "stderr should report release date, got:\n{}",
-        find_stderr
+        find_stdout.contains("* Source: releases/2026-06-26/orgs.parquet"),
+        "stdout should report release in * Source: line, got:\n{}",
+        find_stdout
     );
     assert!(
-        !find_stderr.contains("2026-06-26 (current)"),
+        !find_stdout.contains("(current)"),
         "non-current release must not be labelled (current), got:\n{}",
-        find_stderr
+        find_stdout
     );
 }
 
