@@ -18,7 +18,7 @@ fn test_find_sedbergh_output_matches_good_binary() {
             verbose: false,
             sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Table,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,

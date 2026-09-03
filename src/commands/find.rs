@@ -64,8 +64,8 @@ pub struct Args {
     pub format: OutputFormat,
 
     /// Input directory containing Parquet files (defaults to active release)
-    #[arg(long, short, default_value = ".")]
-    pub input: PathBuf,
+    #[arg(long, short)]
+    pub input: Option<PathBuf>,
 }
 
 impl Default for Args {
@@ -81,7 +81,7 @@ impl Default for Args {
             verbose: false,
             sort: None,
             format: OutputFormat::Table,
-            input: PathBuf::from("."),
+            input: None,
         }
     }
 }
@@ -420,12 +420,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let user_input = if args.input == PathBuf::from(".") && !Path::new("orgs.parquet").exists() {
-        None
-    } else {
-        Some(args.input.as_path())
-    };
-    let resolved_input = crate::workspace::resolve_parquet_input(user_input)?;
+    let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
 
     run_with_writer(args, &mut std::io::stdout(), &resolved_input)
 }
@@ -434,7 +429,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let path = parquet_dir.join(file_name);
     if !path.exists() {
-        if args.input != PathBuf::from(".") || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
             anyhow::bail!(
                 "✖ Parquet file '{}' not found in '{}'",
                 file_name,
@@ -1073,10 +1068,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         }
     }
 
-    // Staleness nudge: check index age if human-readable output
+    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
+        .and_then(|p| p.trud_release_date)
+        .or_else(|| {
+            crate::workspace::find_workspace_root_from(parquet_dir, None)
+                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
+                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
+        });
+
     let is_machine = args.format == OutputFormat::Json
         || args.format == OutputFormat::Csv
         || args.format == OutputFormat::Tsv;
+
+    if let Some(ref d) = release_date {
+        crate::workspace::report_release_resolution(d, Some(parquet_dir), is_machine);
+    }
+
+    // Staleness nudge: check index age if human-readable output
     if !is_machine {
         let ws_root = crate::workspace::find_workspace_root_from(parquet_dir, None);
         let index_opt = ws_root
@@ -1221,7 +1229,7 @@ mod tests {
                 query: Some("Alpha".to_string()),
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1240,7 +1248,7 @@ mod tests {
                 role: vec!["gp practice".to_string()],
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1257,7 +1265,7 @@ mod tests {
                 all: true,
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1275,7 +1283,7 @@ mod tests {
                 code: vec!["A101".to_string()],
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Table,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1308,7 +1316,7 @@ mod tests {
                 query: Some("Alpha".to_string()),
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1325,7 +1333,7 @@ mod tests {
                 query: Some("Alpha".to_string()),
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut out,
@@ -1460,7 +1468,7 @@ mod tests {
                 query: Some("Alpha".to_string()),
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Json,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut json_out,
@@ -1476,7 +1484,7 @@ mod tests {
                 query: Some("Alpha".to_string()),
                 sort: Some(SortBy::Code),
                 format: OutputFormat::Csv,
-                input: parquet_dir.clone(),
+                input: Some(parquet_dir.clone()),
                 ..Default::default()
             },
             &mut csv_out,

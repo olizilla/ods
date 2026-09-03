@@ -31,8 +31,8 @@ pub struct Args {
     pub format: OutputFormat,
 
     /// Input directory containing Parquet files (defaults to active release)
-    #[arg(long, short, default_value = ".")]
-    pub input: PathBuf,
+    #[arg(long, short)]
+    pub input: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,19 +43,14 @@ pub struct RoleEntry {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let user_input = if args.input == PathBuf::from(".") && !Path::new("roles.parquet").exists() && !Path::new("orgs.parquet").exists() {
-        None
-    } else {
-        Some(args.input.as_path())
-    };
-    let resolved_input = crate::workspace::resolve_parquet_input(user_input)?;
+    let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     run_with_writer(args, &mut std::io::stdout(), &resolved_input)
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
-        if args.input != PathBuf::from(".") || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
             anyhow::bail!(
                 "✖ Parquet file 'orgs.parquet' not found in '{}'",
                 parquet_dir.display()
@@ -174,6 +169,19 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         OutputFormat::Json => {
             writeln!(writer, "{}", serde_json::to_string_pretty(&entries)?)?;
         }
+    }
+
+    let is_machine = args.codes || args.format == OutputFormat::Json || args.format == OutputFormat::Csv;
+    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
+        .and_then(|p| p.trud_release_date)
+        .or_else(|| {
+            crate::workspace::find_workspace_root_from(parquet_dir, None)
+                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
+                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
+        });
+
+    if let Some(ref d) = release_date {
+        crate::workspace::report_release_resolution(d, Some(parquet_dir), is_machine);
     }
 
     Ok(())

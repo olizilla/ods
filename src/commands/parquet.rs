@@ -66,17 +66,18 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
 }
 
 pub fn run(args: Args) -> Result<PathBuf> {
-    let input_path = match args.input {
-        Some(p) => p,
+    let (input_path, inferred_date) = match args.input {
+        Some(p) => (p, None),
         None => {
             let ws = crate::workspace::Workspace::open(None)?;
-            let (_, active_dir) = ws.active_release()?;
+            let (date, active_dir) = ws.active_release()?;
             let trud_dir = active_dir.join("trud");
-            if trud_dir.exists() {
+            let p = if trud_dir.exists() {
                 trud_dir
             } else {
                 active_dir
-            }
+            };
+            (p, Some(date))
         }
     };
 
@@ -100,6 +101,10 @@ pub fn run(args: Args) -> Result<PathBuf> {
             active_dir
         }
     };
+
+    if let Some(ref date) = inferred_date {
+        crate::workspace::report_inferred_release_write(date, &output_path);
+    }
 
     let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
 

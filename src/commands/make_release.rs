@@ -116,9 +116,7 @@ pub fn run(args: Args) -> Result<()> {
     let release_dir = match args.input {
         Some(ref p) => p.clone(),
         None => {
-            let ws = crate::workspace::Workspace::open_or_create(None)?;
-            let (_, active_path) = ws.active_release()?;
-            active_path
+            bail!("✖ --input is required for 'ods make release'\n  Pass the release directory to publish, e.g. ods make release --input <release-dir>");
         }
     };
 

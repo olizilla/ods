@@ -110,14 +110,17 @@ pub fn build_manifest_from_dir(
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let release_dir = match args.input {
-        Some(ref p) => p.clone(),
+    let (release_dir, inferred_date) = match args.input {
+        Some(ref p) => (p.clone(), None),
         None => {
-            let ws = crate::workspace::Workspace::open_or_create(None)?;
-            let (_, active_path) = ws.active_release()?;
-            active_path
+            let ws = crate::workspace::Workspace::open(None)?;
+            let (date, active_path) = ws.active_release()?;
+            (active_path, Some(date))
         }
     };
+    if let Some(ref date) = inferred_date {
+        crate::workspace::report_inferred_release_write(date, &release_dir);
+    }
     if !release_dir.exists() {
         bail!("Release directory does not exist: {}", release_dir.display());
     }

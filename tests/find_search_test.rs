@@ -11,7 +11,7 @@ fn test_find_searches_name_only() {
     find::run_with_writer(
         Args {
             query: Some("Sedbergh".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -32,7 +32,7 @@ fn test_find_in_location_precedence_county_over_town() {
     find::run_with_writer(
         Args {
             location: Some("Surrey".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -56,7 +56,7 @@ fn test_find_in_postcode_stripping_spaces() {
     find::run_with_writer(
         Args {
             location: Some("LA10 5DL".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_spaced,
@@ -68,7 +68,7 @@ fn test_find_in_postcode_stripping_spaces() {
     find::run_with_writer(
         Args {
             location: Some("LA105DL".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_unspaced,
@@ -95,7 +95,7 @@ fn test_find_in_rejects_under_3_chars() {
     let result = find::run_with_writer(
         Args {
             location: Some("M".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -119,7 +119,7 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     find::run_with_writer(
         Args {
             location: Some("ELY".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_ely,
@@ -138,7 +138,7 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     find::run_with_writer(
         Args {
             location: Some("AYR".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_ayr,
@@ -163,7 +163,7 @@ fn test_find_in_unknown_place_errors() {
     let result = find::run_with_writer(
         Args {
             location: Some("Narnia".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -190,7 +190,7 @@ fn test_find_code_flag_exact_lists() {
     find::run_with_writer(
         Args {
             code: vec!["A82608".to_string(), "RJZ".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -216,7 +216,7 @@ fn test_find_normalization_apostrophes_and_punctuation() {
     find::run_with_writer(
         Args {
             query: Some("kings college".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_plain,
@@ -228,7 +228,7 @@ fn test_find_normalization_apostrophes_and_punctuation() {
     find::run_with_writer(
         Args {
             query: Some("king's college".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_apostrophe,
@@ -268,7 +268,7 @@ fn test_find_ranking_exact_prefix_word_substring() {
         Args {
             query: Some("royal free".to_string()),
             format: OutputFormat::Markdown,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -300,7 +300,7 @@ fn test_find_explicit_sort_overrides_ranking() {
             query: Some("royal free".to_string()),
             sort: Some(SortBy::Code),
             format: OutputFormat::Markdown,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -333,7 +333,7 @@ fn test_find_role_flag_codes_and_names() {
     find::run_with_writer(
         Args {
             role: vec!["RO76".to_string(), "RO227".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_code,
@@ -357,7 +357,7 @@ fn test_find_role_flag_codes_and_names() {
     find::run_with_writer(
         Args {
             role: vec!["GP Practice".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_name,
@@ -386,7 +386,7 @@ fn test_find_role_typo_gives_suggestions() {
     let result = find::run_with_writer(
         Args {
             role: vec!["General Practice".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -428,7 +428,7 @@ fn test_find_code_hint_for_inactive_code() {
     find::run_with_writer(
         Args {
             query: Some("FAH".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -535,7 +535,7 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     find::run_with_writer(
         Args {
             query: Some("SEDBERGH MEDICAL PRACTICE".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_default,
@@ -555,7 +555,7 @@ fn test_find_roles_display_deemphasis_and_verbose() {
         Args {
             query: Some("SEDBERGH MEDICAL PRACTICE".to_string()),
             verbose: true,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_verbose,
@@ -574,7 +574,7 @@ fn test_find_roles_display_deemphasis_and_verbose() {
     find::run_with_writer(
         Args {
             code: vec!["RJZ".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_rjz,
@@ -598,7 +598,7 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
     find::run_with_writer(
         Args {
             code: vec!["A85619".to_string()],
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_table,
@@ -618,7 +618,7 @@ fn test_find_table_preserves_plus_n_suffix_without_truncation() {
         Args {
             code: vec!["A85619".to_string()],
             format: OutputFormat::Markdown,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out_md,
@@ -651,7 +651,7 @@ fn test_find_alias_gp_expands_to_three_national_codes() {
         Args {
             gp: true,
             location: Some("sedbergh".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -677,7 +677,7 @@ fn test_find_alias_dentist_expands_to_dental_codes() {
         Args {
             dentist: true,
             location: Some("sedbergh".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -707,7 +707,7 @@ fn test_find_alias_and_role_merge_with_or_semantics() {
             gp: true,
             role: vec!["RO110".to_string()],
             location: Some("sedbergh".to_string()),
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -736,7 +736,7 @@ fn test_find_tsv_format_without_all() {
         Args {
             code: vec!["A82608".to_string(), "RJZ".to_string()],
             format: OutputFormat::Tsv,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
@@ -777,7 +777,7 @@ fn test_find_tsv_format_with_all() {
             code: vec!["A82608".to_string()],
             all: true,
             format: OutputFormat::Tsv,
-            input: parquet_dir.clone(),
+            input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,

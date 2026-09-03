@@ -526,6 +526,19 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
         }
     }
 
+    let is_machine = args.format == OutputFormat::Json;
+    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
+        .and_then(|p| p.trud_release_date)
+        .or_else(|| {
+            crate::workspace::find_workspace_root_from(parquet_dir, None)
+                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
+                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
+        });
+
+    if let Some(ref d) = release_date {
+        crate::workspace::report_release_resolution(d, Some(parquet_dir), is_machine);
+    }
+
     Ok(())
 }
 

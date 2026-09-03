@@ -113,7 +113,7 @@ fn full_pipeline_make_find_cite() {
             verbose: false,
             sort: Some(find::SortBy::Code),
             format: find::OutputFormat::Json,
-            input: release_dir.clone(),
+            input: Some(release_dir.clone()),
             ..Default::default()
         },
         &mut find_out,

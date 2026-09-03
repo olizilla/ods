@@ -352,6 +352,99 @@ pub fn check_and_emit_staleness_nudge(index: &crate::index::OdsReleaseIndex, is_
     }
 }
 
+/// Detects if the current working directory is a release directory.
+/// Returns Some("YYYY-MM-DD") if cwd is a release directory, or None otherwise.
+pub fn detect_cwd_release() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    // 1. If cwd has _provenance.json with trud_release_date:
+    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(&cwd) {
+        if let Some(d) = prov.trud_release_date {
+            return Some(d);
+        }
+    }
+    // 2. If parent directory is named "releases" and folder name matches YYYY-MM-DD:
+    // Structural inspection of cwd is strictly for the disagreement UX nudge; it never discovers workspaces or selects data.
+    if let Some(parent) = cwd.parent() {
+        if parent.file_name().and_then(|n| n.to_str()) == Some("releases") {
+            if let Some(name) = cwd.file_name().and_then(|n| n.to_str()) {
+                if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the active release date of the enclosing workspace (if any).
+pub fn workspace_active_release(dir: Option<&Path>) -> Option<String> {
+    if let Some(d) = dir {
+        if let Some(root) = find_workspace_root_from(d, None) {
+            if let Ok((active, _)) = get_active_release(&root) {
+                return Some(active);
+            }
+        }
+    }
+    if let Ok(ws) = Workspace::open(None) {
+        if let Ok((active, _)) = ws.active_release() {
+            return Some(active);
+        }
+    }
+    None
+}
+
+/// Reports the release date read from to stderr in the two-space gutter.
+/// Appends `(current)` only when the resolved release equals the workspace's active release;
+/// otherwise prints the date bare.
+/// If cwd is a release directory other than current, reports the disagreement and offers `ods use <cwd_date>`.
+/// Suppressed entirely on machine-readable formats.
+pub fn report_release_resolution(
+    release_date: &str,
+    release_dir: Option<&Path>,
+    is_machine_readable: bool,
+) {
+    if is_machine_readable {
+        return;
+    }
+    let is_current = workspace_active_release(release_dir)
+        .map(|act| act == release_date)
+        .unwrap_or(false);
+
+    if is_current {
+        if let Some(cwd_date) = detect_cwd_release() {
+            if cwd_date != release_date {
+                eprintln!("  {} (current), not the {} you're in", release_date, cwd_date);
+                eprintln!("  Switch with: ods use {}", cwd_date);
+                return;
+            }
+        }
+        eprintln!("  {} (current)", release_date);
+    } else {
+        eprintln!("  {}", release_date);
+    }
+}
+
+/// Reports an inferred release input for write commands (make, make oci) and names the directory written.
+pub fn report_inferred_release_write(release_date: &str, written_dir: &Path) {
+    let is_current = workspace_active_release(Some(written_dir))
+        .map(|act| act == release_date)
+        .unwrap_or(false);
+    let current_tag = if is_current { " (current)" } else { "" };
+    if let Some(cwd_date) = detect_cwd_release() {
+        if cwd_date != release_date {
+            eprintln!(
+                "  {}{current_tag} → {}, not the {} you're in",
+                release_date,
+                written_dir.display(),
+                cwd_date
+            );
+            eprintln!("  Switch with: ods use {}", cwd_date);
+            return;
+        }
+    }
+    eprintln!("  {}{current_tag} → {}", release_date, written_dir.display());
+}
+
 /// Sets or updates the `current` symlink/pointer in the workspace root to target `releases/<release_date>`.
 fn set_active_release(workspace_root: &Path, release_date: &str) -> Result<()> {
     let target = Path::new("releases").join(release_date);
