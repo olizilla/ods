@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use arrow::array::{Array, Date32Array, StringArray};
 use clap::{Parser, ValueEnum};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -155,36 +156,173 @@ pub fn compute_name_rank(norm_name: &str, norm_query: &str) -> Option<u8> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrgRow {
+    pub ods_code: String,
+    pub name: String,
+    pub record_class: String,
+    pub role_codes: Vec<String>,
+    pub role_names: Vec<String>,
+    pub primary_role_code: String,
+    pub address: Option<String>,
+    pub town: Option<String>,
+    pub county: Option<String>,
+    pub postcode: Option<String>,
+    pub country: Option<String>,
+    pub uprn: Option<String>,
+    pub telephone: Option<String>,
+    pub website: Option<String>,
+    pub predecessor_codes: Vec<String>,
+    pub successor_codes: Vec<String>,
+    pub status: String,
+    pub legal_start: Option<String>,
+    pub legal_end: Option<String>,
+    pub operational_start: Option<String>,
+    pub operational_end: Option<String>,
+    pub last_changed: Option<String>,
+    pub trud_release_date: String,
+}
+
 #[derive(Debug, Clone)]
-struct MatchedRecord {
-    ods_code: String,
-    name: String,
-    record_class: String,
-    status: String,
-    /// The ODS primary role *code* (e.g. RO177).
-    primary_role_code: String,
-    /// Curated display name for `primary_role_code`, resolved from roles.parquet.
-    role_name: String,
-    /// Every active role code held, including the primary one.
-    role_codes: Vec<String>,
-    /// Curated role names positionally aligned with role_codes.
-    role_names: Vec<String>,
-    address: String,
-    town: String,
-    county: String,
-    postcode: String,
-    country: String,
-    uprn: String,
-    telephone: String,
-    website: String,
-    operational_start: Option<String>,
-    operational_end: Option<String>,
-    legal_start: Option<String>,
-    legal_end: Option<String>,
-    last_changed: Option<String>,
-    trud_release_date: Option<String>,
-    rank: u8,
-    loc_level: Option<LocationLevel>,
+pub struct Match {
+    pub org: OrgRow,
+    pub rank: u8,
+    pub loc_level: Option<LocationLevel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Related {
+    pub code: String,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputRecord {
+    #[serde(flatten)]
+    pub org: OrgRow,
+    pub predecessors: Vec<Related>,
+    pub successors: Vec<Related>,
+}
+
+pub fn build_output_record(
+    org: &OrgRow,
+    org_metadata: &HashMap<String, (String, String)>,
+) -> OutputRecord {
+    let predecessors = org.predecessor_codes.iter().map(|code| {
+        let (name, status) = org_metadata
+            .get(code)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), "unknown".to_string()));
+        Related {
+            code: code.clone(),
+            name,
+            status,
+        }
+    }).collect();
+
+    let successors = org.successor_codes.iter().map(|code| {
+        let (name, status) = org_metadata
+            .get(code)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), "unknown".to_string()));
+        Related {
+            code: code.clone(),
+            name,
+            status,
+        }
+    }).collect();
+
+    OutputRecord {
+        org: org.clone(),
+        predecessors,
+        successors,
+    }
+}
+
+/// Derives the CSV headers from the serialized representation of an OutputRecord.
+///
+/// Filters out object-array fields (`predecessors`, `successors`), returning the
+/// 23 Parquet schema columns in exact declaration order.
+pub fn csv_headers_from_output_record() -> Vec<String> {
+    let dummy = OutputRecord {
+        org: OrgRow {
+            ods_code: String::new(),
+            name: String::new(),
+            record_class: String::new(),
+            role_codes: Vec::new(),
+            role_names: Vec::new(),
+            primary_role_code: String::new(),
+            address: None,
+            town: None,
+            county: None,
+            postcode: None,
+            country: None,
+            uprn: None,
+            telephone: None,
+            website: None,
+            predecessor_codes: Vec::new(),
+            successor_codes: Vec::new(),
+            status: String::new(),
+            legal_start: None,
+            legal_end: None,
+            operational_start: None,
+            operational_end: None,
+            last_changed: None,
+            trud_release_date: String::new(),
+        },
+        predecessors: vec![Related {
+            code: String::new(),
+            name: String::new(),
+            status: String::new(),
+        }],
+        successors: vec![Related {
+            code: String::new(),
+            name: String::new(),
+            status: String::new(),
+        }],
+    };
+    let val = serde_json::to_value(&dummy).expect("serialize dummy OutputRecord");
+    csv_headers_from_json(&val)
+}
+
+/// Computes CSV headers from a serialized JSON value by filtering out object-valued arrays.
+pub fn csv_headers_from_json(val: &serde_json::Value) -> Vec<String> {
+    val.as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter(|(k, v)| match v {
+                    serde_json::Value::Object(_) => false,
+                    serde_json::Value::Array(arr) => {
+                        *k != "predecessors"
+                            && *k != "successors"
+                            && !arr.iter().any(|x| x.is_object())
+                    }
+                    _ => true,
+                })
+                .map(|(k, _v)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Formats a serialized JSON value for a single CSV cell.
+///
+/// | serialized value | CSV cell |
+/// | string | the string (escaped) |
+/// | null | empty |
+/// | array of strings | joined with `; ` (escaped) |
+/// | array of objects | omitted — JSON only |
+pub fn format_csv_cell(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => crate::roles::escape_csv(s),
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Array(items) => {
+            let str_items: Vec<&str> = items.iter().filter_map(|x| x.as_str()).collect();
+            crate::roles::escape_csv(&str_items.join("; "))
+        }
+        _ => String::new(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -645,10 +783,14 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
 
-    let successions_graph = load_succession_graph(parquet_dir);
+    let successions_graph = if args.all && (args.format == OutputFormat::Table || args.format == OutputFormat::Markdown) {
+        Some(load_succession_graph(parquet_dir))
+    } else {
+        None
+    };
     let org_metadata = load_org_metadata(parquet_dir);
 
-    let mut matches: Vec<MatchedRecord> = Vec::new();
+    let mut matches: Vec<Match> = Vec::new();
 
     for batch in reader {
         let batch = batch?;
@@ -665,10 +807,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
         let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
             .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
-        let roles_arr = batch.column(schema.index_of("role_codes")?)
-            .as_any().downcast_ref::<arrow::array::ListArray>().context("role_codes ListArray")?;
-        let role_names_arr = batch.column(schema.index_of("role_names")?)
-            .as_any().downcast_ref::<arrow::array::ListArray>().context("role_names ListArray")?;
+
+        let roles_idx = schema.index_of("role_codes").ok();
+        let role_names_idx = schema.index_of("role_names").ok();
+        let pred_codes_idx = schema.index_of("predecessor_codes").ok();
+        let succ_codes_idx = schema.index_of("successor_codes").ok();
 
         let address_idx = schema.index_of("address").ok();
         let town_idx = schema.index_of("town").ok();
@@ -685,6 +828,33 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
         let leg_end_idx = schema.index_of("legal_end").ok();
         let last_change_idx = schema.index_of("last_changed").ok();
         let trud_release_date_idx = schema.index_of("trud_release_date").ok();
+
+        let extract_opt_str = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
+            let idx = idx?;
+            let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+            if arr.is_valid(row) {
+                Some(arr.value(row).to_string())
+            } else {
+                None
+            }
+        };
+
+        let extract_list = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Vec<String> {
+            if let Some(idx) = idx {
+                if let Some(list_arr) = batch.column(idx).as_any().downcast_ref::<arrow::array::ListArray>() {
+                    if list_arr.is_valid(row) {
+                        let val_arr = list_arr.value(row);
+                        if let Some(str_arr) = val_arr.as_any().downcast_ref::<StringArray>() {
+                            return (0..str_arr.len())
+                                .filter(|&j| str_arr.is_valid(j))
+                                .map(|j| str_arr.value(j).to_string())
+                                .collect();
+                        }
+                    }
+                }
+            }
+            Vec::new()
+        };
 
         let extract_date = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
             let idx = idx?;
@@ -727,36 +897,15 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let primary_role = primary_role_arr.value(i);
 
             // Extract all role codes
-            let role_codes: Vec<String> = if roles_arr.is_valid(i) {
-                let value_arr = roles_arr.value(i);
-                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
-                if let Some(str_arr) = str_arr {
-                    (0..str_arr.len())
-                        .filter(|j| str_arr.is_valid(*j))
-                        .map(|j| str_arr.value(j).to_string())
-                        .collect()
-                } else {
-                    vec![primary_role.to_string()]
-                }
-            } else {
+            let role_codes = extract_list(&batch, roles_idx, i);
+            let role_codes = if role_codes.is_empty() {
                 vec![primary_role.to_string()]
+            } else {
+                role_codes
             };
 
             // Extract all role names
-            let role_names: Vec<String> = if role_names_arr.is_valid(i) {
-                let value_arr = role_names_arr.value(i);
-                let str_arr = value_arr.as_any().downcast_ref::<StringArray>();
-                if let Some(str_arr) = str_arr {
-                    (0..str_arr.len())
-                        .filter(|j| str_arr.is_valid(*j))
-                        .map(|j| str_arr.value(j).to_string())
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
+            let role_names = extract_list(&batch, role_names_idx, i);
 
             // Filter by --role if specified
             if let Some(ref rf) = parsed_roles {
@@ -767,29 +916,17 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 }
             }
 
-            let postcode = postcode_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let town = town_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let county = county_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let country = country_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
+            let postcode = extract_opt_str(&batch, postcode_idx, i);
+            let town = extract_opt_str(&batch, town_idx, i);
+            let county = extract_opt_str(&batch, county_idx, i);
+            let country = extract_opt_str(&batch, country_idx, i);
 
             // Evaluate location matching level
             let loc_level: Option<LocationLevel> = if let Some(ref loc_info) = parsed_location {
-                let norm_country = normalize_for_matching(country);
-                let norm_county = normalize_for_matching(county);
-                let norm_town = normalize_for_matching(town);
-                let norm_post = normalize_postcode(postcode);
+                let norm_country = normalize_for_matching(country.as_deref().unwrap_or(""));
+                let norm_county = normalize_for_matching(county.as_deref().unwrap_or(""));
+                let norm_town = normalize_for_matching(town.as_deref().unwrap_or(""));
+                let norm_post = normalize_postcode(postcode.as_deref().unwrap_or(""));
 
                 if norm_country.starts_with(&loc_info.norm) || norm_country == loc_info.norm {
                     Some(LocationLevel::Country)
@@ -810,60 +947,49 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 continue;
             }
 
-            let uprn = uprn_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let telephone = telephone_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
-            let website = website_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i)) } else { None }
-            }).unwrap_or("");
+            let address = extract_opt_str(&batch, address_idx, i);
+            let uprn = extract_opt_str(&batch, uprn_idx, i);
+            let telephone = extract_opt_str(&batch, telephone_idx, i);
+            let website = extract_opt_str(&batch, website_idx, i);
 
-            let address = address_idx.and_then(|idx| {
-                let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-                if arr.is_valid(i) { Some(arr.value(i).to_string()) } else { None }
-            }).unwrap_or_default();
+            let predecessor_codes = extract_list(&batch, pred_codes_idx, i);
+            let successor_codes = extract_list(&batch, succ_codes_idx, i);
 
             let op_start = extract_date(&batch, op_start_idx, i);
             let op_end = extract_date(&batch, op_end_idx, i);
             let leg_start = extract_date(&batch, leg_start_idx, i);
             let leg_end = extract_date(&batch, leg_end_idx, i);
             let last_change_date = extract_date(&batch, last_change_idx, i);
-            let trud_release_date = extract_date(&batch, trud_release_date_idx, i);
+            let trud_release_date = extract_date(&batch, trud_release_date_idx, i).unwrap_or_default();
 
-            let primary_role_idx = role_codes.iter().position(|c| c == primary_role);
-            let role_name = primary_role_idx
-                .and_then(|idx| role_names.get(idx))
-                .cloned()
-                .unwrap_or_else(|| primary_role.to_string());
-
-            matches.push(MatchedRecord {
+            let org = OrgRow {
                 ods_code: ods_code.to_string(),
                 name: name.to_string(),
                 record_class: record_class_arr.value(i).to_string(),
-                status: status_arr.value(i).to_string(),
-                primary_role_code: primary_role.to_string(),
                 role_codes,
                 role_names,
-                role_name,
+                primary_role_code: primary_role.to_string(),
                 address,
-                town: town.to_string(),
-                county: county.to_string(),
-                postcode: postcode.to_string(),
-                country: country.to_string(),
-                uprn: uprn.to_string(),
-                telephone: telephone.to_string(),
-                website: website.to_string(),
-                operational_start: op_start,
-                operational_end: op_end,
+                town,
+                county,
+                postcode,
+                country,
+                uprn,
+                telephone,
+                website,
+                predecessor_codes,
+                successor_codes,
+                status: status_arr.value(i).to_string(),
                 legal_start: leg_start,
                 legal_end: leg_end,
+                operational_start: op_start,
+                operational_end: op_end,
                 last_changed: last_change_date,
                 trud_release_date,
+            };
+
+            matches.push(Match {
+                org,
                 rank,
                 loc_level,
             });
@@ -890,14 +1016,18 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
     matches.sort_by(|a, b| {
         if let Some(sort_by) = args.sort {
             match sort_by {
-                SortBy::Code => a.ods_code.cmp(&b.ods_code),
-                SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortBy::Postcode => a.postcode.to_lowercase().cmp(&b.postcode.to_lowercase()),
+                SortBy::Code => a.org.ods_code.cmp(&b.org.ods_code),
+                SortBy::Name => a.org.name.to_lowercase().cmp(&b.org.name.to_lowercase()),
+                SortBy::Postcode => {
+                    let a_post = a.org.postcode.as_deref().unwrap_or("");
+                    let b_post = b.org.postcode.as_deref().unwrap_or("");
+                    a_post.to_lowercase().cmp(&b_post.to_lowercase())
+                }
             }
         } else if args.query.is_some() {
-            a.rank.cmp(&b.rank).then_with(|| a.ods_code.cmp(&b.ods_code))
+            a.rank.cmp(&b.rank).then_with(|| a.org.ods_code.cmp(&b.org.ods_code))
         } else {
-            a.ods_code.cmp(&b.ods_code)
+            a.org.ods_code.cmp(&b.org.ods_code)
         }
     });
 
@@ -905,114 +1035,23 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 
     match args.format {
         OutputFormat::Json => {
-            for r in &matches {
-                let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
-                let pred_hops = get_predecessors(&r.ods_code, &successions_graph, &org_metadata);
-
-                let succ_codes: Vec<String> = if let Some(edges) = successions_graph.forward.get(&r.ods_code) {
-                    edges.iter().map(|e| e.target_code.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-                let pred_codes: Vec<String> = if let Some(edges) = successions_graph.reverse.get(&r.ods_code) {
-                    edges.iter().map(|e| e.target_code.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-
-                let successors_json: Vec<serde_json::Value> = succ_hops.iter().map(|h| serde_json::json!({
-                    "code": h.code,
-                    "name": h.name,
-                    "status": h.status,
-                    "date": h.date,
-                })).collect();
-
-                let predecessors_json: Vec<serde_json::Value> = pred_hops.iter().map(|h| serde_json::json!({
-                    "code": h.code,
-                    "name": h.name,
-                    "status": h.status,
-                    "date": h.date,
-                })).collect();
-
-                let json = serde_json::json!({
-                    "ods_code": r.ods_code,
-                    "record_class": r.record_class,
-                    "status": r.status,
-                    "primary_role_code": r.primary_role_code,
-                    "role_codes": r.role_codes,
-                    "role_names": r.role_names,
-                    "role_name": r.role_name,
-                    "name": r.name,
-                    "address": if r.address.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.address.clone()) },
-                    "town": if r.town.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.town.clone()) },
-                    "county": if r.county.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.county.clone()) },
-                    "postcode": if r.postcode.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.postcode.clone()) },
-                    "country": if r.country.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.country.clone()) },
-                    "uprn": if r.uprn.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.uprn.clone()) },
-                    "telephone": if r.telephone.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.telephone.clone()) },
-                    "website": if r.website.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(r.website.clone()) },
-                    "successor_codes": succ_codes,
-                    "predecessor_codes": pred_codes,
-                    "successors": successors_json,
-                    "predecessors": predecessors_json,
-                    "legal_start": r.legal_start,
-                    "legal_end": r.legal_end,
-                    "operational_start": r.operational_start,
-                    "operational_end": r.operational_end,
-                    "last_changed": r.last_changed,
-                    "trud_release_date": r.trud_release_date,
-                });
+            for m in &matches {
+                let record = build_output_record(&m.org, &org_metadata);
+                let json = serde_json::to_value(&record)?;
                 writeln!(writer, "{}", json)?;
             }
         }
         OutputFormat::Csv => {
-            writeln!(writer, "ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date")?;
-            use crate::roles::escape_csv;
-            for r in &matches {
-                let roles_str = r.role_codes.join("; ");
-                let role_names_str = r.role_names.join("; ");
-                let succ_codes: Vec<String> = if let Some(edges) = successions_graph.forward.get(&r.ods_code) {
-                    edges.iter().map(|e| e.target_code.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-                let pred_codes: Vec<String> = if let Some(edges) = successions_graph.reverse.get(&r.ods_code) {
-                    edges.iter().map(|e| e.target_code.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-                let succ_codes_str = succ_codes.join("; ");
-                let pred_codes_str = pred_codes.join("; ");
-
-                let fields = [
-                    r.ods_code.as_str(),
-                    r.record_class.as_str(),
-                    r.status.as_str(),
-                    r.primary_role_code.as_str(),
-                    &escape_csv(&roles_str),
-                    &escape_csv(&role_names_str),
-                    &escape_csv(&r.role_name),
-                    &escape_csv(&r.name),
-                    &escape_csv(&r.address),
-                    &escape_csv(&r.town),
-                    &escape_csv(&r.county),
-                    r.postcode.as_str(),
-                    &escape_csv(&r.country),
-                    r.uprn.as_str(),
-                    r.telephone.as_str(),
-                    &escape_csv(&r.website),
-                    &escape_csv(&succ_codes_str),
-                    &escape_csv(&pred_codes_str),
-                    &escape_csv(&succ_codes_str),
-                    &escape_csv(&pred_codes_str),
-                    r.legal_start.as_deref().unwrap_or(""),
-                    r.legal_end.as_deref().unwrap_or(""),
-                    r.operational_start.as_deref().unwrap_or(""),
-                    r.operational_end.as_deref().unwrap_or(""),
-                    r.last_changed.as_deref().unwrap_or(""),
-                    r.trud_release_date.as_deref().unwrap_or(""),
-                ];
-                writeln!(writer, "{}", fields.join(","))?;
+            let headers = csv_headers_from_output_record();
+            writeln!(writer, "{}", headers.join(","))?;
+            for m in &matches {
+                let record = build_output_record(&m.org, &org_metadata);
+                let val = serde_json::to_value(&record)?;
+                let row_cells: Vec<String> = headers
+                    .iter()
+                    .map(|h| format_csv_cell(&val[h]))
+                    .collect();
+                writeln!(writer, "{}", row_cells.join(","))?;
             }
         }
         OutputFormat::Tsv | OutputFormat::Table | OutputFormat::Markdown => {
@@ -1028,26 +1067,30 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let display_rows: Vec<DisplayRow> = matches
                 .iter()
                 .map(|r| {
-                    let full_name = if args.all && r.status.eq_ignore_ascii_case("inactive") {
-                        let succ_hops = walk_succession_chain(&r.ods_code, &successions_graph, &org_metadata);
-                        if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
-                            format!("{} → {}", r.name, live_succ)
+                    let full_name = if args.all && r.org.status.eq_ignore_ascii_case("inactive") {
+                        if let Some(ref graph) = successions_graph {
+                            let succ_hops = walk_succession_chain(&r.org.ods_code, graph, &org_metadata);
+                            if let Some(live_succ) = resolve_table_successor_display(&succ_hops) {
+                                format!("{} → {}", r.org.name, live_succ)
+                            } else {
+                                r.org.name.clone()
+                            }
                         } else {
-                            r.name.clone()
+                            r.org.name.clone()
                         }
                     } else {
-                        r.name.clone()
+                        r.org.name.clone()
                     };
 
-                    let role_display = crate::roles::format_roles_for_display(&r.role_codes, &r.role_names, args.verbose);
+                    let role_display = crate::roles::format_roles_for_display(&r.org.role_codes, &r.org.role_names, args.verbose);
 
                     DisplayRow {
-                        ods_code: &r.ods_code,
+                        ods_code: &r.org.ods_code,
                         full_name,
-                        postcode: &r.postcode,
+                        postcode: r.org.postcode.as_deref().unwrap_or(""),
                         role_display,
-                        record_class: &r.record_class,
-                        status: &r.status,
+                        record_class: &r.org.record_class,
+                        status: &r.org.status,
                     }
                 })
                 .collect();
@@ -1182,7 +1225,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     // 5. Render table with footer
                     let n = matched_count;
                     let (left, right) = if args.all {
-                        let active_count = matches.iter().filter(|r| r.status.eq_ignore_ascii_case("active")).count();
+                        let active_count = matches.iter().filter(|r| r.org.status.eq_ignore_ascii_case("active")).count();
                         let inactive_count = n.saturating_sub(active_count);
                         let left_str = if n == 1 {
                             "1 record".to_string()
@@ -1464,8 +1507,9 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("ods_code,record_class,status,primary_role_code,role_codes,role_names,role_name,name,address,town,county,postcode,country,uprn,telephone,website,successor_codes,predecessor_codes,successors,predecessors,legal_start,legal_end,operational_start,operational_end,last_changed,trud_release_date"));
-        assert!(s.contains("A101,org,active"));
+        let expected_header = csv_headers_from_output_record().join(",");
+        assert!(s.starts_with(&expected_header));
+        assert!(s.contains("A101,Alpha Health Centre,org"));
 
         // Test 6: JSON output
         let mut out = Vec::new();
@@ -1488,114 +1532,94 @@ mod tests {
 
     #[test]
     fn test_find_json_schema_matches_parquet_schema() {
+        let (dir, parquet_dir) = setup_synthetic_parquet();
+        let _keep_dir = dir;
+
         let parquet_schema = crate::commands::parquet::orgs_schema();
-        let parquet_fields: std::collections::HashSet<String> = parquet_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
+        let parquet_fields = parquet_schema.fields();
 
-        let ignored_fields: std::collections::HashSet<&str> =
-            ["successor_codes", "predecessor_codes"].into_iter().collect();
-
-        let enriching_fields: std::collections::HashSet<&str> =
-            ["role_name", "successor_codes", "predecessor_codes", "successors", "predecessors"].into_iter().collect();
-
-        // Construct a synthetic MatchedRecord with all fields populated
-        let record = MatchedRecord {
-            ods_code: "TEST1".to_string(),
-            name: "Test Org".to_string(),
-            record_class: "org".to_string(),
-            status: "active".to_string(),
-            primary_role_code: "RO177".to_string(),
-            role_name: "Prescribing Cost Centre".to_string(),
-            role_codes: vec!["RO76".to_string(), "RO177".to_string()],
-            role_names: vec!["GP Practice".to_string(), "Prescribing Cost Centre".to_string()],
-            address: "1 Main St".to_string(),
-            town: "Town".to_string(),
-            county: "County".to_string(),
-            postcode: "SW1A 1AA".to_string(),
-            country: "ENGLAND".to_string(),
-            uprn: "100".to_string(),
-            telephone: "0123".to_string(),
-            website: "http://test".to_string(),
-            operational_start: Some("2020-01-01".to_string()),
-            operational_end: None,
-            legal_start: Some("2020-01-01".to_string()),
+        // 1. Assert OrgRow serialized keys equals orgs_schema() names in order, derived at runtime
+        let dummy_org = OrgRow {
+            ods_code: "X".to_string(),
+            name: "X".to_string(),
+            record_class: "X".to_string(),
+            role_codes: vec!["R1".to_string()],
+            role_names: vec!["Role 1".to_string()],
+            primary_role_code: "R1".to_string(),
+            address: None,
+            town: None,
+            county: None,
+            postcode: None,
+            country: None,
+            uprn: None,
+            telephone: None,
+            website: None,
+            predecessor_codes: vec![],
+            successor_codes: vec![],
+            status: "X".to_string(),
+            legal_start: None,
             legal_end: None,
-            last_changed: Some("2023-01-01".to_string()),
-            trud_release_date: Some("2026-07-31".to_string()),
-            rank: 1,
-            loc_level: None,
+            operational_start: None,
+            operational_end: None,
+            last_changed: None,
+            trud_release_date: "X".to_string(),
         };
 
-        let json_val = serde_json::json!({
-            "ods_code": record.ods_code,
-            "record_class": record.record_class,
-            "status": record.status,
-            "primary_role_code": record.primary_role_code,
-            "role_codes": record.role_codes,
-            "role_names": record.role_names,
-            "role_name": record.role_name,
-            "name": record.name,
-            "address": record.address,
-            "town": record.town,
-            "county": record.county,
-            "postcode": record.postcode,
-            "country": record.country,
-            "uprn": record.uprn,
-            "telephone": record.telephone,
-            "website": record.website,
-            "successor_codes": vec!["SUCC1".to_string()],
-            "predecessor_codes": Vec::<String>::new(),
-            "successors": vec![serde_json::json!({"code": "SUCC1", "name": "Successor Org", "status": "active", "date": null})],
-            "predecessors": Vec::<serde_json::Value>::new(),
-            "legal_start": record.legal_start,
-            "legal_end": record.legal_end,
-            "operational_start": record.operational_start,
-            "operational_end": record.operational_end,
-            "last_changed": record.last_changed,
-            "trud_release_date": record.trud_release_date,
-        });
+        let org_val = serde_json::to_value(&dummy_org).unwrap();
+        let org_obj = org_val.as_object().unwrap();
+        let org_keys: Vec<String> = org_obj.keys().cloned().collect();
 
-        let json_keys_vec: Vec<String> = json_val.as_object().unwrap().keys().cloned().collect();
-        let json_keys_set: std::collections::HashSet<String> = json_keys_vec.iter().cloned().collect();
+        assert_eq!(org_keys.len(), parquet_fields.len());
+        for (i, field) in parquet_fields.iter().enumerate() {
+            assert_eq!(
+                &org_keys[i],
+                field.name(),
+                "OrgRow key index {} mismatch with orgs_schema()",
+                i
+            );
 
-        // 1. Assert every field in orgs.parquet (except ignored_fields) is present in JSON output
-        for field in &parquet_fields {
-            if !ignored_fields.contains(field.as_str()) {
+            // Assert nullability agrees: Option<String> is nullable, non-Option is not
+            let val = &org_obj[field.name()];
+            if field.is_nullable() {
                 assert!(
-                    json_keys_set.contains(field),
-                    "Field '{}' from orgs.parquet schema is missing in find --format json output!",
-                    field
+                    val.is_null(),
+                    "Field '{}' is nullable in schema but not null in dummy OrgRow",
+                    field.name()
+                );
+            } else {
+                assert!(
+                    !val.is_null(),
+                    "Field '{}' is non-nullable in schema but is null in dummy OrgRow",
+                    field.name()
                 );
             }
         }
 
-        // 2. Assert every enriching field is present in JSON output
-        for field in &enriching_fields {
-            assert!(
-                json_keys_set.contains(*field),
-                "Enriching field '{}' is missing in find --format json output!",
-                field
-            );
-        }
+        // 2. Call run_with_writer on live parquet and verify JSON output has 25 keys
+        let mut out = Vec::new();
+        run_with_writer(
+            Args {
+                query: Some("Alpha".to_string()),
+                sort: Some(SortBy::Code),
+                format: OutputFormat::Json,
+                input: Some(parquet_dir.clone()),
+                ..Default::default()
+            },
+            &mut out,
+            &parquet_dir,
+        ).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let line = s.lines().next().expect("at least one JSON line");
+        let val: serde_json::Value = serde_json::from_str(line).unwrap();
+        let obj = val.as_object().unwrap();
+        let json_keys: Vec<String> = obj.keys().cloned().collect();
 
-        // 3. Assert property ordering matches Parquet schema order with grouped enriching properties
-        assert_eq!(json_keys_vec[0], "ods_code");
-        assert_eq!(json_keys_vec[1], "record_class");
-        assert_eq!(json_keys_vec[2], "status");
-        assert_eq!(json_keys_vec[3], "primary_role_code");
-        assert_eq!(json_keys_vec[4], "role_codes");
-        assert_eq!(json_keys_vec[5], "role_names");
-        assert_eq!(json_keys_vec[6], "role_name");
-        assert_eq!(json_keys_vec[7], "name");
-        assert_eq!(json_keys_vec[16], "successor_codes");
-        assert_eq!(json_keys_vec[17], "predecessor_codes");
-        assert_eq!(json_keys_vec[18], "successors");
-        assert_eq!(json_keys_vec[19], "predecessors");
-        assert_eq!(json_keys_vec[24], "last_changed");
-        assert_eq!(json_keys_vec[25], "trud_release_date");
+        assert_eq!(json_keys.len(), 25);
+        for (i, field) in parquet_fields.iter().enumerate() {
+            assert_eq!(&json_keys[i], field.name());
+        }
+        assert_eq!(json_keys[23], "predecessors");
+        assert_eq!(json_keys[24], "successors");
     }
 
     #[test]
@@ -1616,8 +1640,8 @@ mod tests {
             &parquet_dir,
         ).unwrap();
         let json_str = String::from_utf8(json_out).unwrap();
-        let json_val: serde_json::Value = serde_json::from_str(json_str.trim()).unwrap();
-        let json_keys: Vec<String> = json_val.as_object().unwrap().keys().cloned().collect();
+        let json_val: serde_json::Value = serde_json::from_str(json_str.lines().next().unwrap()).unwrap();
+        let json_obj = json_val.as_object().unwrap();
 
         let mut csv_out = Vec::new();
         run_with_writer(
@@ -1635,10 +1659,18 @@ mod tests {
         let header_line = csv_str.lines().next().unwrap();
         let csv_headers: Vec<String> = header_line.split(',').map(|s| s.to_string()).collect();
 
+        let expected_csv_headers: Vec<String> = json_obj
+            .iter()
+            .filter(|(k, _)| *k != "predecessors" && *k != "successors")
+            .map(|(k, _)| k.clone())
+            .collect();
+
         assert_eq!(
-            csv_headers, json_keys,
-            "CSV output headers do not match JSON key sequence!"
+            csv_headers, expected_csv_headers,
+            "CSV output headers do not match JSON key sequence minus object arrays!"
         );
+        assert_eq!(csv_headers.len(), 23);
+        assert_eq!(json_obj.len(), 25);
     }
 
     #[test]
