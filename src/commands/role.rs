@@ -128,12 +128,15 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let mut table = Table::new();
 
             if args.format == OutputFormat::Markdown {
-                table.load_preset(presets::ASCII_MARKDOWN);
+                table.load_style(presets::ASCII_MARKDOWN);
                 table.set_content_arrangement(ContentArrangement::Disabled);
             } else {
-                table.load_preset(presets::UTF8_FULL_CONDENSED);
+                table.load_style(presets::UTF8_FULL_CONDENSED);
+                table.set_truncation_indicator("…");
                 table.set_content_arrangement(ContentArrangement::Dynamic);
-                if std::io::stdout().is_terminal() {
+                if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
+                    table.set_width(col_env);
+                } else if std::io::stdout().is_terminal() {
                     if let Ok((cols, _)) = crossterm::terminal::size() {
                         table.set_width(cols);
                     }

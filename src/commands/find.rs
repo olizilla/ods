@@ -826,22 +826,34 @@ pub fn render_with_footer(table: &comfy_table::Table, left: &str, right: &str) -
     let bottom_border = lines.pop().unwrap();
     let border_width = bottom_border.width();
 
-    // 1. Merge line: └ -> ├, ┘ -> ┤, ┴ untouched
+    let style = table.style();
+    let b_left = style.bottom_border.left;
+    let b_right = style.bottom_border.right;
+    let b_junction = style.bottom_border.junction;
+    let b_fill = style.bottom_border.fill;
+
+    let m_left = style.row_separator.left.unwrap_or('├');
+    let m_right = style.row_separator.right.unwrap_or('┤');
+
+    // 1. Merge line: replace bottom-left corner with m_left, bottom-right corner with m_right, junctions untouched
     let mut merge_chars: Vec<char> = bottom_border.chars().collect();
     if let Some(first) = merge_chars.first_mut() {
-        if *first == '└' {
-            *first = '├';
+        if b_left == Some(*first) {
+            *first = m_left;
         }
     }
     if let Some(last) = merge_chars.last_mut() {
-        if *last == '┘' {
-            *last = '┤';
+        if b_right == Some(*last) {
+            *last = m_right;
         }
     }
     let merge_line: String = merge_chars.into_iter().collect();
 
-    // 2. Bottom line: every ┴ -> ─
-    let bottom_line = bottom_border.replace('┴', "─");
+    // 2. Bottom line: replace junction with fill
+    let bottom_line = match (b_junction, b_fill) {
+        (Some(j), Some(f)) => bottom_border.replace(j, &f.to_string()),
+        _ => bottom_border.to_string(),
+    };
 
     // 3. Footer line & overflow hint
     // Box borders: "│ " (2) and " │" (2) -> 4 columns total
@@ -1249,10 +1261,11 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 let mut table = Table::new();
 
                 if args.format == OutputFormat::Markdown {
-                    table.load_preset(presets::ASCII_MARKDOWN);
+                    table.load_style(presets::ASCII_MARKDOWN);
                     table.set_content_arrangement(ContentArrangement::Disabled);
                 } else {
-                    table.load_preset(presets::UTF8_FULL_CONDENSED);
+                    table.load_style(presets::UTF8_FULL_CONDENSED);
+                    table.set_truncation_indicator("…");
                     table.set_content_arrangement(ContentArrangement::Dynamic);
                     if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
                         table.set_width(col_env);
@@ -1809,7 +1822,7 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
 
         let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.load_style(presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(ContentArrangement::Disabled);
         table.set_header(vec!["ODS Code", "Name", "Postcode"]);
         table.add_row(vec!["H01", "Hôpital Sainte-Thérèse d'Avila", "SW1A 1AA"]);
@@ -1839,7 +1852,7 @@ mod tests {
         use comfy_table::{Table, presets, ContentArrangement};
 
         let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.load_style(presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(ContentArrangement::Disabled);
         table.set_header(vec!["Col A", "Column B", "Col C", "Column D"]);
         table.add_row(vec!["123", "Example item", "Test", "More content"]);
@@ -1879,7 +1892,7 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
 
         let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL_CONDENSED);
+        table.load_style(presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(ContentArrangement::Dynamic);
         table.set_width(40);
         table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);

@@ -101,7 +101,7 @@ fn test_task1_render_with_footer_box_geometry() {
     use unicode_width::UnicodeWidthStr;
 
     let mut table = Table::new();
-    table.load_preset(presets::UTF8_FULL_CONDENSED);
+    table.load_style(presets::UTF8_FULL_CONDENSED);
     table.set_content_arrangement(ContentArrangement::Disabled);
     table.set_header(vec!["ODS Code", "Organisation Name", "Postcode"]);
     table.add_row(vec!["A01", "René & François Hospital", "SW1A 1AA"]);
@@ -524,3 +524,29 @@ fn test_task6_staleness_nudge_uses_exclamation_sigil() {
         stderr
     );
 }
+
+#[test]
+fn test_render_with_footer_with_rounded_corners() {
+    use comfy_table::{presets, ContentArrangement, Table};
+
+    let mut table = Table::new();
+    table.load_style(presets::UTF8_FULL_CONDENSED.with_rounded_corners());
+    table.set_content_arrangement(ContentArrangement::Disabled);
+    table.set_header(vec!["ODS Code", "Organisation Name"]);
+    table.add_row(vec!["A01", "René & François Hospital"]);
+
+    let rendered = render_with_footer(&table, "1 active record", "Use --all to include inactive");
+    let lines: Vec<&str> = rendered.table.lines().collect();
+    let merge_line = lines[lines.len() - 3];
+    assert!(
+        merge_line.starts_with('├'),
+        "Merge line must start with ├, but was: {}",
+        merge_line
+    );
+    assert!(
+        merge_line.ends_with('┤'),
+        "Merge line must end with ┤, but was: {}",
+        merge_line
+    );
+}
+

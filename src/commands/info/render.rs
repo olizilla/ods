@@ -153,11 +153,11 @@ fn create_base_table(color: bool, style: TableStyle) -> Table {
     let mut table = Table::new();
     match style {
         TableStyle::Markdown => {
-            table.load_preset(ASCII_MARKDOWN);
+            table.load_style(ASCII_MARKDOWN);
             table.set_content_arrangement(ContentArrangement::Disabled);
         }
         TableStyle::Table => {
-            table.load_preset(UTF8_FULL_CONDENSED);
+            table.load_style(UTF8_FULL_CONDENSED);
             table.set_truncation_indicator("…");
             if !color {
                 table.force_no_tty();
