@@ -14,10 +14,11 @@ use model::{
     InfoRecord, InfoRecordJson, InfoRelationship, InfoRole, LiveSuccessor, RelationshipItemJson,
     SuccessionHopJson,
 };
-use render::{render_info, RenderOptions, ResponsiveBand};
+use render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputFormat {
+    Table,
     Markdown,
     Json,
 }
@@ -27,8 +28,8 @@ pub struct Args {
     /// Exact ODS organisation code (e.g. A82608, RJZ, 0AF)
     pub ods_code: String,
 
-    /// Output format (markdown for human-readable card, json for structured record)
-    #[arg(short, long, value_enum, default_value = "markdown")]
+    /// Output format
+    #[arg(short, long, value_enum, default_value = "table")]
     pub format: OutputFormat,
 
     /// Directory containing Parquet files (defaults to active release)
@@ -52,7 +53,7 @@ impl Default for Args {
     fn default() -> Self {
         Self {
             ods_code: String::new(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: None,
             all: false,
             width: None,
@@ -158,22 +159,29 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
     };
 
     match args.format {
-        OutputFormat::Markdown => {
-            let terminal_w = if let Some(w) = args.width {
-                w
-            } else if let Some(cols) = std::env::var("COLUMNS").ok().and_then(|s| s.parse::<u16>().ok()) {
-                cols
-            } else if use_color {
-                crossterm::terminal::size().map(|(w, _)| w).unwrap_or(78)
+        OutputFormat::Table | OutputFormat::Markdown => {
+            let is_markdown = args.format == OutputFormat::Markdown;
+            let (band, color_enabled, style) = if is_markdown {
+                (ResponsiveBand::Wide, false, TableStyle::Markdown)
             } else {
-                78
-            };
+                let terminal_w = if let Some(w) = args.width {
+                    w
+                } else if let Some(cols) = std::env::var("COLUMNS").ok().and_then(|s| s.parse::<u16>().ok()) {
+                    cols
+                } else if use_color {
+                    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(78)
+                } else {
+                    78
+                };
 
-            let band = ResponsiveBand::from_width(terminal_w);
-            let color_enabled = use_color
-                && !args.plain
-                && std::env::var_os("NO_COLOR").is_none()
-                && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
+                let band = ResponsiveBand::from_width(terminal_w);
+                let color_enabled = use_color
+                    && !args.plain
+                    && std::env::var_os("NO_COLOR").is_none()
+                    && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
+
+                (band, color_enabled, TableStyle::Table)
+            };
 
             let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
                 .and_then(|p| p.trud_release_date)
@@ -201,6 +209,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                 all: args.all,
                 color: color_enabled,
                 source_path: Some(&source_path_str),
+                style,
             };
 
             let rendered = render_info(&info_record, &options);

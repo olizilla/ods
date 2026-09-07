@@ -519,7 +519,7 @@ fn test_task4_two_hop_chain_closure_and_predecessors_decoration() {
     ods::commands::info::run_with_writer(
         ods::commands::info::Args {
             ods_code: "B202".to_string(),
-            format: ods::commands::info::OutputFormat::Markdown,
+            format: ods::commands::info::OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },

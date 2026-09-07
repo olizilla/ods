@@ -26,7 +26,7 @@ pub struct Args {
     #[arg(long)]
     pub codes: bool,
 
-    /// Output format: table, markdown, csv, json
+    /// Output format
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 

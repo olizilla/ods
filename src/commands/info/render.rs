@@ -1,5 +1,5 @@
 use crate::commands::info::model::{InfoRecord, InfoRelationship, InfoRole};
-use comfy_table::presets::UTF8_FULL_CONDENSED;
+use comfy_table::presets::{ASCII_MARKDOWN, UTF8_FULL_CONDENSED};
 use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table, Width};
 
 pub const ANSI_RESET: &str = "\x1b[0m";
@@ -9,6 +9,12 @@ pub const ANSI_GREEN: &str = "\x1b[32m";
 pub const ANSI_YELLOW: &str = "\x1b[33m";
 pub const ANSI_CYAN: &str = "\x1b[36m";
 pub const ANSI_MUTED: &str = "\x1b[90m";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableStyle {
+    Table,
+    Markdown,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponsiveBand {
@@ -50,6 +56,7 @@ pub struct RenderOptions<'a> {
     pub all: bool,
     pub color: bool,
     pub source_path: Option<&'a str>,
+    pub style: TableStyle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,12 +149,20 @@ fn apply_column_widths(table: &mut Table, widths: &[u16]) {
     }
 }
 
-fn create_base_table(color: bool) -> Table {
+fn create_base_table(color: bool, style: TableStyle) -> Table {
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_truncation_indicator("…");
-    if !color {
-        table.force_no_tty();
+    match style {
+        TableStyle::Markdown => {
+            table.load_preset(ASCII_MARKDOWN);
+            table.set_content_arrangement(ContentArrangement::Disabled);
+        }
+        TableStyle::Table => {
+            table.load_preset(UTF8_FULL_CONDENSED);
+            table.set_truncation_indicator("…");
+            if !color {
+                table.force_no_tty();
+            }
+        }
     }
     table
 }
@@ -159,12 +174,10 @@ pub fn render_info(record: &InfoRecord, options: &RenderOptions) -> String {
         || record.status.eq_ignore_ascii_case("inactive");
 
     // 1. Source line
-    let source_file = options.source_path.unwrap_or_else(|| {
-        if is_record_closed {
-            "orgs-all.parquet"
-        } else {
-            "orgs.parquet"
-        }
+    let source_file = options.source_path.unwrap_or(if is_record_closed {
+        "orgs-all.parquet"
+    } else {
+        "orgs.parquet"
     });
 
     let source_line = if options.source_path.is_some() {
@@ -209,6 +222,10 @@ pub fn render_info(record: &InfoRecord, options: &RenderOptions) -> String {
         ));
     } else {
         out.push_str(&format!("{}\n", status_line));
+    }
+
+    if options.style == TableStyle::Markdown {
+        out.push('\n');
     }
 
     // 3. Fields Table
@@ -267,8 +284,12 @@ pub fn render_info(record: &InfoRecord, options: &RenderOptions) -> String {
                 out.push('\n');
                 first = false;
             }
-            out.push_str(&anom.message(count));
-            out.push('\n');
+            if options.style == TableStyle::Markdown {
+                out.push_str(&format!("> {}\n\n", anom.message(count)));
+            } else {
+                out.push_str(&anom.message(count));
+                out.push('\n');
+            }
         }
     }
 
@@ -287,7 +308,7 @@ fn titlecase_country(country: Option<&str>) -> String {
 }
 
 fn render_fields_table(record: &InfoRecord, options: &RenderOptions) -> String {
-    let mut table = create_base_table(options.color);
+    let mut table = create_base_table(options.color, options.style);
 
     let header_code = if options.color {
         format!("{ANSI_BOLD}{ANSI_CYAN}{}{ANSI_RESET}", record.ods_code)
@@ -296,12 +317,14 @@ fn render_fields_table(record: &InfoRecord, options: &RenderOptions) -> String {
     };
     table.set_header(vec![Cell::new("ODS Code"), Cell::new(&header_code)]);
 
-    let widths = match options.band {
-        ResponsiveBand::Narrow => [10, 41],
-        ResponsiveBand::Medium => [12, 59],
-        ResponsiveBand::Wide => [12, 79],
-    };
-    apply_column_widths(&mut table, &widths);
+    if options.style == TableStyle::Table {
+        let widths = match options.band {
+            ResponsiveBand::Narrow => [10, 41],
+            ResponsiveBand::Medium => [12, 59],
+            ResponsiveBand::Wide => [12, 79],
+        };
+        apply_column_widths(&mut table, &widths);
+    }
 
     // Name (bold if color)
     let name_val = if options.color {
@@ -403,7 +426,11 @@ fn render_roles_table(
     } else {
         format!("{} active", total_active)
     };
-    let heading = format!("Roles ({}, {} inactive)", active_phrase, total_inactive);
+    let heading = if options.style == TableStyle::Markdown {
+        format!("## Roles ({}, {} inactive)\n", active_phrase, total_inactive)
+    } else {
+        format!("Roles ({}, {} inactive)", active_phrase, total_inactive)
+    };
 
     // Anomalies
     let mut anomalies = Vec::new();
@@ -433,7 +460,7 @@ fn render_roles_table(
 
     let show_gutter = (rows_differ_in_status && end_column_absent) || any_row_flagged;
 
-    let mut table = create_base_table(options.color);
+    let mut table = create_base_table(options.color, options.style);
 
     // Headers
     let mut headers = Vec::new();
@@ -451,13 +478,15 @@ fn render_roles_table(
     table.set_header(headers);
 
     // Set widths
-    match (options.band, show_gutter) {
-        (ResponsiveBand::Narrow, true) => apply_column_widths(&mut table, &[1, 42, 5]),
-        (ResponsiveBand::Narrow, false) => apply_column_widths(&mut table, &[46, 5]),
-        (ResponsiveBand::Medium, true) => apply_column_widths(&mut table, &[1, 49, 5, 10]),
-        (ResponsiveBand::Medium, false) => apply_column_widths(&mut table, &[53, 5, 10]),
-        (ResponsiveBand::Wide, true) => apply_column_widths(&mut table, &[1, 56, 5, 10, 10]),
-        (ResponsiveBand::Wide, false) => apply_column_widths(&mut table, &[60, 5, 10, 10]),
+    if options.style == TableStyle::Table {
+        match (options.band, show_gutter) {
+            (ResponsiveBand::Narrow, true) => apply_column_widths(&mut table, &[1, 42, 5]),
+            (ResponsiveBand::Narrow, false) => apply_column_widths(&mut table, &[46, 5]),
+            (ResponsiveBand::Medium, true) => apply_column_widths(&mut table, &[1, 49, 5, 10]),
+            (ResponsiveBand::Medium, false) => apply_column_widths(&mut table, &[53, 5, 10]),
+            (ResponsiveBand::Wide, true) => apply_column_widths(&mut table, &[1, 56, 5, 10, 10]),
+            (ResponsiveBand::Wide, false) => apply_column_widths(&mut table, &[60, 5, 10, 10]),
+        }
     }
 
     // Rows
@@ -592,7 +621,11 @@ fn render_relationships_table(
     } else {
         format!("{} active", total_active)
     };
-    let heading = format!("Relationships ({}, {} inactive)", active_phrase, total_inactive);
+    let heading = if options.style == TableStyle::Markdown {
+        format!("## Relationships ({}, {} inactive)\n", active_phrase, total_inactive)
+    } else {
+        format!("Relationships ({}, {} inactive)", active_phrase, total_inactive)
+    };
 
     // Anomalies
     let mut anomalies = Vec::new();
@@ -621,7 +654,7 @@ fn render_relationships_table(
 
     let show_gutter = (rows_differ_in_status && end_column_absent) || any_row_flagged;
 
-    let mut table = create_base_table(options.color);
+    let mut table = create_base_table(options.color, options.style);
 
     // Headers
     let mut headers = Vec::new();
@@ -640,44 +673,46 @@ fn render_relationships_table(
     table.set_header(headers);
 
     // Set widths: Relationship and Code columns take width from content
-    let max_phrase_len = displayed_rels
-        .iter()
-        .map(|r| canonical_re_rank_and_phrase(&r.rel_code).1.len())
-        .max()
-        .unwrap_or(0);
-    let rel_width = (max_phrase_len.max("Relationship".len())) as u16;
+    if options.style == TableStyle::Table {
+        let max_phrase_len = displayed_rels
+            .iter()
+            .map(|r| canonical_re_rank_and_phrase(&r.rel_code).1.len())
+            .max()
+            .unwrap_or(0);
+        let rel_width = (max_phrase_len.max("Relationship".len())) as u16;
 
-    let max_code_len = displayed_rels
-        .iter()
-        .map(|r| r.code.len())
-        .max()
-        .unwrap_or(0);
-    let code_width = (max_code_len.max("Code".len())) as u16;
+        let max_code_len = displayed_rels
+            .iter()
+            .map(|r| r.code.len())
+            .max()
+            .unwrap_or(0);
+        let code_width = (max_code_len.max("Code".len())) as u16;
 
-    match (options.band, show_gutter) {
-        (ResponsiveBand::Narrow, true) => {
-            let org_width = 44u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[1, rel_width, org_width, code_width]);
-        }
-        (ResponsiveBand::Narrow, false) => {
-            let org_width = 48u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[rel_width, org_width, code_width]);
-        }
-        (ResponsiveBand::Medium, true) => {
-            let org_width = 51u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[1, rel_width, org_width, code_width, 10]);
-        }
-        (ResponsiveBand::Medium, false) => {
-            let org_width = 55u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[rel_width, org_width, code_width, 10]);
-        }
-        (ResponsiveBand::Wide, true) => {
-            let org_width = 58u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[1, rel_width, org_width, code_width, 10, 10]);
-        }
-        (ResponsiveBand::Wide, false) => {
-            let org_width = 62u16.saturating_sub(rel_width).saturating_sub(code_width);
-            apply_column_widths(&mut table, &[rel_width, org_width, code_width, 10, 10]);
+        match (options.band, show_gutter) {
+            (ResponsiveBand::Narrow, true) => {
+                let org_width = 44u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[1, rel_width, org_width, code_width]);
+            }
+            (ResponsiveBand::Narrow, false) => {
+                let org_width = 48u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[rel_width, org_width, code_width]);
+            }
+            (ResponsiveBand::Medium, true) => {
+                let org_width = 51u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[1, rel_width, org_width, code_width, 10]);
+            }
+            (ResponsiveBand::Medium, false) => {
+                let org_width = 55u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[rel_width, org_width, code_width, 10]);
+            }
+            (ResponsiveBand::Wide, true) => {
+                let org_width = 58u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[1, rel_width, org_width, code_width, 10, 10]);
+            }
+            (ResponsiveBand::Wide, false) => {
+                let org_width = 62u16.saturating_sub(rel_width).saturating_sub(code_width);
+                apply_column_widths(&mut table, &[rel_width, org_width, code_width, 10, 10]);
+            }
         }
     }
 
@@ -771,8 +806,10 @@ fn render_relationships_table(
         table.add_row(row);
     }
 
-    for row in table.row_iter_mut() {
-        row.max_height(1);
+    if options.style == TableStyle::Table {
+        for row in table.row_iter_mut() {
+            row.max_height(1);
+        }
     }
 
     let mut res = heading;

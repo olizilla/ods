@@ -60,7 +60,7 @@ pub struct Args {
     #[arg(long, short, value_enum)]
     pub sort: Option<SortBy>,
 
-    /// Output format: table, markdown, csv, json, tsv
+    /// Output format
     #[arg(long, short, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 

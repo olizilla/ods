@@ -1,5 +1,5 @@
 use ods::commands::info::model::InfoRecord;
-use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand};
+use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
 use std::fs;
 
 fn test_case(
@@ -21,6 +21,7 @@ fn test_case(
         all,
         color: false,
         source_path: None,
+        style: TableStyle::Table,
     };
 
     let rendered = render_info(&record, &options);
@@ -133,6 +134,7 @@ fn test_coloured_box_width(fixture_name: &str, band: ResponsiveBand, all: bool) 
         all,
         color: true,
         source_path: None,
+        style: TableStyle::Table,
     };
 
     let rendered = render_info(&record, &options);
@@ -190,3 +192,45 @@ fn test_all_13_reference_files_coloured_box_width_invariant() {
         test_coloured_box_width(fixture, band, all);
     }
 }
+
+fn test_markdown_case(fixture_name: &str, ref_filename: &str) {
+    let fixture_path = format!("tests/fixtures/info/fixtures/{}.json", fixture_name);
+    let ref_path = format!("tests/fixtures/info/reference/{}", ref_filename);
+
+    let fixture_content = fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", fixture_path, e));
+    let record: InfoRecord = serde_json::from_str(&fixture_content)
+        .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", fixture_path, e));
+
+    let options = RenderOptions {
+        band: ResponsiveBand::Wide,
+        all: false,
+        color: false,
+        source_path: None,
+        style: TableStyle::Markdown,
+    };
+
+    let rendered = render_info(&record, &options);
+
+    if std::env::var("UPDATE_EXPECT").is_ok() {
+        fs::write(&ref_path, &rendered)
+            .unwrap_or_else(|e| panic!("failed to write {}: {}", ref_path, e));
+    }
+
+    let expected = fs::read_to_string(&ref_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", ref_path, e));
+
+    assert_eq!(
+        rendered, expected,
+        "Markdown output for {} does not match golden reference fixture {}",
+        fixture_name, ref_filename
+    );
+}
+
+#[test]
+fn test_markdown_reference_fixtures() {
+    test_markdown_case("5QG", "5QG.markdown.md");
+    test_markdown_case("15N", "15N.markdown.md");
+    test_markdown_case("A81002", "A81002.markdown.md");
+}
+

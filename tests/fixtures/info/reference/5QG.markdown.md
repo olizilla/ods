@@ -1,0 +1,32 @@
+* Source: releases/2026-08-28/orgs-all.parquet
+* Status: inactive, Class: org, Last Change: 2013-04-01
+
+| ODS Code     | 5QG                                                           |
+|--------------|---------------------------------------------------------------|
+| Name         | BERKSHIRE EAST PRIMARY CARE TRUST                             |
+| Address      | King Edward VII Hospital, St Leonards Road, Windsor, SL4 3DP  |
+| Country      | England                                                       |
+| UPRN         | 100080219944                                                  |
+| Website      | —                                                             |
+| Telephone    | —                                                             |
+| Opened       | 2006-10-01                                                    |
+| Closed       | 2013-03-31                                                    |
+| Succeeded by | D4U1Y  NHS FRIMLEY ICB                                        |
+|              | QU9    NHS BUCKINGHAMSHIRE OXFORDSHIRE AND BERKSHIRE WEST ICB |
+
+## Roles (none active, 2 inactive)
+
+| Role                    | Code  | Start      | End        |
+|-------------------------|-------|------------|------------|
+| Primary Care Trust      | RO105 | 2006-10-01 | 2013-03-31 |
+| Prescribing Cost Centre | RO177 | 2006-10-01 | 2013-03-31 |
+
+## Relationships (none active, 5 inactive)
+
+| Relationship        | Organisation             | Code | Start      | End        |
+|---------------------|--------------------------|------|------------|------------|
+| commissioned by     | NHS ENGLAND              | X24  | 2006-10-01 | 2013-03-31 |
+| in the geography of | NHS SOUTH OF ENGLAND SHA | Q71  | 2011-10-01 | 2013-03-31 |
+|                     | NHS SOUTH CENTRAL SHA    | Q70  | 2006-10-01 | 2011-03-31 |
+| partner to          | BRACKNELL FOREST COUNCIL | 881  | 2006-10-01 | 2013-03-31 |
+|                     | SLOUGH BOROUGH COUNCIL   | 882  | 2006-10-01 | 2013-03-31 |

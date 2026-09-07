@@ -490,7 +490,7 @@ fn test_info_renders_full_detail_for_exact_code() {
     info::run_with_writer(
         Args {
             ods_code: "A82608".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -596,7 +596,7 @@ fn test_info_case_insensitive() {
     info::run_with_writer(
         Args {
             ods_code: "a82608".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -621,7 +621,7 @@ fn test_info_nonexistent_code_fails() {
     let result = info::run_with_writer(
         Args {
             ods_code: "NONEXISTENT999".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -646,7 +646,7 @@ fn test_info_relationships_section_shows_outbound() {
     info::run_with_writer(
         Args {
             ods_code: "A82608".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -722,21 +722,21 @@ fn test_info_relationships_in_json() {
 }
 
 #[test]
-fn test_info_trust_inbound_relationships_not_in_markdown() {
+fn test_info_trust_inbound_relationships_not_in_card() {
     let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
     info::run_with_writer(
         Args {
             ods_code: "RJZ".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
         &mut out,
         &parquet_dir,
     )
-    .expect("info::run_with_writer should succeed for RJZ in Markdown");
+    .expect("info::run_with_writer should succeed for RJZ in Table");
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
@@ -797,7 +797,7 @@ fn test_info_leaf_operates_under_parent() {
     info::run_with_writer(
         Args {
             ods_code: "A82608001".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -832,7 +832,7 @@ fn test_info_entity_without_relationships_omits_section() {
     info::run_with_writer(
         Args {
             ods_code: "ISOLATED".to_string(),
-            format: OutputFormat::Markdown,
+            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -844,14 +844,14 @@ fn test_info_entity_without_relationships_omits_section() {
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
         !output_str.contains("Relationships"),
-        "Isolated entity must not have 'Relationships' section, got:\n{}",
+        "ISOLATED has no relationships, so Relationships section must be omitted, got:\n{}",
         output_str
     );
 }
 
 #[test]
 fn test_info_succeeded_by_cyan_and_relationships_code_column() {
-    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand};
+    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
     use ods::commands::find::OrgRow;
     use ods::commands::info::model::{InfoRecord, InfoRelationship, LiveSuccessor};
 
@@ -891,6 +891,7 @@ fn test_info_succeeded_by_cyan_and_relationships_code_column() {
         all: false,
         color: true,
         source_path: None,
+        style: TableStyle::Table,
     };
 
     let rendered = render_info(&record, &options_color);
@@ -925,4 +926,122 @@ fn test_info_succeeded_by_cyan_and_relationships_code_column() {
         rel_row
     );
 }
+
+#[test]
+fn test_info_markdown_format_structure_and_no_ansi() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
+
+    let mut out = Vec::new();
+    info::run_with_writer(
+        Args {
+            ods_code: "A82608".to_string(),
+            format: OutputFormat::Markdown,
+            input: Some(parquet_dir.clone()),
+            ..Default::default()
+        },
+        &mut out,
+        &parquet_dir,
+    )
+    .expect("info::run_with_writer should succeed for A82608 in Markdown");
+
+    let s = String::from_utf8(out).expect("valid UTF-8");
+
+    // 1. Pipe table structure
+    assert!(s.contains("| ODS Code"), "Must contain markdown pipe table for fields");
+    assert!(s.contains("| Role"), "Must contain markdown pipe table for roles");
+    assert!(s.contains("| Relationship"), "Must contain markdown pipe table for relationships");
+
+    // 2. Section headings start with ## and are followed by a blank line
+    assert!(s.contains("## Roles (2 active, 0 inactive)\n\n|"), "Roles heading must be ## followed by blank line");
+    assert!(s.contains("## Relationships (1 active, 0 inactive)\n\n|"), "Relationships heading must be ## followed by blank line");
+
+    // 3. Start and End columns present in markdown tables
+    assert!(s.contains("| Start"), "Roles/relationships table must have Start column");
+    assert!(s.contains("| End"), "Roles/relationships table must have End column");
+
+    // 4. No ANSI escape codes
+    assert!(!s.contains("\x1b"), "Markdown output must not contain ANSI escape codes");
+}
+
+#[test]
+fn test_info_markdown_width_invariance_and_no_truncation() {
+    let (_tmp, parquet_dir) = setup_test_workspace();
+
+    let mut out_narrow = Vec::new();
+    info::run_with_writer(
+        Args {
+            ods_code: "A82608".to_string(),
+            format: OutputFormat::Markdown,
+            input: Some(parquet_dir.clone()),
+            width: Some(58),
+            ..Default::default()
+        },
+        &mut out_narrow,
+        &parquet_dir,
+    )
+    .expect("markdown at width 58");
+
+    let mut out_wide = Vec::new();
+    info::run_with_writer(
+        Args {
+            ods_code: "A82608".to_string(),
+            format: OutputFormat::Markdown,
+            input: Some(parquet_dir.clone()),
+            width: Some(200),
+            ..Default::default()
+        },
+        &mut out_wide,
+        &parquet_dir,
+    )
+    .expect("markdown at width 200");
+
+    assert_eq!(
+        out_narrow, out_wide,
+        "Markdown output must be byte-identical regardless of --width or terminal size"
+    );
+
+    let s = String::from_utf8(out_narrow).expect("valid UTF-8");
+    assert!(!s.contains('…'), "Markdown output must not truncate with '…'");
+}
+
+#[test]
+fn test_info_default_format_is_table() {
+    assert_eq!(Args::default().format, OutputFormat::Table);
+}
+
+#[test]
+fn test_info_markdown_anomalies_as_blockquotes() {
+    use ods::commands::info::model::InfoRecord;
+    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
+
+    let fixture_content = std::fs::read_to_string("tests/fixtures/info/fixtures/A81002.json")
+        .expect("read A81002 fixture");
+    let record: InfoRecord = serde_json::from_str(&fixture_content).expect("parse A81002 JSON");
+
+    let options = RenderOptions {
+        band: ResponsiveBand::Wide,
+        all: false,
+        color: false,
+        source_path: None,
+        style: TableStyle::Markdown,
+    };
+
+    let rendered = render_info(&record, &options);
+
+    // Verify anomalies are rendered as blockquotes with > prefix
+    assert!(
+        rendered.contains("> ! 1 row still open on a closed organisation\n\n"),
+        "Anomaly must be formatted as markdown blockquote, got:\n{}",
+        rendered
+    );
+    assert!(
+        rendered.contains("> ! 1 row starts after the organisation closed\n\n"),
+        "Anomaly must be formatted as markdown blockquote, got:\n{}",
+        rendered
+    );
+}
+
+
+
+
 
