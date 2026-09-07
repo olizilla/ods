@@ -1,0 +1,47 @@
+❯ ods info K81657 --all
+* Source: releases/2026-08-28/orgs.parquet
+* Status: active, Class: org, Last Change: 2026-04-01
+┌────────────┬───────────────────────────────────────────┐
+│ ODS Code   ┆ K81657                                    │
+╞════════════╪═══════════════════════════════════════════╡
+│ Name       ┆ EVERGREEN PRACTICE                        │
+│ Address    ┆ Ringmead, Birch Hill, Bracknell, RG12 7WW │
+│ Country    ┆ England                                   │
+│ UPRN       ┆ 100080439125                              │
+│ Website    ┆ https://www.evergreenpractice.nhs.uk/     │
+│ Telephone  ┆ 01344 454540                              │
+│ Opened     ┆ 1999-07-01                                │
+└────────────┴───────────────────────────────────────────┘
+
+Roles (3 active, 3 inactive)
+┌───┬────────────────────────────────────────────┬───────┐
+│   ┆ Role                                       ┆ Code  │
+╞═══╪════════════════════════════════════════════╪═══════╡
+│ ● ┆ GP Practice                                ┆ RO76  │
+│ ● ┆ Prescribing Cost Centre                    ┆ RO177 │
+│ ● ┆ PCN Prescribing Cost Centre                ┆ RO321 │
+│   ┆ Branch Surgery                             ┆ RO96  │
+│   ┆ Extended Access Provider                   ┆ RO266 │
+│   ┆ COVID Vaccination Centre                   ┆ RO279 │
+└───┴────────────────────────────────────────────┴───────┘
+
+Relationships (4 active, 11 inactive)
+┌───┬───────────────────────────┬───────────────┬────────┐
+│   ┆ Relationship              ┆ Organisation  ┆ Code   │
+╞═══╪═══════════════════════════╪═══════════════╪════════╡
+│ ● ┆ commissioned by           ┆ NHS THAMES…   ┆ U2G6B  │
+│   ┆                           ┆ NHS FRIMLEY…  ┆ D4U1Y  │
+│   ┆                           ┆ NHS EAST…     ┆ 15D    │
+│   ┆                           ┆ NHS BRACKNEL… ┆ 10G    │
+│   ┆                           ┆ BERKSHIRE…    ┆ 5QG    │
+│   ┆                           ┆ BRACKNELL…    ┆ 5G2    │
+│   ┆                           ┆ BRACKNELL PCG ┆ 4RC51  │
+│ ● ┆ operated by               ┆ NHS THAMES…   ┆ U2G6B  │
+│   ┆                           ┆ NHS FRIMLEY…  ┆ D4U1Y  │
+│   ┆                           ┆ NHS EAST…     ┆ 15D    │
+│   ┆                           ┆ NHS BRACKNEL… ┆ 10G    │
+│ ● ┆ partner to                ┆ THE HEALTH…   ┆ U89762 │
+│ ● ┆ nominated payee for       ┆ THE HEALTH…   ┆ U89762 │
+│   ┆ covid nominated payee for ┆ THE HEALTH…   ┆ U89762 │
+│   ┆ constituent of            ┆ BRACKNELL…    ┆ C7X7P  │
+└───┴───────────────────────────┴───────────────┴────────┘

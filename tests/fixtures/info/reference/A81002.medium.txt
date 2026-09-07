@@ -1,0 +1,38 @@
+❯ ods info A81002
+* Source: releases/2026-08-28/orgs-all.parquet
+* Status: inactive, Class: org, Last Change: 2019-04-01
+┌──────────────┬─────────────────────────────────────────────────────────────┐
+│ ODS Code     ┆ A81002                                                      │
+╞══════════════╪═════════════════════════════════════════════════════════════╡
+│ Name         ┆ NORTHGATE MEDICAL PRACTICE                                  │
+│ Address      ┆ 12 Northgate, Darlington, DL1 1PS                           │
+│ Country      ┆ England                                                     │
+│ UPRN         ┆ 100110043872                                                │
+│ Website      ┆ —                                                           │
+│ Telephone    ┆ —                                                           │
+│ Opened       ┆ 1974-04-01                                                  │
+│ Closed       ┆ 2019-03-31                                                  │
+│ Succeeded by ┆ A81003 RIVERSIDE MEDICAL GROUP                              │
+└──────────────┴─────────────────────────────────────────────────────────────┘
+
+Roles (none active, 2 inactive)
+┌───────────────────────────────────────────────────────┬───────┬────────────┐
+│ Role                                                  ┆ Code  ┆ Start      │
+╞═══════════════════════════════════════════════════════╪═══════╪════════════╡
+│ GP Practice                                           ┆ RO76  ┆ 1974-04-01 │
+│ Prescribing Cost Centre                               ┆ RO177 ┆ 1974-04-01 │
+└───────────────────────────────────────────────────────┴───────┴────────────┘
+
+Relationships (1 active, 4 inactive)
+┌───┬─────────────────────┬────────────────────────────┬────────┬────────────┐
+│   ┆ Relationship        ┆ Organisation               ┆ Code   ┆ Start      │
+╞═══╪═════════════════════╪════════════════════════════╪════════╪════════════╡
+│ ! ┆ commissioned by     ┆ NHS TEES VALLEY ICB        ┆ 00K    ┆ 2022-07-01 │
+│   ┆                     ┆ NHS DARLINGTON CCG         ┆ 03D    ┆ 2013-04-01 │
+│   ┆ in the geography of ┆ NHS DARLINGTON CCG         ┆ 03D    ┆ 2013-04-01 │
+│ ! ┆ partner to          ┆ CENTRAL DARLINGTON PCN     ┆ U54321 ┆ 2019-07-01 │
+│   ┆ nominated payee for ┆ ORCHARD GROUP PRACTICE     ┆ A81005 ┆ 2015-04-01 │
+└───┴─────────────────────┴────────────────────────────┴────────┴────────────┘
+
+! 1 row still open on a closed organisation
+! 1 row starts after the organisation closed

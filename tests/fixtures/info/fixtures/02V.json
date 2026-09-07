@@ -1,0 +1,95 @@
+{
+  "ods_code": "02V",
+  "name": "NHS LEEDS NORTH CCG",
+  "record_class": "org",
+  "status": "inactive",
+  "address": "Suites 2-4 Wira House, Wira Business Park, Leeds, LS16 6EB",
+  "country": "ENGLAND",
+  "uprn": "100051200401",
+  "website": null,
+  "telephone": null,
+  "operational_start": "2013-04-01",
+  "operational_end": "2018-03-31",
+  "last_changed": "2018-04-01",
+  "trud_release_date": "2026-08-28",
+  "roles": [
+    {
+      "role_code": "RO98",
+      "role_name": "CCG",
+      "primary": true,
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "role_code": "RO177",
+      "role_name": "Prescribing Cost Centre",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "role_code": "RO218",
+      "role_name": "Commissioning Hub",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2015-03-31"
+    }
+  ],
+  "relationships": [
+    {
+      "rel_code": "RE2",
+      "direction": "outbound",
+      "code": "Q75",
+      "name": "NHS ENGLAND NORTH (YORKSHIRE AND HUMBER)",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "X24",
+      "name": "NHS ENGLAND",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE5",
+      "direction": "outbound",
+      "code": "15F",
+      "name": "NHS WEST YORKSHIRE ICB",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE8",
+      "direction": "outbound",
+      "code": "36J",
+      "name": "LEEDS CITY COUNCIL",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE9",
+      "direction": "outbound",
+      "code": "B86031",
+      "name": "MEANWOOD GROUP PRACTICE",
+      "status": "inactive",
+      "operational_start": "2014-04-01",
+      "operational_end": "2016-09-30"
+    }
+  ],
+  "successors_live": [
+    {
+      "code": "QWO",
+      "name": "NHS WEST YORKSHIRE INTEGRATED CARE BOARD"
+    }
+  ],
+  "successor_hops": 1
+}

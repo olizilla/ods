@@ -156,7 +156,13 @@ pub fn compute_name_rank(norm_name: &str, norm_query: &str) -> Option<u8> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Canonical in-memory representation of an organisation row from `orgs.parquet` / `orgs_all.parquet`.
+///
+/// The field declaration order defines the serialized JSON key order for flattened output
+/// records (`ods find --format json` and `ods info --format json`).
+/// Verified against `orgs_schema()` in `tests/find_output_record_test.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct OrgRow {
     pub ods_code: String,
     pub name: String,
@@ -181,6 +187,188 @@ pub struct OrgRow {
     pub operational_end: Option<String>,
     pub last_changed: Option<String>,
     pub trud_release_date: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OrgColumnIndices {
+    pub ods_code: usize,
+    pub name: usize,
+    pub record_class: usize,
+    pub status: usize,
+    pub primary_role_code: usize,
+    pub role_codes: Option<usize>,
+    pub role_names: Option<usize>,
+    pub pred_codes: Option<usize>,
+    pub succ_codes: Option<usize>,
+    pub address: Option<usize>,
+    pub town: Option<usize>,
+    pub county: Option<usize>,
+    pub postcode: Option<usize>,
+    pub country: Option<usize>,
+    pub uprn: Option<usize>,
+    pub telephone: Option<usize>,
+    pub website: Option<usize>,
+    pub op_start: Option<usize>,
+    pub op_end: Option<usize>,
+    pub leg_start: Option<usize>,
+    pub leg_end: Option<usize>,
+    pub last_change: Option<usize>,
+    pub trud_release_date: Option<usize>,
+}
+
+impl OrgColumnIndices {
+    pub fn try_from_schema(schema: &arrow::datatypes::Schema) -> Result<Self> {
+        Ok(Self {
+            ods_code: schema.index_of("ods_code")?,
+            name: schema.index_of("name")?,
+            record_class: schema.index_of("record_class")?,
+            status: schema.index_of("status")?,
+            primary_role_code: schema.index_of("primary_role_code")?,
+            role_codes: schema.index_of("role_codes").ok(),
+            role_names: schema.index_of("role_names").ok(),
+            pred_codes: schema.index_of("predecessor_codes").ok(),
+            succ_codes: schema.index_of("successor_codes").ok(),
+            address: schema.index_of("address").ok(),
+            town: schema.index_of("town").ok(),
+            county: schema.index_of("county").ok(),
+            postcode: schema.index_of("postcode").ok(),
+            country: schema.index_of("country").ok(),
+            uprn: schema.index_of("uprn").ok(),
+            telephone: schema.index_of("telephone").ok(),
+            website: schema.index_of("website").ok(),
+            op_start: schema.index_of("operational_start").ok(),
+            op_end: schema.index_of("operational_end").ok(),
+            leg_start: schema.index_of("legal_start").ok(),
+            leg_end: schema.index_of("legal_end").ok(),
+            last_change: schema.index_of("last_changed").ok(),
+            trud_release_date: schema.index_of("trud_release_date").ok(),
+        })
+    }
+}
+
+pub fn extract_batch_opt_str(
+    batch: &arrow::record_batch::RecordBatch,
+    idx: Option<usize>,
+    row: usize,
+) -> Option<String> {
+    let idx = idx?;
+    let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
+    if arr.is_valid(row) {
+        Some(arr.value(row).to_string())
+    } else {
+        None
+    }
+}
+
+pub fn extract_batch_list(
+    batch: &arrow::record_batch::RecordBatch,
+    idx: Option<usize>,
+    row: usize,
+) -> Vec<String> {
+    if let Some(idx) = idx {
+        if let Some(list_arr) = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<arrow::array::ListArray>()
+        {
+            if list_arr.is_valid(row) {
+                let val_arr = list_arr.value(row);
+                if let Some(str_arr) = val_arr.as_any().downcast_ref::<StringArray>() {
+                    return (0..str_arr.len())
+                        .filter(|&j| str_arr.is_valid(j))
+                        .map(|j| str_arr.value(j).to_string())
+                        .collect();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub fn extract_batch_date(
+    batch: &arrow::record_batch::RecordBatch,
+    idx: Option<usize>,
+    row: usize,
+) -> Option<String> {
+    let idx = idx?;
+    let arr = batch.column(idx).as_any().downcast_ref::<Date32Array>()?;
+    if arr.is_valid(row) {
+        let days = arr.value(row);
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
+        let date = epoch.checked_add_signed(chrono::Duration::days(days as i64))?;
+        Some(date.format("%Y-%m-%d").to_string())
+    } else {
+        None
+    }
+}
+
+pub fn extract_org_row_from_batch(
+    batch: &arrow::record_batch::RecordBatch,
+    row: usize,
+    idx: &OrgColumnIndices,
+) -> OrgRow {
+    let ods_code = batch
+        .column(idx.ods_code)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .map(|a| a.value(row))
+        .unwrap_or("");
+    let name = batch
+        .column(idx.name)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .map(|a| a.value(row))
+        .unwrap_or("");
+    let record_class = batch
+        .column(idx.record_class)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .map(|a| a.value(row))
+        .unwrap_or("");
+    let status = batch
+        .column(idx.status)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .map(|a| a.value(row))
+        .unwrap_or("");
+    let primary_role = batch
+        .column(idx.primary_role_code)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .map(|a| a.value(row))
+        .unwrap_or("");
+
+    let mut role_codes = extract_batch_list(batch, idx.role_codes, row);
+    if role_codes.is_empty() && !primary_role.is_empty() {
+        role_codes = vec![primary_role.to_string()];
+    }
+    let role_names = extract_batch_list(batch, idx.role_names, row);
+
+    OrgRow {
+        ods_code: ods_code.to_string(),
+        name: name.to_string(),
+        record_class: record_class.to_string(),
+        role_codes,
+        role_names,
+        primary_role_code: primary_role.to_string(),
+        address: extract_batch_opt_str(batch, idx.address, row),
+        town: extract_batch_opt_str(batch, idx.town, row),
+        county: extract_batch_opt_str(batch, idx.county, row),
+        postcode: extract_batch_opt_str(batch, idx.postcode, row),
+        country: extract_batch_opt_str(batch, idx.country, row),
+        uprn: extract_batch_opt_str(batch, idx.uprn, row),
+        telephone: extract_batch_opt_str(batch, idx.telephone, row),
+        website: extract_batch_opt_str(batch, idx.website, row),
+        predecessor_codes: extract_batch_list(batch, idx.pred_codes, row),
+        successor_codes: extract_batch_list(batch, idx.succ_codes, row),
+        status: status.to_string(),
+        legal_start: extract_batch_date(batch, idx.leg_start, row),
+        legal_end: extract_batch_date(batch, idx.leg_end, row),
+        operational_start: extract_batch_date(batch, idx.op_start, row),
+        operational_end: extract_batch_date(batch, idx.op_end, row),
+        last_changed: extract_batch_date(batch, idx.last_change, row),
+        trud_release_date: extract_batch_date(batch, idx.trud_release_date, row).unwrap_or_default(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +720,51 @@ pub fn resolve_table_successor_display(
     }
 }
 
+/// Find a single organisation by exact ODS code in a Parquet file.
+pub fn find_org_by_code(path: &Path, target_code: &str) -> Result<Option<OrgRow>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    for batch in reader {
+        let batch = batch?;
+        let indices = OrgColumnIndices::try_from_schema(&batch.schema())?;
+        let ods_code_arr = batch
+            .column(indices.ods_code)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("ods_code StringArray")?;
+
+        for i in 0..batch.num_rows() {
+            if ods_code_arr.is_valid(i) && ods_code_arr.value(i).eq_ignore_ascii_case(target_code) {
+                return Ok(Some(extract_org_row_from_batch(&batch, i, &indices)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Find an organisation across active (orgs.parquet) and historical (orgs_all.parquet).
+/// Returns Some((OrgRow, is_from_orgs_all)).
+pub fn find_org_in_parquet(
+    parquet_dir: &Path,
+    target_code: &str,
+) -> Result<Option<(OrgRow, bool)>> {
+    let orgs_path = parquet_dir.join("orgs.parquet");
+    if orgs_path.exists() {
+        if let Some(org) = find_org_by_code(&orgs_path, target_code)? {
+            return Ok(Some((org, false)));
+        }
+    }
+    let orgs_all_path = parquet_dir.join("orgs_all.parquet");
+    if orgs_all_path.exists() {
+        if let Some(org) = find_org_by_code(&orgs_all_path, target_code)? {
+            return Ok(Some((org, true)));
+        }
+    }
+    Ok(None)
+}
+
 struct ParsedLocation {
     norm: String,
     norm_postcode: String,
@@ -801,73 +1034,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             .as_any().downcast_ref::<StringArray>().context("ods_code StringArray")?;
         let name_arr = batch.column(schema.index_of("name")?)
             .as_any().downcast_ref::<StringArray>().context("name StringArray")?;
-        let record_class_arr = batch.column(schema.index_of("record_class")?)
-            .as_any().downcast_ref::<StringArray>().context("record_class StringArray")?;
-        let status_arr = batch.column(schema.index_of("status")?)
-            .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
         let primary_role_arr = batch.column(schema.index_of("primary_role_code")?)
             .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
 
-        let roles_idx = schema.index_of("role_codes").ok();
-        let role_names_idx = schema.index_of("role_names").ok();
-        let pred_codes_idx = schema.index_of("predecessor_codes").ok();
-        let succ_codes_idx = schema.index_of("successor_codes").ok();
-
-        let address_idx = schema.index_of("address").ok();
-        let town_idx = schema.index_of("town").ok();
-        let county_idx = schema.index_of("county").ok();
-        let postcode_idx = schema.index_of("postcode").ok();
-        let country_idx = schema.index_of("country").ok();
-        let uprn_idx = schema.index_of("uprn").ok();
-        let telephone_idx = schema.index_of("telephone").ok();
-        let website_idx = schema.index_of("website").ok();
-
-        let op_start_idx = schema.index_of("operational_start").ok();
-        let op_end_idx = schema.index_of("operational_end").ok();
-        let leg_start_idx = schema.index_of("legal_start").ok();
-        let leg_end_idx = schema.index_of("legal_end").ok();
-        let last_change_idx = schema.index_of("last_changed").ok();
-        let trud_release_date_idx = schema.index_of("trud_release_date").ok();
-
-        let extract_opt_str = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
-            let idx = idx?;
-            let arr = batch.column(idx).as_any().downcast_ref::<StringArray>()?;
-            if arr.is_valid(row) {
-                Some(arr.value(row).to_string())
-            } else {
-                None
-            }
-        };
-
-        let extract_list = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Vec<String> {
-            if let Some(idx) = idx {
-                if let Some(list_arr) = batch.column(idx).as_any().downcast_ref::<arrow::array::ListArray>() {
-                    if list_arr.is_valid(row) {
-                        let val_arr = list_arr.value(row);
-                        if let Some(str_arr) = val_arr.as_any().downcast_ref::<StringArray>() {
-                            return (0..str_arr.len())
-                                .filter(|&j| str_arr.is_valid(j))
-                                .map(|j| str_arr.value(j).to_string())
-                                .collect();
-                        }
-                    }
-                }
-            }
-            Vec::new()
-        };
-
-        let extract_date = |batch: &arrow::record_batch::RecordBatch, idx: Option<usize>, row: usize| -> Option<String> {
-            let idx = idx?;
-            let arr = batch.column(idx).as_any().downcast_ref::<Date32Array>()?;
-            if arr.is_valid(row) {
-                let days = arr.value(row);
-                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
-                let date = epoch.checked_add_signed(chrono::Duration::days(days as i64))?;
-                Some(date.format("%Y-%m-%d").to_string())
-            } else {
-                None
-            }
-        };
+        let indices = OrgColumnIndices::try_from_schema(&schema)?;
 
         for i in 0..num_rows {
             let ods_code = ods_code_arr.value(i);
@@ -897,7 +1067,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             let primary_role = primary_role_arr.value(i);
 
             // Extract all role codes
-            let role_codes = extract_list(&batch, roles_idx, i);
+            let role_codes = extract_batch_list(&batch, indices.role_codes, i);
             let role_codes = if role_codes.is_empty() {
                 vec![primary_role.to_string()]
             } else {
@@ -905,7 +1075,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
             };
 
             // Extract all role names
-            let role_names = extract_list(&batch, role_names_idx, i);
+            let role_names = extract_batch_list(&batch, indices.role_names, i);
 
             // Filter by --role if specified
             if let Some(ref rf) = parsed_roles {
@@ -916,10 +1086,10 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 }
             }
 
-            let postcode = extract_opt_str(&batch, postcode_idx, i);
-            let town = extract_opt_str(&batch, town_idx, i);
-            let county = extract_opt_str(&batch, county_idx, i);
-            let country = extract_opt_str(&batch, country_idx, i);
+            let postcode = extract_batch_opt_str(&batch, indices.postcode, i);
+            let town = extract_batch_opt_str(&batch, indices.town, i);
+            let county = extract_batch_opt_str(&batch, indices.county, i);
+            let country = extract_batch_opt_str(&batch, indices.country, i);
 
             // Evaluate location matching level
             let loc_level: Option<LocationLevel> = if let Some(ref loc_info) = parsed_location {
@@ -947,46 +1117,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 continue;
             }
 
-            let address = extract_opt_str(&batch, address_idx, i);
-            let uprn = extract_opt_str(&batch, uprn_idx, i);
-            let telephone = extract_opt_str(&batch, telephone_idx, i);
-            let website = extract_opt_str(&batch, website_idx, i);
-
-            let predecessor_codes = extract_list(&batch, pred_codes_idx, i);
-            let successor_codes = extract_list(&batch, succ_codes_idx, i);
-
-            let op_start = extract_date(&batch, op_start_idx, i);
-            let op_end = extract_date(&batch, op_end_idx, i);
-            let leg_start = extract_date(&batch, leg_start_idx, i);
-            let leg_end = extract_date(&batch, leg_end_idx, i);
-            let last_change_date = extract_date(&batch, last_change_idx, i);
-            let trud_release_date = extract_date(&batch, trud_release_date_idx, i).unwrap_or_default();
-
-            let org = OrgRow {
-                ods_code: ods_code.to_string(),
-                name: name.to_string(),
-                record_class: record_class_arr.value(i).to_string(),
-                role_codes,
-                role_names,
-                primary_role_code: primary_role.to_string(),
-                address,
-                town,
-                county,
-                postcode,
-                country,
-                uprn,
-                telephone,
-                website,
-                predecessor_codes,
-                successor_codes,
-                status: status_arr.value(i).to_string(),
-                legal_start: leg_start,
-                legal_end: leg_end,
-                operational_start: op_start,
-                operational_end: op_end,
-                last_changed: last_change_date,
-                trud_release_date,
-            };
+            let org = extract_org_row_from_batch(&batch, i, &indices);
 
             matches.push(Match {
                 org,
@@ -1482,16 +1613,15 @@ mod tests {
                 ods_code: "A101".to_string(),
                 format: crate::commands::info::OutputFormat::Markdown,
                 input: Some(parquet_dir.clone()),
+                ..Default::default()
             },
             &mut info_out,
             &parquet_dir,
         ).unwrap();
         let info_s = String::from_utf8(info_out).unwrap();
-        assert!(info_s.contains("# Alpha Health Centre (A101)"));
-        assert!(info_s.contains("## Contact Details"));
-        assert!(info_s.contains("## Relationships"));
-        assert!(info_s.contains("Other Roles"));
-        assert!(info_s.contains("GP Practice (RO76)"), "expected curated role name\n{info_s}");
+        assert!(info_s.contains("Alpha Health Centre"));
+        assert!(info_s.contains("A101"));
+        assert!(info_s.contains("GP Practice") && info_s.contains("RO76"), "expected curated role name\n{info_s}");
 
         // Test 5: CSV output
         let mut out = Vec::new();

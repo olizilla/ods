@@ -1,0 +1,87 @@
+{
+  "ods_code": "A81002",
+  "name": "NORTHGATE MEDICAL PRACTICE",
+  "record_class": "org",
+  "status": "inactive",
+  "address": "12 Northgate, Darlington, DL1 1PS",
+  "country": "ENGLAND",
+  "uprn": "100110043872",
+  "website": null,
+  "telephone": null,
+  "operational_start": "1974-04-01",
+  "operational_end": "2019-03-31",
+  "last_changed": "2019-04-01",
+  "trud_release_date": "2026-08-28",
+  "roles": [
+    {
+      "role_code": "RO76",
+      "role_name": "GP Practice",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "1974-04-01",
+      "operational_end": "2019-03-31"
+    },
+    {
+      "role_code": "RO177",
+      "role_name": "Prescribing Cost Centre",
+      "primary": true,
+      "status": "inactive",
+      "operational_start": "1974-04-01",
+      "operational_end": "2019-03-31"
+    }
+  ],
+  "relationships": [
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "00K",
+      "name": "NHS TEES VALLEY ICB",
+      "status": "active",
+      "operational_start": "2022-07-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "03D",
+      "name": "NHS DARLINGTON CCG",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2019-03-31"
+    },
+    {
+      "rel_code": "RE5",
+      "direction": "outbound",
+      "code": "03D",
+      "name": "NHS DARLINGTON CCG",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2019-03-31"
+    },
+    {
+      "rel_code": "RE8",
+      "direction": "outbound",
+      "code": "U54321",
+      "name": "CENTRAL DARLINGTON PCN",
+      "status": "inactive",
+      "operational_start": "2019-07-01",
+      "operational_end": "2019-03-31"
+    },
+    {
+      "rel_code": "RE9",
+      "direction": "outbound",
+      "code": "A81005",
+      "name": "ORCHARD GROUP PRACTICE",
+      "status": "inactive",
+      "operational_start": "2015-04-01",
+      "operational_end": "2019-03-31"
+    }
+  ],
+  "successors_live": [
+    {
+      "code": "A81003",
+      "name": "RIVERSIDE MEDICAL GROUP"
+    }
+  ],
+  "successor_hops": 0
+}

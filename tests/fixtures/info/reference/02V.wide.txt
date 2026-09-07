@@ -1,0 +1,36 @@
+❯ ods info 02V
+* Source: releases/2026-08-28/orgs-all.parquet
+* Status: inactive, Class: org, Last Change: 2018-04-01
+┌──────────────┬─────────────────────────────────────────────────────────────────────────────────┐
+│ ODS Code     ┆ 02V                                                                             │
+╞══════════════╪═════════════════════════════════════════════════════════════════════════════════╡
+│ Name         ┆ NHS LEEDS NORTH CCG                                                             │
+│ Address      ┆ Suites 2-4 Wira House, Wira Business Park, Leeds, LS16 6EB                      │
+│ Country      ┆ England                                                                         │
+│ UPRN         ┆ 100051200401                                                                    │
+│ Website      ┆ —                                                                               │
+│ Telephone    ┆ —                                                                               │
+│ Opened       ┆ 2013-04-01                                                                      │
+│ Closed       ┆ 2018-03-31                                                                      │
+│ Succeeded by ┆ QWO    NHS WEST YORKSHIRE INTEGRATED CARE BOARD                                 │
+└──────────────┴─────────────────────────────────────────────────────────────────────────────────┘
+
+Roles (none active, 3 inactive)
+┌──────────────────────────────────────────────────────────────┬───────┬────────────┬────────────┐
+│ Role                                                         ┆ Code  ┆ Start      ┆ End        │
+╞══════════════════════════════════════════════════════════════╪═══════╪════════════╪════════════╡
+│ CCG                                                          ┆ RO98  ┆ 2013-04-01 ┆ 2018-03-31 │
+│ Prescribing Cost Centre                                      ┆ RO177 ┆ 2013-04-01 ┆ 2018-03-31 │
+│ Commissioning Hub                                            ┆ RO218 ┆ 2013-04-01 ┆ 2015-03-31 │
+└──────────────────────────────────────────────────────────────┴───────┴────────────┴────────────┘
+
+Relationships (none active, 5 inactive)
+┌─────────────────────┬───────────────────────────────────────┬────────┬────────────┬────────────┐
+│ Relationship        ┆ Organisation                          ┆ Code   ┆ Start      ┆ End        │
+╞═════════════════════╪═══════════════════════════════════════╪════════╪════════════╪════════════╡
+│ sub-division of     ┆ NHS ENGLAND NORTH (YORKSHIRE AND…     ┆ Q75    ┆ 2013-04-01 ┆ 2018-03-31 │
+│ commissioned by     ┆ NHS ENGLAND                           ┆ X24    ┆ 2013-04-01 ┆ 2018-03-31 │
+│ in the geography of ┆ NHS WEST YORKSHIRE ICB                ┆ 15F    ┆ 2013-04-01 ┆ 2018-03-31 │
+│ partner to          ┆ LEEDS CITY COUNCIL                    ┆ 36J    ┆ 2013-04-01 ┆ 2018-03-31 │
+│ nominated payee for ┆ MEANWOOD GROUP PRACTICE               ┆ B86031 ┆ 2014-04-01 ┆ 2016-09-30 │
+└─────────────────────┴───────────────────────────────────────┴────────┴────────────┴────────────┘

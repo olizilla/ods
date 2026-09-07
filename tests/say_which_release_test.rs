@@ -116,7 +116,7 @@ fn test_task1_find_reports_release_in_header_source_line() {
 }
 
 #[test]
-fn test_task1_info_reports_release_to_stderr() {
+fn test_task1_info_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -127,10 +127,16 @@ fn test_task1_info_reports_release_to_stderr() {
         .expect("run ods info");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("* Source: releases/2026-07-31/orgs.parquet"),
+        "stdout should report active release in * Source: line, got:\n{}",
+        stdout
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("  2026-07-31 (current)"),
-        "stderr should report active release, got:\n{}",
+        !stderr.contains("(current)"),
+        "stderr should not report release footer on info, got:\n{}",
         stderr
     );
 }

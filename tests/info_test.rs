@@ -492,6 +492,7 @@ fn test_info_renders_full_detail_for_exact_code() {
             ods_code: "A82608".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -500,32 +501,33 @@ fn test_info_renders_full_detail_for_exact_code() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("# SEDBERGH MEDICAL PRACTICE (A82608)"),
-        "Expected header '# SEDBERGH MEDICAL PRACTICE (A82608)', got:\n{}",
+        output_str.contains("SEDBERGH MEDICAL PRACTICE"),
+        "Expected name 'SEDBERGH MEDICAL PRACTICE', got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Class:") && output_str.contains("org"),
+        output_str.contains("A82608"),
+        "Expected ODS Code A82608, got:\n{}",
+        output_str
+    );
+    assert!(
+        output_str.contains("Class: org"),
         "Expected 'Class: org', got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Status:") && output_str.to_lowercase().contains("active"),
+        output_str.contains("Status: active"),
         "Expected 'Status: active', got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Primary Role:")
-            && output_str.contains("Prescribing Cost Centre")
-            && output_str.contains("RO177"),
-        "Expected Primary Role with RO177, got:\n{}",
+        output_str.contains("Prescribing Cost Centre") && output_str.contains("RO177"),
+        "Expected Prescribing Cost Centre with RO177, got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("Other Roles:")
-            && output_str.contains("GP Practice")
-            && output_str.contains("RO76"),
-        "Expected Other Roles with GP Practice (RO76), got:\n{}",
+        output_str.contains("GP Practice") && output_str.contains("RO76"),
+        "Expected GP Practice (RO76), got:\n{}",
         output_str
     );
     assert!(
@@ -550,6 +552,7 @@ fn test_info_json_format_and_succession_chain() {
             ods_code: "0AF".to_string(),
             format: OutputFormat::Json,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -595,6 +598,7 @@ fn test_info_case_insensitive() {
             ods_code: "a82608".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -619,6 +623,7 @@ fn test_info_nonexistent_code_fails() {
             ods_code: "NONEXISTENT999".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -634,7 +639,7 @@ fn test_info_nonexistent_code_fails() {
 }
 
 #[test]
-fn test_info_relationships_section_shows_outbound_and_inbound_with_dates() {
+fn test_info_relationships_section_shows_outbound() {
     let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
@@ -643,6 +648,7 @@ fn test_info_relationships_section_shows_outbound_and_inbound_with_dates() {
             ods_code: "A82608".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -651,14 +657,14 @@ fn test_info_relationships_section_shows_outbound_and_inbound_with_dates() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("## Relationships"),
-        "Expected '## Relationships' section in Markdown output, got:\n{}",
+        output_str.contains("Relationships (1 active, 0 inactive)"),
+        "Expected 'Relationships (1 active, 0 inactive)' section, got:\n{}",
         output_str
     );
     // Outbound commissioning link
     assert!(
-        output_str.contains("IS COMMISSIONED BY"),
-        "Expected 'IS COMMISSIONED BY' relationship group, got:\n{}",
+        output_str.contains("commissioned by"),
+        "Expected 'commissioned by' relationship group, got:\n{}",
         output_str
     );
     assert!(
@@ -666,16 +672,10 @@ fn test_info_relationships_section_shows_outbound_and_inbound_with_dates() {
         "Expected commissioner code 01K and name in relationships, got:\n{}",
         output_str
     );
-    // Inbound operation link (Dr Lumb W & Partner operates under A82608)
+    // Inbound links are absent from table
     assert!(
-        output_str.contains("IS OPERATED BY (Inbound)"),
-        "Expected 'IS OPERATED BY (Inbound)' group, got:\n{}",
-        output_str
-    );
-    assert!(
-        output_str.contains("A82608001") && output_str.contains("DR LUMB W & PARTNER"),
-        "Expected inbound operated site A82608001 in relationships, got:\n{}",
-        output_str
+        !output_str.contains("A82608001"),
+        "Inbound links must not appear in info table"
     );
 }
 
@@ -689,6 +689,7 @@ fn test_info_relationships_in_json() {
             ods_code: "A82608".to_string(),
             format: OutputFormat::Json,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -721,7 +722,7 @@ fn test_info_relationships_in_json() {
 }
 
 #[test]
-fn test_info_trust_inbound_relationships_and_truncation() {
+fn test_info_trust_inbound_relationships_not_in_markdown() {
     let (_tmp, parquet_dir) = setup_test_workspace();
 
     let mut out = Vec::new();
@@ -730,6 +731,7 @@ fn test_info_trust_inbound_relationships_and_truncation() {
             ods_code: "RJZ".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -738,24 +740,9 @@ fn test_info_trust_inbound_relationships_and_truncation() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("## Relationships"),
-        "RJZ must have '## Relationships' section, got:\n{}",
+        !output_str.contains("Relationships"),
+        "RJZ has no outbound relationships, so Relationships section must be omitted, got:\n{}",
         output_str
-    );
-    assert!(
-        output_str.contains("IS OPERATED BY (Inbound)"),
-        "RJZ must have 'IS OPERATED BY (Inbound)' group, got:\n{}",
-        output_str
-    );
-    // 12 active + 1 inactive = 13 total inbound RE6. First 10 shown, remaining truncated.
-    assert!(
-        output_str.contains("... and 3 more (use --format json for all)"),
-        "Expected truncation pointer '... and 3 more (use --format json for all)', got:\n{}",
-        output_str
-    );
-    assert!(
-        output_str.contains("RJZ01"),
-        "First site RJZ01 must be shown"
     );
 }
 
@@ -769,6 +756,7 @@ fn test_info_trust_relationships_in_json() {
             ods_code: "RJZ".to_string(),
             format: OutputFormat::Json,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -811,6 +799,7 @@ fn test_info_leaf_operates_under_parent() {
             ods_code: "A82608001".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -819,13 +808,13 @@ fn test_info_leaf_operates_under_parent() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        output_str.contains("## Relationships"),
-        "Leaf entity A82608001 must have '## Relationships' for its outbound link, got:\n{}",
+        output_str.contains("Relationships (1 active, 0 inactive)"),
+        "Leaf entity A82608001 must have relationships heading, got:\n{}",
         output_str
     );
     assert!(
-        output_str.contains("IS OPERATED BY"),
-        "Leaf entity must show outbound 'IS OPERATED BY', got:\n{}",
+        output_str.contains("operated by"),
+        "Leaf entity must show outbound 'operated by', got:\n{}",
         output_str
     );
     assert!(
@@ -845,6 +834,7 @@ fn test_info_entity_without_relationships_omits_section() {
             ods_code: "ISOLATED".to_string(),
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -853,8 +843,86 @@ fn test_info_entity_without_relationships_omits_section() {
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
     assert!(
-        !output_str.contains("## Relationships"),
-        "Isolated entity must not have '## Relationships' section, got:\n{}",
+        !output_str.contains("Relationships"),
+        "Isolated entity must not have 'Relationships' section, got:\n{}",
         output_str
     );
 }
+
+#[test]
+fn test_info_succeeded_by_cyan_and_relationships_code_column() {
+    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand};
+    use ods::commands::find::OrgRow;
+    use ods::commands::info::model::{InfoRecord, InfoRelationship, LiveSuccessor};
+
+    let record = InfoRecord {
+        org: OrgRow {
+            ods_code: "CLOSED01".to_string(),
+            name: "CLOSED HEALTH CENTRE".to_string(),
+            record_class: "org".to_string(),
+            status: "inactive".to_string(),
+            address: Some("1 HIGH STREET".to_string()),
+            country: Some("England".to_string()),
+            operational_start: Some("2000-01-01".to_string()),
+            operational_end: Some("2020-01-01".to_string()),
+            last_changed: Some("2020-01-01".to_string()),
+            trud_release_date: "2026-08-28".to_string(),
+            ..Default::default()
+        },
+        roles: vec![],
+        relationships: vec![InfoRelationship {
+            rel_code: "RE4".to_string(),
+            direction: "outbound".to_string(),
+            code: "01K".to_string(),
+            name: "NHS MORECAMBE BAY CCG".to_string(),
+            status: "active".to_string(),
+            operational_start: Some("2013-04-01".to_string()),
+            operational_end: None,
+        }],
+        successors_live: vec![LiveSuccessor {
+            code: "SUCC01".to_string(),
+            name: "NEW HEALTH CENTRE".to_string(),
+        }],
+        successor_hops: 1,
+    };
+
+    let options_color = RenderOptions {
+        band: ResponsiveBand::Medium,
+        all: false,
+        color: true,
+        source_path: None,
+    };
+
+    let rendered = render_info(&record, &options_color);
+
+    // 1. "Succeeded by" line has cyan org code: \x1b[36mSUCC01\x1b[0m
+    assert!(
+        rendered.contains("\x1b[36mSUCC01\x1b[0m"),
+        "Succeeded by line must have cyan org code, got:\n{}",
+        rendered
+    );
+
+    // 2. Relationships table has separate Code column with cyan code
+    assert!(
+        rendered.contains("Code"),
+        "Relationships table must have Code column header, got:\n{}",
+        rendered
+    );
+    assert!(
+        rendered.contains("\x1b[36m01K\x1b[0m"),
+        "Relationships table Code column must be 16-colour cyan, got:\n{}",
+        rendered
+    );
+
+    // 3. Organisation column contains only the name without preceding code or padding
+    let rel_row = rendered
+        .lines()
+        .find(|l| l.contains("NHS MORECAMBE BAY CCG"))
+        .expect("Relationships table must contain row with NHS MORECAMBE BAY CCG");
+    assert!(
+        rel_row.contains("┆ NHS MORECAMBE BAY CCG") && rel_row.contains("┆ \x1b[36m01K\x1b[0m"),
+        "Row must contain separate Organisation and Code cells, got:\n{}",
+        rel_row
+    );
+}
+

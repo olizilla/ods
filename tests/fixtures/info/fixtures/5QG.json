@@ -1,0 +1,91 @@
+{
+  "ods_code": "5QG",
+  "name": "BERKSHIRE EAST PRIMARY CARE TRUST",
+  "record_class": "org",
+  "status": "inactive",
+  "address": "King Edward VII Hospital, St Leonards Road, Windsor, SL4 3DP",
+  "country": "ENGLAND",
+  "uprn": "100080219944",
+  "website": null,
+  "telephone": null,
+  "operational_start": "2006-10-01",
+  "operational_end": "2013-03-31",
+  "last_changed": "2013-04-01",
+  "trud_release_date": "2026-08-28",
+  "roles": [
+    {
+      "role_code": "RO105",
+      "role_name": "Primary Care Trust",
+      "primary": true,
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    },
+    {
+      "role_code": "RO177",
+      "role_name": "Prescribing Cost Centre",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    }
+  ],
+  "relationships": [
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "X24",
+      "name": "NHS ENGLAND",
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    },
+    {
+      "rel_code": "RE5",
+      "direction": "outbound",
+      "code": "Q70",
+      "name": "NHS SOUTH CENTRAL SHA",
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2011-03-31"
+    },
+    {
+      "rel_code": "RE5",
+      "direction": "outbound",
+      "code": "Q71",
+      "name": "NHS SOUTH OF ENGLAND SHA",
+      "status": "inactive",
+      "operational_start": "2011-10-01",
+      "operational_end": "2013-03-31"
+    },
+    {
+      "rel_code": "RE8",
+      "direction": "outbound",
+      "code": "881",
+      "name": "BRACKNELL FOREST COUNCIL",
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    },
+    {
+      "rel_code": "RE8",
+      "direction": "outbound",
+      "code": "882",
+      "name": "SLOUGH BOROUGH COUNCIL",
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    }
+  ],
+  "successors_live": [
+    {
+      "code": "D4U1Y",
+      "name": "NHS FRIMLEY ICB"
+    },
+    {
+      "code": "QU9",
+      "name": "NHS BUCKINGHAMSHIRE OXFORDSHIRE AND BERKSHIRE WEST ICB"
+    }
+  ],
+  "successor_hops": 11
+}

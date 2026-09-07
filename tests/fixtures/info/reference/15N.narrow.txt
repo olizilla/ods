@@ -1,0 +1,37 @@
+❯ ods info 15N
+* Source: releases/2026-08-28/orgs.parquet
+* Status: active, Class: org, Last Change: 2024-02-19
+┌────────────┬───────────────────────────────────────────┐
+│ ODS Code   ┆ 15N                                       │
+╞════════════╪═══════════════════════════════════════════╡
+│ Name       ┆ NHS ENGLAND SOUTH WEST DSCRO              │
+│ Address    ┆ Peninsula House, Rydon Lane, Exeter, EX2  │
+│            ┆ 7XU                                       │
+│ Country    ┆ England                                   │
+│ UPRN       ┆ 100040217986                              │
+│ Website    ┆ —                                         │
+│ Telephone  ┆ 0113 824 8888                             │
+│ Opened     ┆ 2013-04-01                                │
+└────────────┴───────────────────────────────────────────┘
+
+Roles (4 active, 0 inactive)
+┌────────────────────────────────────────────────┬───────┐
+│ Role                                           ┆ Code  │
+╞════════════════════════════════════════════════╪═══════╡
+│ Commissioning Support Unit                     ┆ RO213 │
+│ Hosts Data Management Integration Centre       ┆ RO215 │
+│ (DMIC)                                         ┆       │
+│ Data Services for Commissioners Regional       ┆ RO216 │
+│ Office (DSCRO)                                 ┆       │
+│ NHS Support Agency                             ┆ RO161 │
+└────────────────────────────────────────────────┴───────┘
+
+Relationships (4 active, 1 inactive)
+┌─────────────────────┬─────────────────────────┬────────┐
+│ Relationship        ┆ Organisation            ┆ Code   │
+╞═════════════════════╪═════════════════════════╪════════╡
+│ sub-division of     ┆ NHS ENGLAND             ┆ X24    │
+│ commissioned by     ┆ NHS ENGLAND SOUTH WEST… ┆ X26    │
+│ in the geography of ┆ NHS ENGLAND SOUTH WEST  ┆ Y58    │
+│ nominated payee for ┆ TAUNTON DEANE PRIMARY…  ┆ L83137 │
+└─────────────────────┴─────────────────────────┴────────┘

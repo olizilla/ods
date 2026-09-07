@@ -252,7 +252,7 @@ fn test_task3_disagreement_becomes_exclamation_line() {
     let stdout_root = String::from_utf8_lossy(&out_root.stdout);
     assert!(!stdout_root.contains("! Run from releases/"));
 
-    // Verify info, cite, and role keep existing two-line stderr form and are unaffected
+    // Verify cite and role keep existing two-line stderr form
     let cite_out = ods_binary()
         .current_dir(&ws_root)
         .arg("cite")
@@ -274,8 +274,10 @@ fn test_task3_disagreement_becomes_exclamation_line() {
         .args(["info", "A82608"])
         .output()
         .expect("run info");
+    let info_stdout = String::from_utf8_lossy(&info_out.stdout);
+    assert!(info_stdout.contains("* Source: releases/2026-07-31/orgs.parquet"));
     let info_stderr = String::from_utf8_lossy(&info_out.stderr);
-    assert!(info_stderr.contains("  2026-07-31 (current)"));
+    assert!(!info_stderr.contains("  2026-07-31 (current)"));
 }
 
 // ---------------------------------------------------------------------------

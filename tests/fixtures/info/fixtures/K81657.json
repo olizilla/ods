@@ -1,0 +1,204 @@
+{
+  "ods_code": "K81657",
+  "name": "EVERGREEN PRACTICE",
+  "record_class": "org",
+  "status": "active",
+  "address": "Ringmead, Birch Hill, Bracknell, RG12 7WW",
+  "country": "ENGLAND",
+  "uprn": "100080439125",
+  "website": "https://www.evergreenpractice.nhs.uk/",
+  "telephone": "01344 454540",
+  "operational_start": "1999-07-01",
+  "operational_end": null,
+  "last_changed": "2026-04-01",
+  "trud_release_date": "2026-08-28",
+  "roles": [
+    {
+      "role_code": "RO76",
+      "role_name": "GP Practice",
+      "primary": false,
+      "status": "active",
+      "operational_start": "1999-07-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO177",
+      "role_name": "Prescribing Cost Centre",
+      "primary": true,
+      "status": "active",
+      "operational_start": "1999-07-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO321",
+      "role_name": "PCN Prescribing Cost Centre",
+      "primary": false,
+      "status": "active",
+      "operational_start": "2019-10-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO266",
+      "role_name": "Extended Access Provider",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "2019-10-01",
+      "operational_end": "2022-06-30"
+    },
+    {
+      "role_code": "RO279",
+      "role_name": "COVID Vaccination Centre",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "2020-10-01",
+      "operational_end": "2023-04-30"
+    },
+    {
+      "role_code": "RO96",
+      "role_name": "Branch Surgery",
+      "primary": false,
+      "status": "inactive",
+      "operational_start": "1999-07-01",
+      "operational_end": "2013-03-31"
+    }
+  ],
+  "relationships": [
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "U2G6B",
+      "name": "NHS THAMES VALLEY ICB",
+      "status": "active",
+      "operational_start": "2026-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE6",
+      "direction": "outbound",
+      "code": "U2G6B",
+      "name": "NHS THAMES VALLEY ICB",
+      "status": "active",
+      "operational_start": "2026-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE8",
+      "direction": "outbound",
+      "code": "U89762",
+      "name": "THE HEALTH TRIANGLE PCN",
+      "status": "active",
+      "operational_start": "2019-10-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE9",
+      "direction": "outbound",
+      "code": "U89762",
+      "name": "THE HEALTH TRIANGLE PCN",
+      "status": "active",
+      "operational_start": "2020-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "D4U1Y",
+      "name": "NHS FRIMLEY ICB",
+      "status": "inactive",
+      "operational_start": "2021-04-01",
+      "operational_end": "2026-03-31"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "15D",
+      "name": "NHS EAST BERKSHIRE CCG",
+      "status": "inactive",
+      "operational_start": "2018-04-01",
+      "operational_end": "2021-03-31"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "10G",
+      "name": "NHS BRACKNELL AND ASCOT CCG",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "5QG",
+      "name": "BERKSHIRE EAST PCT",
+      "status": "inactive",
+      "operational_start": "2006-10-01",
+      "operational_end": "2013-03-31"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "5G2",
+      "name": "BRACKNELL FOREST PCT",
+      "status": "inactive",
+      "operational_start": "2002-04-01",
+      "operational_end": "2006-09-30"
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "4RC51",
+      "name": "BRACKNELL PCG",
+      "status": "inactive",
+      "operational_start": "1999-07-01",
+      "operational_end": "2002-03-31"
+    },
+    {
+      "rel_code": "RE6",
+      "direction": "outbound",
+      "code": "D4U1Y",
+      "name": "NHS FRIMLEY ICB",
+      "status": "inactive",
+      "operational_start": "2021-04-01",
+      "operational_end": "2026-03-31"
+    },
+    {
+      "rel_code": "RE6",
+      "direction": "outbound",
+      "code": "15D",
+      "name": "NHS EAST BERKSHIRE CCG",
+      "status": "inactive",
+      "operational_start": "2018-04-01",
+      "operational_end": "2021-03-31"
+    },
+    {
+      "rel_code": "RE6",
+      "direction": "outbound",
+      "code": "10G",
+      "name": "NHS BRACKNELL AND ASCOT CCG",
+      "status": "inactive",
+      "operational_start": "2013-04-01",
+      "operational_end": "2018-03-31"
+    },
+    {
+      "rel_code": "RE10",
+      "direction": "outbound",
+      "code": "U89762",
+      "name": "THE HEALTH TRIANGLE PCN",
+      "status": "inactive",
+      "operational_start": "2021-03-01",
+      "operational_end": "2024-07-31"
+    },
+    {
+      "rel_code": "RE11",
+      "direction": "outbound",
+      "code": "C7X7P",
+      "name": "BRACKNELL FOREST SUB-ICB",
+      "status": "inactive",
+      "operational_start": "2024-07-01",
+      "operational_end": "2026-03-31"
+    }
+  ],
+  "successors_live": [],
+  "successor_hops": 0
+}

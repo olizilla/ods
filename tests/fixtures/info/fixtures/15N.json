@@ -1,0 +1,98 @@
+{
+  "ods_code": "15N",
+  "name": "NHS ENGLAND SOUTH WEST DSCRO",
+  "record_class": "org",
+  "status": "active",
+  "address": "Peninsula House, Rydon Lane, Exeter, EX2 7XU",
+  "country": "ENGLAND",
+  "uprn": "100040217986",
+  "website": null,
+  "telephone": "0113 824 8888",
+  "operational_start": "2013-04-01",
+  "operational_end": null,
+  "last_changed": "2024-02-19",
+  "trud_release_date": "2026-08-28",
+  "roles": [
+    {
+      "role_code": "RO216",
+      "role_name": "Data Services for Commissioners Regional Office (DSCRO)",
+      "primary": true,
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO215",
+      "role_name": "Hosts Data Management Integration Centre (DMIC)",
+      "primary": false,
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO213",
+      "role_name": "Commissioning Support Unit",
+      "primary": false,
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "role_code": "RO161",
+      "role_name": "NHS Support Agency",
+      "primary": false,
+      "status": "active",
+      "operational_start": "2015-10-01",
+      "operational_end": null
+    }
+  ],
+  "relationships": [
+    {
+      "rel_code": "RE2",
+      "direction": "outbound",
+      "code": "X24",
+      "name": "NHS ENGLAND",
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE4",
+      "direction": "outbound",
+      "code": "X26",
+      "name": "NHS ENGLAND SOUTH WEST REGION",
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE5",
+      "direction": "outbound",
+      "code": "Y58",
+      "name": "NHS ENGLAND SOUTH WEST",
+      "status": "active",
+      "operational_start": "2013-04-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE9",
+      "direction": "outbound",
+      "code": "L83137",
+      "name": "TAUNTON DEANE PRIMARY CARE NETWORK",
+      "status": "active",
+      "operational_start": "2019-10-01",
+      "operational_end": null
+    },
+    {
+      "rel_code": "RE10",
+      "direction": "outbound",
+      "code": "8J440",
+      "name": "SOMERSET COVID VACCINATION SERVICE",
+      "status": "inactive",
+      "operational_start": "2021-03-01",
+      "operational_end": "2022-09-30"
+    }
+  ],
+  "successors_live": [],
+  "successor_hops": 0
+}

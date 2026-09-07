@@ -1,0 +1,33 @@
+❯ ods info K81657
+* Source: releases/2026-08-28/orgs.parquet
+* Status: active, Class: org, Last Change: 2026-04-01
+┌────────────┬───────────────────────────────────────────┐
+│ ODS Code   ┆ K81657                                    │
+╞════════════╪═══════════════════════════════════════════╡
+│ Name       ┆ EVERGREEN PRACTICE                        │
+│ Address    ┆ Ringmead, Birch Hill, Bracknell, RG12 7WW │
+│ Country    ┆ England                                   │
+│ UPRN       ┆ 100080439125                              │
+│ Website    ┆ https://www.evergreenpractice.nhs.uk/     │
+│ Telephone  ┆ 01344 454540                              │
+│ Opened     ┆ 1999-07-01                                │
+└────────────┴───────────────────────────────────────────┘
+
+Roles (3 active, 3 inactive)
+┌────────────────────────────────────────────────┬───────┐
+│ Role                                           ┆ Code  │
+╞════════════════════════════════════════════════╪═══════╡
+│ GP Practice                                    ┆ RO76  │
+│ Prescribing Cost Centre                        ┆ RO177 │
+│ PCN Prescribing Cost Centre                    ┆ RO321 │
+└────────────────────────────────────────────────┴───────┘
+
+Relationships (4 active, 11 inactive)
+┌─────────────────────┬─────────────────────────┬────────┐
+│ Relationship        ┆ Organisation            ┆ Code   │
+╞═════════════════════╪═════════════════════════╪════════╡
+│ commissioned by     ┆ NHS THAMES VALLEY ICB   ┆ U2G6B  │
+│ operated by         ┆ NHS THAMES VALLEY ICB   ┆ U2G6B  │
+│ partner to          ┆ THE HEALTH TRIANGLE PCN ┆ U89762 │
+│ nominated payee for ┆ THE HEALTH TRIANGLE PCN ┆ U89762 │
+└─────────────────────┴─────────────────────────┴────────┘
