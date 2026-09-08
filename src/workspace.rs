@@ -422,6 +422,66 @@ pub fn check_release_resolution(release_date: &str, release_dir: Option<&Path>) 
     }
 }
 
+/// Formats a single `* Source: {path}` line, optionally muted with ANSI_MUTED.
+///
+/// This is the canonical definition of the source line format across ods commands.
+pub fn format_source_line(path: &str, color: bool) -> String {
+    let line = format!("* Source: {}", path);
+    if color {
+        format!("{}{}{}", crate::ansi::ANSI_MUTED, line, crate::ansi::ANSI_RESET)
+    } else {
+        line
+    }
+}
+
+/// Builds the source header lines for a resolved release directory and file name.
+///
+/// Returns:
+/// 1. `* Source: releases/{date}/{file_name}` (or relative workspace path), muted if `color` is true.
+/// 2. If running from a release directory different from the active workspace release,
+///    an additional disagreement line:
+///    `! Run from releases/{cwd_date}. Change source with: ods use {cwd_date}`
+pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) -> Vec<String> {
+    let release_date = crate::provenance::OdsProvenance::load_from_dir(release_dir)
+        .and_then(|p| p.trud_release_date)
+        .or_else(|| {
+            find_workspace_root_from(release_dir, None)
+                .and_then(|r| Workspace::open(Some(&r)).ok())
+                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
+        });
+
+    let source_rel = if let Some(ref d) = release_date {
+        format!("releases/{}/{}", d, file_name)
+    } else {
+        let ws_root = find_workspace_root_from(release_dir, None);
+        if let Some(ref root) = ws_root {
+            release_dir
+                .strip_prefix(root)
+                .unwrap_or(release_dir)
+                .join(file_name)
+                .display()
+                .to_string()
+        } else {
+            release_dir.join(file_name).display().to_string()
+        }
+    };
+
+    let mut lines = vec![format_source_line(&source_rel, color)];
+
+    if let Some(ref d) = release_date {
+        if let ReleaseResolution::Disagreement { ref cwd_date } =
+            check_release_resolution(d, Some(release_dir))
+        {
+            lines.push(format!(
+                "! Run from releases/{}. Change source with: ods use {}",
+                cwd_date, cwd_date
+            ));
+        }
+    }
+
+    lines
+}
+
 /// Reports the release date read from to stderr in the two-space gutter.
 /// Appends `(current)` only when the resolved release equals the workspace's active release;
 /// otherwise prints the date bare.

@@ -886,11 +886,12 @@ fn test_info_succeeded_by_cyan_and_relationships_code_column() {
         successor_hops: 1,
     };
 
+    let dummy_source = vec![ods::workspace::format_source_line("releases/current/orgs.parquet", true)];
     let options_color = RenderOptions {
         band: ResponsiveBand::Medium,
         all: false,
         color: true,
-        source_path: None,
+        source_header: &dummy_source,
         style: TableStyle::Table,
     };
 
@@ -1019,11 +1020,12 @@ fn test_info_markdown_anomalies_as_blockquotes() {
         .expect("read A81002 fixture");
     let record: InfoRecord = serde_json::from_str(&fixture_content).expect("parse A81002 JSON");
 
+    let dummy_source = vec![ods::workspace::format_source_line("releases/current/orgs-all.parquet", false)];
     let options = RenderOptions {
         band: ResponsiveBand::Wide,
         all: false,
         color: false,
-        source_path: None,
+        source_header: &dummy_source,
         style: TableStyle::Markdown,
     };
 

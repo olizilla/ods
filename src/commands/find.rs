@@ -908,13 +908,6 @@ pub fn run_with_writer_color(
     color: bool,
 ) -> Result<()> {
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
-    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
-        .and_then(|p| p.trud_release_date)
-        .or_else(|| {
-            crate::workspace::find_workspace_root_from(parquet_dir, None)
-                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
-                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
-        });
     let path = parquet_dir.join(file_name);
     if !path.exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
@@ -1350,30 +1343,9 @@ pub fn run_with_writer_color(
                     };
                     writeln!(writer, "* Search: {}", search_desc)?;
 
-                    // 2. Source line
-                    let source_rel = if let Some(ref d) = release_date {
-                        format!("releases/{}/{}", d, file_name)
-                    } else {
-                        let ws_root = crate::workspace::find_workspace_root_from(parquet_dir, None);
-                        if let Some(ref root) = ws_root {
-                            parquet_dir.strip_prefix(root).unwrap_or(parquet_dir).join(file_name).display().to_string()
-                        } else {
-                            parquet_dir.join(file_name).display().to_string()
-                        }
-                    };
-                    writeln!(writer, "* Source: {}", source_rel)?;
-
-                    // 3. Disagreement notice (!) directly under Source
-                    if let Some(ref d) = release_date {
-                        if let crate::workspace::ReleaseResolution::Disagreement { ref cwd_date } =
-                            crate::workspace::check_release_resolution(d, Some(parquet_dir))
-                        {
-                            writeln!(
-                                writer,
-                                "! Run from releases/{}. Change source with: ods use {}",
-                                cwd_date, cwd_date
-                            )?;
-                        }
+                    // 2. Source header & disagreement notice
+                    for line in crate::workspace::format_source_header(parquet_dir, file_name, false) {
+                        writeln!(writer, "{}", line)?;
                     }
 
                     // 4. Any alias notices

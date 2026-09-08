@@ -179,32 +179,18 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                 (band, color_enabled, TableStyle::Table)
             };
 
-            let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
-                .and_then(|p| p.trud_release_date)
-                .or_else(|| {
-                    crate::workspace::find_workspace_root_from(parquet_dir, None)
-                        .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
-                        .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
-                });
-            let release_str = release_date.as_deref().unwrap_or_else(|| {
-                if info_record.trud_release_date.is_empty() {
-                    "current"
-                } else {
-                    &info_record.trud_release_date
-                }
-            });
             let source_filename = if is_from_orgs_all {
                 "orgs-all.parquet"
             } else {
                 "orgs.parquet"
             };
-            let source_path_str = format!("releases/{}/{}", release_str, source_filename);
+            let source_header = crate::workspace::format_source_header(parquet_dir, source_filename, color_enabled);
 
             let options = RenderOptions {
                 band,
                 all: args.all,
                 color: color_enabled,
-                source_path: Some(&source_path_str),
+                source_header: &source_header,
                 style,
             };
 

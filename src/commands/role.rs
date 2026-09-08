@@ -146,6 +146,15 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
 
     match args.format {
         OutputFormat::Table | OutputFormat::Markdown => {
+            let is_table = args.format == OutputFormat::Table;
+            let source_header = crate::workspace::format_source_header(parquet_dir, "orgs.parquet", color && is_table);
+            for line in &source_header {
+                writeln!(writer, "{}", line)?;
+            }
+            if args.format == OutputFormat::Markdown {
+                writeln!(writer)?;
+            }
+
             let mut table = Table::new();
 
             if args.format == OutputFormat::Markdown {
@@ -169,10 +178,32 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
             table.set_header(vec!["Code", "Name", "Holders"]);
 
             for e in &entries {
+                let (code_str, name_str, holders_str) = if color && is_table {
+                    if e.holders > 0 {
+                        (
+                            format!("{}{}{}", crate::ansi::ANSI_YELLOW, e.role_code, crate::ansi::ANSI_RESET),
+                            e.role_name.clone(),
+                            format_number_with_commas(e.holders),
+                        )
+                    } else {
+                        (
+                            format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_code, crate::ansi::ANSI_RESET),
+                            format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_name, crate::ansi::ANSI_RESET),
+                            format!("{}{}{}", crate::ansi::ANSI_MUTED, format_number_with_commas(e.holders), crate::ansi::ANSI_RESET),
+                        )
+                    }
+                } else {
+                    (
+                        e.role_code.clone(),
+                        e.role_name.clone(),
+                        format_number_with_commas(e.holders),
+                    )
+                };
+
                 table.add_row(vec![
-                    &e.role_code,
-                    &e.role_name,
-                    &format_number_with_commas(e.holders),
+                    code_str,
+                    name_str,
+                    holders_str,
                 ]);
             }
 
@@ -198,19 +229,6 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
         OutputFormat::Json => {
             writeln!(writer, "{}", serde_json::to_string_pretty(&entries)?)?;
         }
-    }
-
-    let is_machine = args.codes || args.format == OutputFormat::Json || args.format == OutputFormat::Csv;
-    let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
-        .and_then(|p| p.trud_release_date)
-        .or_else(|| {
-            crate::workspace::find_workspace_root_from(parquet_dir, None)
-                .and_then(|r| crate::workspace::Workspace::open(Some(&r)).ok())
-                .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
-        });
-
-    if let Some(ref d) = release_date {
-        crate::workspace::report_release_resolution(d, Some(parquet_dir), is_machine);
     }
 
     Ok(())

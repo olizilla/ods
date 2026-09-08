@@ -142,7 +142,7 @@ fn test_task1_info_reports_release_in_header_source_line() {
 }
 
 #[test]
-fn test_task1_role_reports_release_to_stderr() {
+fn test_task1_role_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -152,10 +152,16 @@ fn test_task1_role_reports_release_to_stderr() {
         .expect("run ods role");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("* Source: releases/2026-07-31/orgs.parquet"),
+        "stdout should report active release in * Source: line, got:\n{}",
+        stdout
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("  2026-07-31 (current)"),
-        "stderr should report active release, got:\n{}",
+        !stderr.contains("(current)"),
+        "stderr should not report release footer on role, got:\n{}",
         stderr
     );
 }
@@ -234,10 +240,38 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
     assert!(output_disagree.status.success());
     let stdout_disagree = String::from_utf8_lossy(&output_disagree.stdout);
 
+    let expected_disagree = "! Run from releases/2026-06-26. Change source with: ods use 2026-06-26";
     assert!(
-        stdout_disagree.contains("! Run from releases/2026-06-26. Change source with: ods use 2026-06-26"),
-        "must name the disagreement with ! sigil, got:\n{}",
+        stdout_disagree.contains(expected_disagree),
+        "find must name the disagreement with ! sigil, got:\n{}",
         stdout_disagree
+    );
+
+    let info_disagree = ods_binary()
+        .current_dir(&older_rel_dir)
+        .arg("info")
+        .arg("A82608")
+        .output()
+        .expect("run ods info");
+    assert!(info_disagree.status.success());
+    let stdout_info_disagree = String::from_utf8_lossy(&info_disagree.stdout);
+    assert!(
+        stdout_info_disagree.contains(expected_disagree),
+        "info must name the disagreement with ! sigil, got:\n{}",
+        stdout_info_disagree
+    );
+
+    let role_disagree = ods_binary()
+        .current_dir(&older_rel_dir)
+        .arg("role")
+        .output()
+        .expect("run ods role");
+    assert!(role_disagree.status.success());
+    let stdout_role_disagree = String::from_utf8_lossy(&role_disagree.stdout);
+    assert!(
+        stdout_role_disagree.contains(expected_disagree),
+        "role must name the disagreement with ! sigil, got:\n{}",
+        stdout_role_disagree
     );
 
     // 2. Run from workspace root: normal run, NO disagreement line

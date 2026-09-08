@@ -2,6 +2,18 @@ use ods::commands::info::model::InfoRecord;
 use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
 use std::fs;
 
+fn source_header_for(record: &InfoRecord, color: bool) -> Vec<String> {
+    let is_closed = record.operational_end.is_some() || record.status.eq_ignore_ascii_case("inactive");
+    let file = if is_closed { "orgs-all.parquet" } else { "orgs.parquet" };
+    let release_date = if record.trud_release_date.is_empty() {
+        "current"
+    } else {
+        &record.trud_release_date
+    };
+    let path = format!("releases/{}/{}", release_date, file);
+    vec![ods::workspace::format_source_line(&path, color)]
+}
+
 fn test_case(
     fixture_name: &str,
     ref_filename: &str,
@@ -16,11 +28,12 @@ fn test_case(
     let record: InfoRecord = serde_json::from_str(&fixture_content)
         .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", fixture_path, e));
 
+    let source_header = source_header_for(&record, false);
     let options = RenderOptions {
         band,
         all,
         color: false,
-        source_path: None,
+        source_header: &source_header,
         style: TableStyle::Table,
     };
 
@@ -134,11 +147,12 @@ fn test_coloured_box_width(
     let record: InfoRecord = serde_json::from_str(&fixture_content)
         .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", fixture_path, e));
 
+    let source_header = source_header_for(&record, true);
     let options = RenderOptions {
         band,
         all,
         color: true,
-        source_path: None,
+        source_header: &source_header,
         style: TableStyle::Table,
     };
 
@@ -248,11 +262,12 @@ fn test_markdown_case(fixture_name: &str, ref_filename: &str) {
     let record: InfoRecord = serde_json::from_str(&fixture_content)
         .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", fixture_path, e));
 
+    let source_header = source_header_for(&record, false);
     let options = RenderOptions {
         band: ResponsiveBand::Wide,
         all: false,
         color: false,
-        source_path: None,
+        source_header: &source_header,
         style: TableStyle::Markdown,
     };
 

@@ -49,7 +49,7 @@ pub struct RenderOptions<'a> {
     pub band: ResponsiveBand,
     pub all: bool,
     pub color: bool,
-    pub source_path: Option<&'a str>,
+    pub source_header: &'a [String],
     pub style: TableStyle,
 }
 
@@ -167,28 +167,9 @@ pub fn render_info(record: &InfoRecord, options: &RenderOptions) -> String {
     let is_record_closed = record.operational_end.is_some()
         || record.status.eq_ignore_ascii_case("inactive");
 
-    // 1. Source line
-    let source_file = options.source_path.unwrap_or(if is_record_closed {
-        "orgs-all.parquet"
-    } else {
-        "orgs.parquet"
-    });
-
-    let source_line = if options.source_path.is_some() {
-        format!("* Source: {}", source_file)
-    } else {
-        let release_date = if record.trud_release_date.is_empty() {
-            "current"
-        } else {
-            &record.trud_release_date
-        };
-        format!("* Source: releases/{}/{}", release_date, source_file)
-    };
-
-    if options.color {
-        out.push_str(&format!("{ANSI_MUTED}{source_line}{ANSI_RESET}\n"));
-    } else {
-        out.push_str(&format!("{}\n", source_line));
+    // 1. Source header
+    for line in options.source_header {
+        out.push_str(&format!("{line}\n"));
     }
 
     // 2. Status line
