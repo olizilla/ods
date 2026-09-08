@@ -1,3 +1,4 @@
+pub mod ansi;
 pub mod archive;
 pub mod commands;
 pub mod datapackage;

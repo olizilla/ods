@@ -63,8 +63,7 @@ impl Default for Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    use std::io::IsTerminal;
-    let use_color = std::io::stdout().is_terminal();
+    let use_color = crate::ansi::stdout_color_enabled(args.plain);
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     if let Err(e) = run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, use_color) {
         if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
@@ -175,10 +174,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                 };
 
                 let band = ResponsiveBand::from_width(terminal_w);
-                let color_enabled = use_color
-                    && !args.plain
-                    && std::env::var_os("NO_COLOR").is_none()
-                    && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
+                let color_enabled = use_color;
 
                 (band, color_enabled, TableStyle::Table)
             };

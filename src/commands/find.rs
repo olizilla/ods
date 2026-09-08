@@ -67,6 +67,10 @@ pub struct Args {
     /// Input directory containing Parquet files (defaults to active release)
     #[arg(long, short)]
     pub input: Option<PathBuf>,
+
+    /// Disable ANSI colored output
+    #[arg(long)]
+    pub plain: bool,
 }
 
 impl Default for Args {
@@ -83,6 +87,7 @@ impl Default for Args {
             sort: None,
             format: OutputFormat::Table,
             input: None,
+            plain: false,
         }
     }
 }
@@ -792,8 +797,9 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
+    let color = crate::ansi::stdout_color_enabled(args.plain);
 
-    run_with_writer(args, &mut std::io::stdout(), &resolved_input)
+    run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, color)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -892,6 +898,15 @@ pub fn render_with_footer(table: &comfy_table::Table, left: &str, right: &str) -
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
+    run_with_writer_color(args, writer, parquet_dir, false)
+}
+
+pub fn run_with_writer_color(
+    args: Args,
+    writer: &mut dyn std::io::Write,
+    parquet_dir: &Path,
+    color: bool,
+) -> Result<()> {
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
     let release_date = crate::provenance::OdsProvenance::load_from_dir(parquet_dir)
         .and_then(|p| p.trud_release_date)
@@ -1389,7 +1404,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                     };
 
                     let rendered_footer = render_with_footer(&table, &left, &right);
-                    writeln!(writer, "{}", rendered_footer.table)?;
+                    let table_out = if color {
+                        crate::ansi::dim_borders(&rendered_footer.table)
+                    } else {
+                        rendered_footer.table
+                    };
+                    writeln!(writer, "{}", table_out)?;
                     if let Some(hint) = rendered_footer.overflow_hint {
                         writeln!(writer, "* {}", hint)?;
                     }

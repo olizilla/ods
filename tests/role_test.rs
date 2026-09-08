@@ -10,10 +10,9 @@ fn test_role_lists_all_205_sorted_by_holders_desc() {
     let mut out = Vec::new();
     role::run_with_writer(
         Args {
-            query: None,
-            codes: false,
             format: OutputFormat::Csv,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -53,9 +52,9 @@ fn test_role_search_substring_filter() {
     role::run_with_writer(
         Args {
             query: Some("dental".to_string()),
-            codes: false,
             format: OutputFormat::Csv,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -82,8 +81,8 @@ fn test_role_codes_flag_outputs_comma_separated() {
         Args {
             query: Some("dental".to_string()),
             codes: true,
-            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -101,6 +100,7 @@ fn test_role_codes_flag_outputs_comma_separated() {
             codes: true,
             format: OutputFormat::Json,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out_json,
         &parquet_dir,
@@ -122,10 +122,9 @@ fn test_role_codes_all_when_no_query() {
     let mut out = Vec::new();
     role::run_with_writer(
         Args {
-            query: None,
             codes: true,
-            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -151,9 +150,8 @@ fn test_role_formats_table_markdown_csv_json() {
     role::run_with_writer(
         Args {
             query: Some("dental".to_string()),
-            codes: false,
-            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out_table,
         &parquet_dir,
@@ -171,9 +169,9 @@ fn test_role_formats_table_markdown_csv_json() {
     role::run_with_writer(
         Args {
             query: Some("dental".to_string()),
-            codes: false,
             format: OutputFormat::Markdown,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out_md,
         &parquet_dir,
@@ -191,9 +189,9 @@ fn test_role_formats_table_markdown_csv_json() {
     role::run_with_writer(
         Args {
             query: Some("dental".to_string()),
-            codes: false,
             format: OutputFormat::Json,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out_json,
         &parquet_dir,
@@ -215,9 +213,8 @@ fn test_role_zero_match_suggestions() {
     let err = role::run_with_writer(
         Args {
             query: Some("general practice".to_string()),
-            codes: false,
-            format: OutputFormat::Table,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out,
         &parquet_dir,
@@ -237,10 +234,9 @@ fn test_role_csv_escaping_guards() {
     let mut out_csv = Vec::new();
     role::run_with_writer(
         Args {
-            query: None,
-            codes: false,
             format: OutputFormat::Csv,
             input: Some(parquet_dir.clone()),
+            ..Default::default()
         },
         &mut out_csv,
         &parquet_dir,

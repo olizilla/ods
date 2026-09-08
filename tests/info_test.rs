@@ -921,7 +921,8 @@ fn test_info_succeeded_by_cyan_and_relationships_code_column() {
         .find(|l| l.contains("NHS MORECAMBE BAY CCG"))
         .expect("Relationships table must contain row with NHS MORECAMBE BAY CCG");
     assert!(
-        rel_row.contains("┆ NHS MORECAMBE BAY CCG") && rel_row.contains("┆ \x1b[36m01K\x1b[0m"),
+        ods::ansi::strip_ansi(rel_row).contains("┆ NHS MORECAMBE BAY CCG")
+            && rel_row.contains("\x1b[36m01K\x1b[0m"),
         "Row must contain separate Organisation and Code cells, got:\n{}",
         rel_row
     );

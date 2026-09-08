@@ -33,6 +33,22 @@ pub struct Args {
     /// Input directory containing Parquet files (defaults to active release)
     #[arg(long, short)]
     pub input: Option<PathBuf>,
+
+    /// Disable ANSI colored output
+    #[arg(long)]
+    pub plain: bool,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            query: None,
+            codes: false,
+            format: OutputFormat::Table,
+            input: None,
+            plain: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,10 +60,15 @@ pub struct RoleEntry {
 
 pub fn run(args: Args) -> Result<()> {
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
-    run_with_writer(args, &mut std::io::stdout(), &resolved_input)
+    let color = crate::ansi::stdout_color_enabled(args.plain);
+    run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, color)
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
+    run_with_writer_color(args, writer, parquet_dir, false)
+}
+
+pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path, color: bool) -> Result<()> {
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
@@ -155,7 +176,12 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
                 ]);
             }
 
-            writeln!(writer, "{}", table)?;
+            let rendered = if args.format == OutputFormat::Table && color {
+                crate::ansi::dim_borders(&table.to_string())
+            } else {
+                table.to_string()
+            };
+            writeln!(writer, "{}", rendered)?;
         }
         OutputFormat::Csv => {
             writeln!(writer, "role_code,role_name,holders")?;

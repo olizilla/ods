@@ -2,13 +2,7 @@ use crate::commands::info::model::{InfoRecord, InfoRelationship, InfoRole};
 use comfy_table::presets::{ASCII_MARKDOWN, UTF8_FULL_CONDENSED};
 use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table, Width};
 
-pub const ANSI_RESET: &str = "\x1b[0m";
-pub const ANSI_BOLD: &str = "\x1b[1m";
-pub const ANSI_RED: &str = "\x1b[31m";
-pub const ANSI_GREEN: &str = "\x1b[32m";
-pub const ANSI_YELLOW: &str = "\x1b[33m";
-pub const ANSI_CYAN: &str = "\x1b[36m";
-pub const ANSI_MUTED: &str = "\x1b[90m";
+pub use crate::ansi::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableStyle {
@@ -375,7 +369,11 @@ fn render_fields_table(record: &InfoRecord, options: &RenderOptions) -> String {
         table.add_row(vec![Cell::new(label), Cell::new(&cell)]);
     }
 
-    table.to_string()
+    if options.color {
+        dim_borders(&table.to_string())
+    } else {
+        table.to_string()
+    }
 }
 
 fn render_roles_table(
@@ -560,7 +558,11 @@ fn render_roles_table(
 
     let mut res = heading;
     res.push('\n');
-    res.push_str(&table.to_string());
+    if options.color {
+        res.push_str(&dim_borders(&table.to_string()));
+    } else {
+        res.push_str(&table.to_string());
+    }
     (res, anomalies)
 }
 
@@ -814,6 +816,10 @@ fn render_relationships_table(
 
     let mut res = heading;
     res.push('\n');
-    res.push_str(&table.to_string());
+    if options.color {
+        res.push_str(&dim_borders(&table.to_string()));
+    } else {
+        res.push_str(&table.to_string());
+    }
     (res, anomalies)
 }

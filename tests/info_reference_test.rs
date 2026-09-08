@@ -122,7 +122,12 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-fn test_coloured_box_width(fixture_name: &str, band: ResponsiveBand, all: bool) {
+fn test_coloured_box_width(
+    fixture_name: &str,
+    ref_filename: &str,
+    band: ResponsiveBand,
+    all: bool,
+) {
     let fixture_path = format!("tests/fixtures/info/fixtures/{}.json", fixture_name);
     let fixture_content = fs::read_to_string(&fixture_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {}", fixture_path, e));
@@ -146,6 +151,28 @@ fn test_coloured_box_width(fixture_name: &str, band: ResponsiveBand, all: bool) 
         fixture_name
     );
 
+    let ref_path = format!("tests/fixtures/info/reference/{}", ref_filename);
+    let ref_content = fs::read_to_string(&ref_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", ref_path, e));
+
+    // Strip line 1 (`❯ ods info ...\n`)
+    let expected_body = if let Some(pos) = ref_content.find('\n') {
+        &ref_content[pos + 1..]
+    } else {
+        &ref_content
+    };
+
+    // 1. Colour must add escapes and change nothing else: stripped render == reference body
+    let stripped_full = strip_ansi(&rendered);
+    assert_eq!(
+        stripped_full.trim_end(),
+        expected_body.trim_end(),
+        "Stripped ANSI output for {} does not match reference body {}",
+        fixture_name,
+        ref_filename
+    );
+
+    // 2. Invariant: every line starting with box chars must have length equal to band.width()
     let expected_width = band.width();
     for (line_idx, line) in rendered.lines().enumerate() {
         let stripped = strip_ansi(line);
@@ -168,28 +195,47 @@ fn test_coloured_box_width(fixture_name: &str, band: ResponsiveBand, all: bool) 
             );
         }
     }
+
+    // 3. Assert the dimming actually happened: the 5QG Wide render contains 93 dimmed box-drawing runs
+    if fixture_name == "5QG" && band == ResponsiveBand::Wide && !all {
+        let dimmed_box_runs = rendered
+            .match_indices(ods::ansi::ANSI_MUTED)
+            .filter(|&(idx, _)| {
+                rendered[idx + ods::ansi::ANSI_MUTED.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(ods::ansi::is_box_drawing)
+            })
+            .count();
+        println!("5QG Wide: {} dimmed box-drawing runs", dimmed_box_runs);
+        assert_eq!(
+            dimmed_box_runs, 93,
+            "5QG Wide must contain 93 dimmed box-drawing runs, found {}",
+            dimmed_box_runs
+        );
+    }
 }
 
 #[test]
 fn test_all_13_reference_files_coloured_box_width_invariant() {
     let cases = [
-        ("02V", ResponsiveBand::Wide, false),
-        ("15N", ResponsiveBand::Narrow, false),
-        ("15N", ResponsiveBand::Medium, false),
-        ("15N", ResponsiveBand::Wide, false),
-        ("5QG", ResponsiveBand::Wide, false),
-        ("A81002", ResponsiveBand::Medium, false),
-        ("A81002", ResponsiveBand::Wide, false),
-        ("K81657", ResponsiveBand::Narrow, false),
-        ("K81657", ResponsiveBand::Narrow, true),
-        ("K81657", ResponsiveBand::Medium, false),
-        ("K81657", ResponsiveBand::Medium, true),
-        ("K81657", ResponsiveBand::Wide, false),
-        ("K81657", ResponsiveBand::Wide, true),
+        ("02V", "02V.wide.txt", ResponsiveBand::Wide, false),
+        ("15N", "15N.narrow.txt", ResponsiveBand::Narrow, false),
+        ("15N", "15N.medium.txt", ResponsiveBand::Medium, false),
+        ("15N", "15N.wide.txt", ResponsiveBand::Wide, false),
+        ("5QG", "5QG.wide.txt", ResponsiveBand::Wide, false),
+        ("A81002", "A81002.medium.txt", ResponsiveBand::Medium, false),
+        ("A81002", "A81002.wide.txt", ResponsiveBand::Wide, false),
+        ("K81657", "K81657.narrow.txt", ResponsiveBand::Narrow, false),
+        ("K81657", "K81657.narrow.all.txt", ResponsiveBand::Narrow, true),
+        ("K81657", "K81657.medium.txt", ResponsiveBand::Medium, false),
+        ("K81657", "K81657.medium.all.txt", ResponsiveBand::Medium, true),
+        ("K81657", "K81657.wide.txt", ResponsiveBand::Wide, false),
+        ("K81657", "K81657.wide.all.txt", ResponsiveBand::Wide, true),
     ];
 
-    for (fixture, band, all) in cases {
-        test_coloured_box_width(fixture, band, all);
+    for (fixture, ref_file, band, all) in cases {
+        test_coloured_box_width(fixture, ref_file, band, all);
     }
 }
 
