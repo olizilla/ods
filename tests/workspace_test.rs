@@ -79,7 +79,7 @@ fn test_workspace_full_lifecycle() {
         find::Args {
             query: Some("Mock".to_string()),
             code: Vec::new(),
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             all: false,
             verbose: false,

@@ -185,6 +185,90 @@ pub fn ensure_vocabulary_covers(observed: &HashSet<String>) -> Result<()> {
     );
 }
 
+/// Computes restricted Damerau-Levenshtein distance (optimal string alignment) between two strings.
+pub fn damerau_levenshtein(s1: &str, s2: &str) -> usize {
+    let s1: Vec<char> = s1.chars().collect();
+    let s2: Vec<char> = s2.chars().collect();
+    let len1 = s1.len();
+    let len2 = s2.len();
+    if len1 == 0 {
+        return len2;
+    }
+    if len2 == 0 {
+        return len1;
+    }
+
+    let mut d = vec![vec![0; len2 + 1]; len1 + 1];
+    for (i, row) in d.iter_mut().enumerate().take(len1 + 1) {
+        row[0] = i;
+    }
+    for (j, val) in d[0].iter_mut().enumerate().take(len2 + 1) {
+        *val = j;
+    }
+
+    for i in 1..=len1 {
+        for j in 1..=len2 {
+            let cost = usize::from(s1[i - 1] != s2[j - 1]);
+            let mut del = d[i - 1][j] + 1;
+            let ins = d[i][j - 1] + 1;
+            let sub = d[i - 1][j - 1] + cost;
+            if ins < del {
+                del = ins;
+            }
+            if sub < del {
+                del = sub;
+            }
+            d[i][j] = del;
+
+            if i > 1 && j > 1 && s1[i - 1] == s2[j - 2] && s1[i - 2] == s2[j - 1] {
+                let trans = d[i - 2][j - 2] + 1;
+                if trans < d[i][j] {
+                    d[i][j] = trans;
+                }
+            }
+        }
+    }
+    d[len1][len2]
+}
+
+/// Generic candidate scorer for near-miss matching across roles and locations.
+pub fn score_candidate(input_norm: &str, input_words: &[&str], cand_norm: &str) -> usize {
+    let cand_words: Vec<&str> = cand_norm.split_whitespace().collect();
+    let mut score = 0;
+
+    if cand_norm == input_norm {
+        score += 100;
+    } else if cand_norm.contains(input_norm) || input_norm.contains(cand_norm) {
+        score += 50;
+    } else {
+        let dist = damerau_levenshtein(input_norm, cand_norm);
+        if dist <= 1 {
+            score += 45;
+        } else if dist == 2 {
+            score += 20;
+        }
+    }
+
+    for iw in input_words {
+        for nw in &cand_words {
+            if nw == iw {
+                score += 30;
+            } else if nw.starts_with(iw) {
+                score += 15;
+            } else {
+                let dist = damerau_levenshtein(iw, nw);
+                if dist <= 1 {
+                    score += 25;
+                } else if dist == 2 {
+                    score += 10;
+                }
+            }
+        }
+    }
+
+    score
+}
+
 /// Finds top role suggestions for a misspelled or approximate role name.
 pub fn find_role_suggestions(input: &str) -> Vec<(&'static str, &'static str)> {
     let input_norm = input.to_lowercase();
@@ -195,22 +279,7 @@ pub fn find_role_suggestions(input: &str) -> Vec<(&'static str, &'static str)> {
 
     for (code, name) in &vocab.names {
         let name_lower = name.to_lowercase();
-        let name_words: Vec<&str> = name_lower.split_whitespace().collect();
-
-        let mut score = 0;
-        if name_lower.contains(&input_norm) || input_norm.contains(&name_lower) {
-            score += 50;
-        }
-        for iw in &input_words {
-            for nw in &name_words {
-                if nw == iw {
-                    score += 30;
-                } else if nw.starts_with(iw) || iw.starts_with(nw) {
-                    score += 15;
-                }
-            }
-        }
-
+        let score = score_candidate(&input_norm, &input_words, &name_lower);
         if score > 0 {
             // (name, code, score, name_length)
             scored.push((name.as_str(), code.as_str(), score, name.len()));
@@ -220,6 +289,46 @@ pub fn find_role_suggestions(input: &str) -> Vec<(&'static str, &'static str)> {
     // Sort by score descending, then shorter name first, then name alphabetically
     scored.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.3.cmp(&b.3)).then_with(|| a.0.cmp(b.0)));
     scored.into_iter().take(3).map(|(n, c, _, _)| (n, c)).collect()
+}
+
+/// Finds top location suggestions for a misspelled or approximate location name.
+pub fn find_location_suggestions<I, S, C>(input: &str, candidates: I) -> Vec<String>
+where
+    I: IntoIterator<Item = (S, C)>,
+    S: AsRef<str>,
+    C: std::borrow::Borrow<usize>,
+{
+    let cand_list: Vec<(String, usize)> = candidates
+        .into_iter()
+        .map(|(s, c)| (s.as_ref().to_string(), *c.borrow()))
+        .collect();
+
+    let max_count = cand_list.iter().map(|(_, c)| *c).max().unwrap_or(0);
+    let min_threshold = if max_count >= 50 { 5 } else { 0 };
+
+    let input_norm = input.to_lowercase();
+    let input_words: Vec<&str> = input_norm.split_whitespace().collect();
+
+    let mut scored: Vec<(String, usize, usize)> = Vec::new();
+
+    for (name, count) in cand_list {
+        if count < min_threshold {
+            continue;
+        }
+        let name_lower = name.to_lowercase();
+        let mut score = score_candidate(&input_norm, &input_words, &name_lower);
+        if score > 0 {
+            if count >= 100 {
+                score += 10;
+            }
+            // (name, score, name_length)
+            scored.push((name, score, name_lower.len()));
+        }
+    }
+
+    // Sort by score descending, then shorter name first, then name alphabetically
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)).then_with(|| a.0.cmp(&b.0)));
+    scored.into_iter().take(3).map(|(n, _, _)| n).collect()
 }
 
 #[cfg(test)]
@@ -381,6 +490,48 @@ mod tests {
         assert_eq!(
             escape_csv("RO76; RO227"),
             "\"RO76; RO227\""
+        );
+    }
+
+    #[test]
+    fn test_damerau_levenshtein_distance() {
+        assert_eq!(damerau_levenshtein("", ""), 0);
+        assert_eq!(damerau_levenshtein("a", ""), 1);
+        assert_eq!(damerau_levenshtein("", "b"), 1);
+        assert_eq!(damerau_levenshtein("newcastle", "newcastle"), 0);
+        assert_eq!(damerau_levenshtein("newcastel", "newcastle"), 1); // transposition of el -> le
+        assert_eq!(damerau_levenshtein("london", "londn"), 1); // deletion
+        assert_eq!(damerau_levenshtein("durham", "durhamm"), 1); // insertion
+    }
+
+    #[test]
+    fn test_find_location_suggestions_newcastel() {
+        let candidates = vec![
+            ("newcastle", 318),
+            ("newcastle upon tyne", 1561),
+            ("newcastle under lyme", 33),
+            ("newcastle emlyn", 15),
+            ("newcastle upon", 1),
+            ("newcastleton", 1),
+        ];
+
+        let suggestions = find_location_suggestions("newcastel", candidates);
+        assert_eq!(
+            suggestions,
+            vec!["newcastle", "newcastle upon tyne", "newcastle emlyn"]
+        );
+    }
+
+    #[test]
+    fn test_find_role_suggestions_general_practice() {
+        let suggestions = find_role_suggestions("General Practice");
+        assert_eq!(
+            suggestions,
+            vec![
+                ("General Dental Practice", "RO110"),
+                ("GP Practice", "RO76"),
+                ("Scottish GP Practice", "RO227"),
+            ]
         );
     }
 }

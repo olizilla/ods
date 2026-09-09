@@ -12,7 +12,7 @@ fn test_find_sedbergh_output_matches_good_binary() {
         find::Args {
             query: None,
             code: Vec::new(),
-            location: Some("sedbergh".to_string()),
+            location: vec!["sedbergh".to_string()],
             role: Vec::new(),
             all: false,
             verbose: false,

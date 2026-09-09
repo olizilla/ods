@@ -167,28 +167,28 @@ fn test_task2_header_search_and_source_lines() {
         .output()
         .expect("run find");
     let stdout_plain = String::from_utf8_lossy(&out_plain.stdout);
-    assert!(stdout_plain.contains("* Search: \"sedbergh\" in name"));
+    assert!(!stdout_plain.contains("* Search:"), "* Search: line must be deleted");
     assert!(stdout_plain.contains("* Source: releases/2026-07-31/orgs.parquet"));
     assert!(!stdout_plain.contains("* matched"), "trailing matched line must be deleted");
 
-    // 2. ods find --in sedbergh (town level wins)
+    // 2. ods find --in sedbergh
     let out_in_town = ods_binary()
         .current_dir(&ws_root)
         .args(["find", "--in", "sedbergh"])
         .output()
         .expect("run find --in");
     let stdout_in_town = String::from_utf8_lossy(&out_in_town.stdout);
-    assert!(stdout_in_town.contains("* Search: \"sedbergh\" in town"));
+    assert!(!stdout_in_town.contains("* Search:"), "* Search: line must be deleted");
     assert!(!stdout_in_town.contains("* matched"), "trailing matched line must be deleted");
 
-    // 3. ods find --in cumbria (county level wins)
+    // 3. ods find --in cumbria
     let out_in_county = ods_binary()
         .current_dir(&ws_root)
         .args(["find", "--in", "cumbria"])
         .output()
         .expect("run find --in cumbria");
     let stdout_in_county = String::from_utf8_lossy(&out_in_county.stdout);
-    assert!(stdout_in_county.contains("* Search: \"cumbria\" in county"));
+    assert!(!stdout_in_county.contains("* Search:"), "* Search: line must be deleted");
 
     // 4. ods find sedbergh --all (names orgs_all.parquet in Source)
     let out_all = ods_binary()

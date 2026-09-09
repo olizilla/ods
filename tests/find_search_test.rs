@@ -31,7 +31,7 @@ fn test_find_in_location_precedence_county_over_town() {
     let mut out = Vec::new();
     find::run_with_writer(
         Args {
-            location: Some("Surrey".to_string()),
+            location: vec!["Surrey".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -41,11 +41,18 @@ fn test_find_in_location_precedence_county_over_town() {
     .expect("find::run_with_writer should succeed for --in Surrey");
 
     let output_str = String::from_utf8(out).expect("valid UTF-8");
-    assert!(
-        output_str.contains("* Search: \"Surrey\" in county"),
-        "Expected Surrey to match county in Search header, got:\n{}",
+    let matched_cell = output_str
+        .lines()
+        .find(|l| l.contains("SUR01"))
+        .and_then(|l| l.split('┆').next_back())
+        .map(|c| c.trim().trim_end_matches('│').trim())
+        .unwrap_or("");
+    assert_eq!(
+        matched_cell, "county",
+        "Expected Surrey to match county in Matched column, got:\n{}",
         output_str
     );
+    assert!(!output_str.contains("* Search:"));
 }
 
 #[test]
@@ -55,7 +62,7 @@ fn test_find_in_postcode_stripping_spaces() {
     let mut out_spaced = Vec::new();
     find::run_with_writer(
         Args {
-            location: Some("LA10 5DL".to_string()),
+            location: vec!["LA10 5DL".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -67,7 +74,7 @@ fn test_find_in_postcode_stripping_spaces() {
     let mut out_unspaced = Vec::new();
     find::run_with_writer(
         Args {
-            location: Some("LA105DL".to_string()),
+            location: vec!["LA105DL".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -96,7 +103,7 @@ fn test_find_in_rejects_under_3_chars() {
     let mut out = Vec::new();
     let result = find::run_with_writer(
         Args {
-            location: Some("M".to_string()),
+            location: vec!["M".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -120,7 +127,7 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     let mut out_ely = Vec::new();
     find::run_with_writer(
         Args {
-            location: Some("ELY".to_string()),
+            location: vec!["ELY".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -130,16 +137,23 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     .expect("find --in ELY should succeed");
 
     let s_ely = String::from_utf8(out_ely).unwrap();
-    assert!(
-        s_ely.contains("* Search: \"ELY\" in town"),
-        "Expected ELY to match town in Search header, got:\n{}",
+    let matched_ely = s_ely
+        .lines()
+        .find(|l| l.contains("ELY01"))
+        .and_then(|l| l.split('┆').next_back())
+        .map(|c| c.trim().trim_end_matches('│').trim())
+        .unwrap_or("");
+    assert_eq!(
+        matched_ely, "town",
+        "Expected ELY to match town in Matched column, got:\n{}",
         s_ely
     );
+    assert!(!s_ely.contains("* Search:"));
 
     let mut out_ayr = Vec::new();
     find::run_with_writer(
         Args {
-            location: Some("AYR".to_string()),
+            location: vec!["AYR".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -149,11 +163,18 @@ fn test_find_in_three_char_towns_ely_and_ayr() {
     .expect("find --in AYR should succeed");
 
     let s_ayr = String::from_utf8(out_ayr).unwrap();
+    let matched_ayr = s_ayr
+        .lines()
+        .find(|l| l.contains("BOOTS OPTICIANS (AYR)"))
+        .and_then(|l| l.split('┆').next_back())
+        .map(|c| c.trim().trim_end_matches('│').trim())
+        .unwrap_or("");
     assert!(
-        s_ayr.contains("* Search: \"AYR\" in county") || s_ayr.contains("* Search: \"AYR\" in town"),
+        matched_ayr == "county" || matched_ayr == "town",
         "Expected AYR to match county or town, got:\n{}",
         s_ayr
     );
+    assert!(!s_ayr.contains("* Search:"));
     assert!(s_ayr.contains("BOOTS OPTICIANS (AYR)"));
 }
 
@@ -164,7 +185,7 @@ fn test_find_in_unknown_place_errors() {
     let mut out = Vec::new();
     let result = find::run_with_writer(
         Args {
-            location: Some("Narnia".to_string()),
+            location: vec!["Narnia".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -178,7 +199,7 @@ fn test_find_in_unknown_place_errors() {
     );
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("No organisation found in 'Narnia'"),
+        err.contains("No location matches 'Narnia'"),
         "Expected error message for Narnia, got: {}",
         err
     );
@@ -654,7 +675,7 @@ fn test_find_alias_gp_expands_to_three_national_codes() {
     find::run_with_writer(
         Args {
             gp: true,
-            location: Some("sedbergh".to_string()),
+            location: vec!["sedbergh".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -680,7 +701,7 @@ fn test_find_alias_dentist_expands_to_dental_codes() {
     find::run_with_writer(
         Args {
             dentist: true,
-            location: Some("sedbergh".to_string()),
+            location: vec!["sedbergh".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },
@@ -710,7 +731,7 @@ fn test_find_alias_and_role_merge_with_or_semantics() {
         Args {
             gp: true,
             role: vec!["RO110".to_string()],
-            location: Some("sedbergh".to_string()),
+            location: vec!["sedbergh".to_string()],
             input: Some(parquet_dir.clone()),
             ..Default::default()
         },

@@ -12,7 +12,7 @@ fn test_find_table_inactive_successor_display() {
         Args {
             query: Some("CLWYD".to_string()),
             code: Vec::new(),
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             all: true,
             verbose: false,
@@ -43,7 +43,7 @@ fn test_find_exact_code_matches_as_table() {
         Args {
             query: None,
             code: vec!["A82608".to_string()],
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             all: false,
             verbose: false,
@@ -80,7 +80,7 @@ fn test_find_json_successor_codes_array() {
         Args {
             query: None,
             code: vec!["001".to_string()],
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             all: true,
             verbose: false,
@@ -132,7 +132,7 @@ fn test_find_csv_successor_codes_semicolon_list() {
         Args {
             query: None,
             code: vec!["001".to_string()],
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             all: true,
             verbose: false,

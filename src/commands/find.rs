@@ -23,7 +23,23 @@ pub enum SortBy {
     Postcode,
 }
 
+const AFTER_LONG_HELP: &str = "Filters combine with AND. Repeated or comma-separated values within one flag
+combine with OR:
+
+  ods find --gp --in cumbria           GP practices AND in Cumbria
+  ods find --in durham --in cumbria    in Durham OR in Cumbria
+
+--gp and --dentist add role codes to --role rather than filtering separately.
+--all reads orgs_all.parquet, which is why it adds a Status column.
+
+--in matches a whole country, county or town, ignoring case and punctuation, or
+a postcode prefix. Town and county are as ODS records them: postal and historic,
+not administrative. London-area practices are recorded under MIDDLESEX (196 GP
+practices, none with town LONDON), ESSEX, KENT and SURREY, so no --in value
+selects a metropolitan area.";
+
 #[derive(Parser, Debug, Clone)]
+#[command(after_long_help = AFTER_LONG_HELP)]
 pub struct Args {
     /// Search query matching organisation name (case-insensitive substring)
     pub query: Option<String>,
@@ -32,9 +48,9 @@ pub struct Args {
     #[arg(long, value_delimiter = ',', num_args = 1..)]
     pub code: Vec<String>,
 
-    /// Filter by location: country -> county -> town -> postcode (minimum 3 characters)
-    #[arg(long = "in")]
-    pub location: Option<String>,
+    /// Filter by whole country, county or town, or a postcode prefix (minimum 3 characters)
+    #[arg(long = "in", value_delimiter = ',', num_args = 1..)]
+    pub location: Vec<String>,
 
     /// Filter by role code (e.g. RO76) or curated role name (repeatable and comma-separated). Codes never change; use codes for durable queries and scripts.
     #[arg(short, long, value_delimiter = ',', num_args = 1..)]
@@ -78,7 +94,7 @@ impl Default for Args {
         Self {
             query: None,
             code: Vec::new(),
-            location: None,
+            location: Vec::new(),
             role: Vec::new(),
             gp: false,
             dentist: false,
@@ -88,25 +104,6 @@ impl Default for Args {
             format: OutputFormat::Table,
             input: None,
             plain: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LocationLevel {
-    Country = 1,
-    County = 2,
-    Town = 3,
-    Postcode = 4,
-}
-
-impl LocationLevel {
-    pub fn name(&self) -> &'static str {
-        match self {
-            LocationLevel::Country => "country",
-            LocationLevel::County => "county",
-            LocationLevel::Town => "town",
-            LocationLevel::Postcode => "postcode",
         }
     }
 }
@@ -380,7 +377,7 @@ pub fn extract_org_row_from_batch(
 pub struct Match {
     pub org: OrgRow,
     pub rank: u8,
-    pub loc_level: Option<LocationLevel>,
+    pub matched_fields: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -771,6 +768,7 @@ pub fn find_org_in_parquet(
 }
 
 struct ParsedLocation {
+    raw: String,
     norm: String,
     norm_postcode: String,
 }
@@ -783,17 +781,16 @@ struct ParsedRoleFilter {
 pub fn run(args: Args) -> Result<()> {
     if args.query.is_none()
         && args.code.is_empty()
-        && args.location.is_none()
+        && args.location.is_empty()
         && args.role.is_empty()
         && !args.gp
         && !args.dentist
+        && (args.format == OutputFormat::Table || args.format == OutputFormat::Markdown)
     {
-        if args.format == OutputFormat::Table || args.format == OutputFormat::Markdown {
-            eprintln!(
-                "No search filters given. Try:\n\n  ods find sedbergh                 by name\n  ods find --in SW9                 by postcode, town, county or country\n  ods find --role RO76              by role\n\nOr browse with a fuzzy finder:\n\n  ods find --format tsv | fzf\n\nPick one and open it:\n\n  ods find --format tsv | fzf | cut -f1 | xargs ods info"
-            );
-            return Ok(());
-        }
+        eprintln!(
+            "No search filters given. Try:\n\n  ods find sedbergh                 by name\n  ods find --in SW9                 by postcode, town, county or country\n  ods find --role RO76              by role\n\nOr browse with a fuzzy finder:\n\n  ods find --format tsv | fzf\n\nPick one and open it:\n\n  ods find --format tsv | fzf | cut -f1 | xargs ods info"
+        );
+        return Ok(());
     }
 
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
@@ -974,17 +971,22 @@ pub fn run_with_writer_color(
     }
 
     // 1. Validate --in location filter
-    let parsed_location = if let Some(ref loc) = args.location {
-        let trimmed = loc.trim();
-        if trimmed.chars().count() < 3 {
-            bail!("✖ Location query '{}' is too short (minimum 3 characters)", trimmed);
+    let parsed_locations: Vec<ParsedLocation> = if !args.location.is_empty() {
+        let mut locs = Vec::new();
+        for loc in &args.location {
+            let trimmed = loc.trim();
+            if trimmed.chars().count() < 3 {
+                bail!("✖ Location query '{}' is too short (minimum 3 characters)", trimmed);
+            }
+            locs.push(ParsedLocation {
+                raw: trimmed.to_string(),
+                norm: normalize_for_matching(trimmed),
+                norm_postcode: normalize_postcode(trimmed),
+            });
         }
-        Some(ParsedLocation {
-            norm: normalize_for_matching(trimmed),
-            norm_postcode: normalize_postcode(trimmed),
-        })
+        locs
     } else {
-        None
+        Vec::new()
     };
 
     // 2. Validate --role filter (codes or curated names)
@@ -1044,6 +1046,8 @@ pub fn run_with_writer_color(
     let org_metadata = load_org_metadata(parquet_dir);
 
     let mut matches: Vec<Match> = Vec::new();
+    let mut location_counts: HashMap<String, usize> = HashMap::new();
+    let mut matched_location_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     for batch in reader {
         let batch = batch?;
@@ -1060,6 +1064,50 @@ pub fn run_with_writer_color(
         let indices = OrgColumnIndices::try_from_schema(&schema)?;
 
         for i in 0..num_rows {
+            let mut norm_town = String::new();
+            let mut norm_county = String::new();
+            let mut norm_country = String::new();
+            let mut norm_post = String::new();
+
+            if !parsed_locations.is_empty() {
+                let postcode = extract_batch_opt_str(&batch, indices.postcode, i);
+                let town = extract_batch_opt_str(&batch, indices.town, i);
+                let county = extract_batch_opt_str(&batch, indices.county, i);
+                let country = extract_batch_opt_str(&batch, indices.country, i);
+
+                norm_country = normalize_for_matching(country.as_deref().unwrap_or(""));
+                norm_county = normalize_for_matching(county.as_deref().unwrap_or(""));
+                norm_town = normalize_for_matching(town.as_deref().unwrap_or(""));
+                norm_post = normalize_postcode(postcode.as_deref().unwrap_or(""));
+
+                if !norm_town.is_empty() {
+                    *location_counts.entry(norm_town.clone()).or_default() += 1;
+                }
+                if !norm_county.is_empty() {
+                    *location_counts.entry(norm_county.clone()).or_default() += 1;
+                }
+                if !norm_country.is_empty() {
+                    *location_counts.entry(norm_country.clone()).or_default() += 1;
+                }
+                if let Some(ref p) = postcode {
+                    let outward = p.split_whitespace().next().unwrap_or("");
+                    let norm_outward = normalize_postcode(outward);
+                    if !norm_outward.is_empty() {
+                        *location_counts.entry(norm_outward).or_default() += 1;
+                    }
+                }
+
+                for (q_idx, q) in parsed_locations.iter().enumerate() {
+                    if (!norm_town.is_empty() && norm_town == q.norm)
+                        || (!norm_county.is_empty() && norm_county == q.norm)
+                        || (!norm_country.is_empty() && norm_country == q.norm)
+                        || (!norm_post.is_empty() && !q.norm_postcode.is_empty() && norm_post.starts_with(&q.norm_postcode))
+                    {
+                        matched_location_indices.insert(q_idx);
+                    }
+                }
+            }
+
             let ods_code = ods_code_arr.value(i);
 
             // Filter by exact ODS code if --code specified
@@ -1106,64 +1154,110 @@ pub fn run_with_writer_color(
                 }
             }
 
-            let postcode = extract_batch_opt_str(&batch, indices.postcode, i);
-            let town = extract_batch_opt_str(&batch, indices.town, i);
-            let county = extract_batch_opt_str(&batch, indices.county, i);
-            let country = extract_batch_opt_str(&batch, indices.country, i);
+            let matched_fields = if !parsed_locations.is_empty() {
+                let mut matched_town = false;
+                let mut matched_county = false;
+                let mut matched_postcode = false;
+                let mut matched_country = false;
 
-            // Evaluate location matching level
-            let loc_level: Option<LocationLevel> = if let Some(ref loc_info) = parsed_location {
-                let norm_country = normalize_for_matching(country.as_deref().unwrap_or(""));
-                let norm_county = normalize_for_matching(county.as_deref().unwrap_or(""));
-                let norm_town = normalize_for_matching(town.as_deref().unwrap_or(""));
-                let norm_post = normalize_postcode(postcode.as_deref().unwrap_or(""));
-
-                if norm_country.starts_with(&loc_info.norm) || norm_country == loc_info.norm {
-                    Some(LocationLevel::Country)
-                } else if norm_county.starts_with(&loc_info.norm) || norm_county == loc_info.norm {
-                    Some(LocationLevel::County)
-                } else if norm_town.starts_with(&loc_info.norm) || norm_town == loc_info.norm {
-                    Some(LocationLevel::Town)
-                } else if !loc_info.norm_postcode.is_empty() && norm_post.starts_with(&loc_info.norm_postcode) {
-                    Some(LocationLevel::Postcode)
-                } else {
-                    None
+                for q in &parsed_locations {
+                    if !norm_town.is_empty() && norm_town == q.norm {
+                        matched_town = true;
+                    }
+                    if !norm_county.is_empty() && norm_county == q.norm {
+                        matched_county = true;
+                    }
+                    if !norm_post.is_empty() && !q.norm_postcode.is_empty() && norm_post.starts_with(&q.norm_postcode) {
+                        matched_postcode = true;
+                    }
+                    if !norm_country.is_empty() && norm_country == q.norm {
+                        matched_country = true;
+                    }
                 }
-            } else {
-                None
-            };
 
-            if parsed_location.is_some() && loc_level.is_none() {
-                continue;
-            }
+                if !matched_town && !matched_county && !matched_postcode && !matched_country {
+                    continue;
+                }
+
+                let mut parts = Vec::with_capacity(4);
+                if matched_town { parts.push("town"); }
+                if matched_county { parts.push("county"); }
+                if matched_postcode { parts.push("postcode"); }
+                if matched_country { parts.push("country"); }
+                parts.join(", ")
+            } else {
+                String::new()
+            };
 
             let org = extract_org_row_from_batch(&batch, i, &indices);
 
             matches.push(Match {
                 org,
                 rank,
-                loc_level,
+                matched_fields,
             });
         }
     }
 
-    // 4. Broad-to-narrow location filtering (retain only winning level)
-    let matched_loc_level = if let Some(ref loc) = args.location {
-        let min_level = matches.iter().filter_map(|m| m.loc_level).min();
-        match min_level {
-            Some(lvl) => {
-                matches.retain(|m| m.loc_level == Some(lvl));
-                Some(lvl)
+    // Zero-match check for --in
+    if matches.is_empty() && !parsed_locations.is_empty() {
+        let unmatched_locations: Vec<&ParsedLocation> = parsed_locations
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| !matched_location_indices.contains(idx))
+            .map(|(_, loc)| loc)
+            .collect();
+
+        if !unmatched_locations.is_empty() {
+            let mut msgs = Vec::new();
+            for loc in unmatched_locations {
+                let suggestions = crate::roles::find_location_suggestions(&loc.raw, &location_counts);
+                let mut msg = format!("✖ No location matches '{}'\n", loc.raw);
+                if !suggestions.is_empty() {
+                    msg.push_str(&format!("  Did you mean: {}\n", suggestions.join(" · ")));
+                }
+                msgs.push(msg.trim_end().to_string());
             }
-            None => {
-                bail!("✖ No organisation found in '{}'\n  --in matches country, county, town or postcode.", loc.trim());
+            bail!("{}", msgs.join("\n"));
+        }
+    }
+
+    // Near-miss * Also: candidates when matches found
+    let also_line: Option<String> = if !matches.is_empty() && !parsed_locations.is_empty() {
+        let mut candidates: Vec<(&String, usize)> = Vec::new();
+        let mut seen_keys: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let searched_norms: std::collections::HashSet<&str> = parsed_locations.iter().map(|l| l.norm.as_str()).collect();
+
+        for loc in &parsed_locations {
+            let prefix = format!("{} ", loc.norm);
+            for (key, count) in &location_counts {
+                if key.starts_with(&prefix) && !searched_norms.contains(key.as_str()) && seen_keys.insert(key.as_str()) {
+                    candidates.push((key, *count));
+                }
             }
+        }
+
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+
+        if !candidates.is_empty() {
+            let top3: Vec<String> = candidates
+                .iter()
+                .take(3)
+                .map(|(k, cnt)| format!("\"{}\" ({})", k, cnt))
+                .collect();
+            let mut line = format!("* Also: {}", top3.join(" · "));
+            if candidates.len() > 3 {
+                line.push_str(&format!(" · +{} more", candidates.len() - 3));
+            }
+            Some(line)
+        } else {
+            None
         }
     } else {
         None
     };
 
-    // 5. Sorting
+    // Sorting
     matches.sort_by(|a, b| {
         if let Some(sort_by) = args.sort {
             match sort_by {
@@ -1213,6 +1307,7 @@ pub fn run_with_writer_color(
                 role_display: String,
                 record_class: &'a str,
                 status: &'a str,
+                matched_fields: &'a str,
             }
 
             let display_rows: Vec<DisplayRow> = matches
@@ -1242,6 +1337,7 @@ pub fn run_with_writer_color(
                         role_display,
                         record_class: &r.org.record_class,
                         status: &r.org.status,
+                        matched_fields: &r.matched_fields,
                     }
                 })
                 .collect();
@@ -1286,14 +1382,42 @@ pub fn run_with_writer_color(
                     }
                 }
 
-                if args.all {
+                let has_location = !parsed_locations.is_empty();
+                if has_location {
+                    if args.all {
+                        table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Status", "Matched"]);
+                    } else {
+                        table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Matched"]);
+                    }
+                } else if args.all {
                     table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class", "Status"]);
                 } else {
                     table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
                 }
 
                 for row in &display_rows {
-                    if args.all {
+                    if has_location {
+                        if args.all {
+                            table.add_row(vec![
+                                row.ods_code,
+                                &row.full_name,
+                                row.postcode,
+                                &row.role_display,
+                                row.record_class,
+                                row.status,
+                                row.matched_fields,
+                            ]);
+                        } else {
+                            table.add_row(vec![
+                                row.ods_code,
+                                &row.full_name,
+                                row.postcode,
+                                &row.role_display,
+                                row.record_class,
+                                row.matched_fields,
+                            ]);
+                        }
+                    } else if args.all {
                         table.add_row(vec![
                             row.ods_code,
                             &row.full_name,
@@ -1317,43 +1441,28 @@ pub fn run_with_writer_color(
                     for notice in &alias_notices {
                         writeln!(writer, "{}", notice)?;
                     }
+                    if let Some(ref line) = also_line {
+                        writeln!(writer, "{}", line)?;
+                    }
                     writeln!(writer, "{}", table)?;
                 } else {
                     // OutputFormat::Table
-                    // 1. Search line
-                    let search_desc = match (&args.query, &args.location, matched_loc_level) {
-                        (Some(q), Some(loc), Some(lvl)) => format!("\"{}\" in name, \"{}\" in {}", q, loc, lvl.name()),
-                        (Some(q), Some(loc), None) => format!("\"{}\" in name, \"{}\" in location", q, loc),
-                        (None, Some(loc), Some(lvl)) => format!("\"{}\" in {}", loc, lvl.name()),
-                        (None, Some(loc), None) => format!("\"{}\" in location", loc),
-                        (Some(q), None, _) => format!("\"{}\" in name", q),
-                        (None, None, _) => {
-                            if !args.code.is_empty() {
-                                format!("\"{}\" in code", args.code.join(", "))
-                            } else if !args.role.is_empty() {
-                                format!("\"{}\" in role", args.role.join(", "))
-                            } else if args.gp {
-                                "GP practices".to_string()
-                            } else if args.dentist {
-                                "Dental practices".to_string()
-                            } else {
-                                "all".to_string()
-                            }
-                        }
-                    };
-                    writeln!(writer, "* Search: {}", search_desc)?;
-
-                    // 2. Source header & disagreement notice
+                    // 1. Source header & disagreement notice
                     for line in crate::workspace::format_source_header(parquet_dir, file_name, false) {
                         writeln!(writer, "{}", line)?;
                     }
 
-                    // 4. Any alias notices
+                    // 2. Any alias notices
                     for notice in &alias_notices {
                         writeln!(writer, "{}", notice)?;
                     }
 
-                    // 5. Render table with footer
+                    // 3. Any * Also: line
+                    if let Some(ref line) = also_line {
+                        writeln!(writer, "{}", line)?;
+                    }
+
+                    // 4. Render table with footer
                     let n = matched_count;
                     let (left, right) = if args.all {
                         let active_count = matches.iter().filter(|r| r.org.status.eq_ignore_ascii_case("active")).count();
