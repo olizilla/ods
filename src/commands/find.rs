@@ -767,15 +767,15 @@ pub fn find_org_in_parquet(
     Ok(None)
 }
 
-struct ParsedLocation {
-    raw: String,
-    norm: String,
-    norm_postcode: String,
+pub struct ParsedLocation {
+    pub raw: String,
+    pub norm: String,
+    pub norm_postcode: String,
 }
 
-struct ParsedRoleFilter {
-    codes: Vec<String>,
-    names: Vec<String>,
+pub struct ParsedRoleFilter {
+    pub codes: Vec<String>,
+    pub names: Vec<String>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -937,32 +937,123 @@ fn escape_sql_literal(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-pub fn build_sql_query(args: &Args, parquet_path: &Path) -> Result<String> {
-    let mut out = format!("SELECT *\nFROM '{}'", escape_sql_literal(&parquet_path.display().to_string()));
+pub fn build_sql_query(
+    args: &Args,
+    parquet_path: &Path,
+    parsed_locations: &[ParsedLocation],
+    parsed_roles: Option<&ParsedRoleFilter>,
+) -> Result<String> {
+    let mut out = String::new();
+
+    if !parsed_locations.is_empty() {
+        out.push_str(
+            "CREATE OR REPLACE TEMP MACRO norm(s) AS\n  \
+             trim(regexp_replace(lower(regexp_replace(s, '[''’‘]', '', 'g')), '[^\\p{L}\\p{N}]+', ' ', 'g'));\n\
+             CREATE OR REPLACE TEMP MACRO norm_postcode(s) AS\n  \
+             regexp_replace(lower(s), '[^a-z0-9]', '', 'g');\n\n",
+        );
+    }
+
+    out.push_str(&format!(
+        "SELECT *\nFROM '{}'",
+        escape_sql_literal(&parquet_path.display().to_string())
+    ));
+
+    let mut clauses: Vec<String> = Vec::new();
+
+    if let Some(ref q) = args.query {
+        let squashed: String = q
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        clauses.push(format!(
+            "regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%{}%'",
+            escape_sql_literal(&squashed)
+        ));
+    }
+
+    if !args.code.is_empty() {
+        let mut formatted_codes: Vec<String> = Vec::new();
+        for code in &args.code {
+            let trimmed = code.trim();
+            if !trimmed.is_empty() {
+                let upper = trimmed.to_uppercase();
+                formatted_codes.push(format!("'{}'", escape_sql_literal(&upper)));
+            }
+        }
+        if !formatted_codes.is_empty() {
+            clauses.push(format!("ods_code IN ({})", formatted_codes.join(", ")));
+        }
+    }
+
+    if let Some(pr) = parsed_roles {
+        if !pr.codes.is_empty() {
+            let mut unique_codes = Vec::new();
+            for c in &pr.codes {
+                if !unique_codes.contains(c) {
+                    unique_codes.push(c.clone());
+                }
+            }
+            let formatted_role_codes: Vec<String> = unique_codes
+                .iter()
+                .map(|c| format!("'{}'", escape_sql_literal(c)))
+                .collect();
+            clauses.push(format!(
+                "list_has_any(role_codes, [{}])",
+                formatted_role_codes.join(", ")
+            ));
+        }
+    }
+
+    if !parsed_locations.is_empty() {
+        if parsed_locations.len() == 1 {
+            let loc = &parsed_locations[0];
+            let norm_val = escape_sql_literal(&loc.norm);
+            let norm_pc = escape_sql_literal(&loc.norm_postcode);
+            clauses.push(format!(
+                "(   norm(town)    = '{norm_val}'\n \
+                 OR norm(county)  = '{norm_val}'\n \
+                 OR norm(country) = '{norm_val}'\n \
+                 OR norm_postcode(postcode) LIKE '{norm_pc}%')"
+            ));
+        } else {
+            let mut blocks = Vec::new();
+            for loc in parsed_locations {
+                let norm_val = escape_sql_literal(&loc.norm);
+                let norm_pc = escape_sql_literal(&loc.norm_postcode);
+                blocks.push(format!(
+                    "(   norm(town)    = '{norm_val}'\n \
+                     OR norm(county)  = '{norm_val}'\n \
+                     OR norm(country) = '{norm_val}'\n \
+                     OR norm_postcode(postcode) LIKE '{norm_pc}%')"
+                ));
+            }
+            clauses.push(format!("({})", blocks.join("\n OR\n ")));
+        }
+    }
+
+    if !clauses.is_empty() {
+        out.push_str(&format!("\nWHERE {}", clauses.join("\n  AND ")));
+    }
 
     let order_by = if let Some(sort) = args.sort {
         match sort {
             SortBy::Code => "ORDER BY ods_code;".to_string(),
-            SortBy::Name => "ORDER BY name;".to_string(),
-            SortBy::Postcode => "ORDER BY postcode;".to_string(),
+            SortBy::Name => "ORDER BY name, ods_code;".to_string(),
+            SortBy::Postcode => "ORDER BY postcode, ods_code;".to_string(),
         }
     } else if let Some(ref q) = args.query {
         let raw_upper = q.to_uppercase();
-        format!("ORDER BY (name LIKE '%{}%') DESC, ods_code;", escape_sql_literal(&raw_upper))
+        format!(
+            "ORDER BY (name LIKE '%{}%') DESC, ods_code;",
+            escape_sql_literal(&raw_upper)
+        )
     } else {
         "ORDER BY ods_code;".to_string()
     };
 
-    if let Some(ref q) = args.query {
-        let squashed: String = q.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
-        out.push_str(&format!(
-            "\nWHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%{}%'\n{}",
-            escape_sql_literal(&squashed),
-            order_by
-        ));
-    } else {
-        out.push_str(&format!("\n{}", order_by));
-    }
+    out.push_str(&format!("\n{}", order_by));
 
     Ok(out)
 }
@@ -978,40 +1069,6 @@ pub fn run_with_writer_color(
     color: bool,
 ) -> Result<()> {
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
-    if args.sql {
-        let sql_path = resolve_sql_parquet_path(parquet_dir, file_name);
-        let sql = build_sql_query(&args, &sql_path)?;
-        writeln!(writer, "{}", sql)?;
-        return Ok(());
-    }
-    let path = parquet_dir.join(file_name);
-    if !path.exists() {
-        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
-            anyhow::bail!(
-                "✖ Parquet file '{}' not found in '{}'",
-                file_name,
-                parquet_dir.display()
-            );
-        }
-        if let Ok(ws) = crate::workspace::Workspace::open(None) {
-            let releases = ws.releases().unwrap_or_default();
-            if !releases.is_empty() {
-                let n = releases.len();
-                let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
-                let newest_date = &releases[0].date;
-                let ws_name = ws.root().file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
-                anyhow::bail!(
-                    "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
-                    count_str,
-                    ws_name,
-                    newest_date
-                );
-            }
-        }
-        anyhow::bail!(
-            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
-        );
-    }
 
     // Expand alias flags (--gp, --dentist) into role filters with OR semantics
     let mut effective_roles = args.role.clone();
@@ -1109,6 +1166,42 @@ pub fn run_with_writer_color(
     } else {
         None
     };
+
+    if args.sql {
+        let sql_path = resolve_sql_parquet_path(parquet_dir, file_name);
+        let sql = build_sql_query(&args, &sql_path, &parsed_locations, parsed_roles.as_ref())?;
+        writeln!(writer, "{}", sql)?;
+        return Ok(());
+    }
+
+    let path = parquet_dir.join(file_name);
+    if !path.exists() {
+        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+            anyhow::bail!(
+                "✖ Parquet file '{}' not found in '{}'",
+                file_name,
+                parquet_dir.display()
+            );
+        }
+        if let Ok(ws) = crate::workspace::Workspace::open(None) {
+            let releases = ws.releases().unwrap_or_default();
+            if !releases.is_empty() {
+                let n = releases.len();
+                let count_str = if n == 1 { "1 release".to_string() } else { format!("{} releases", n) };
+                let newest_date = &releases[0].date;
+                let ws_name = ws.root().file_name().and_then(|n| n.to_str()).unwrap_or(crate::workspace::DEFAULT_WORKSPACE_DIR);
+                anyhow::bail!(
+                    "✖ No active release pinned\n  {} in {}/releases/, none active.\n  Pin one:  ods use {}",
+                    count_str,
+                    ws_name,
+                    newest_date
+                );
+            }
+        }
+        anyhow::bail!(
+            "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
+        );
+    }
 
     // 3. Squashed and raw uppercased name query
     let squashed_query = args.query.as_deref().map(squash_for_matching).unwrap_or_default();
@@ -1341,11 +1434,19 @@ pub fn run_with_writer_color(
         if let Some(sort_by) = args.sort {
             match sort_by {
                 SortBy::Code => a.org.ods_code.cmp(&b.org.ods_code),
-                SortBy::Name => a.org.name.to_lowercase().cmp(&b.org.name.to_lowercase()),
+                SortBy::Name => a
+                    .org
+                    .name
+                    .to_lowercase()
+                    .cmp(&b.org.name.to_lowercase())
+                    .then_with(|| a.org.ods_code.cmp(&b.org.ods_code)),
                 SortBy::Postcode => {
                     let a_post = a.org.postcode.as_deref().unwrap_or("");
                     let b_post = b.org.postcode.as_deref().unwrap_or("");
-                    a_post.to_lowercase().cmp(&b_post.to_lowercase())
+                    a_post
+                        .to_lowercase()
+                        .cmp(&b_post.to_lowercase())
+                        .then_with(|| a.org.ods_code.cmp(&b.org.ods_code))
                 }
             }
         } else if args.query.is_some() {

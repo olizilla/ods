@@ -6,6 +6,7 @@ How to build it, the principles behind it, and the sharp edges to avoid.
 
 The quick path, pulling published data from github:
 
+- Install the `duckdb` CLI (v1.4.1+) to run SQL equivalence tests and query Parquet files
 - `cargo test` - Run the tests 
 - `cargo install --path .` build the bin and add to your path
 - `ods pull` pull the latest data from a github release
