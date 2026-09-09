@@ -41,7 +41,11 @@ selects a metropolitan area.";
 #[derive(Parser, Debug, Clone)]
 #[command(after_long_help = AFTER_LONG_HELP)]
 pub struct Args {
-    /// Search query matching organisation name (case-insensitive substring)
+    /// Search query matching organisation name.
+    ///
+    /// Spaces and punctuation are ignored. Results order exact matches first.
+    ///
+    /// "healthcare" and "health care" return the same result set in different orders.
     pub query: Option<String>,
 
     /// Filter by exact ODS code (repeatable and comma-separated, e.g. A82608,RJZ)
@@ -87,6 +91,10 @@ pub struct Args {
     /// Disable ANSI colored output
     #[arg(long)]
     pub plain: bool,
+
+    /// Print the DuckDB query for these filters instead of running them
+    #[arg(long)]
+    pub sql: bool,
 }
 
 impl Default for Args {
@@ -104,6 +112,7 @@ impl Default for Args {
             format: OutputFormat::Table,
             input: None,
             plain: false,
+            sql: false,
         }
     }
 }
@@ -141,21 +150,12 @@ pub fn normalize_postcode(s: &str) -> String {
         .collect()
 }
 
-pub fn compute_name_rank(norm_name: &str, norm_query: &str) -> Option<u8> {
-    if norm_query.is_empty() {
-        return Some(4);
-    }
-    if norm_name == norm_query {
-        Some(1)
-    } else if norm_name.starts_with(norm_query) {
-        Some(2)
-    } else if norm_name.split_whitespace().any(|w| w.starts_with(norm_query)) || norm_name.contains(&format!(" {norm_query}")) {
-        Some(3)
-    } else if norm_name.contains(norm_query) {
-        Some(4)
-    } else {
-        None
-    }
+/// Uppercase, keeping only letters and digits. Used for name matching only.
+pub fn squash_for_matching(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
 }
 
 /// Canonical in-memory representation of an organisation row from `orgs.parquet` / `orgs_all.parquet`.
@@ -376,7 +376,7 @@ pub fn extract_org_row_from_batch(
 #[derive(Debug, Clone)]
 pub struct Match {
     pub org: OrgRow,
-    pub rank: u8,
+    pub exact_match: bool,
     pub matched_fields: String,
 }
 
@@ -779,7 +779,8 @@ struct ParsedRoleFilter {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    if args.query.is_none()
+    if !args.sql
+        && args.query.is_none()
         && args.code.is_empty()
         && args.location.is_empty()
         && args.role.is_empty()
@@ -894,6 +895,78 @@ pub fn render_with_footer(table: &comfy_table::Table, left: &str, right: &str) -
     }
 }
 
+pub fn resolve_sql_parquet_path(parquet_dir: &Path, file_name: &str) -> PathBuf {
+    let concrete_dir = if let Ok(meta) = std::fs::symlink_metadata(parquet_dir) {
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = std::fs::read_link(parquet_dir) {
+                if target.is_relative() {
+                    parquet_dir.parent().unwrap_or(Path::new("")).join(target)
+                } else {
+                    target
+                }
+            } else {
+                parquet_dir.to_path_buf()
+            }
+        } else if parquet_dir.is_file() {
+            if let Ok(content) = std::fs::read_to_string(parquet_dir) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    parquet_dir.parent().unwrap_or(Path::new("")).join(trimmed)
+                } else {
+                    parquet_dir.to_path_buf()
+                }
+            } else {
+                parquet_dir.to_path_buf()
+            }
+        } else {
+            parquet_dir.to_path_buf()
+        }
+    } else {
+        parquet_dir.to_path_buf()
+    };
+    let full = concrete_dir.join(file_name);
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(rel) = full.strip_prefix(&cwd) {
+            return rel.to_path_buf();
+        }
+    }
+    full
+}
+
+fn escape_sql_literal(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+pub fn build_sql_query(args: &Args, parquet_path: &Path) -> Result<String> {
+    let mut out = format!("SELECT *\nFROM '{}'", escape_sql_literal(&parquet_path.display().to_string()));
+
+    let order_by = if let Some(sort) = args.sort {
+        match sort {
+            SortBy::Code => "ORDER BY ods_code;".to_string(),
+            SortBy::Name => "ORDER BY name;".to_string(),
+            SortBy::Postcode => "ORDER BY postcode;".to_string(),
+        }
+    } else if let Some(ref q) = args.query {
+        let raw_upper = q.to_uppercase();
+        format!("ORDER BY (name LIKE '%{}%') DESC, ods_code;", escape_sql_literal(&raw_upper))
+    } else {
+        "ORDER BY ods_code;".to_string()
+    };
+
+    if let Some(ref q) = args.query {
+        let squashed: String = q.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
+        out.push_str(&format!(
+            "\nWHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%{}%'\n{}",
+            escape_sql_literal(&squashed),
+            order_by
+        ));
+    } else {
+        out.push_str(&format!("\n{}", order_by));
+    }
+
+    Ok(out)
+}
+
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
     run_with_writer_color(args, writer, parquet_dir, false)
 }
@@ -905,6 +978,12 @@ pub fn run_with_writer_color(
     color: bool,
 ) -> Result<()> {
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
+    if args.sql {
+        let sql_path = resolve_sql_parquet_path(parquet_dir, file_name);
+        let sql = build_sql_query(&args, &sql_path)?;
+        writeln!(writer, "{}", sql)?;
+        return Ok(());
+    }
     let path = parquet_dir.join(file_name);
     if !path.exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
@@ -1031,8 +1110,9 @@ pub fn run_with_writer_color(
         None
     };
 
-    // 3. Normalised name query
-    let norm_query = args.query.as_deref().map(normalize_for_matching).unwrap_or_default();
+    // 3. Squashed and raw uppercased name query
+    let squashed_query = args.query.as_deref().map(squash_for_matching).unwrap_or_default();
+    let raw_query_upper = args.query.as_deref().map(|q| q.to_uppercase()).unwrap_or_default();
 
     let file = File::open(&path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -1119,17 +1199,16 @@ pub fn run_with_writer_color(
             }
 
             let name = name_arr.value(i);
-            let norm_name = normalize_for_matching(name);
+            let squashed_name = squash_for_matching(name);
 
             // Match name against positional query
-            let rank = if args.query.is_some() {
-                if let Some(r) = compute_name_rank(&norm_name, &norm_query) {
-                    r
-                } else {
+            let exact_match = if args.query.is_some() {
+                if !squashed_name.contains(&squashed_query) {
                     continue;
                 }
+                name.contains(&raw_query_upper)
             } else {
-                4
+                false
             };
 
             let primary_role = primary_role_arr.value(i);
@@ -1193,7 +1272,7 @@ pub fn run_with_writer_color(
 
             matches.push(Match {
                 org,
-                rank,
+                exact_match,
                 matched_fields,
             });
         }
@@ -1270,7 +1349,7 @@ pub fn run_with_writer_color(
                 }
             }
         } else if args.query.is_some() {
-            a.rank.cmp(&b.rank).then_with(|| a.org.ods_code.cmp(&b.org.ods_code))
+            b.exact_match.cmp(&a.exact_match).then_with(|| a.org.ods_code.cmp(&b.org.ods_code))
         } else {
             a.org.ods_code.cmp(&b.org.ods_code)
         }

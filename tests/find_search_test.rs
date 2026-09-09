@@ -285,7 +285,7 @@ fn test_find_normalization_apostrophes_and_punctuation() {
 }
 
 #[test]
-fn test_find_ranking_exact_prefix_word_substring() {
+fn test_find_ranking_exact_matches_first() {
     let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     let mut out = Vec::new();

@@ -19,6 +19,7 @@ fn get_release_dir() -> Option<PathBuf> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_test_record(
     ods_code: &str,
     name: &str,
