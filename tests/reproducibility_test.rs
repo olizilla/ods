@@ -99,15 +99,17 @@ fn test_real_trud_parquet_hash_stability() {
     })
     .expect("run 2 on real TRUD zip should succeed");
 
-    let parquet_files = vec![
+    let all_files = vec![
         "orgs.parquet",
         "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
+        "datapackage.json",
+        "_provenance.json",
     ];
 
-    for file_name in parquet_files {
+    for file_name in all_files {
         let f1 = tmp1.path().join(file_name);
         let f2 = tmp2.path().join(file_name);
 
@@ -120,7 +122,7 @@ fn test_real_trud_parquet_hash_stability() {
         println!("File {:20} -> SHA256: {}", file_name, hash1);
         assert_eq!(
             hash1, hash2,
-            "Real TRUD Parquet file {} SHA-256 hash is not stable across runs: {} vs {}",
+            "Real TRUD output file {} SHA-256 hash is not stable across runs: {} vs {}",
             file_name, hash1, hash2
         );
     }
