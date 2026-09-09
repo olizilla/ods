@@ -258,6 +258,48 @@ concept](#ods-has-no-hospital-concept): the register doesn't have a role for
 through `orgs_all.parquet` rather than `orgs.parquet` matters here too — see
 [the trap below](#traps) for why the active-only table silently drops rows.
 
+
+## Differences between `org` and `site` (IS OPEATED BY)
+
+- **Almost 100% of sites (63,048 out of 63,066)** have an `IS OPERATED BY` relationship pointing to their parent organisation (e.g. an NHS Trust or Foundation Trust).
+- While some `org` records also have this (e.g., branches or managed services, ~41%), it is effectively mandatory/universal for `site`.
+
+
+Sites are physical operational locations, not legal contracting entities. As a result, **no site has any of the legal, commissioning, or governance relationships**:
+
+| Relationship | Sites as Source | Orgs as Source | Meaning |
+| :--- | :---: | :---: | :--- |
+| **`IS COMMISSIONED BY`** | **0** | 114,414 | Sites cannot hold commissioning contracts with ICBs. |
+| **`IS PARTNER TO`** | **0** | 7,602 | Partnerships are between legal bodies (PCNs, trusts). |
+| **`IS DIRECTED BY`** | **0** | 4,048 | Governance directing bodies only apply to orgs. |
+| **`IS CONSTITUENT OF`** | **0** | 1,945 | Membership (e.g. practices constituent of PCNs). |
+| **`IS COVID NOMINATED PAYEE FOR`** | **0** | 897 | Financial payee nominations are legal orgs only. |
+
+
+A `site` is **never the `target_code`** in any relationship (0 occurrences across all relationships). In ODS, relationships flow outward from a site to its operating org or geography (`Site -> IS OPERATED BY -> Org`), but other entities never link back to a site as their target.
+
+| Relationship (`rel_name`) | Sites (`site`) | Orgs (`org`) |
+| :--- | :---: | :---: |
+| **`IS OPERATED BY`** | **63,102** (100% of sites) | 73,887 (41% of orgs) |
+| **`IS LOCATED IN THE GEOGRAPHY OF`** | **45,382** (72% of sites) | 201,903 |
+| **`IS NOMINATED PAYEE FOR`** | **47** (<0.1% legacy edge-cases) | 1,592 |
+| **`IS A SUB-DIVISION OF`** | **18** | 127 |
+| *All 5 other relationship types* | **0** | 128,806 |
+
+Query to verify:
+
+```sql
+SELECT 
+    r.rel_name,
+    count(CASE WHEN o.record_class = 'site' THEN 1 END) AS site_source_count,
+    count(CASE WHEN o.record_class = 'org' THEN 1 END) AS org_source_count
+FROM 'ods_data/releases/2026-08-28/relationships.parquet' r
+JOIN 'ods_data/releases/2026-08-28/orgs.parquet' o 
+    ON r.source_code = o.ods_code
+GROUP BY r.rel_name
+ORDER BY site_source_count DESC;
+```
+
 ## What did this become
 
 ```sql
