@@ -105,23 +105,42 @@ pub fn run(args: Args) -> Result<PathBuf> {
 
     let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
 
-    let parent_prov = crate::provenance::OdsProvenance::load_from_dir(&input_path)
-        .or_else(|| crate::provenance::OdsProvenance::load_from_dir(&archive_info.archive_path))
-        .or_else(|| {
+    let disk_prov = crate::provenance::OdsProvenance::load_from_dir_with_path(&input_path)
+        .or_else(|| crate::provenance::OdsProvenance::load_from_dir_with_path(&archive_info.archive_path));
+
+    let parent_prov = match disk_prov {
+        Some((prov, prov_path)) => {
+            if input_path.is_dir() {
+                if let Err(e) = prov.validate_baseline() {
+                    anyhow::bail!(
+                        "Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?",
+                        input_path.display(),
+                        e
+                    );
+                }
+            }
+            let display_path = crate::provenance::format_provenance_display_path(&prov_path);
+            println!("* Provenance: {}", display_path);
+            Some(prov)
+        }
+        None => {
+            if input_path.is_dir() {
+                anyhow::bail!(
+                    "Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?",
+                    input_path.display()
+                );
+            }
+            eprintln!(
+                "! No provenance info found for {}. Source is unverified.",
+                input_path.display()
+            );
             crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
                 &archive_info.archive_path,
             )
-        });
-
-    if input_path.is_dir() {
-        if let Some(ref prov) = parent_prov {
-            if let Err(e) = prov.validate_baseline() {
-                anyhow::bail!("Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?", input_path.display(), e);
-            }
-        } else {
-            anyhow::bail!("Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?", input_path.display());
         }
-    }
+    };
+
+    eprintln!("Generating dataset target projections (Parquet)...");
 
     let xml_path = crate::ods_xml::find_xml_file(&archive_info.archive_path)?;
     let (mut prov, _concept_map, parsed) =

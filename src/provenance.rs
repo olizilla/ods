@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const PROVENANCE_TYPE_TAG: &str = "ods_provenance";
 
@@ -155,7 +155,7 @@ impl OdsProvenance {
         meta
     }
 
-    pub fn load_from_dir(dir: &Path) -> Option<Self> {
+    pub fn load_from_dir_with_path(dir: &Path) -> Option<(Self, PathBuf)> {
         let mut curr = if dir.is_file() {
             dir.parent().map(|p| p.to_path_buf())
         } else {
@@ -176,7 +176,7 @@ impl OdsProvenance {
                                     if prov.trud_release_sha256.is_none() { prov.trud_release_sha256 = zip_prov.trud_release_sha256; }
                                 }
                             }
-                            return Some(prov);
+                            return Some((prov, prov_file));
                         }
                     }
                 }
@@ -186,6 +186,10 @@ impl OdsProvenance {
             }
         }
         None
+    }
+
+    pub fn load_from_dir(dir: &Path) -> Option<Self> {
+        Self::load_from_dir_with_path(dir).map(|(prov, _)| prov)
     }
 
     pub fn try_extract_trud_zip_provenance(input_path: &Path) -> Option<Self> {
@@ -334,6 +338,31 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
         }
     }
     url.to_string()
+}
+
+/// Formats a provenance path relative to the workspace root if one is found,
+/// or as given otherwise.
+pub fn format_provenance_display_path(prov_path: &Path) -> String {
+    let ws_root = prov_path
+        .parent()
+        .and_then(|p| crate::workspace::find_workspace_root_from(p, None))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|pwd| crate::workspace::find_workspace_root_from(&pwd, None))
+        });
+
+    if let Some(ref root) = ws_root {
+        if let Ok(rel) = prov_path.strip_prefix(root) {
+            return rel.display().to_string();
+        }
+        if let (Ok(can_prov), Ok(can_root)) = (prov_path.canonicalize(), root.canonicalize()) {
+            if let Ok(rel) = can_prov.strip_prefix(&can_root) {
+                return rel.display().to_string();
+            }
+        }
+    }
+    prov_path.display().to_string()
 }
 
 pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
