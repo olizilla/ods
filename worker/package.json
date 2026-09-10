@@ -13,11 +13,11 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.2",
-    "@cloudflare/workers-types": "^4.20241230.0",
+    "@cloudflare/workers-types": "^5.20260910.1",
     "@types/node": "^20.17.10",
     "miniflare": "^3.20241218.0",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11",
-    "wrangler": "^3.100.0"
+    "wrangler": "^4.130.0"
   }
 }
