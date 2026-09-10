@@ -261,13 +261,9 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     assert!(manifests_dir.join("2026-07-31").exists());
     assert!(manifests_dir.join("latest").exists());
 
-    // Check versioned and latest layer files
-    let versioned_orgs = dist_dir.join("2026-07-31").join(ver).join("orgs.parquet");
-    let latest_orgs = dist_dir.join("latest").join("orgs.parquet");
-    assert!(versioned_orgs.exists());
-    assert!(latest_orgs.exists());
-    assert!(!versioned_orgs.is_symlink(), "dist files must be real files, not symlinks");
-    assert!(!latest_orgs.is_symlink(), "dist files must be real files, not symlinks");
+    // Check that duplicate trees are NOT written to dist/
+    assert!(!dist_dir.join("latest").exists(), "dist/latest must NOT exist in dist/");
+    assert!(!dist_dir.join("2026-07-31").exists(), "dist/2026-07-31 must NOT exist in dist/");
 
     // Check blobs
     let blobs_dir = dist_dir.join("v2").join("ods-data").join("blobs").join("sha256");

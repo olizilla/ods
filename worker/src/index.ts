@@ -12,7 +12,12 @@ const CORS_HEADERS: Record<string, string> = {
 
 const ROOT_TEXT = `ods.fyi — NHS Organisation Data Service, as Parquet.
 
-  duckdb -c "SELECT * FROM 'https://ods.fyi/latest/orgs.parquet' LIMIT 5"
+  duckdb -c "SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5"
+
+Running more than a few queries? Fetch it once and query locally:
+
+  cargo install --git https://github.com/olizilla/ods
+  ods pull
 
 Releases: https://ods.fyi/releases.json
 Source:   https://github.com/olizilla/ods
@@ -86,7 +91,7 @@ export function deriveHeaders(pathname: string, etag?: string, computedDigest?: 
   if (digestMatch) {
     headers.set('Docker-Content-Digest', `sha256:${digestMatch[1].toLowerCase()}`);
   } else if (computedDigest) {
-    headers.set('Docker-Content-Digest', `sha256:${computedDigest.toLowerCase()}`);
+    headers.set('Docker-Content-Digest', computedDigest.startsWith('sha256:') ? computedDigest.toLowerCase() : `sha256:${computedDigest.toLowerCase()}`);
   }
 
   // 3. Cache-Control
@@ -97,6 +102,8 @@ export function deriveHeaders(pathname: string, etag?: string, computedDigest?: 
 
   if (isImmutable) {
     headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  } else if (clean.startsWith('latest/') || (!clean.includes('/') && clean !== 'releases.json' && clean !== 'v2')) {
+    headers.set('Cache-Control', 'public, max-age=300');
   } else {
     headers.set('Cache-Control', 'no-cache');
   }
@@ -126,6 +133,109 @@ function errorResponse(pathname: string): Response {
     status: 404,
     headers,
   });
+}
+
+export interface NamedPathMatch {
+  manifestTag: string;
+  filename: string;
+  isLatest: boolean;
+}
+
+export function matchNamedPath(pathname: string): NamedPathMatch | null {
+  const clean = pathname.replace(/^\/+/, '');
+  if (!clean || clean === 'v2' || clean.startsWith('v2/') || clean === 'releases.json') {
+    return null;
+  }
+
+  // 1. Versioned path: <date>/<version>/<file>
+  // e.g. 2026-08-28/0.1.0/orgs.parquet
+  const versionedMatch = clean.match(/^(\d{4}-\d{2}-\d{2})\/(\d+\.\d+\.\d+)\/([^/]+)$/);
+  if (versionedMatch) {
+    return {
+      manifestTag: `v2/ods-data/manifests/${versionedMatch[1]}_${versionedMatch[2]}`,
+      filename: versionedMatch[3],
+      isLatest: false,
+    };
+  }
+
+  // 2. Latest path: latest/<file>
+  // e.g. latest/orgs.parquet
+  const latestMatch = clean.match(/^latest\/([^/]+)$/);
+  if (latestMatch) {
+    return {
+      manifestTag: 'v2/ods-data/manifests/latest',
+      filename: latestMatch[1],
+      isLatest: true,
+    };
+  }
+
+  // 3. Root convenience path: <file>
+  // e.g. orgs.parquet
+  if (!clean.includes('/')) {
+    return {
+      manifestTag: 'v2/ods-data/manifests/latest',
+      filename: clean,
+      isLatest: true,
+    };
+  }
+
+  return null;
+}
+
+export interface ManifestLayer {
+  mediaType: string;
+  digest: string;
+  size: number;
+  annotations?: Record<string, string>;
+}
+
+export interface ManifestInfo {
+  layersByTitle: Map<string, ManifestLayer>;
+  fetchedAt: number;
+}
+
+const manifestCache = new Map<string, ManifestInfo>();
+
+export function clearManifestCache(): void {
+  manifestCache.clear();
+}
+
+export async function getManifest(tag: string, bucket: R2Bucket): Promise<ManifestInfo | null> {
+  const cached = manifestCache.get(tag);
+  const now = Date.now();
+  const isLatest = tag.endsWith('/latest');
+  const ttl = isLatest ? 1000 : Infinity;
+
+  if (cached && now - cached.fetchedAt < ttl) {
+    return cached;
+  }
+
+  const obj = await bucket.get(tag);
+  if (!obj) {
+    return null;
+  }
+
+  try {
+    const text = await obj.text();
+    const parsed = JSON.parse(text);
+    const layersByTitle = new Map<string, ManifestLayer>();
+    if (Array.isArray(parsed.layers)) {
+      for (const layer of parsed.layers) {
+        const title = layer.annotations?.['org.opencontainers.image.title'];
+        if (title) {
+          layersByTitle.set(title, layer);
+        }
+      }
+    }
+    const info: ManifestInfo = {
+      layersByTitle,
+      fetchedAt: now,
+    };
+    manifestCache.set(tag, info);
+    return info;
+  } catch {
+    return null;
+  }
 }
 
 export default {
@@ -169,14 +279,30 @@ export default {
       return new Response('{}', { status: 200, headers });
     }
 
-    const key = pathToKey(pathname);
+    const namedMatch = matchNamedPath(pathname);
+    let key = pathToKey(pathname);
+    let resolvedLayer: ManifestLayer | null = null;
+
+    if (namedMatch) {
+      const manifest = await getManifest(namedMatch.manifestTag, env.BUCKET);
+      if (!manifest) {
+        return errorResponse(pathname);
+      }
+      const layer = manifest.layersByTitle.get(namedMatch.filename);
+      if (!layer) {
+        return errorResponse(pathname);
+      }
+      resolvedLayer = layer;
+      const hex = layer.digest.replace(/^sha256:/i, '').toLowerCase();
+      key = `v2/ods-data/blobs/sha256/${hex}`;
+    }
 
     // Range parsing: ignore multi-range requests and treat as unranged (full body 200)
     const rawRange = request.headers.get('range');
     const isMultiRange = rawRange ? rawRange.includes(',') : false;
 
     // Check if HEAD on manifest tag
-    const isManifestTag = pathname.includes('/manifests/') && !pathname.includes('sha256:');
+    const isManifestTag = !resolvedLayer && pathname.includes('/manifests/') && !pathname.includes('sha256:');
 
     if (request.method === 'HEAD') {
       if (isManifestTag) {
@@ -196,13 +322,21 @@ export default {
       if (!headObj) {
         return errorResponse(pathname);
       }
-      const headers = deriveHeaders(pathname, headObj.httpEtag);
+      const effectiveEtag = resolvedLayer ? resolvedLayer.digest : headObj.httpEtag;
+      const effectiveDigest = resolvedLayer ? resolvedLayer.digest : undefined;
+      const headers = deriveHeaders(pathname, effectiveEtag, effectiveDigest);
       headers.set('Content-Length', headObj.size.toString());
       return new Response(null, { status: 200, headers });
     }
 
-    // Check If-None-Match first
+    // Check If-None-Match helper
     const ifNoneMatch = request.headers.get('if-none-match');
+    const checkIfNoneMatch = (etagToCheck?: string): boolean => {
+      if (!ifNoneMatch || !etagToCheck) return false;
+      const cleanEtag = etagToCheck.replace(/^"|"$/g, '');
+      const clientEtag = ifNoneMatch.replace(/^"|"$/g, '');
+      return cleanEtag === clientEtag || ifNoneMatch === '*';
+    };
 
     if (!rawRange || isMultiRange) {
       const object = await env.BUCKET.get(key);
@@ -210,17 +344,16 @@ export default {
         return errorResponse(pathname);
       }
 
+      const effectiveEtag = resolvedLayer ? resolvedLayer.digest : object.httpEtag;
+      const effectiveDigest = resolvedLayer ? resolvedLayer.digest : undefined;
+
       // Check If-None-Match
-      if (ifNoneMatch && object.httpEtag) {
-        const cleanEtag = object.httpEtag.replace(/^"|"$/g, '');
-        const clientEtag = ifNoneMatch.replace(/^"|"$/g, '');
-        if (cleanEtag === clientEtag || ifNoneMatch === '*') {
-          const headers = deriveHeaders(pathname, object.httpEtag);
-          return new Response(null, { status: 304, headers });
-        }
+      if (checkIfNoneMatch(effectiveEtag)) {
+        const headers = deriveHeaders(pathname, effectiveEtag, effectiveDigest);
+        return new Response(null, { status: 304, headers });
       }
 
-      let computedDigest: string | undefined;
+      let computedDigest: string | undefined = effectiveDigest;
       let body: ReadableStream | ArrayBuffer = object.body;
 
       if (isManifestTag) {
@@ -229,7 +362,7 @@ export default {
         body = bodyBytes;
       }
 
-      const headers = deriveHeaders(pathname, object.httpEtag, computedDigest);
+      const headers = deriveHeaders(pathname, effectiveEtag, computedDigest);
       headers.set('Content-Length', object.size.toString());
 
       return new Response(body, {
@@ -243,6 +376,8 @@ export default {
     if (!headObj) {
       return errorResponse(pathname);
     }
+    const headEtag = resolvedLayer ? resolvedLayer.digest : headObj.httpEtag;
+    const headDigest = resolvedLayer ? resolvedLayer.digest : undefined;
 
     const rangeMatch = rawRange.match(/^bytes=(\d*)-(\d*)$/);
     if (rangeMatch) {
@@ -269,7 +404,7 @@ export default {
       }
 
       if (isUnsatisfiable) {
-        const headers = deriveHeaders(pathname, headObj.httpEtag);
+        const headers = deriveHeaders(pathname, headEtag, headDigest);
         headers.set('Content-Range', `bytes */${headObj.size}`);
         return new Response(null, {
           status: 416,
@@ -288,7 +423,7 @@ export default {
     }
 
     if (!object) {
-      const headers = deriveHeaders(pathname, headObj.httpEtag);
+      const headers = deriveHeaders(pathname, headEtag, headDigest);
       headers.set('Content-Range', `bytes */${headObj.size}`);
       return new Response(null, {
         status: 416,
@@ -296,17 +431,16 @@ export default {
       });
     }
 
+    const effectiveEtag = resolvedLayer ? resolvedLayer.digest : object.httpEtag;
+    const effectiveDigest = resolvedLayer ? resolvedLayer.digest : undefined;
+
     // Check If-None-Match
-    if (ifNoneMatch && object.httpEtag) {
-      const cleanEtag = object.httpEtag.replace(/^"|"$/g, '');
-      const clientEtag = ifNoneMatch.replace(/^"|"$/g, '');
-      if (cleanEtag === clientEtag || ifNoneMatch === '*') {
-        const headers = deriveHeaders(pathname, object.httpEtag);
-        return new Response(null, { status: 304, headers });
-      }
+    if (checkIfNoneMatch(effectiveEtag)) {
+      const headers = deriveHeaders(pathname, effectiveEtag, effectiveDigest);
+      return new Response(null, { status: 304, headers });
     }
 
-    let computedDigest: string | undefined;
+    let computedDigest: string | undefined = effectiveDigest;
     if (isManifestTag) {
       const fullObj = await env.BUCKET.get(key);
       if (fullObj) {
@@ -315,7 +449,7 @@ export default {
       }
     }
 
-    const headers = deriveHeaders(pathname, object.httpEtag, computedDigest);
+    const headers = deriveHeaders(pathname, effectiveEtag, computedDigest);
 
     if ('range' in object && object.range) {
       const offset = (object.range as { offset?: number }).offset ?? 0;

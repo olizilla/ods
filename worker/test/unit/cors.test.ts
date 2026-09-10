@@ -1,10 +1,33 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import worker from '../../src/index';
+import worker, { clearManifestCache, sha256Hex } from '../../src/index';
 import { env } from 'cloudflare:test';
 
 describe('CORS Configuration', () => {
   beforeEach(async () => {
-    await env.BUCKET.put('latest/orgs.parquet', new Uint8Array([1, 2, 3, 4]));
+    clearManifestCache();
+    const layerBytes = new Uint8Array([1, 2, 3, 4]);
+    const layerDigest = await sha256Hex(layerBytes);
+    await env.BUCKET.put(`v2/ods-data/blobs/sha256/${layerDigest}`, layerBytes);
+
+    const manifestObj = {
+      schemaVersion: 2,
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      config: { digest: 'sha256:1111', size: 10 },
+      layers: [
+        {
+          mediaType: 'application/vnd.apache.parquet',
+          digest: `sha256:${layerDigest}`,
+          size: layerBytes.length,
+          annotations: {
+            'org.opencontainers.image.title': 'orgs.parquet',
+          },
+        },
+      ],
+    };
+    await env.BUCKET.put(
+      'v2/ods-data/manifests/latest',
+      new TextEncoder().encode(JSON.stringify(manifestObj))
+    );
   });
 
   it('Acceptance 15: OPTIONS returns 204 with full CORS headers', async () => {

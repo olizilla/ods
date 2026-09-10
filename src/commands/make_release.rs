@@ -310,21 +310,6 @@ pub fn run(args: Args) -> Result<()> {
     fs::write(manifests_dir.join(date), &manifest_bytes)?;
     fs::write(manifests_dir.join("latest"), &manifest_bytes)?;
 
-    // 5d. Layer files by title: {date}/{version}/{title} and latest/{title}
-    for layer in &manifest.layers {
-        if let Some(ref ann) = layer.annotations {
-            if let Some(title) = ann.get(ANNOTATION_TITLE) {
-                let src_layer = release_dir.join(title);
-                if src_layer.exists() {
-                    let dst_versioned = dist_dir.join(date).join(&version).join(title);
-                    let dst_latest = dist_dir.join("latest").join(title);
-                    link_or_copy(&src_layer, &dst_versioned)?;
-                    link_or_copy(&src_layer, &dst_latest)?;
-                }
-            }
-        }
-    }
-
     let object_count = count_files_in_dir(&dist_dir);
     eprintln!("✓ dist/ written, {} objects", object_count);
 

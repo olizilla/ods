@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import worker, { sha256Hex } from '../../src/index';
+import worker, { clearManifestCache, sha256Hex } from '../../src/index';
 import { env } from 'cloudflare:test';
 
 describe('Range Requests & HEAD Handlers', () => {
@@ -8,18 +8,31 @@ describe('Range Requests & HEAD Handlers', () => {
     dummy1000Bytes[i] = i % 256;
   }
 
-  const manifestBytes = new TextEncoder().encode(
-    JSON.stringify({
+  let manifestBytes: Uint8Array;
+
+  beforeEach(async () => {
+    clearManifestCache();
+    const dummyDigest = await sha256Hex(dummy1000Bytes);
+    await env.BUCKET.put(`v2/ods-data/blobs/sha256/${dummyDigest}`, dummy1000Bytes);
+
+    const manifestObj = {
       schemaVersion: 2,
       mediaType: 'application/vnd.oci.image.manifest.v1+json',
       config: { digest: 'sha256:1111', size: 10 },
-      layers: [],
-    })
-  );
-
-  beforeEach(async () => {
-    await env.BUCKET.put('2026-07-31/1.0.1/orgs.parquet', dummy1000Bytes);
+      layers: [
+        {
+          mediaType: 'application/vnd.apache.parquet',
+          digest: `sha256:${dummyDigest}`,
+          size: dummy1000Bytes.length,
+          annotations: {
+            'org.opencontainers.image.title': 'orgs.parquet',
+          },
+        },
+      ],
+    };
+    manifestBytes = new TextEncoder().encode(JSON.stringify(manifestObj));
     await env.BUCKET.put('v2/ods-data/manifests/2026-07-31_1.0.1', manifestBytes);
+    await env.BUCKET.put('v2/ods-data/manifests/latest', manifestBytes);
   });
 
   it('handles standard slice range (bytes=0-15)', async () => {
@@ -118,5 +131,37 @@ describe('Range Requests & HEAD Handlers', () => {
     expect(res.headers.get('content-length')).toBe(manifestBytes.length.toString());
     const text = await res.text();
     expect(text).toBe('');
+  });
+
+  it('handles range request on latest/orgs.parquet returning 206 slice', async () => {
+    const res = await worker.fetch(
+      new Request('https://ods.fyi/latest/orgs.parquet', {
+        headers: { range: 'bytes=0-15' },
+      }),
+      env
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 0-15/1000');
+    expect(res.headers.get('content-length')).toBe('16');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes.length).toBe(16);
+    expect(bytes[0]).toBe(0);
+    expect(bytes[15]).toBe(15);
+  });
+
+  it('handles range request on bare root orgs.parquet returning 206 slice', async () => {
+    const res = await worker.fetch(
+      new Request('https://ods.fyi/orgs.parquet', {
+        headers: { range: 'bytes=100-199' },
+      }),
+      env
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe('bytes 100-199/1000');
+    expect(res.headers.get('content-length')).toBe('100');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes.length).toBe(100);
+    expect(bytes[0]).toBe(100);
+    expect(bytes[99]).toBe(199);
   });
 });

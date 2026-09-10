@@ -141,7 +141,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       // 4. Load every single object from dist/ into in-process Miniflare R2
       const bucket = await mf.getR2Bucket('BUCKET');
       const distKeys = walkDir(distDir);
-      expect(distKeys.length).toBe(19);
+      expect(distKeys.length).toBe(9);
 
       for (const relKey of distKeys) {
         const filePath = path.join(distDir, relKey);
@@ -187,18 +187,44 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
   it('Acceptance 10: /latest/ actually moves when a new release is published', async () => {
     const bucket = await mf.getR2Bucket('BUCKET');
 
+    const publishRelease = async (orgsBytes: Uint8Array) => {
+      const orgsDigest = crypto.createHash('sha256').update(orgsBytes).digest('hex');
+      await bucket.put(`v2/ods-data/blobs/sha256/${orgsDigest}`, orgsBytes);
+
+      const manifestObj = {
+        schemaVersion: 2,
+        mediaType: 'application/vnd.oci.image.manifest.v1+json',
+        config: { digest: 'sha256:dummyconfig', size: 10 },
+        layers: [
+          {
+            mediaType: 'application/vnd.apache.parquet',
+            digest: `sha256:${orgsDigest}`,
+            size: orgsBytes.length,
+            annotations: {
+              'org.opencontainers.image.title': 'orgs.parquet',
+            },
+          },
+        ],
+      };
+      const manifestBytes = new TextEncoder().encode(JSON.stringify(manifestObj));
+      await bucket.put('v2/ods-data/manifests/latest', manifestBytes);
+    };
+
     // Initial release
     const v1Bytes = new Uint8Array([10, 20, 30]);
-    await bucket.put('latest/orgs.parquet', v1Bytes);
+    await publishRelease(v1Bytes);
 
     const res1 = await mf.dispatchFetch(`${serverUrl}/latest/orgs.parquet`);
     expect(res1.status).toBe(200);
     const body1 = new Uint8Array(await res1.arrayBuffer());
     expect(body1).toEqual(v1Bytes);
 
+    // Wait for in-worker manifest cache TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
     // Newer release overwrites /latest/
     const v2Bytes = new Uint8Array([40, 50, 60, 70]);
-    await bucket.put('latest/orgs.parquet', v2Bytes);
+    await publishRelease(v2Bytes);
 
     const res2 = await mf.dispatchFetch(`${serverUrl}/latest/orgs.parquet`);
     expect(res2.status).toBe(200);

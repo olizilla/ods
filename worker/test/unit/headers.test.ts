@@ -1,73 +1,49 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import worker, { deriveHeaders, sha256Hex } from '../../src/index';
+import worker, { clearManifestCache, deriveHeaders, sha256Hex } from '../../src/index';
 import { env } from 'cloudflare:test';
 import expectedKeys from '../fixtures/expected-keys.json';
 
 describe('Derived Headers & Caching Policies', () => {
-  const sampleManifestBytes = new TextEncoder().encode(
-    JSON.stringify({
-      schemaVersion: 2,
-      mediaType: 'application/vnd.oci.image.manifest.v1+json',
-      config: {
-        mediaType: 'application/vnd.fyi.ods.provenance.v1+json',
-        digest: 'sha256:083525aae40231344be2fa3f14064ca2e455b0bcce9868d0e9051558ebbf5b0a',
-        size: 1024,
-      },
-      layers: [],
-    })
-  );
+  const sampleLayerBytes = new Uint8Array([1, 2, 3, 4]);
+  let sampleLayerDigest: string;
+  let sampleManifestBytes: Uint8Array;
+  let sampleManifestDigest: string;
 
   beforeEach(async () => {
-    // Populate manifest tag and blob in R2
-    const manifestDigest = await sha256Hex(sampleManifestBytes);
+    clearManifestCache();
+    sampleLayerDigest = await sha256Hex(sampleLayerBytes);
+    sampleManifestBytes = new TextEncoder().encode(
+      JSON.stringify({
+        schemaVersion: 2,
+        mediaType: 'application/vnd.oci.image.manifest.v1+json',
+        config: {
+          mediaType: 'application/vnd.fyi.ods.provenance.v1+json',
+          digest: 'sha256:083525aae40231344be2fa3f14064ca2e455b0bcce9868d0e9051558ebbf5b0a',
+          size: 1024,
+        },
+        layers: [
+          {
+            mediaType: 'application/vnd.apache.parquet',
+            digest: `sha256:${sampleLayerDigest}`,
+            size: sampleLayerBytes.length,
+            annotations: {
+              'org.opencontainers.image.title': 'orgs.parquet',
+            },
+          },
+        ],
+      })
+    );
+    sampleManifestDigest = await sha256Hex(sampleManifestBytes);
+
+    // Populate manifest tags and blobs in R2
     await env.BUCKET.put('v2/ods-data/manifests/2026-07-31_0.1.0', sampleManifestBytes);
-    await env.BUCKET.put(`v2/ods-data/blobs/sha256/${manifestDigest}`, sampleManifestBytes);
-    await env.BUCKET.put('2026-07-31/0.1.0/orgs.parquet', new Uint8Array([1, 2, 3, 4]));
-    await env.BUCKET.put('latest/orgs.parquet', new Uint8Array([5, 6, 7, 8]));
+    await env.BUCKET.put('v2/ods-data/manifests/latest', sampleManifestBytes);
+    await env.BUCKET.put(`v2/ods-data/blobs/sha256/${sampleManifestDigest}`, sampleManifestBytes);
+    await env.BUCKET.put(`v2/ods-data/blobs/sha256/${sampleLayerDigest}`, sampleLayerBytes);
     await env.BUCKET.put('releases.json', new TextEncoder().encode('{"releases":[]}'));
   });
 
   const EXPECTED_CONTRACT: Record<string, { contentType: string; cacheControl: string }> = {
-    '2026-07-31/0.1.0/NOTES.md': {
-      contentType: 'text/markdown; charset=utf-8',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    '2026-07-31/0.1.0/_provenance.json': {
-      contentType: 'application/json',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    '2026-07-31/0.1.0/datapackage.json': {
-      contentType: 'application/json',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    '2026-07-31/0.1.0/orgs.parquet': {
-      contentType: 'application/vnd.apache.parquet',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    '2026-07-31/0.1.0/roles.parquet': {
-      contentType: 'application/vnd.apache.parquet',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'latest/NOTES.md': {
-      contentType: 'text/markdown; charset=utf-8',
-      cacheControl: 'no-cache',
-    },
-    'latest/_provenance.json': {
-      contentType: 'application/json',
-      cacheControl: 'no-cache',
-    },
-    'latest/datapackage.json': {
-      contentType: 'application/json',
-      cacheControl: 'no-cache',
-    },
-    'latest/orgs.parquet': {
-      contentType: 'application/vnd.apache.parquet',
-      cacheControl: 'no-cache',
-    },
-    'latest/roles.parquet': {
-      contentType: 'application/vnd.apache.parquet',
-      cacheControl: 'no-cache',
-    },
     'v2/ods-data/blobs/sha256/0b19e9910a525c3ceb11ed7b821e1c390d1b18cac24be0f4ae5a477a9409690f': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
@@ -128,7 +104,7 @@ describe('Derived Headers & Caching Policies', () => {
   });
 
   it('Acceptance 8: manifest by digest and by tag return identical responses and manifest media type', async () => {
-    const digestHex = await sha256Hex(sampleManifestBytes);
+    const digestHex = sampleManifestDigest;
     const digestUrl = `https://ods.fyi/v2/ods-data/manifests/sha256:${digestHex}`;
     const tagUrl = `https://ods.fyi/v2/ods-data/manifests/2026-07-31_0.1.0`;
 
@@ -147,6 +123,50 @@ describe('Derived Headers & Caching Policies', () => {
     const bytesDigest = new Uint8Array(await resDigest.arrayBuffer());
     const bytesTag = new Uint8Array(await resTag.arrayBuffer());
     expect(bytesDigest).toEqual(bytesTag);
+  });
+
+  it('serves resolved versioned path with immutable cache and layer digest', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/2026-07-31/0.1.0/orgs.parquet'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/vnd.apache.parquet');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('etag')).toBe(`"sha256:${sampleLayerDigest}"`);
+    expect(res.headers.get('docker-content-digest')).toBe(`sha256:${sampleLayerDigest}`);
+    expect(res.headers.get('content-length')).toBe(sampleLayerBytes.length.toString());
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes).toEqual(sampleLayerBytes);
+  });
+
+  it('serves resolved latest path with max-age=300 and layer digest', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/latest/orgs.parquet'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/vnd.apache.parquet');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(res.headers.get('etag')).toBe(`"sha256:${sampleLayerDigest}"`);
+    expect(res.headers.get('docker-content-digest')).toBe(`sha256:${sampleLayerDigest}`);
+    expect(res.headers.get('content-length')).toBe(sampleLayerBytes.length.toString());
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes).toEqual(sampleLayerBytes);
+  });
+
+  it('serves resolved root convenience path with max-age=300 and layer digest', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/orgs.parquet'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/vnd.apache.parquet');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(res.headers.get('etag')).toBe(`"sha256:${sampleLayerDigest}"`);
+    expect(res.headers.get('docker-content-digest')).toBe(`sha256:${sampleLayerDigest}`);
+    expect(res.headers.get('content-length')).toBe(sampleLayerBytes.length.toString());
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes).toEqual(sampleLayerBytes);
+  });
+
+  it('returns plain text 404 for missing file in latest manifest', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/latest/missing.parquet'), env);
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    const text = await res.text();
+    expect(text).toContain('Not found. See https://ods.fyi/');
   });
 
   it('Acceptance 12: If-None-Match returns 304 Not Modified when ETag matches', async () => {

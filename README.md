@@ -6,7 +6,7 @@ The `ods` project lets use and explore the data in in multiple ways:
 
 | I want to...                  | Feature                | Commands |
 |-------------------------------|------------------------|----------|
-| _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM https://ods.fyi/orgs.parquet` |
+| _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5` |
 | _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` `ods info` |
 | _**Cite** the data_           | Citation guide         | `ods cite` |
 | _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` `ods make` `ods trud audit` |
@@ -22,27 +22,49 @@ A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide a stable, ac
 
 ## Query the data
 
-Use `duckdb` to query the hosted parquet files. 
+- Use `duckdb` to query the hosted parquet files. 
+- Use `ods pull` to fetch the dataset to your computer. 
+- Use `ods find` to explore the data without SQL.
 
-Use `ods pull` to fetch the dataset to your computer. 
-
-Use `ods find` to explore the data without SQL.
-
-### Find all active GP practices, and their parent ICB 
+`https://ods.fyi/orgs.parquet` is a convenience URL that follows the newest release.
+Query the hosted Parquet files directly with `duckdb` without installing `ods`:
 
 ```shell
 duckdb -c "
-  SELECT ods_code, name, postcode, icb_name
-    FROM https://ods.fyi/orgs.parquet
-   WHERE list_contains(role_names, 'GP Practice');"
+  SELECT ods_code, name, postcode, role_names
+    FROM 'https://ods.fyi/orgs.parquet'
+   WHERE list_contains(role_names, 'GP Practice')
+   AND postcode LIKE 'SW9%';"
 ```
 
-Work offline using `ods pull` to fetch the latest dataset to your computer.
+Running more than a few queries? Fetch the parquet files for the release once with `ods pull`
 
 ```shell
 ods pull
-ods find --role 'GP Practice'
+ods find --gp --in SW9
+* Source: releases/2026-08-28/orgs.parquet
+* --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
+┌──────────┬──────────────────────────────┬──────────┬────────────────┬───────┬──────────┐
+│ ODS Code ┆ Name                         ┆ Postcode ┆ Roles          ┆ Class ┆ Matched  │
+╞══════════╪══════════════════════════════╪══════════╪════════════════╪═══════╪══════════╡
+│ G85028   ┆ STOCKWELL GROUP PRACTICE     ┆ SW9 9TJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85054   ┆ LAMBETH WALK GROUP PRACTICE  ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85073   ┆ VASSALL MEDICAL CENTRE       ┆ SW9 6NA  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85100   ┆ BECKETT HOUSE PRACTICE       ┆ SW9 9DL  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85135   ┆ MINET GREEN HEALTH PRACTICE  ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85695   ┆ AKERMAN MEDICAL PRACTICE     ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y00020   ┆ THE GRANTHAM PRACTICE        ┆ SW9 9BH  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y03063   ┆ HETHERINGTON AT THE PAVILION ┆ SW9 8DJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y05161   ┆ FIVEWAYS PCN EA HUB          ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y05163   ┆ LARC CLINIC (LA)             ┆ SW9 8DJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+├──────────┴──────────────────────────────┴──────────┴────────────────┴───────┴──────────┤
+│ 10 active records                                        Use --all to include inactive │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+Local queries on static parquet files are _fast_! Each release is published as an [OCI Image], and `ods pull` verifies the file integrity for you. 
+
+A DuckDB query over HTTP makes about 30 range requests. Querying local files is faster for you and costs about ~200x less on the hosting bill.
 
 ## ODS Data directory
 
@@ -172,3 +194,6 @@ Considerate PRs welcome! The priorities for this project are:
 - ODS Data Model: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 - NHS TRUD ODS info: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5
 - NHS TRUD ODS releases: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases
+
+
+[OCI Image]: https://opencontainers.org/faq/
