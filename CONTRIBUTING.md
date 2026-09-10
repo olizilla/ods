@@ -164,8 +164,16 @@ When publishing a monthly dataset cut or republishing a fix:
 
    > `dist/` contains this release's objects. `releases.json` is not a release object: it is the index, it lives in git, and it is published from there as the commit point.
 
-3. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
-4. Publish using the release script:
+3. Rehearse the release before announcing:
+   ```console
+   $ rclone copy dist/ r2:ods-fyi/
+   $ ods pull --index ./rehearsal.json --force
+   $ ods find sedbergh
+   ```
+   where `rehearsal.json` names the manifest digest just pushed. Blobs on ods.fyi are inert until `releases.json` names them, which is what makes this safe to run before announcing anything.
+
+4. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
+5. Publish using the release script:
    ```console
    $ scripts/release-data.sh --publish <date> <version>
    ```

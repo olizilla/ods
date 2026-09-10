@@ -27,6 +27,10 @@ pub struct Args {
     /// Target release date in YYYY-MM-DD format (defaults to latest available release)
     pub release_date: Option<String>,
 
+    /// Read the release index from this path or URL instead of the network
+    #[arg(long, hide = true)]
+    pub index: Option<String>,
+
     /// List all available remote and local release versions
     #[arg(long, short = 'l')]
     pub list: bool,
@@ -243,7 +247,12 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
     let _ws = Workspace::open_or_create(Some(workspace_root))?;
 
     // Step 1: Resolve index
-    let (index, _) = resolve_index_with_baked(workspace_root, fetcher, baked_override)?;
+    let (index, _) = resolve_index_with_baked(
+        workspace_root,
+        fetcher,
+        baked_override,
+        args.index.as_deref(),
+    )?;
 
     if args.list {
         return list_releases_cmd(workspace_root, &index, &args, &progress);
@@ -261,8 +270,55 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
     workspace_root: &Path,
     fetcher: &F,
     baked_override: Option<OdsReleaseIndex>,
+    index_override: Option<&str>,
 ) -> Result<(OdsReleaseIndex, Option<String>)> {
     let baked = baked_override.unwrap_or_else(|| OdsReleaseIndex::baked().unwrap_or_default());
+
+    if let Some(val) = index_override {
+        let is_http = val.starts_with("http://") || val.starts_with("https://");
+        let bytes = if is_http {
+            match fetcher.fetch_bytes(val) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("✖ Cannot read release index '{}': {}", val, e);
+                    return Err(AlreadyReported.into());
+                }
+            }
+        } else {
+            match fs::read(val) {
+                Ok(b) => b,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
+                    eprintln!("✖ Cannot read release index '{}': {}", val, clean_err);
+                    return Err(AlreadyReported.into());
+                }
+            }
+        };
+
+        let fetched_index: OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+            Ok(idx) => idx,
+            Err(_) => {
+                eprintln!("✖ Cannot parse release index '{}' as an ODS release index", val);
+                eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                return Err(AlreadyReported.into());
+            }
+        };
+
+        if let Err(e) = fetched_index.validate() {
+            eprintln!("✖ Cannot parse release index '{}' as an ODS release index", val);
+            if fetched_index.type_tag != "ods_release_index" {
+                eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+            } else {
+                eprintln!("  {}", e);
+            }
+            return Err(AlreadyReported.into());
+        }
+
+        let merged = baked.merge(&fetched_index)?;
+        let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&bytes, workspace_root);
+        return Ok((merged, Some("just now".to_string())));
+    }
 
     // 1. Try fetching remote index
     match fetcher.fetch_release_index() {
@@ -469,7 +525,7 @@ fn pull_single_release<F: OciBlobFetcher>(
         }
     }
 
-    let default_mirrors = vec![
+    let default_mirrors = [
         MirrorEntry {
             url: "https://ods.fyi/v2/ods-data".to_string(),
         },
