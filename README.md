@@ -130,7 +130,7 @@ ods cite
 Subcommands for working with the NHS TRUD REST API (`pull`, `diff`, `audit`, `verify`).
 
 ```bash
-NHS_TRUD_API_KEY="<key>" ods trud pull
+TRUD_API_KEY="<key>" ods trud pull
 ods trud diff --old 2026-06-22 --new 2026-07-31
 ods trud audit
 ods trud verify

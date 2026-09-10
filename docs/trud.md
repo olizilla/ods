@@ -27,7 +27,7 @@ ods trud pull [OPTIONS]
 
 | Option | Short | Environment Variable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--api-key <KEY>` | | `NHS_TRUD_API_KEY` | | Your TRUD API key. Required unless set in environment or passed via 1Password (`op run`). |
+| `--api-key <KEY>` | | `TRUD_API_KEY` | | Your TRUD API key. Required unless set in environment or passed via 1Password (`op run`). |
 | `--release <DATE>` | | | Latest available | Target release date in `YYYY-MM-DD` format (e.g. `2026-07-31`). |
 | `--output <DIR>` | `-o` | | `./ods_data/releases/<date>/` | Custom destination directory for archive and provenance files. |
 | `--verify-only <FILE>` | | | | Compute local SHA-256 for `<FILE>` and verify against TRUD API without downloading. |
@@ -42,12 +42,12 @@ op run --env-file=.env -- ods trud pull
 
 #### Target Specific Release Date with Verbose Logging
 ```bash
-ods trud pull --api-key $NHS_TRUD_API_KEY --release 2026-07-31 --verbose
+ods trud pull --api-key $TRUD_API_KEY --release 2026-07-31 --verbose
 ```
 
 #### Save to Custom Directory
 ```bash
-ods trud pull --api-key $NHS_TRUD_API_KEY -o ./custom_downloads/
+ods trud pull --api-key $TRUD_API_KEY -o ./custom_downloads/
 ```
 
 ### How It Works

@@ -52,8 +52,8 @@ pub struct Args {
     #[arg(long)]
     pub format: Option<String>,
 
-    /// TRUD API Key (defaults to $NHS_TRUD_API_KEY if omitted)
-    #[arg(long, env = "NHS_TRUD_API_KEY")]
+    /// TRUD API Key
+    #[arg(long, env = "TRUD_API_KEY")]
     pub api_key: Option<String>,
 
     /// Custom output directory for downloaded archive and provenance (defaults to workspace release dir ./ods_data/releases/<date>/)
@@ -287,7 +287,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(ref key) if !key.trim().is_empty() => key.clone(),
         _ => {
             anyhow::bail!(
-                "✖ Missing API Key\n  Please set $NHS_TRUD_API_KEY environment variable or pass --api-key <KEY>.\n  See: https://isd.digital.nhs.uk/trud/user/authenticated/group/0/pack/341/subpack/160/releases"
+                "✖ Missing API Key\n  Please set $TRUD_API_KEY environment variable or pass --api-key <KEY>.\n  See: https://isd.digital.nhs.uk/trud/user/authenticated/group/0/pack/341/subpack/160/releases"
             );
         }
     };

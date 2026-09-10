@@ -69,7 +69,7 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ```mermaid
 flowchart TD
-    A[ods fetch --api-key KEY] --> B[Query TRUD REST API /items/341/releases]
+    A[ods trud pull --api-key KEY] --> B[Query TRUD REST API /items/341/releases]
     B --> C[Fetch Official archiveFileSha256 & archiveFileUrl]
     C --> D[Download Archive .zip to ods_data/releases/DATE/raw/]
     D --> E[Compute Local SHA-256 Hash]

@@ -34,7 +34,7 @@ fn embed_metadata(
 
 fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterProperties {
     let meta_kv = if let Some(p) = prov {
-        p.to_parquet_metadata()
+        p.to_parquet_declared_metadata()
             .into_iter()
             .map(|(k, v)| parquet::file::metadata::KeyValue {
                 key: k,
@@ -42,10 +42,7 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
             })
             .collect()
     } else {
-        vec![parquet::file::metadata::KeyValue {
-            key: "ods.tool_version".to_string(),
-            value: Some(env!("CARGO_PKG_VERSION").to_string()),
-        }]
+        vec![]
     };
 
     // Parquet Encoding Rationale:
@@ -233,7 +230,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
     let enriched_prov = crate::provenance::OdsProvenance::load_from_dir(&output_path);
     let release_pkg =
         crate::datapackage::generate_release_datapackage(&output_path, enriched_prov.as_ref(), None, None);
-    let pkg_json = serde_json::to_string_pretty(&release_pkg)?;
+    let pkg_json = serde_json::to_string_pretty(&release_pkg)? + "\n";
     std::fs::write(output_path.join("datapackage.json"), pkg_json)
         .context("writing datapackage.json")?;
 

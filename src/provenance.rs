@@ -109,7 +109,21 @@ impl Default for OdsProvenance {
 }
 
 impl OdsProvenance {
-    pub fn to_parquet_metadata(&self) -> std::collections::BTreeMap<String, String> {
+    /// Declared Parquet key-value metadata subset.
+    /// Emits strictly the nine source and publication identity keys:
+    /// - ods.trud_release_date
+    /// - ods.trud_release_name
+    /// - ods.trud_release_file
+    /// - ods.trud_release_sha256
+    /// - ods.publication_date
+    /// - ods.publication_seq_num
+    /// - ods.publication_type
+    /// - ods.publication_source
+    /// - ods.dataset_version
+    ///
+    /// Tool fields (tool_version, tool_git_sha, tool_git_dirty) and verification source
+    /// are strictly excluded so Parquet bytes are a pure function of the source archive.
+    pub fn to_parquet_declared_metadata(&self) -> std::collections::BTreeMap<String, String> {
         let mut meta = std::collections::BTreeMap::new();
         if let Some(ref d) = self.trud_release_date {
             meta.insert("ods.trud_release_date".to_string(), d.clone());
@@ -134,17 +148,6 @@ impl OdsProvenance {
         }
         if let Some(ref s) = self.publication_source {
             meta.insert("ods.publication_source".to_string(), s.clone());
-        }
-        if let Some(ref v) = self.tool_version {
-            meta.insert("ods.tool_version".to_string(), v.clone());
-        }
-        if let Some(ref sha) = self.tool_git_sha {
-            meta.insert("ods.tool_git_sha".to_string(), sha.clone());
-        }
-        if let Some(dirty) = self.tool_git_dirty {
-            if dirty {
-                meta.insert("ods.tool_git_dirty".to_string(), "true".to_string());
-            }
         }
         if let Some(ref ver) = self.dataset_version {
             meta.insert("ods.dataset_version".to_string(), ver.clone());

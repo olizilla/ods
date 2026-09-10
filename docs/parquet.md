@@ -25,7 +25,9 @@ The source is one large XML document which is awkward to query. These tables are
 NHS England documents the model behind it in the [ODS data model reference][ods-model].
 
 The parquet files are ZSTD level 3, pinned so that rebuilding a release gives
-byte-identical output. 
+byte-identical output. Paired with a declared metadata subset that excludes tool
+and builder identity, anyone rebuilding from the same TRUD zip gets bit-identical
+Parquet tables.
 
 Worked examples live in [queries.md]; Note that the ODS records every entity that works with the NHS;
 schools and care homes outnumber GP Practice rows. Other suprises in the data are listed in the
@@ -231,12 +233,21 @@ which handle them natively.
 
 Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
 archive it came from and its verified SHA-256, the ODS publication date and
-sequence number, and the commit that built it. That's enough to rebuild the
-release and compare bytes. Hashes are uppercase throughout, matching TRUD.
+sequence number, and the commit that built it. Hashes are uppercase throughout, matching TRUD.
 `ods cite` renders it as a citation.
 
-The same facts are in each file's Parquet key-value metadata, so a file separated
-from its directory still knows where it came from.
+Each Parquet file carries a deliberate subset of provenance in its key-value metadata:
+source and publication identity only (`ods.trud_release_date`, `ods.trud_release_name`,
+`ods.trud_release_file`, `ods.trud_release_sha256`, `ods.publication_date`,
+`ods.publication_seq_num`, `ods.publication_type`, `ods.publication_source`, and
+`ods.dataset_version`). Builder and tool fields (`ods.tool_version`, `ods.tool_git_sha`,
+`ods.tool_git_dirty`, and `trud_release_sha256_verified`) are excluded so the Parquet bytes
+depend solely on the source archive.
+
+To verify a release: rebuild from the TRUD archive using any version of `ods` and compare
+the SHA-256 of the generated Parquet files against the hashes in the published
+`datapackage.json`. `_provenance.json` records who built it and will differ between
+builders; the data files will match byte for byte.
 
 ## Versioning
 

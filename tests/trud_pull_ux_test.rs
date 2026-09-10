@@ -915,4 +915,53 @@ fn test_batch_pin_moved_when_newer_downloaded() {
     assert!(output.contains("current → releases/2026-05-28"), "Must emit pin change for newly fetched newer release");
 }
 
+#[test]
+fn test_trud_pull_help_shows_clean_api_key_env() {
+    let output = ods_binary()
+        .args(["trud", "pull", "--help"])
+        .output()
+        .expect("running ods trud pull --help");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("--api-key <API_KEY>"),
+        "Help must document --api-key option: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("TRUD API Key [env: TRUD_API_KEY=]"),
+        "Help must show clean doc and env without duplicating variable name: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("defaults to $"),
+        "Help must not duplicate env var in doc comment: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_trud_pull_missing_api_key_error_names_trud_api_key() {
+    let tmp = TempDir::new().unwrap();
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .args(["trud", "pull"])
+        .env_remove("TRUD_API_KEY")
+        .output()
+        .expect("running ods trud pull");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("✖ Missing API Key"),
+        "Stderr must report missing API key: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Please set $TRUD_API_KEY environment variable or pass --api-key <KEY>."),
+        "Stderr must name $TRUD_API_KEY: {}",
+        stderr
+    );
+}
+
 

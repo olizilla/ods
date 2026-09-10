@@ -127,3 +127,101 @@ fn test_real_trud_parquet_hash_stability() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn test_real_trud_parquet_stable_across_contexts() {
+    let zip_path = find_real_trud_zip().expect(
+        "TRUD_XML_PATH environment variable must point to an existing TRUD zip archive to run this test",
+    );
+
+    let tmp_workspace = TempDir::new().unwrap();
+    let tmp_isolated = TempDir::new().unwrap();
+
+    // Context 1: Run against zip_path in its original location where parent _provenance.json sits
+    parquet::run(parquet::Args {
+        input: Some(zip_path.clone()),
+        output: Some(tmp_workspace.path().to_path_buf()),
+    })
+    .expect("context 1 make should succeed");
+
+    // Context 2: Copy archive alone to an isolated TempDir without _provenance.json
+    let isolated_zip_dir = TempDir::new().unwrap();
+    let isolated_zip = isolated_zip_dir.path().join(zip_path.file_name().unwrap());
+    std::fs::copy(&zip_path, &isolated_zip).unwrap();
+
+    parquet::run(parquet::Args {
+        input: Some(isolated_zip),
+        output: Some(tmp_isolated.path().to_path_buf()),
+    })
+    .expect("context 2 make should succeed");
+
+    // 1. Assert all 5 Parquet files are byte-identical across contexts
+    let parquet_files = [
+        "orgs.parquet",
+        "orgs_all.parquet",
+        "roles.parquet",
+        "relationships.parquet",
+        "successions.parquet",
+    ];
+
+    for file_name in parquet_files {
+        let f1 = tmp_workspace.path().join(file_name);
+        let f2 = tmp_isolated.path().join(file_name);
+
+        assert!(f1.exists(), "{} missing in context 1", file_name);
+        assert!(f2.exists(), "{} missing in context 2", file_name);
+
+        let hash1 = compute_file_sha256(&f1).unwrap();
+        let hash2 = compute_file_sha256(&f2).unwrap();
+
+        assert_eq!(
+            hash1, hash2,
+            "Parquet file {} diverged across contexts: {} vs {}",
+            file_name, hash1, hash2
+        );
+    }
+
+    // 2. Assert datapackage.json is byte-identical across contexts
+    let dp1 = tmp_workspace.path().join("datapackage.json");
+    let dp2 = tmp_isolated.path().join("datapackage.json");
+    assert!(dp1.exists(), "datapackage.json missing in context 1");
+    assert!(dp2.exists(), "datapackage.json missing in context 2");
+
+    let dp_hash1 = compute_file_sha256(&dp1).unwrap();
+    let dp_hash2 = compute_file_sha256(&dp2).unwrap();
+    assert_eq!(
+        dp_hash1, dp_hash2,
+        "datapackage.json diverged across contexts: {} vs {}",
+        dp_hash1, dp_hash2
+    );
+
+    // 3. Assert _provenance.json differs across contexts
+    let prov1_file = tmp_workspace.path().join("_provenance.json");
+    let prov2_file = tmp_isolated.path().join("_provenance.json");
+    assert!(prov1_file.exists(), "_provenance.json missing in context 1");
+    assert!(prov2_file.exists(), "_provenance.json missing in context 2");
+
+    let prov_hash1 = compute_file_sha256(&prov1_file).unwrap();
+    let prov_hash2 = compute_file_sha256(&prov2_file).unwrap();
+    assert_ne!(
+        prov_hash1, prov_hash2,
+        "_provenance.json must differ across contexts (trud_api vs unverified)"
+    );
+
+    // 4. Assert verification source difference specifically
+    let prov1: ods::provenance::OdsProvenance =
+        serde_json::from_str(&std::fs::read_to_string(&prov1_file).unwrap()).unwrap();
+    let prov2: ods::provenance::OdsProvenance =
+        serde_json::from_str(&std::fs::read_to_string(&prov2_file).unwrap()).unwrap();
+    assert_eq!(
+        prov1.trud_release_sha256_verified,
+        Some(ods::provenance::TrudVerificationSource::TrudApi),
+        "Context 1 provenance must be verified by TRUD API"
+    );
+    assert_eq!(
+        prov2.trud_release_sha256_verified,
+        Some(ods::provenance::TrudVerificationSource::Unverified),
+        "Context 2 provenance must be unverified"
+    );
+}

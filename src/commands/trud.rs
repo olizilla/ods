@@ -25,8 +25,8 @@ pub enum TrudCommand {
         #[arg(long, short)]
         path: Option<PathBuf>,
 
-        /// TRUD API Key (defaults to $NHS_TRUD_API_KEY)
-        #[arg(long, env = "NHS_TRUD_API_KEY")]
+        /// TRUD API Key
+        #[arg(long, env = "TRUD_API_KEY")]
         api_key: Option<String>,
     },
 }
