@@ -1,30 +1,39 @@
-# `ods` - NHS Organisation Data Service CLI
+# `ods.fyi`
 
-A Rust CLI to make NHS Organisation Data Service (ODS) records easy to query and use by transforming raw TRUD ODS XML into modern, open formats.
+All the organisations and sites of the NHS as queryable & verifiable Parquet files.
 
-The `ods` project lets use and explore the data in in multiple ways:
+The NHS Organisation Data Service (ODS) publishes reference data for every health and social care site. This project provides deterministic projections of that data to static Parquet files you can query it offline with SQL, reproduce them yourself to verify it, or rehost the data on any OCI container registry.
+
+- `ods` is rust CLI that makes the ODS data easy to fetch, query, cite, and reproduce.
+- [`ods.fyi`](https://ods.fyi) hosts the data as verfiable OCI Images. Republished to ghcr.io for resliance.
+
+You can use the data in in multiple ways:
 
 | I want to...                  | Feature                | Commands |
 |-------------------------------|------------------------|----------|
 | _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5` |
-| _**Find** NHS orgs_           | Local-first search     | `ods pull` `ods find` `ods info` |
-| _**Cite** the data_           | Citation guide         | `ods cite` |
-| _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` `ods make` `ods trud audit` |
-| _What changed this month?_    | Diff trud ods releases | `ods trud diff` |
+| _**Find** NHS orgs_           | Local-first search     | `ods pull` & `ods find`|
+| _**Verify** the proveance_    | Reproducible builds    | `ods trud pull` & `ods make` |
+| _**Cite** the data_           | Academic citation info | `ods cite` |
+| _See What changed_            | Diff trud ods releases | `ods trud diff` |
+| _Know how it works_           | See the SQL queries    | `ods find --sql` |
 
-- **Open formats**: Derived Parquet tables can be queried remotely using `duckdb`, or Python without installing `ods` at all.
+- **Open formats**: https://ods.fyi republishes it as Parquet files you can query with standard SQL. The tables can be queried over https via `duckdb`, or Python without installing `ods` at all.
 - **Easy to query out of the box**: `ods find` gives you fast, local-first search across all NHS orgs and sites. Parent, PCN, ICB, Trust, and Successor relationships are all pre-calculated.
 - **Reproducible projections**: Built directly from official NHS TRUD XML data with full provenance tracking and SHA-256 hash checks. You can build byte-for-byte identical projections yourself anytime with `ods make`.
+- **Content-addressed** https://ods.fyi publishes the datasets as an OCI Images. `ods pull` automatically checks the file integrity for you, and will fetch identically bytes from from ods.fyi or gchr.io.
 
-A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide a stable, academically citable and easier to interpret source for NHS Org structure info.
+A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide a open, resiliant, academically citable and easy to use source for NHS Org structure data.
 
 > **NOTE** this an independent project not commissioned by the NHS. The goal is to provide reliable and useful projections of NHS data, to aid research and to demonstrate the value of open formats and good UX.
 
 ## Query the data
 
-- Use `duckdb` to query the hosted parquet files. 
-- Use `ods pull` to fetch the dataset to your computer. 
+- Use `duckdb` to query the hosted parquet files directly. 
+- Use `ods pull` to fetch the data to your computer.
 - Use `ods find` to explore the data without SQL.
+
+### Try it out
 
 `https://ods.fyi/orgs.parquet` is a convenience URL that follows the newest release.
 Query the hosted Parquet files directly with `duckdb` without installing `ods`:
@@ -36,6 +45,8 @@ duckdb -c "
    WHERE list_contains(role_names, 'GP Practice')
    AND postcode LIKE 'SW9%';"
 ```
+
+### Local-first
 
 Running more than a few queries? Fetch the parquet files for the release once with `ods pull`
 
@@ -62,9 +73,7 @@ ods find --gp --in SW9
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Local queries on static parquet files are _fast_! Each release is published as an [OCI Image], and `ods pull` verifies the file integrity for you. 
-
-A DuckDB query over HTTP makes about 30 range requests. Querying local files is faster for you and costs about ~200x less on the hosting bill.
+Local queries on static parquet files are _fast_! Each dataset is published as an [OCI Image](https://opencontainers.org/faq/), and `ods pull` verifies the file integrity for you.
 
 ## ODS Data directory
 
@@ -181,13 +190,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
 Considerate PRs welcome! The priorities for this project are:
 
 1. **Correctness & Provenance**
-    - We must not introduce data errors, the trud xml is complicated enough
+    - We must not introduce data errors, the trud xml is complicated enough.
     - We must track sha256 hashes from NHS TRUD API to derived sources so researchers can trust and cite the derived data.
+    - Our output is deterministic. Anyone with an NHS TRUD account can reproduce the projects and verify the hashes match.
 2. **User experience**
-    - The NHS org data xml is hard to work with. We're publishing derived Parquet files as more user-friendly alternative to allow SQL, querying over http, and queries across releases.
+    - The NHS org data xml is fiddly to work with. We're publishing derived Parquet files as more user-friendly alternative to allow SQL, querying over http, and queries across releases.
     - Speed affects user experience. The tool must be fast.
-    - Availability affects accessbility. The data must be available offline and not require a log in.
-
+    - Availability is vital. The data must be available to use offline and refetchable from multiple sources, and not require a log in.
 
 ## Useful Links
 
@@ -195,5 +204,10 @@ Considerate PRs welcome! The priorities for this project are:
 - NHS TRUD ODS info: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5
 - NHS TRUD ODS releases: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases
 
+## Licence
 
-[OCI Image]: https://opencontainers.org/faq/
+The ODS data is NHS England's, published under the [Open Government Licence (OGL)](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
+
+`ods` is [MIT](./LICENSE). To cite `ods`, run `ods cite` or see: [CITATION.cff](./CITATION.cff);
+
+See: [CONTRIBUTING.md](./CONTRIBUTING.md#licensing) for more detail.

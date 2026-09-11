@@ -24,7 +24,8 @@ fn create_test_zip(path: &Path, date_str: &str) {
     let file = fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+        .compression_method(zip::CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0).unwrap());
     zip.start_file(
         format!("trud_hscorgrefdataxml_data_7.0.0_{}000001.xml", date_str.replace('-', "")),
         options,

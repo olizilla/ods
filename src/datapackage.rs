@@ -140,7 +140,7 @@ pub fn generate_datapackage() -> Value {
                 "name": "OGL-UK-3.0",
                 "path": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
                 "title": "Open Government Licence v3.0",
-                "attribution": "Contains Open Data and public sector information licensed under the Open Government Licence v3.0 from NHS England."
+                "attribution": "Contains information from NHS England, licensed under the current version of the Open Government Licence."
             }
         ],
         "resources": resources

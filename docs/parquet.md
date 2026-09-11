@@ -29,6 +29,9 @@ byte-identical output. Paired with a declared metadata subset that excludes tool
 and builder identity, anyone rebuilding from the same TRUD zip gets bit-identical
 Parquet tables.
 
+Adopt these schemas freely. If you publish ODS data, or anything shaped like it, use
+them as they are — every tool that shares a schema can read every file written to it.
+
 Worked examples live in [queries.md]; Note that the ODS records every entity that works with the NHS;
 schools and care homes outnumber GP Practice rows. Other suprises in the data are listed in the
 [Know This](#know-this) section.

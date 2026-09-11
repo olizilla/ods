@@ -1,9 +1,18 @@
 cff-version: 1.2.0
-message: "If you use this software or data, please cite it as below."
+message: "If you use ods, please cite it as below. The ODS data is NHS England's; cite it too, from references."
+type: software
+title: "ods: NHS Organisation Data Service CLI"
 authors:
-  - name: "NHS England"
-title: "Organisation Data Service"
-abstract: "NHS Organisation Data Service (ODS) release data and open Parquet format projections."
+  - given-names: Oli
+    family-names: Evans
+    orcid: "https://orcid.org/0009-0005-6983-1640"
 repository-code: "https://github.com/olizilla/ods"
-url: "https://isd.digital.nhs.uk/trud"
-license: "Open Government Licence v3.0"
+url: "https://ods.fyi"
+license: MIT
+references:
+  - type: data
+    title: "Organisation Data Service"
+    authors:
+      - name: "NHS England"
+    url: "https://isd.digital.nhs.uk/trud"
+    license: OGL-UK-3.0

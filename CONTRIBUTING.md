@@ -1,6 +1,6 @@
 # Contributing to ods
 
-How to build it, the principles behind it, and the sharp edges to avoid.
+How to build `ods`, the principles behind it, and the sharp edges to avoid.
 
 ## Getting started
 
@@ -46,6 +46,21 @@ $ ods find --in sedbergh
 - `ods make` build out the derived resources
 - `ods find sedbergh` - find active nhs entities in Sedbergh
 
+## Who is this for?
+
+Three audiences, wanting different things:
+
+| Audience | Wants | Path |
+| :--- | :--- | :--- |
+| **Query** | zero setup, something citable | `ods pull`, `ods find`, `ods cite` |
+| **Verify** | to rebuild it and check | `ods trud pull`, `ods make`, `ods trud audit` |
+| **Publish** | the monthly release to go out right | CI, `ods make`, release workflow |
+
+Most trade-offs come down to those three. 
+
+We assume most folks will want a low friction path to query the data.
+Some folks will verify out claims by recreating the parquet files from the source XML.
+We will publish the artifacts. Folks can fetch them from multiple sources: the published hashes means `ods` can verify the output is identical.
 
 ## What we're building
 
@@ -90,17 +105,6 @@ we disagree, please open an issue.
 archive, and only NHS England distributes it. If TRUD is withdrawn, nobody can
 re-run the derivation and our source hashes become claims you'd have to take on
 trust. We keep a copy of every source archive to garud against that possibility.
-
-Three audiences, wanting different things:
-
-| Audience | Wants | Path |
-| :--- | :--- | :--- |
-| **Query** | zero setup, something citable | `ods pull`, `ods find`, `ods cite` |
-| **Verify** | to rebuild it and check | `ods trud pull`, `ods make`, `ods trud audit` |
-| **Publish** | the monthly release to go out right | CI, `ods make`, release workflow |
-
-Most trade-offs come down to those three. Query is the biggest group. Verify is
-why anyone trusts the output.
 
 ## How to decide things
 
@@ -212,11 +216,15 @@ only for work actually done. Data to stdout, progress to stderr, so `ods pull --
 
 ## Licensing
 
-The code is [AGPL-3.0]. It requires source disclosure from anyone running a
-modified version as a network service.
+Everything written for this project — code, documentation, schemas and the role
+vocabulary — is [MIT](./LICENSE). Copy a query, adopt a schema, reuse the code. If
+you use `ods` in research, cite it from [CITATION.cff](./CITATION.cff).
 
-The ODS data is published by NHS England under the [Open Government Licence], and
-the derived Parquet inherits it. Attribution should point to NHS England first.
+Two things are NHS England's rather than ours, under the [Open Government Licence]:
+the ODS data, which the derived Parquet inherits, and the test fixtures built from
+it — `tests/fixtures/info/`, `trud_releases_response.json` and
+`mock_hscorgrefdata.xml`. Attribute them to NHS England: *"Contains information from
+NHS England, licensed under the current version of the Open Government Licence."*
 
 We publish the derived Parquet, not the TRUD XML. The NHS TRUD service asks people
 to register for access to the source data so they can contact people when the data
@@ -225,9 +233,9 @@ is corrected or updated.
 The parquet tables are our main output and the provenance chain points to the TRUD
 for anyone who wants the source.
 
-Per the OGL licence: 
+Per the OGL licence:
 - Report errors upstream when you find them,
-- Keep a record of which release you used. 
+- Keep a record of which release you used.
 
 Our per release `_provenance.json` covers the second point, for every artefact `ods` makes.
 
@@ -239,5 +247,4 @@ Our per release `_provenance.json` covers the second point, for every artefact `
 [docs/parquet.md]: ./docs/parquet.md
 [docs/queries.md]: ./docs/queries.md
 [role_names.json]: ./data/role_names.json
-[agpl-3.0]: https://www.gnu.org/licenses/agpl-3.0.en.html
 [open government licence]: https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/licence/26
