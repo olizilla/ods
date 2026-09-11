@@ -131,9 +131,9 @@ pub fn generate_datapackage() -> Value {
     ];
 
     json!({
-        "name": "nhs-ods-parquet",
-        "title": "NHS Organisation Data Service (ODS) Parquet Dataset",
-        "description": "Columnar Parquet dataset compiled from the official NHS TRUD Organisation Data Service (ODS) release",
+        "name": "ods-fyi",
+        "title": "ods: NHS Organisation Data as verifiable Parquet files",
+        "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
         "version": dataset_version(),
         "licenses": [
             {
@@ -143,13 +143,19 @@ pub fn generate_datapackage() -> Value {
                 "attribution": "Contains information from NHS England, licensed under the current version of the Open Government Licence."
             }
         ],
+        "sources": [
+            {
+                "title": "NHS Organisation Data Service XML Data, NHS England",
+                "path": "https://isd.digital.nhs.uk/trud"
+            }
+        ],
         "resources": resources
     })
 }
 
 /// Generates the enriched per-release `datapackage.json` containing the schema contract
-/// plus this release's facts: `id` (DOI if set), `sources` (TRUD release metadata),
-/// and per-resource `bytes` and `hash` (SHA-256).
+/// plus this release's facts: `id` (DOI if set), `version`, and per-resource `bytes`
+/// and `hash` (SHA-256).
 pub fn generate_release_datapackage(
     output_dir: &std::path::Path,
     provenance: Option<&crate::provenance::OdsProvenance>,
@@ -169,22 +175,6 @@ pub fn generate_release_datapackage(
         .or_else(|| provenance.and_then(|p| p.dataset_version.clone()))
         .unwrap_or_else(|| dataset_version().to_string());
     pkg["version"] = json!(ver);
-
-    if let Some(prov) = provenance {
-
-        let mut sources = Vec::new();
-        let source_title = prov
-            .trud_release_name
-            .clone()
-            .unwrap_or_else(|| "NHS TRUD ODS XML Organisation Data".to_string());
-        let mut source_obj = serde_json::Map::new();
-        source_obj.insert("title".to_string(), json!(source_title));
-        if let Some(ref date) = prov.trud_release_date {
-            source_obj.insert("version".to_string(), json!(date));
-        }
-        sources.push(Value::Object(source_obj));
-        pkg["sources"] = Value::Array(sources);
-    }
 
     if let Some(resources) = pkg["resources"].as_array_mut() {
         for res in resources.iter_mut() {

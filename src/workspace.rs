@@ -628,8 +628,9 @@ fn generate_workspace_readme(
     let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(DEFAULT_WORKSPACE_DIR);
 
     let content = format!(
-        "# NHS Organisation Data Service (ODS) Workspace\n\n\
-         This directory contains versioned NHS Organisation Data managed by the `ods` CLI.\n\n\
+        "# `ods` workspace\n\n\
+         This directory holds verified releases of NHS Organisation Data as Parquet files, pulled by the `ods` CLI.\n\
+         The data is NHS England's Organisation Data Service, under the Open Government Licence.\n\n\
          - **Active Release**: {release_date}{seq_info}\n\
          - **Status**: {count_info} indexed in `current/`\n\n\
          ## Directory Structure\n\n\

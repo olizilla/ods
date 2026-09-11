@@ -485,9 +485,8 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
     assert_eq!(release_pkg["version"], "1.0.1");
     let sources = release_pkg["sources"].as_array().expect("sources must be array");
     assert_eq!(sources.len(), 1);
-    assert_eq!(sources[0]["title"], "Release 7.0.0");
-    assert_eq!(sources[0]["version"], "2026-07-31");
-    assert!(sources[0].get("path").is_none(), "sources[0] must not contain path");
+    assert_eq!(sources[0]["title"], "NHS Organisation Data Service XML Data, NHS England");
+    assert_eq!(sources[0]["path"], "https://isd.digital.nhs.uk/trud");
 
     let resources = release_pkg["resources"].as_array().expect("resources must be array");
     for res in resources {

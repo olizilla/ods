@@ -103,7 +103,9 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
     let text_out = String::from_utf8(text_buf)?;
     assert!(text_out.contains("Dataset version:    v1.0.1"));
     assert!(text_out.contains("Manifest digest:    sha256:"));
-    assert!(text_out.contains("NHS ODS Dataset (2026-08-31 cut, v1.0.1)"));
+    assert!(text_out.contains("ods: NHS Organisation Data as verifiable Parquet files,"));
+    assert!(text_out.contains("ods (Version 1.0.1) [Computer software]"));
+    assert!(text_out.contains("NHS Organisation Data Service XML Data, release 2026-08-31"));
     assert!(!text_out.contains("Dataset DOI:")); // DOI absent, no fallback
 
     // 2. BibTeX format
@@ -118,7 +120,10 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
     )?;
     let bib_out = String::from_utf8(bib_buf)?;
     assert!(bib_out.contains("@misc{ods-2026-08-31-v1.0.1,"));
-    assert!(bib_out.contains("title = {NHS Organisation Data Service (2026-08-31 cut, v1.0.1)}"));
+    assert!(bib_out.contains("title = {ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31}"));
+    assert!(bib_out.contains("title = {ods}"));
+    assert!(bib_out.contains("howpublished = {Computer software}"));
+    assert!(bib_out.contains("title = {NHS Organisation Data Service XML Data, release 2026-08-31}"));
     assert!(bib_out.contains("version = {1.0.1}"));
     assert!(bib_out.contains("note = {Manifest: sha256:"));
     assert!(!bib_out.contains("doi =")); // DOI absent, no fallback
@@ -134,7 +139,9 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         &fetcher,
     )?;
     let apa_out = String::from_utf8(apa_buf)?;
-    assert!(apa_out.contains("Organisation Data Service (2026-08-31 cut, v1.0.1)"));
+    assert!(apa_out.contains("ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31"));
+    assert!(apa_out.contains("ods (Version 1.0.1) [Computer software]"));
+    assert!(apa_out.contains("NHS Organisation Data Service XML Data, release 2026-08-31"));
     assert!(!apa_out.contains("https://doi.org/"));
 
     // 4. CSL-JSON format
@@ -148,6 +155,10 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         &fetcher,
     )?;
     let csl_out = String::from_utf8(csl_buf)?;
+    assert!(csl_out.contains("\"title\": \"ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31\""));
+    assert!(csl_out.contains("\"title\": \"ods\""));
+    assert!(csl_out.contains("\"type\": \"software\""));
+    assert!(csl_out.contains("\"title\": \"NHS Organisation Data Service XML Data, release 2026-08-31\""));
     assert!(csl_out.contains("\"version\": \"1.0.1\""));
     assert!(csl_out.contains("\"note\": \"Manifest: sha256:"));
     assert!(!csl_out.contains("\"DOI\":"));

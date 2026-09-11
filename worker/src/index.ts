@@ -10,7 +10,8 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Max-Age': '86400',
 };
 
-const ROOT_TEXT = `ods.fyi — NHS Organisation Data Service, as Parquet.
+const ROOT_TEXT = `ods.fyi — All the organisations and sites in the NHS Organisation Data Service,
+as queryable & verifiable Parquet files. An independent project.
 
   duckdb -c "SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5"
 
@@ -19,8 +20,9 @@ Running more than a few queries? Fetch it once and query locally:
   cargo install --git https://github.com/olizilla/ods
   ods pull
 
-Releases: https://ods.fyi/releases.json
-Source:   https://github.com/olizilla/ods
+Releases:  https://ods.fyi/releases.json
+Code:      https://github.com/olizilla/ods
+Data from: NHS England, via NHS TRUD, under the Open Government Licence
 `;
 
 /**

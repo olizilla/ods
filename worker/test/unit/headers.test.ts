@@ -48,11 +48,11 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/b548d4c85162bb0a75b461fce5408b99c043b9b54111c9d7ca9c56bd36b218eb': {
+    'v2/ods-data/blobs/sha256/091145d75e23b23a22618ab63bc442bbf07cf362fcaca5c9b8a1b2dccba630f5': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/d6d090fc9e39bb4743c2eb746f7961422a0e7e166fdc1669bd9bcbf74db5c8a8': {
+    'v2/ods-data/blobs/sha256/865ae1b1b0ad804aa57abc90de9805be6727516afd83cb86c808e33c78461ea0': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },

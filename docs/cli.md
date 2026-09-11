@@ -22,19 +22,22 @@ The CLI serves three distinct users:
 Pull the latest parquet files with `ods pull`. Find NHS legal orgs and phyiscla sites with `ods find`. Pass their ods code to `ods info <code>` to see all the details.
 
 ```
-NHS ODS Data Tool
+Fetch, query, cite and reproduce NHS ODS data as verifiable Parquet
 
 Usage: ods <COMMAND>
 
 Commands:
-  find  Search NHS organisations and sites
-  info  Show full details for a single organisation by ODS code
-  role  Search and list role codes and names with holder counts
-  pull  Download pre-built dataset releases
-  cite  Show provenance metadata and academic citation
-  trud  Build from official NHS source data (requires TRUD API key)
-  make  Compile TRUD XML into Parquet files
-  help  Print this message or the help of the given subcommand(s)
+  find   Search NHS organisations and sites
+  info   Show full details for a single organisation by ODS code
+  role   Search and list role codes and names with holder counts
+  pull   Download pre-built dataset releases
+  cite   Show provenance metadata and academic citation
+  trud   Build from official NHS source data (requires TRUD API key)
+  make   Compile TRUD XML into Parquet tables
+  use    Pin an active dataset release
+  audit  Audit release data against TRUD source XML
+  diff   Compare two dataset releases
+  help   Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help

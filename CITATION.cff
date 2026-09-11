@@ -1,7 +1,8 @@
 cff-version: 1.2.0
-message: "If you use ods, please cite it as below. The ODS data is NHS England's; cite it too, from references."
+message: "If you use ods, please cite it as below. To cite the Parquet data for a specific release, run `ods cite`, which also cites NHS England's source."
 type: software
-title: "ods: NHS Organisation Data Service CLI"
+title: "ods"
+abstract: "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files."
 authors:
   - given-names: Oli
     family-names: Evans
@@ -11,8 +12,10 @@ url: "https://ods.fyi"
 license: MIT
 references:
   - type: data
-    title: "Organisation Data Service"
+    title: "NHS Organisation Data Service XML Data"
     authors:
       - name: "NHS England"
+    publisher:
+      name: "NHS TRUD"
     url: "https://isd.digital.nhs.uk/trud"
     license: OGL-UK-3.0

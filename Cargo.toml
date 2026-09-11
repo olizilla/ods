@@ -2,7 +2,7 @@
 name = "ods"
 version = "0.1.0"
 edition = "2021"
-description = "NHS ODS Data Tool"
+description = "Fetch, query, cite and reproduce NHS ODS data as verifiable Parquet"
 exclude = ["worker"]
 
 [dependencies]

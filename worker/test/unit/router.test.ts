@@ -50,10 +50,13 @@ describe('Router & Path-to-Key Mapping', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/plain');
     const text = await res.text();
-    expect(text).toContain('ods.fyi — NHS Organisation Data Service, as Parquet.');
+    expect(text).toContain(
+      'ods.fyi — All the organisations and sites in the NHS Organisation Data Service,\nas queryable & verifiable Parquet files. An independent project.'
+    );
     expect(text).toContain('duckdb -c');
-    expect(text).toContain('Releases: https://ods.fyi/releases.json');
-    expect(text).toContain('Source:   https://github.com/olizilla/ods');
+    expect(text).toContain('Releases:  https://ods.fyi/releases.json');
+    expect(text).toContain('Code:      https://github.com/olizilla/ods');
+    expect(text).toContain('Data from: NHS England, via NHS TRUD, under the Open Government Licence');
   });
 
   it('serves GET /v2/ returning 200 and {} unauthenticated', async () => {
