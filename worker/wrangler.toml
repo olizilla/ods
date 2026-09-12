@@ -1,6 +1,7 @@
 name = "ods-fyi"
 main = "src/index.ts"
 compatibility_date = "2024-12-30"
+routes = [{ pattern = "ods.fyi", custom_domain = true }]
 
 [[r2_buckets]]
 binding = "BUCKET"
