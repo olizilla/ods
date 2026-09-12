@@ -83,5 +83,8 @@ jobs:
       - name: Install Worker Dependencies
         run: npm ci --prefix worker
 
+      - name: Typecheck ods.fyi worker
+        run: npx tsc --noEmit --project worker
+
       - name: Run ods.fyi worker tests
         run: npm test --prefix worker
