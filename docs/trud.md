@@ -9,7 +9,7 @@ Publisher namespace for TRUD API interactions: query, download (`pull`), compare
 | **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, generate `provenance.json`, and set the active workspace release. |
 | **`ods trud diff`** | Compare two TRUD ODS releases (or workspace versions) and print a structured diff report of entity changes. |
 | **`ods trud audit`** | Audit workspace Parquet projections against ground-truth TRUD XML/ZIP releases to detect data drift or compilation anomalies. |
-| **`ods trud verify`** | Compute local archive SHA-256 and verify against TRUD REST API metadata without downloading. |
+| **`ods trud verify`** | Check a TRUD archive you already have against the ods release index, then the TRUD API, without downloading it. |
 
 ---
 
@@ -119,9 +119,17 @@ ods trud audit --json           # Output machine-readable audit report for CI
 
 ## 4. `ods trud verify`
 
-Verify checksums of local release archives against TRUD REST API.
+Check a TRUD archive you already have against a published SHA-256, without
+downloading it. `ods` looks the release up in the ods release index first, which
+needs no API key, then asks the TRUD API when `TRUD_API_KEY` is set.
 
 ```bash
-ods trud verify ./ods_data/releases/2026-07-31/raw/HSCOrgRefData_Full_20260731.zip
+ods trud verify ./hscorgrefdataxml_data_7.0.0_20260731000001.zip
 ```
+
+```text
+✓ 2026-07-31  36MB  SHA-256 verified by ods release index
+```
+
+It exits 1 when the SHA-256 differs, or when neither source has one for that release.
 

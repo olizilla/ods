@@ -56,4 +56,6 @@ stable interface, and `datapackage.json` describes them.
 
 ### Reproducibility Guarantee
 
-Parquet projections are byte-identical for a given commit, captured in `_provenance.json` and parquet metadata as `tool_git_sha`.
+`ods make` builds byte-identical Parquet files from the same TRUD zip, on any
+machine. This is guarantee D1 in [tests.md](./tests.md#the-data), and a test
+fails if it stops being true.

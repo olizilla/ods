@@ -141,7 +141,9 @@ from stable monthly sources. Always compare the output to the input.
   step guarded by a condition that's never true reports success having tested
   nothing.
 
-Every change needs a test, and tests run offline.
+A change to a guarantee in [docs/tests.md](./docs/tests.md) needs a test that
+fails when that guarantee breaks, and the page gains or updates the guarantee
+first. Tests run offline.
 
 ## Release Process
 

@@ -16,7 +16,7 @@ ods find [QUERY] [OPTIONS]
 | :--- | :--- |
 | `[QUERY]` | Positional query matching organisation **name only** with relevance ranking |
 | `--code <CODES>` | Filter by exact ODS code (repeatable and comma-separated, e.g. `--code A82608,RJZ`) |
-| `--in <PLACE>` | Filter by location across `country` ➔ `county` ➔ `town` ➔ `postcode` (minimum 3 characters) |
+| `--in <PLACE>` | Filter by exact town, county or country, or by postcode district (repeatable and comma-separated) |
 | `-r, --role <ROLES>` | Filter by role codes (e.g. `RO76`) or curated names (repeatable and comma-separated) |
 | `--gp` | Shortcut for GP practices (`RO76,RO227,RO315`) |
 | `--dentist` | Shortcut for dental practices (`RO110,RO65`) |
@@ -39,11 +39,13 @@ The positional argument matches the organisation `name` column exclusively. When
 If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes precedence over ranking.
 
 ### 2. Location Filtering (`--in <place>`)
-`--in` evaluates four geographic columns using broad-to-narrow precedence:
+`--in` checks every value against four columns at once: `town`, `county`, `country` and `postcode`.
 
-`country` ➔ `county` ➔ `town` ➔ `postcode`
+- **Places match whole.** Town, county and country must equal the value, ignoring case, apostrophes and punctuation. `--in "kings lynn"` finds KING'S LYNN, and `--in london` does not find LONDONDERRY.
+- **Postcodes match by district, then sector.** `--in LA1` is district LA1, not LA10. A district also covers its lettered sub-districts, so `--in SW1` returns SW1A to SW1Y and `--in W1` returns W1A to W1W. `--in "LA1 5"` is sector LA1 5. A full postcode matches with or without its space. Two-character districts such as `N1` are accepted; any other value needs at least three characters.
+- **Values add, flags narrow.** `--in durham --in cumbria` and `--in durham,cumbria` return rows in either place. Adding `--gp` or `--role` keeps only rows that match both. Commas always separate values, so the handful of towns recorded with a comma in their name (`ENFIELD, LONDON`) can't be matched.
 
-The first level with any match wins and returns only that level's rows. Postcodes are whitespace-stripped during comparison so `--in LA105DL` and `--in "LA10 5DL"` work identically.
+Town and county are as ODS records them: postal and historic, not administrative. Some London-area practices are recorded under MIDDLESEX, ESSEX, KENT and SURREY, so some care is 
 
 ### 3. Role Filtering (`--role <roles>`)
 `--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
