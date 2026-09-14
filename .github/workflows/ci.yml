@@ -40,6 +40,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Keeps compiled dependencies between runs; keyed on the toolchain and Cargo.lock
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Build binary
         run: cargo build
 
@@ -67,17 +71,32 @@ jobs:
           ./target/debug/ods make oci --input ods_data/releases/2026-07-31
           ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --check
 
+      # 24 is in the runner image's tool cache, so this downloads nothing
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: 24
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
 
+      # 1.26 is in the runner image's tool cache; the conformance runner needs 1.24+.
+      # No go.sum in this repo, so setup-go's module cache has nothing to key on.
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
+          go-version: '1.26'
+          cache: false
+
+      - name: Cache OCI Conformance Runner
+        id: conformance-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/conformance
+          # change me if you change the go version or the OCI conformance commit
+          key: conformance-${{ runner.os }}-3ecd27b5c78d-go1.26
 
       - name: Install OCI Conformance Runner
+        if: steps.conformance-cache.outputs.cache-hit != 'true'
         run: go install github.com/opencontainers/distribution-spec/conformance@3ecd27b5c78d
 
       - name: Install Worker Dependencies
