@@ -179,11 +179,18 @@ When publishing a monthly dataset cut or republishing a fix:
    where `rehearsal.json` names the manifest digest just pushed. Blobs on ods.fyi are inert until `releases.json` names them, which is what makes this safe to run before announcing anything.
 
 4. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
-5. Publish using the release script:
-   ```console
-   $ scripts/release-data.sh --publish <date> <version>
-   ```
-   This syncs `dist/` release objects to R2 / GHCR, creates the GitHub release, publishes `data/releases.json` to R2 as the commit point, commits `data/releases.json`, and tags `data/<date>_<version>`.
+5. Announce via pull request:
+   - Generate the release notes markdown summary:
+     ```console
+     $ ods trud diff --format markdown
+     ```
+   - Commit the updated `data/releases.json` row on a release branch (e.g. `release/<date>`).
+   - Open a pull request against `main` with the `data/releases.json` row diff and the `trud diff` summary in the PR body.
+   - Merging the pull request **is** the announce event — a reviewable decision rather than a direct push to `main`. Once merged:
+     ```console
+     $ op run --env-file=.r2.env -- rclone copyto data/releases.json ods-fyi:ods-fyi/releases.json
+     $ gh release create data/<date>_<version> --notes-file <release-dir>/NOTES.md
+     ```
 
 ## Conventions
 

@@ -3,6 +3,12 @@ name = "ods"
 version = "0.1.0"
 edition = "2021"
 description = "Fetch, query, cite and reproduce NHS ODS data as verifiable Parquet"
+license = "MIT"
+homepage = "https://ods.fyi"
+repository = "https://github.com/olizilla/ods"
+readme = "README.md"
+keywords = ["nhs", "org", "open-data", "oci", "parquet"]
+categories = ["command-line-utilities", "science"]
 exclude = ["worker"]
 
 [dependencies]

@@ -3,10 +3,6 @@
 These are the behaviours `ods` guarantees. The test suite exists to protect
 them: each test enforces one, and a failing test names the one that broke.
 
-Everything else can change when we decide it should: how a table is drawn, the
-wording of a message, the keys in `--format json` (see
-[cli.md](./cli.md#json-output-is-not-yet-stable)).
-
 ## The data
 
 - **D1. Same zip, same bytes.** `ods make` builds byte-identical Parquet files from the same TRUD zip on any machine, operating system, CPU architecture, Rust toolchain or working directory.
@@ -16,9 +12,9 @@ wording of a message, the keys in `--format json` (see
 
 ## Releases
 
-- **R1. Nothing unverified lands.** `ods pull` writes a file into the workspace only after its SHA-256 matches the release manifest. On a mismatch it fails and names both digests.
-- **R2. The binary's digest decides.** When a mirror or a supplied index contradicts a release's manifest digest in the release index built into `ods`, the pull stops.
-- **R3. Mirrors are interchangeable.** When one mirror fails, `ods pull` fetches the same release from the next.
+- **R1. Unverified files are clearly flagged.** `ods pull` gives a file its name only after its SHA-256 matches the release manifest. A file that fails on every mirror lands as `<name>.bad-sha`, so the verified files stay usable. `current` stays where it was, and the pull names each bad file with both digests and exits 1.
+- **R2. The index's digest decides.** A fetched or supplied index that contradicts a digest in the index built into `ods` stops the pull. A registry tag that names a different digest from the index is reported, and the index's release is what gets installed.
+- **R3. ods.fyi first, then ghcr.io.** `ods` asks ods.fyi first for the index, tags and every file, and falls back to ghcr.io. `ods pull` alone installs the newest release in the index. `ods pull <date>` also finds a release that exists only as a tag on either registry.
 - **R4. Pulls repair, and repeat for free.** Pulling a verified release a second time downloads nothing. A local file that no longer matches its digest is fetched again.
 - **R5. Withdrawn releases are named, loudly.** `ods pull <date>` and `ods cite` still deliver a withdrawn release, then print the reason it was withdrawn and exit 1. `ods pull` with no date fetches the newest release that isn't withdrawn, and names any it skipped. A withdrawal published in a newer index applies to a release built into `ods`.
 - **R6. `ods use` pins what you name.** It pins any release in the workspace, and warns when that release doesn't match the published one or can't be checked.
