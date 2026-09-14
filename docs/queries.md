@@ -52,6 +52,7 @@ Other things worth knowing before you query:
 - **[Prefer `operational` dates](#use-the-operational-dates)** to find when a thing was active. `legal_*` dates can be
   different to "when a site was operational" and are often not available.
 - **[Join on `ods_code`](#names-are-not-identifiers).** Names aren't unique identifiers. 1,680 entities are called `DENTAL SURGERY`.
+  [docs/parquet.md](./parquet.md#joining-the-tables) lists the join key for every table.
 - **[Use the latest release for history](#which-release-should-you-use)**, and the
   release from the time if you need what ODS knew then. Entities get registered,
   closed, reopened and sometimes deleted outright between releases.

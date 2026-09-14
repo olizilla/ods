@@ -184,6 +184,65 @@ One row per succession event.
 This is the edge list. `orgs.successor_codes` and `orgs.predecessor_codes` hold
 the whole chain — not just the next step — so you never have to walk it yourself.
 
+## Joining the tables
+
+Every supporting table carries ODS codes that point back to `orgs`.
+
+| Table | Join to `orgs_all` on | One row per |
+| :--- | :--- | :--- |
+| `roles.parquet` | `ods_code` | role an organisation holds or has held |
+| `relationships.parquet` | `source_code` for an organisation's own relationships, `target_code` for those pointing at it | relationship |
+| `successions.parquet` | `predecessor_code` for what an organisation became, `successor_code` for what it replaced | succession |
+
+**Join to `orgs_all` unless you mean active organisations only.** Supporting tables
+keep rows for closed organisations. All 443,216 `roles` rows find their organisation
+in `orgs_all`; 314,195 find it in `orgs`.
+
+`roles` names its key the same way `orgs` does, so `USING` reads well:
+
+```sql
+SELECT count(*)
+FROM 'ods_data/current/roles.parquet' r
+JOIN 'ods_data/current/orgs_all.parquet' o USING (ods_code);
+-- 443216
+```
+
+**Relationships and successions have a direction, and the column name says which side
+you are on.** A relationship belongs to the organisation making the statement,
+`source_code`, and points at `target_code`. Joining on `source_code` alone finds an
+organisation's own relationships and none that point at it: the ICB `01K` states 5
+relationships and is the target of 654, and 38,783 organisations only ever appear as a
+target. Join each side under its own alias:
+
+```sql
+SELECT s.name AS organisation, rel.rel_name, t.name AS target
+FROM 'ods_data/current/relationships.parquet' rel
+JOIN 'ods_data/current/orgs_all.parquet' s ON rel.source_code = s.ods_code
+JOIN 'ods_data/current/orgs_all.parquet' t ON rel.target_code = t.ods_code
+WHERE rel.source_code = 'A82608' AND rel.rel_status = 'active'
+ORDER BY rel.rel_code;
+-- SEDBERGH MEDICAL PRACTICE · IS COMMISSIONED BY · NHS LANCASHIRE AND SOUTH CUMBRIA ICB - 01K
+-- SEDBERGH MEDICAL PRACTICE · IS OPERATED BY     · NHS LANCASHIRE AND SOUTH CUMBRIA ICB - 01K
+-- SEDBERGH MEDICAL PRACTICE · IS PARTNER TO      · WESTERN DALES PCN
+```
+
+Most succession questions need no join. `orgs.successor_codes` and
+`orgs.predecessor_codes` already hold the whole chain; reach for
+`successions.parquet` when you need the date each step took effect.
+
+**Never `NATURAL JOIN` these tables.** `roles` shares more than its key with `orgs`:
+`legal_start`, `legal_end`, `operational_start`, `operational_end` and
+`trud_release_date` too, so a natural join matches on the dates as well and silently
+drops rows.
+
+```sql
+SELECT count(*)
+FROM 'ods_data/current/roles.parquet' NATURAL JOIN 'ods_data/current/orgs_all.parquet';
+-- 39506, not 443216
+```
+
+Use `USING (ods_code)` or an explicit `ON`.
+
 ## How the schema works
 
 Five rules, and they explain nearly every decision here.
@@ -242,12 +301,13 @@ sequence number, and the commit that built it. Hashes are uppercase throughout, 
 Each Parquet file carries a deliberate subset of provenance in its key-value metadata:
 source and publication identity only (`ods.trud_release_date`, `ods.trud_release_name`,
 `ods.trud_release_file`, `ods.trud_release_sha256`, `ods.publication_date`,
-`ods.publication_seq_num`, `ods.publication_type`, `ods.publication_source`, and
-`ods.dataset_version`). Builder and tool fields (`ods.tool_version`, `ods.tool_git_sha`,
-`ods.tool_git_dirty`, and `trud_release_sha256_verified`) are excluded so the Parquet bytes
-depend solely on the source archive.
+`ods.publication_seq_num`, `ods.publication_type` and `ods.publication_source`). The dataset
+version and the builder and tool fields (`ods.tool_version`, `ods.tool_git_sha`,
+`ods.tool_git_dirty`, and `trud_release_sha256_verified`) are excluded, so the Parquet bytes
+depend only on the source archive and how it was derived. Relabelling a release with a new
+dataset version leaves its Parquet files byte-identical.
 
-To verify a release: rebuild from the TRUD archive using any version of `ods` and compare
+To verify a release: rebuild from the TRUD archive, using any version of `ods` that builds the same dataset version, and compare
 the SHA-256 of the generated Parquet files against the hashes in the published
 `datapackage.json`. `_provenance.json` records who built it and will differ between
 builders; the data files will match byte for byte.
@@ -260,6 +320,24 @@ Three numbers, three jobs:
 - `ods` crate version — which tool? (`Cargo.toml`, `tool_version`).
 
 `dataset_version` is global and monotonic. It identifies a *cut* — the state of the tool and rules at the moment of packing — so once it moves, every release packed afterwards carries the new number.
+
+What each part of `dataset_version` promises, and what `ods` does with a release at each:
+
+| Bump | Means | An `ods` built for 1.0.0 reading it |
+| :--- | :--- | :--- |
+| patch, e.g. 1.0.1 | same schema, rebuilt | reads it silently |
+| minor, e.g. 1.1.0 | columns added, nothing removed or redefined | reads it, and suggests upgrading `ods`, which may not show the new columns |
+| major, e.g. 2.0.0 | a breaking change: a column removed, renamed, or given a new meaning | tries anyway, prints the output, then warns that the results may be wrong, and exits 1 |
+
+**0.x is for iterating.** A breaking change may land in any 0.x release, and `ods` reads
+0.x releases without version warnings. **1.0.0 is a statement of intent** to support the
+schema from then on. It is identical to the last 0.x, and every release date is republished
+as 1.0.0. The Parquet files keep their bytes, so `ods pull` fetches only the small files that
+changed.
+
+- `ods pull` installs the newest release at the major version it reads, and says when a newer major exists.
+- A workspace holds one version per release date, in `releases/<date>/`, so `releases/*/` queries count each release once. Pulling a new version of a date replaces it, reusing any file whose bytes haven't changed.
+- Upgrading `ods` keeps older releases readable: a column added in a minor version is read as optional, and only the columns present at the start of the current major are required.
 
 **A patch bump means "prefer this", not "the derivation changed."** After a one-off bad build is republished at 1.0.1, every subsequent month is byte-identically derived to the 1.0.0 months before it and still carries 1.0.1.
 
