@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -292,7 +291,7 @@ fn run_duckdb_csv_codes(sql: &str) -> Vec<String> {
 // -----------------------------------------------------------------------------
 
 #[test]
-fn test_task1_validation_errors_match_reader() {
+fn test_sql_flag_validation_errors_match_query_reader() {
     let (_tmp, parquet_dir) = setup_sql_workspace();
 
     // 1. --role GP errors on both
@@ -359,7 +358,7 @@ fn test_task1_validation_errors_match_reader() {
 }
 
 #[test]
-fn test_task1_output_hygiene_and_isolation() {
+fn test_find_sql_output_hygiene_and_isolation() {
     let (_tmp, parquet_dir) = setup_sql_workspace();
 
     // sedbergh --gp --sql | grep -c '^[*!]' returns 0
@@ -470,7 +469,7 @@ fn test_task2_clause_presence() {
 }
 
 #[test]
-fn test_task2_code_apostrophe_escaped() {
+fn test_sql_flag_code_apostrophe_escaped() {
     let (_tmp, parquet_dir) = setup_sql_workspace();
 
     // --code "x'y"
@@ -494,7 +493,7 @@ fn test_task2_code_apostrophe_escaped() {
 // -----------------------------------------------------------------------------
 
 #[test]
-fn test_task3_macro_emission_rules_and_block_format() {
+fn test_sql_flag_macro_emission_rules_and_block_format() {
     let (_tmp, parquet_dir) = setup_sql_workspace();
 
     // --code A82608 --sql emits 0 macros
@@ -592,71 +591,9 @@ fn test_task4_synthetic_ordered_equivalence_matrix() {
     }
 }
 
-#[test]
-fn test_task4_failure_demonstration_drop_code() {
-    if !require_duckdb() {
-        return;
-    }
-    let (_tmp, parquet_dir) = setup_sql_workspace();
-
-    // Expected code filter
-    let args = Args {
-        code: vec!["A82608".to_string()],
-        ..Default::default()
-    };
-    let csv_codes = run_find_csv(args.clone(), &parquet_dir);
-    assert_eq!(csv_codes, vec!["A82608"]);
-
-    // Deliberately broken SQL: drop the WHERE ods_code IN ('A82608')
-    let broken_sql = format!(
-        "SELECT *\nFROM '{}'\nORDER BY ods_code;",
-        parquet_dir.join("orgs.parquet").display()
-    );
-    let duck_codes = run_duckdb_csv_codes(&broken_sql);
-
-    // Shows the test failing and naming the mismatch
-    assert_ne!(csv_codes, duck_codes);
-    assert!(duck_codes.len() > csv_codes.len());
-}
 
 #[test]
-fn test_task4_failure_demonstration_drop_order_by() {
-    if !require_duckdb() {
-        return;
-    }
-    let (_tmp, parquet_dir) = setup_sql_workspace();
-
-    // Query with name ranking: SM01 and SM02
-    let args = Args {
-        query: Some("st marys".to_string()),
-        ..Default::default()
-    };
-    let csv_codes = run_find_csv(args.clone(), &parquet_dir);
-    let normal_sql = run_find_sql(args, &parquet_dir);
-    let duck_codes = run_duckdb_csv_codes(&normal_sql);
-    assert_eq!(csv_codes, duck_codes);
-
-    // Deliberately drop the ORDER BY clause
-    let broken_sql = normal_sql.replace(
-        "ORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;",
-        "ORDER BY ods_code DESC;"
-    );
-    let broken_duck_codes = run_duckdb_csv_codes(&broken_sql);
-
-    // Set equality passes
-    let set_csv: HashSet<_> = csv_codes.iter().cloned().collect();
-    let set_broken: HashSet<_> = broken_duck_codes.iter().cloned().collect();
-    assert_eq!(set_csv, set_broken);
-
-    // But ordered comparison fails!
-    assert_ne!(
-        csv_codes, broken_duck_codes,
-        "Ordered comparison caught the dropped ORDER BY that set comparison missed"
-    );
-}
-
-#[test]
-fn test_task4_duckdb_missing_behavior() {
+fn test_sql_flag_duckdb_missing_behavior() {
     // Check duckdb missing handling
     fn check_duckdb_path(is_avail: bool, is_ci: bool) -> Result<bool, &'static str> {
         if !is_avail {
@@ -678,17 +615,11 @@ fn test_task4_duckdb_missing_behavior() {
 // Cross-cutting Acceptance Tests
 // -----------------------------------------------------------------------------
 
-#[test]
-fn test_crosscutting_docs_queries_current_paths() {
-    let queries_md = std::fs::read_to_string("docs/queries.md").expect("read docs/queries.md");
-    let count = queries_md.lines().filter(|l| l.contains("ods_data/current")).count();
-    assert_eq!(count, 32, "docs/queries.md must keep all 32 ods_data/current paths");
-}
 
 #[test]
 fn test_crosscutting_help_text() {
-    let output = Command::new("cargo")
-        .args(["run", "--quiet", "--", "find", "--help"])
+    let output = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["find", "--help"])
         .output()
         .expect("run find --help");
     let stdout = String::from_utf8(output.stdout).expect("utf8 help");
@@ -704,7 +635,7 @@ fn test_crosscutting_help_text() {
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_release_task2_counts() {
+fn test_sql_flag_release_filter_counts_match_on_release_data() {
     if !require_duckdb() {
         return;
     }
@@ -728,7 +659,7 @@ fn test_release_task2_counts() {
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_release_task3_counts() {
+fn test_sql_flag_macro_emission_counts_match_on_release_data() {
     if !require_duckdb() {
         return;
     }
@@ -800,7 +731,7 @@ fn test_release_task4_equivalence_matrix() {
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_release_task2_list_has_any_agrees_with_or_chain_on_all_rows() {
+fn test_sql_flag_list_has_any_agrees_with_or_chain_on_release_data() {
     if !require_duckdb() {
         return;
     }

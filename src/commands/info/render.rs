@@ -434,7 +434,10 @@ fn render_roles_table(
         && displayed_roles
             .iter()
             .any(|r| r.operational_end.is_some());
-    let end_column_absent = !options.band.has_end_date();
+    let is_markdown = options.style == TableStyle::Markdown;
+    let has_start_date = is_markdown || options.band.has_start_date();
+    let has_end_date = is_markdown || options.band.has_end_date();
+    let end_column_absent = !has_end_date;
     let any_row_flagged = row_anomalies.iter().any(|a| a.is_some());
 
     let show_gutter = (rows_differ_in_status && end_column_absent) || any_row_flagged;
@@ -448,10 +451,10 @@ fn render_roles_table(
     }
     headers.push("Role");
     headers.push("Code");
-    if options.band.has_start_date() {
+    if has_start_date {
         headers.push("Start");
     }
-    if options.band.has_end_date() {
+    if has_end_date {
         headers.push("End");
     }
     table.set_header(headers);
@@ -515,7 +518,7 @@ fn render_roles_table(
         };
         row.push(Cell::new(&code_text));
 
-        if options.band.has_start_date() {
+        if has_start_date {
             let start_val = r.operational_start.as_deref().unwrap_or("—");
             let start_text = if options.color && !is_row_active {
                 format!("{ANSI_MUTED}{start_val}{ANSI_RESET}")
@@ -524,7 +527,7 @@ fn render_roles_table(
             };
             row.push(Cell::new(&start_text));
         }
-        if options.band.has_end_date() {
+        if has_end_date {
             let end_val = r.operational_end.as_deref().unwrap_or("—");
             let end_text = if options.color && !is_row_active {
                 format!("{ANSI_MUTED}{end_val}{ANSI_RESET}")
@@ -632,7 +635,10 @@ fn render_relationships_table(
         && displayed_rels
             .iter()
             .any(|r| r.operational_end.is_some());
-    let end_column_absent = !options.band.has_end_date();
+    let is_markdown = options.style == TableStyle::Markdown;
+    let has_start_date = is_markdown || options.band.has_start_date();
+    let has_end_date = is_markdown || options.band.has_end_date();
+    let end_column_absent = !has_end_date;
     let any_row_flagged = row_anomalies.iter().any(|a| a.is_some());
 
     let show_gutter = (rows_differ_in_status && end_column_absent) || any_row_flagged;
@@ -647,10 +653,10 @@ fn render_relationships_table(
     headers.push("Relationship");
     headers.push("Organisation");
     headers.push("Code");
-    if options.band.has_start_date() {
+    if has_start_date {
         headers.push("Start");
     }
-    if options.band.has_end_date() {
+    if has_end_date {
         headers.push("End");
     }
     table.set_header(headers);
@@ -767,7 +773,7 @@ fn render_relationships_table(
         };
         row.push(Cell::new(&code_text));
 
-        if options.band.has_start_date() {
+        if has_start_date {
             let start_val = r.operational_start.as_deref().unwrap_or("—");
             let start_text = if options.color && !is_row_active {
                 format!("{ANSI_MUTED}{start_val}{ANSI_RESET}")
@@ -776,7 +782,7 @@ fn render_relationships_table(
             };
             row.push(Cell::new(&start_text));
         }
-        if options.band.has_end_date() {
+        if has_end_date {
             let end_val = r.operational_end.as_deref().unwrap_or("—");
             let end_text = if options.color && !is_row_active {
                 format!("{ANSI_MUTED}{end_val}{ANSI_RESET}")

@@ -1,0 +1,16 @@
+$ COLUMNS=100 ods role 'general practice'
+--- stderr
+Error: ✖ No role matches 'general practice'
+  Did you mean: General Dental Practice · GP Practice · Scottish GP Practice
+--- exit 1
+
+$ COLUMNS=100 ods role GP
+* Source: releases/2026-07-31/orgs.parquet
+┌───────┬──────────────────────────────┬─────────┐
+│ Code  ┆ Name                         ┆ Holders │
+╞═══════╪══════════════════════════════╪═════════╡
+│ RO76  ┆ GP Practice                  ┆ 14      │
+│ RO315 ┆ Northern Ireland GP Practice ┆ 1       │
+│ RO227 ┆ Scottish GP Practice         ┆ 1       │
+│ RO88  ┆ GP Abeyance and Dispersal    ┆ 0       │
+└───────┴──────────────────────────────┴─────────┘

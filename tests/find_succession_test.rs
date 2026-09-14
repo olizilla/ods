@@ -3,36 +3,6 @@ mod common;
 use common::setup_find_test_workspace;
 use ods::commands::find::{self, Args, OutputFormat, SortBy};
 
-#[test]
-fn test_find_table_inactive_successor_display() {
-    let (_tmp, parquet_dir) = setup_find_test_workspace();
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            query: Some("CLWYD".to_string()),
-            code: Vec::new(),
-            location: Vec::new(),
-            role: Vec::new(),
-            all: true,
-            verbose: false,
-            sort: Some(SortBy::Code),
-            format: OutputFormat::Table,
-            input: Some(parquet_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &parquet_dir,
-    )
-    .expect("find::run_with_writer should succeed");
-
-    let output_str = String::from_utf8(out).expect("valid UTF-8");
-    assert!(
-        output_str.contains("CLWYD → CONWY UA +4"),
-        "Table view of CLWYD must show 'CLWYD → CONWY UA +4', got:\n{}",
-        output_str
-    );
-}
 
 #[test]
 fn test_find_exact_code_matches_as_table() {

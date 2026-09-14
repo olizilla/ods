@@ -1,15 +1,13 @@
+mod common;
+
 use anyhow::Result;
 use std::fs;
 use tempfile::TempDir;
 
 fn create_mock_zip(path: &std::path::Path, date_str: &str) -> Result<()> {
-    use std::io::Write;
-    let file = fs::File::create(path)?;
-    let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip.start_file(format!("test_{}.xml", date_str), options)?;
-    zip.write_all(format!("<HSCOrgRefData><Manifest><PublicationDate value=\"{}\"/></Manifest></HSCOrgRefData>", date_str).as_bytes())?;
-    zip.finish()?;
+    let xml = format!("<HSCOrgRefData><Manifest><PublicationDate value=\"{}\"/></Manifest></HSCOrgRefData>", date_str);
+    let bytes = common::create_inner_zip(&format!("test_{}.xml", date_str), xml.as_bytes());
+    fs::write(path, bytes)?;
     Ok(())
 }
 

@@ -8,30 +8,15 @@
 //!   before `Generating dataset target projections (Parquet)...`.
 //!   Streams are segregated (stdout gets `* Provenance:`, stderr gets `Generating...`).
 
+mod common;
+
+use common::create_mock_trud_zip as create_mock_zip;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-const FIXTURE_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/mock_hscorgrefdata.xml"
-);
-
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
-}
-
-fn create_mock_zip(dir: &Path, filename: &str) -> PathBuf {
-    let zip_path = dir.join(filename);
-    let zip_file = fs::File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
-    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    std::io::Write::write_all(&mut zip_writer, xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-    zip_path
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +97,7 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
 }
 
 #[test]
-fn test_task1_directory_input_without_provenance_fails_with_hard_error() {
+fn test_directory_input_without_provenance_fails_with_hard_error() {
     let tmp = TempDir::new().unwrap();
     let input_dir = tmp.path().join("dir_without_prov");
     fs::create_dir_all(&input_dir).unwrap();
@@ -228,7 +213,7 @@ fn test_task2_name_provenance_file_and_stream_segregation() {
 }
 
 #[test]
-fn test_task2_make_after_trud_pull_prints_no_warning() {
+fn test_make_after_trud_pull_prints_no_warning() {
     let tmp = TempDir::new().unwrap();
     let zip_dir = tmp.path().join("prov_dir");
     fs::create_dir_all(&zip_dir).unwrap();

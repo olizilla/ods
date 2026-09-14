@@ -210,65 +210,8 @@ fn test_role_formats_table_markdown_csv_json() {
     assert!(arr[0]["holders"].as_u64().unwrap() > 0);
 }
 
-#[test]
-fn test_role_zero_match_suggestions() {
-    let (_tmp, parquet_dir) = setup_find_test_workspace();
 
-    let mut out = Vec::new();
-    let err = role::run_with_writer(
-        Args {
-            query: Some("general practice".to_string()),
-            input: Some(parquet_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &parquet_dir,
-    )
-    .unwrap_err();
 
-    let err_msg = err.to_string();
-    assert!(err_msg.contains("✖ No role matches 'general practice'"));
-    assert!(err_msg.contains("Did you mean:"));
-    assert!(err_msg.contains("GP Practice"));
-}
-
-#[test]
-fn test_role_csv_escaping_guards() {
-    let (_tmp, parquet_dir) = setup_find_test_workspace();
-
-    let mut out_csv = Vec::new();
-    role::run_with_writer(
-        Args {
-            format: OutputFormat::Csv,
-            input: Some(parquet_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_csv,
-        &parquet_dir,
-    )
-    .unwrap();
-
-    let s_csv = String::from_utf8(out_csv).unwrap();
-    let lines: Vec<&str> = s_csv.lines().collect();
-    assert_eq!(lines[0], "role_code,role_name,holders");
-
-    let expected_count = ods::roles::role_names().names.len();
-    assert_eq!(lines.len(), expected_count + 1);
-
-    for line in &lines[1..] {
-        // Must start with RO
-        assert!(
-            line.starts_with("RO"),
-            "CSV row must start with role code: {line}"
-        );
-        // Must end with a parseable integer holders count
-        let last_comma = line
-            .rfind(',')
-            .expect("CSV line must contain at least one comma");
-        let holders_str = &line[last_comma + 1..];
-        let _: usize = holders_str.parse().expect("holders must be integer");
-    }
-}
 
 fn count_role_codes_in_parquet(path: &std::path::Path) -> std::collections::HashMap<String, usize> {
     use arrow::array::{Array, ListArray, StringArray};
@@ -359,44 +302,52 @@ fn test_role_holders_counts_active_orgs_holding_role_actively() {
         Some(&14),
         "ods role must report 14 active RO76 holders (from orgs.parquet), not 17 (from orgs_all.parquet)"
     );
+}
 
-    // 2. Fixed baseline assertions on real release data (2026-08-28) if available
-    let current_dir = std::path::Path::new("ods_data/current");
-    if current_dir.exists() {
-        let mut out_real = Vec::new();
-        role::run_with_writer(
-            Args {
-                format: OutputFormat::Csv,
-                input: Some(current_dir.to_path_buf()),
-                ..Default::default()
-            },
-            &mut out_real,
-            current_dir,
-        )
-        .expect("ods role on real data should succeed");
-
-        let s_real = String::from_utf8(out_real).unwrap();
-        let mut real_map = std::collections::HashMap::new();
-        for line in s_real.lines().skip(1) {
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() == 3 {
-                real_map.insert(parts[0].to_string(), parts[2].parse::<usize>().unwrap());
-            }
-        }
-
-        // On the 2026-08-28 release the fixed values are RO198 38,256 and RO101 31,738;
-        // against orgs_all.parquet they would be 49,575 and 50,114.
-        assert_eq!(
-            real_map.get("RO198"),
-            Some(&38256),
-            "RO198 must have 38,256 active holders in 2026-08-28 release (not 49,575)"
-        );
-        assert_eq!(
-            real_map.get("RO101"),
-            Some(&31738),
-            "RO101 must have 31,738 active holders in 2026-08-28 release (not 50,114)"
-        );
+fn get_release_dir() -> Option<std::path::PathBuf> {
+    let p = std::path::PathBuf::from("ods_data/releases/2026-08-28");
+    if p.join("orgs.parquet").exists() {
+        Some(p)
+    } else {
+        None
     }
+}
+
+#[test]
+#[ignore = "requires full release 2026-08-28"]
+fn test_role_holders_counts_on_release_data() {
+    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
+    let mut out_real = Vec::new();
+    role::run_with_writer(
+        Args {
+            format: OutputFormat::Csv,
+            input: Some(release_dir.clone()),
+            ..Default::default()
+        },
+        &mut out_real,
+        &release_dir,
+    )
+    .expect("ods role on real data should succeed");
+
+    let s_real = String::from_utf8(out_real).unwrap();
+    let mut real_map = std::collections::HashMap::new();
+    for line in s_real.lines().skip(1) {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() == 3 {
+            real_map.insert(parts[0].to_string(), parts[2].parse::<usize>().unwrap());
+        }
+    }
+
+    assert_eq!(
+        real_map.get("RO198"),
+        Some(&38256),
+        "RO198 must have 38,256 active holders in 2026-08-28 release (not 49,575)"
+    );
+    assert_eq!(
+        real_map.get("RO101"),
+        Some(&31738),
+        "RO101 must have 31,738 active holders in 2026-08-28 release (not 50,114)"
+    );
 }
 
 #[test]

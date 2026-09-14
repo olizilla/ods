@@ -263,18 +263,26 @@ fn test_markdown_case(fixture_name: &str, ref_filename: &str) {
         .unwrap_or_else(|e| panic!("failed to deserialize {}: {}", fixture_path, e));
 
     let source_header = source_header_for(&record, false);
-    let options = RenderOptions {
+    let options_wide = RenderOptions {
         band: ResponsiveBand::Wide,
         all: false,
         color: false,
         source_header: &source_header,
         style: TableStyle::Markdown,
     };
+    let rendered_wide = render_info(&record, &options_wide);
 
-    let rendered = render_info(&record, &options);
+    let options_narrow = RenderOptions {
+        band: ResponsiveBand::Narrow,
+        all: false,
+        color: false,
+        source_header: &source_header,
+        style: TableStyle::Markdown,
+    };
+    let rendered_narrow = render_info(&record, &options_narrow);
 
     if std::env::var("UPDATE_EXPECT").is_ok() {
-        fs::write(&ref_path, &rendered)
+        fs::write(&ref_path, &rendered_wide)
             .unwrap_or_else(|e| panic!("failed to write {}: {}", ref_path, e));
     }
 
@@ -282,9 +290,27 @@ fn test_markdown_case(fixture_name: &str, ref_filename: &str) {
         .unwrap_or_else(|e| panic!("failed to read {}: {}", ref_path, e));
 
     assert_eq!(
-        rendered, expected,
-        "Markdown output for {} does not match golden reference fixture {}",
+        rendered_wide, expected,
+        "Markdown output for {} at Wide does not match golden reference fixture {}",
         fixture_name, ref_filename
+    );
+
+    assert_eq!(
+        rendered_narrow, expected,
+        "Markdown output for {} at Narrow does not match golden reference fixture {}",
+        fixture_name, ref_filename
+    );
+
+    assert!(
+        !rendered_wide.contains('…'),
+        "Markdown output for {} at Wide contains ellipsis (…)",
+        fixture_name
+    );
+
+    assert!(
+        !rendered_narrow.contains('…'),
+        "Markdown output for {} at Narrow contains ellipsis (…)",
+        fixture_name
     );
 }
 

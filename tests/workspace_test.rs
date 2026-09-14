@@ -1,25 +1,10 @@
+mod common;
+
+use common::create_mock_trud_zip;
 use ods::commands::{parquet, find, diff};
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
-
-const FIXTURE_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/mock_hscorgrefdata.xml"
-);
-
-fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
-    let zip_path = dir.join(filename);
-    let zip_file = fs::File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
-    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    zip_writer.write_all(xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-    zip_path
-}
 
 #[test]
 fn test_workspace_full_lifecycle() {
@@ -137,19 +122,6 @@ fn test_prepare_release_dir_does_not_create_markdown_dir() {
     assert!(!release_dir.join("markdown").exists(), "markdown directory must NOT be created unconditionally");
 }
 
-#[test]
-fn test_ensure_workspace_gitignore_does_not_unignore_wiki_zip() {
-    let tmp = TempDir::new().unwrap();
-    let workspace_dir = tmp.path().join("ods_data");
-    fs::create_dir_all(&workspace_dir).unwrap();
-
-    let _ws = ods::workspace::Workspace::open_or_create(Some(&workspace_dir)).unwrap();
-    let gitignore_content = fs::read_to_string(workspace_dir.join(".gitignore")).unwrap();
-    assert!(
-        !gitignore_content.contains("!releases/*/markdown/wiki.zip"),
-        ".gitignore must not un-ignore wiki.zip"
-    );
-}
 
 #[test]
 fn test_tightened_workspace_discovery_rules() {

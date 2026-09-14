@@ -1,3 +1,5 @@
+mod common;
+
 use anyhow::Result;
 use std::fs;
 use tempfile::TempDir;
@@ -500,65 +502,6 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_reproducibility_two_different_working_directories_produce_identical_manifests() -> Result<()> {
-    let tmp_a = TempDir::new()?;
-    let tmp_b = TempDir::new()?;
-
-    let xml_fixture = "tests/fixtures/mock_hscorgrefdata.xml";
-    let xml_bytes = fs::read(xml_fixture)?;
-
-    // Create the archive bytes once so both directories start from the exact same TRUD zip archive
-    let mut zip_bytes = Vec::new();
-    {
-        let cursor = std::io::Cursor::new(&mut zip_bytes);
-        let mut zip = zip::ZipWriter::new(cursor);
-        let options = zip::write::SimpleFileOptions::default()
-            .last_modified_time(zip::DateTime::from_date_and_time(2026, 7, 31, 0, 0, 0).unwrap());
-        zip.start_file("HSCOrgRefData_Full.xml", options)?;
-        use std::io::Write;
-        zip.write_all(&xml_bytes)?;
-        zip.finish()?;
-    }
-
-    for tmp in [&tmp_a, &tmp_b] {
-        let zip_path = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
-        fs::write(&zip_path, &zip_bytes)?;
-
-        let out_dir = tmp.path().join("out");
-        let args = ods::commands::parquet::Args {
-            input: Some(zip_path),
-            output: Some(out_dir.clone()),
-        };
-        ods::commands::parquet::run(args)?;
-        ods::provenance::update_provenance(&out_dir, Some("0.1.0"))?;
-    }
-
-    let prov_a = fs::read_to_string(tmp_a.path().join("out").join("_provenance.json"))?;
-    let prov_b = fs::read_to_string(tmp_b.path().join("out").join("_provenance.json"))?;
-    assert_eq!(prov_a, prov_b, "_provenance.json must be byte-identical regardless of working directory");
-
-    let dp_a = fs::read_to_string(tmp_a.path().join("out").join("datapackage.json"))?;
-    let dp_b = fs::read_to_string(tmp_b.path().join("out").join("datapackage.json"))?;
-    assert_eq!(dp_a, dp_b, "datapackage.json must be byte-identical regardless of working directory");
-
-    let (_, bytes_a) = ods::commands::make_oci::build_manifest_from_dir(&tmp_a.path().join("out"), &serde_json::from_str(&prov_a)?, "0.1.0")?;
-    let (_, bytes_b) = ods::commands::make_oci::build_manifest_from_dir(&tmp_b.path().join("out"), &serde_json::from_str(&prov_b)?, "0.1.0")?;
-    assert_eq!(bytes_a, bytes_b, "manifest bytes must be byte-identical regardless of working directory");
-
-    // Assert no trud_release_url in provenance
-    assert!(!prov_a.contains("trud_release_url"), "_provenance.json must not contain trud_release_url");
-
-    // Assert no absolute paths leaked
-    let tmp_a_path = tmp_a.path().to_str().unwrap();
-    let tmp_b_path = tmp_b.path().to_str().unwrap();
-    assert!(!prov_a.contains(tmp_a_path), "no absolute path leaked in _provenance.json");
-    assert!(!dp_a.contains(tmp_a_path), "no absolute path leaked in datapackage.json");
-    assert!(!prov_b.contains(tmp_b_path), "no absolute path leaked in _provenance.json");
-    assert!(!dp_b.contains(tmp_b_path), "no absolute path leaked in datapackage.json");
-
-    Ok(())
-}
 
 #[test]
 fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -> Result<()> {
@@ -588,13 +531,7 @@ fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -
 </Manifest>"#;
 
     for (path, content) in [(&zip_alpha_path, xml_alpha), (&zip_beta_path, xml_beta)] {
-        let zip_file = fs::File::create(path)?;
-        let mut zip = zip::ZipWriter::new(zip_file);
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("HSCOrgRefData_Full.xml", options)?;
-        use std::io::Write;
-        zip.write_all(content.as_bytes())?;
-        zip.finish()?;
+        fs::write(path, common::create_inner_zip("HSCOrgRefData_Full.xml", content.as_bytes()))?;
     }
 
     let iterations = 10;

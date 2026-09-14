@@ -7,10 +7,10 @@ use ods::commands::parquet::{
     export_relationships, export_roles, export_successions,
 };
 use ods::provenance::OdsProvenance;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-#[allow(clippy::vec_init_then_push)]
+#[allow(clippy::vec_init_then_push, dead_code)]
 pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().expect("create temp dir");
     let dir = tmp.path().to_path_buf();
@@ -887,6 +887,58 @@ pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
     export_roles(&dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&dir, &records, Some(&prov)).expect("export successions");
+    std::fs::write(
+        dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    )
+    .expect("write _provenance.json");
 
     (tmp, dir)
+}
+
+#[allow(dead_code)]
+pub const FIXTURE_MOCK_XML: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/mock_hscorgrefdata.xml"
+);
+
+/// Creates an in-memory zip file containing a single file with the given name and bytes.
+#[allow(dead_code)]
+pub fn create_inner_zip(filename: &str, content: &[u8]) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(filename, options).unwrap();
+        std::io::Write::write_all(&mut zip, content).unwrap();
+        zip.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+/// Creates a flat mock TRUD zip with HSCOrgRefData_Full_mock.xml at `dir.join(filename)`.
+#[allow(dead_code)]
+pub fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
+    let zip_path = dir.join(filename);
+    let zip_file = std::fs::File::create(&zip_path).unwrap();
+    let mut zip_writer = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let xml_content = std::fs::read_to_string(FIXTURE_MOCK_XML).unwrap();
+    std::io::Write::write_all(&mut zip_writer, xml_content.as_bytes()).unwrap();
+    zip_writer.finish().unwrap();
+    zip_path
+}
+
+/// Creates a nested mock TRUD zip (outer zip containing inner zips/files) at `outer_path`.
+#[allow(dead_code)]
+pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
+    let file = std::fs::File::create(outer_path).unwrap();
+    let mut outer_zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    for (name, data) in entries {
+        outer_zip.start_file(*name, options).unwrap();
+        std::io::Write::write_all(&mut outer_zip, data).unwrap();
+    }
+    outer_zip.finish().unwrap();
 }

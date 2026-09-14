@@ -124,8 +124,12 @@ fn role_status_does_not_leak_to_organisation() {
     let org = record(&records, "TMP02");
 
     assert!(
+        org.roles.iter().any(|r| r.status.eq_ignore_ascii_case("inactive")),
+        "TMP02 should have an inactive role to verify status scoping"
+    );
+    assert!(
         org.status.eq_ignore_ascii_case("active"),
-        "organisation status should stay Active, got {:?}",
+        "organisation status should stay Active despite inactive child role, got {:?}",
         org.status
     );
 }

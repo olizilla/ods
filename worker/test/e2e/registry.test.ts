@@ -132,7 +132,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       // 3. Run ods make release on fixture release to produce dist/
       const distDir = path.join(repoDir, 'dist');
-      execFileSync(odsBin, ['make', 'release', '--input', fixtureDir, '--tool-repo', repoDir, '--output', distDir, '--offline'], {
+      execFileSync(odsBin, ['make', 'release', '--input', fixtureDir, '--tool-repo', repoDir, '--output', distDir], {
         stdio: 'pipe',
       });
 

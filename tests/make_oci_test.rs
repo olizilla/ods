@@ -210,11 +210,26 @@ fn test_make_oci_idempotent_repack_after_rebuilt_content() -> Result<()> {
 
 #[test]
 fn test_determinism_two_different_working_directories_produce_identical_manifests() -> Result<()> {
-    let (_tmp_a, rel_dir_a) = setup_synthetic_release_dir();
-    let (_tmp_b, rel_dir_b) = setup_synthetic_release_dir();
+    let (tmp_a, rel_dir_a) = setup_synthetic_release_dir();
+    let (tmp_b, rel_dir_b) = setup_synthetic_release_dir();
 
     run(test_args(rel_dir_a.clone(), false))?;
     run(test_args(rel_dir_b.clone(), false))?;
+
+    let prov_a = fs::read_to_string(rel_dir_a.join(PROVENANCE_FILENAME))?;
+    let prov_b = fs::read_to_string(rel_dir_b.join(PROVENANCE_FILENAME))?;
+    assert_eq!(prov_a, prov_b, "_provenance.json must be byte-identical regardless of working directory");
+
+    let dp_a = fs::read_to_string(rel_dir_a.join("datapackage.json"))?;
+    let dp_b = fs::read_to_string(rel_dir_b.join("datapackage.json"))?;
+    assert_eq!(dp_a, dp_b, "datapackage.json must be byte-identical regardless of working directory");
+
+    let tmp_a_path = tmp_a.path().to_str().unwrap();
+    let tmp_b_path = tmp_b.path().to_str().unwrap();
+    assert!(!prov_a.contains(tmp_a_path), "no absolute path leaked in _provenance.json");
+    assert!(!dp_a.contains(tmp_a_path), "no absolute path leaked in datapackage.json");
+    assert!(!prov_b.contains(tmp_b_path), "no absolute path leaked in _provenance.json");
+    assert!(!dp_b.contains(tmp_b_path), "no absolute path leaked in datapackage.json");
 
     let get_manifest_bytes = |dir: &Path| -> Result<Vec<u8>> {
         let blobs = dir.join("oci").join("blobs").join("sha256");

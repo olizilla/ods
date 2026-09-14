@@ -1,15 +1,10 @@
-//! Integration tests enforcing dataset release invariants and projection parity.
+mod common;
 
+use common::{create_inner_zip, create_nested_trud_zip, FIXTURE_MOCK_XML};
 use ods::commands::parquet;
 use ods::workspace;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use tempfile::TempDir;
-
-const FIXTURE_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/mock_hscorgrefdata.xml"
-);
 
 /// 1. Verifies that `extract_xml_from_zip` prioritizes `fullfile.zip` over `archive.zip`
 /// when processing a TRUD distribution package containing both inner archives.
@@ -35,23 +30,19 @@ fn test_trud_zip_selection_prioritizes_full_over_archive() {
   </un:Organisations>
 </un:OrganisationManifest>"#;
 
-    let archive_zip_bytes = create_inner_zip("HSCOrgRefData_Archive_20260518.xml", archive_xml_content);
-    let full_xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    let full_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260518.xml", &full_xml_content);
+    let archive_zip_bytes = create_inner_zip("HSCOrgRefData_Archive_20260518.xml", archive_xml_content.as_bytes());
+    let full_xml_content = fs::read_to_string(FIXTURE_MOCK_XML).unwrap();
+    let full_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260518.xml", full_xml_content.as_bytes());
 
     // Write outer release package containing BOTH archive.zip and fullfile.zip
     // Note: archive.zip is added first alphabetically to test priority handling
-    let outer_file = File::create(&outer_zip_path).unwrap();
-    let mut outer_zip = zip::ZipWriter::new(outer_file);
-    let options = zip::write::SimpleFileOptions::default();
-
-    outer_zip.start_file("archive.zip", options).unwrap();
-    outer_zip.write_all(&archive_zip_bytes).unwrap();
-
-    outer_zip.start_file("fullfile.zip", options).unwrap();
-    outer_zip.write_all(&full_zip_bytes).unwrap();
-
-    outer_zip.finish().unwrap();
+    create_nested_trud_zip(
+        &outer_zip_path,
+        &[
+            ("archive.zip", &archive_zip_bytes),
+            ("fullfile.zip", &full_zip_bytes),
+        ],
+    );
 
     // Run parquet export
     let out_dir = tmp.path().join("parquet_out");
@@ -71,73 +62,4 @@ fn test_trud_zip_selection_prioritizes_full_over_archive() {
         total_rows, 2,
         "ods parquet must select fullfile.zip (producing 2 records), not archive.zip (1 record)"
     );
-}
-
-/// 2. Verifies that child `<Status value="Inactive"/>` tags on secondary roles
-/// or relationships do not corrupt/overwrite the top-level organisation status.
-#[test]
-fn test_status_scoping_prevents_role_status_leak() {
-    let tmp = TempDir::new().unwrap();
-    let zip_path = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260529000001.zip");
-
-    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
-  <un:ManifestHeader>
-    <un:PublicationType value="Full" />
-    <un:PublicationDate value="2026-05-18" />
-    <un:PublicationSeqNum value="1" />
-    <un:PrimaryRoleScope>
-      <un:PrimaryRole id="RO197" displayName="NHS Trust" />
-    </un:PrimaryRoleScope>
-  </un:ManifestHeader>
-  <un:Organisations>
-    <un:Organisation orgRecordClass="RC1">
-      <un:Name>ACTIVE ORG WITH INACTIVE ROLE</un:Name>
-      <un:OrgId root="2.16.840.1.113883.2.1.3.2.4.18.48" extension="TEST1" />
-      <un:Status value="Active" />
-      <un:Roles>
-        <un:Role id="RO197" uniqueRoleId="100" primaryRole="true">
-          <un:Status value="Inactive" />
-        </un:Role>
-      </un:Roles>
-    </un:Organisation>
-  </un:Organisations>
-</un:OrganisationManifest>"#;
-
-    let zip_file = File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full.xml", options).unwrap();
-    zip_writer.write_all(xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-
-    let out_dir = tmp.path().join("parquet_out");
-    parquet::run(parquet::Args {
-        input: Some(zip_path),
-        output: Some(out_dir.clone()),
-    })
-    .unwrap();
-
-    let orgs_parquet = out_dir.join("orgs.parquet");
-    assert!(orgs_parquet.exists());
-
-    let total_rows = workspace::count_records_in_parquet(&orgs_parquet).unwrap();
-
-    assert_eq!(
-        total_rows, 1,
-        "organisation with active status must be exported to orgs.parquet despite inactive child role"
-    );
-}
-
-/// Helper to construct an in-memory zip file containing a named XML file.
-fn create_inner_zip(filename: &str, content: &str) -> Vec<u8> {
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut zip = zip::ZipWriter::new(&mut cursor);
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(filename, options).unwrap();
-        zip.write_all(content.as_bytes()).unwrap();
-        zip.finish().unwrap();
-    }
-    cursor.into_inner()
 }

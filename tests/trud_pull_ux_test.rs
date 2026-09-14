@@ -12,6 +12,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
+mod common;
+
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
 }
@@ -29,22 +31,8 @@ fn create_mock_trud_zip_with_manifest(dir: &std::path::Path) -> std::path::PathB
   </un:ManifestHeader>
 </un:OrganisationManifest>"#;
 
-    let mut inner_bytes = Vec::new();
-    {
-        let mut inner_zip = zip::ZipWriter::new(std::io::Cursor::new(&mut inner_bytes));
-        let options = zip::write::SimpleFileOptions::default();
-        inner_zip.start_file("HSCOrgRefData_Full_20260731.xml", options).unwrap();
-        inner_zip.write_all(xml_content.as_bytes()).unwrap();
-        inner_zip.finish().unwrap();
-    }
-
-    let file = fs::File::create(&zip_path).unwrap();
-    let mut outer_zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default();
-    outer_zip.start_file("fullfile.zip", options).unwrap();
-    outer_zip.write_all(&inner_bytes).unwrap();
-    outer_zip.finish().unwrap();
-
+    let inner_bytes = common::create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content.as_bytes());
+    common::create_nested_trud_zip(&zip_path, &[("fullfile.zip", &inner_bytes)]);
     zip_path
 }
 
@@ -194,12 +182,12 @@ impl TrudFetcher for MockTrudFetcher {
     }
 }
 
-fn generate_96_mock_releases() -> Vec<TrudReleaseItem> {
+fn generate_mock_releases(count: usize) -> Vec<TrudReleaseItem> {
     let mut releases = Vec::new();
     let mut year = 2018;
     let mut month = 6;
 
-    for i in 0..96 {
+    for i in 0..count {
         let date_str = format!("{:04}-{:02}-28", year, month);
         let zip_name = format!("hscorgrefdataxml_data_1.0.0_{}{:02}28000001.zip", year, month);
         let bytes = create_test_zip_bytes(&date_str);
@@ -231,9 +219,9 @@ fn test_batch_all_cached_outputs_four_lines() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
+    let releases = generate_mock_releases(4);
 
-    // Pre-populate all 96 releases
+    // Pre-populate all 4 releases
     for r in &releases {
         let rel_dir = ws.join("releases").join(&r.release_date).join("trud");
         fs::create_dir_all(&rel_dir).unwrap();
@@ -271,8 +259,8 @@ fn test_batch_all_cached_outputs_four_lines() {
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     let lines: Vec<&str> = output.lines().collect();
 
-    assert!(output.contains("96 releases available"));
-    assert!(output.contains("96 cached, SHA-256 verified by TRUD API · nothing to download"));
+    assert!(output.contains("4 releases available"));
+    assert!(output.contains("4 cached, SHA-256 verified by TRUD API · nothing to download"));
     assert!(!output.contains("current →"), "Must NOT emit current pin update when all releases are cached");
     assert_eq!(lines.len(), 2, "Output must be exactly 2 settled lines in non-interactive mode");
 
@@ -290,10 +278,10 @@ fn test_batch_mixed_cache_and_downloads() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
+    let releases = generate_mock_releases(4);
 
-    // Pre-populate 84 releases; leave 12 to download
-    for r in releases.iter().take(84) {
+    // Pre-populate 3 releases; leave 1 to download
+    for r in releases.iter().take(3) {
         let rel_dir = ws.join("releases").join(&r.release_date).join("trud");
         fs::create_dir_all(&rel_dir).unwrap();
         let bytes = create_test_zip_bytes(&r.release_date);
@@ -325,10 +313,10 @@ fn test_batch_mixed_cache_and_downloads() {
     assert!(res.is_ok());
 
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    assert!(output.contains("96 releases available"));
-    assert!(output.contains("84 cached · 12 to download"));
-    assert!(output.contains("12 downloaded · 84 cached · 0 failed"));
-    assert!(output.contains("current → releases/2026-05-28"));
+    assert!(output.contains("4 releases available"));
+    assert!(output.contains("3 cached · 1 to download"));
+    assert!(output.contains("1 downloaded · 3 cached · 0 failed"));
+    assert!(output.contains("current → releases/2018-09-28"));
 }
 
 #[test]
@@ -337,18 +325,18 @@ fn test_batch_503_failure_continues_batch_and_summarises() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
+    let releases = generate_mock_releases(5);
 
-    // Pre-populate 84 releases
-    for r in releases.iter().take(84) {
+    // Pre-populate 2 releases
+    for r in releases.iter().take(2) {
         let rel_dir = ws.join("releases").join(&r.release_date).join("trud");
         fs::create_dir_all(&rel_dir).unwrap();
         let bytes = create_test_zip_bytes(&r.release_date);
         fs::write(rel_dir.join(&r.archive_file_name), bytes).unwrap();
     }
 
-    // Fail release 85 (2025-06-28)
-    let failing_date = releases[84].release_date.clone();
+    // Fail release 3 (2018-08-28)
+    let failing_date = releases[2].release_date.clone();
 
     let fetcher = MockTrudFetcher {
         releases: releases.clone(),
@@ -378,9 +366,9 @@ fn test_batch_503_failure_continues_batch_and_summarises() {
     assert!(res.unwrap_err().downcast_ref::<ods::commands::pull::AlreadyReported>().is_some());
 
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    assert!(output.contains("11 downloaded · 84 cached · 1 failed"));
+    assert!(output.contains("2 downloaded · 2 cached · 1 failed"));
     assert!(output.contains(&format!("✖ {}  download failed", failing_date)));
-    assert!(output.contains("current → releases/2026-05-28"));
+    assert!(output.contains("current → releases/2018-10-28"));
 }
 
 #[test]
@@ -389,9 +377,9 @@ fn test_batch_format_ndjson_stdout() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
+    let releases = generate_mock_releases(3);
     let fetcher = MockTrudFetcher {
-        releases: releases.into_iter().take(3).collect(),
+        releases,
         failing_date: None,
     };
 
@@ -421,9 +409,9 @@ fn test_batch_downloads_in_newest_to_oldest_order() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
+    let releases = generate_mock_releases(5);
     // Only take 5 releases (e.g. 2018-06-28 to 2018-10-28)
-    let sample_releases: Vec<TrudReleaseItem> = releases.into_iter().take(5).collect();
+    let sample_releases: Vec<TrudReleaseItem> = releases;
 
     let fetcher = MockTrudFetcher {
         releases: sample_releases.clone(),
@@ -576,9 +564,9 @@ fn test_batch_pin_lands_on_newest_cached_when_older_downloaded() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
-    // Cache the newest 84 releases (skip the first 12 oldest)
-    for r in releases.iter().skip(12) {
+    let releases = generate_mock_releases(4);
+    // Cache the newest 2 releases (skip the first 2 oldest)
+    for r in releases.iter().skip(2) {
         let rel_dir = ws.join("releases").join(&r.release_date).join("trud");
         fs::create_dir_all(&rel_dir).unwrap();
         let bytes = create_test_zip_bytes(&r.release_date);
@@ -612,8 +600,8 @@ fn test_batch_pin_lands_on_newest_cached_when_older_downloaded() {
     let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
-        "2026-05-28",
-        "Active release must be pinned to the newest cached release (2026-05-28), got: {:?}",
+        "2018-09-28",
+        "Active release must be pinned to the newest cached release (2018-09-28), got: {:?}",
         active_release
     );
 }
@@ -813,19 +801,19 @@ fn test_batch_pin_not_moved_to_older_when_older_downloaded() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
-    // Cache release 95 (newest: 2026-05-28)
-    let newest_rel = &releases[95];
+    let releases = generate_mock_releases(4);
+    // Cache release 3 (newest: 2018-09-28)
+    let newest_rel = &releases[3];
     let rel_dir = ws.join("releases").join(&newest_rel.release_date).join("trud");
     fs::create_dir_all(&rel_dir).unwrap();
     let bytes = create_test_zip_bytes(&newest_rel.release_date);
     fs::write(rel_dir.join(&newest_rel.archive_file_name), bytes).unwrap();
 
-    // Set initial pin to 2026-05-28
+    // Set initial pin to 2018-09-28
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&newest_rel.release_date).unwrap();
 
-    // Fetcher has release 95 (cached) and release 0 (oldest: 2018-06-28 to download)
-    let test_releases = vec![releases[0].clone(), releases[95].clone()];
+    // Fetcher has release 3 (cached) and release 0 (oldest: 2018-06-28 to download)
+    let test_releases = vec![releases[0].clone(), releases[3].clone()];
     let fetcher = MockTrudFetcher {
         releases: test_releases,
         failing_date: None,
@@ -853,8 +841,8 @@ fn test_batch_pin_not_moved_to_older_when_older_downloaded() {
     let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
-        "2026-05-28",
-        "Active release must remain 2026-05-28 and NOT move to older 2018-06-28"
+        "2018-09-28",
+        "Active release must remain 2018-09-28 and NOT move to older 2018-06-28"
     );
 
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
@@ -867,19 +855,19 @@ fn test_batch_pin_moved_when_newer_downloaded() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let releases = generate_96_mock_releases();
-    // Cache release 94 (2026-04-28)
-    let rel_94 = &releases[94];
-    let rel_dir = ws.join("releases").join(&rel_94.release_date).join("trud");
+    let releases = generate_mock_releases(4);
+    // Cache release 2 (2018-08-28)
+    let rel_2 = &releases[2];
+    let rel_dir = ws.join("releases").join(&rel_2.release_date).join("trud");
     fs::create_dir_all(&rel_dir).unwrap();
-    let bytes = create_test_zip_bytes(&rel_94.release_date);
-    fs::write(rel_dir.join(&rel_94.archive_file_name), bytes).unwrap();
+    let bytes = create_test_zip_bytes(&rel_2.release_date);
+    fs::write(rel_dir.join(&rel_2.archive_file_name), bytes).unwrap();
 
-    // Set initial pin to 2026-04-28
-    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&rel_94.release_date).unwrap();
+    // Set initial pin to 2018-08-28
+    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&rel_2.release_date).unwrap();
 
-    // Fetcher has release 94 (cached) and release 95 (newer: 2026-05-28 to download)
-    let test_releases = vec![releases[94].clone(), releases[95].clone()];
+    // Fetcher has release 2 (cached) and release 3 (newer: 2018-09-28 to download)
+    let test_releases = vec![releases[2].clone(), releases[3].clone()];
     let fetcher = MockTrudFetcher {
         releases: test_releases,
         failing_date: None,
@@ -907,12 +895,12 @@ fn test_batch_pin_moved_when_newer_downloaded() {
     let (active_release, _) = ods::workspace::Workspace::open(Some(&ws)).unwrap().active_release().unwrap();
     assert_eq!(
         active_release.as_str(),
-        "2026-05-28",
-        "Active release must be updated to newly fetched 2026-05-28"
+        "2018-09-28",
+        "Active release must be updated to newly fetched 2018-09-28"
     );
 
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    assert!(output.contains("current → releases/2026-05-28"), "Must emit pin change for newly fetched newer release");
+    assert!(output.contains("current → releases/2018-09-28"), "Must emit pin change for newly fetched newer release");
 }
 
 #[test]

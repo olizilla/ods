@@ -171,10 +171,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let manifest_digest = manifest.digest()?;
 
     // 2. Discover workspace and load/cache index
-    let workspace_root = input_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
+    let workspace_root = crate::workspace::find_workspace_root_from(&input_dir, None)
         .or_else(|| crate::workspace::Workspace::open(None).ok().map(|ws| ws.root().to_path_buf()));
 
     let (index, index_status) = resolve_cite_index(workspace_root.as_deref(), fetcher)?;

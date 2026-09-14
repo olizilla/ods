@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -10,14 +9,7 @@ use ods::commands::parquet::{
 use ods::ods_xml::{Location, OdsRecord, OdsRole};
 use ods::provenance::OdsProvenance;
 
-fn get_release_dir() -> Option<PathBuf> {
-    let p = PathBuf::from("ods_data/releases/2026-08-28");
-    if p.join("orgs.parquet").exists() {
-        Some(p)
-    } else {
-        None
-    }
-}
+
 
 #[allow(clippy::too_many_arguments)]
 fn make_test_record(
@@ -180,6 +172,37 @@ fn test_synthetic_in_repeatable_and_union() {
     .expect("find --in newcastle --in newcastle");
     let count_dup = String::from_utf8(out_dup).unwrap().lines().count();
     assert_eq!(count_dup, 2);
+
+    // Location and role filters operate independently and predictably
+    let mut out_london = Vec::new();
+    find::run_with_writer(
+        Args {
+            location: vec!["london".to_string()],
+            format: OutputFormat::Json,
+            input: Some(parquet_dir.clone()),
+            ..Default::default()
+        },
+        &mut out_london,
+        &parquet_dir,
+    )
+    .expect("find --in london");
+    let count_london = String::from_utf8(out_london).unwrap().lines().count();
+    assert_eq!(count_london, 3);
+
+    let mut out_ro76 = Vec::new();
+    find::run_with_writer(
+        Args {
+            role: vec!["RO76".to_string()],
+            format: OutputFormat::Json,
+            input: Some(parquet_dir.clone()),
+            ..Default::default()
+        },
+        &mut out_ro76,
+        &parquet_dir,
+    )
+    .expect("find --role RO76");
+    let count_ro76 = String::from_utf8(out_ro76).unwrap().lines().count();
+    assert_eq!(count_ro76, 11);
 }
 
 #[test]
@@ -247,6 +270,25 @@ fn test_synthetic_exact_match_newcastle_no_newcastleton() {
     assert!(!text.contains("NEWCASTLETON"));
     assert!(text.contains("NEWCASTLE GP PRACTICE"));
     assert!(text.contains("NEWCASTLE CLINIC"));
+
+    // Verify matched column is town, not postcode
+    let mut out_table = Vec::new();
+    find::run_with_writer(
+        Args {
+            location: vec!["newcastle".to_string()],
+            format: OutputFormat::Table,
+            input: Some(parquet_dir.clone()),
+            plain: true,
+            ..Default::default()
+        },
+        &mut out_table,
+        &parquet_dir,
+    )
+    .expect("find --in newcastle table");
+    let cells = get_matched_cells(&String::from_utf8(out_table).unwrap());
+    for cell in cells {
+        assert_eq!(cell, "town");
+    }
 }
 
 #[test]
@@ -401,6 +443,11 @@ fn test_synthetic_matched_column_durham() {
     .expect("find --in durham");
 
     let text = String::from_utf8(out).unwrap();
+    // Verify Matched header column exists
+    assert!(text.contains("Matched"));
+    let header_line = text.lines().find(|l| l.contains("ODS Code")).unwrap();
+    assert!(header_line.contains("Matched"));
+
     let cells = get_matched_cells(&text);
     assert!(cells.contains(&"town".to_string()));
     assert!(cells.contains(&"county".to_string()));
@@ -451,6 +498,7 @@ fn test_synthetic_json_has_no_matched_key() {
     for line in text.lines() {
         let v: serde_json::Value = serde_json::from_str(line).expect("valid json");
         assert!(v.get("matched").is_none());
+        assert!(v.get("matched_fields").is_none());
     }
 }
 
@@ -481,7 +529,8 @@ fn test_synthetic_also_line_for_newcastle() {
 fn test_synthetic_also_line_absent_for_sedbergh_and_durham() {
     let (_tmp, parquet_dir) = setup_exact_in_workspace();
 
-    for loc in &["sedbergh", "durham"] {
+    // Verify also line is absent for sedbergh, durham, london
+    for loc in &["sedbergh", "durham", "london"] {
         let mut out = Vec::new();
         find::run_with_writer(
             Args {
@@ -543,605 +592,6 @@ fn test_synthetic_zero_matches_multiple_unmatched() {
     assert!(err_msg.contains("✖ No location matches 'bar_place'"));
 }
 
-#[test]
-fn test_synthetic_no_search_line() {
-    let (_tmp, parquet_dir) = setup_exact_in_workspace();
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            query: Some("sedbergh".to_string()),
-            gp: true,
-            location: vec!["cumbria".to_string()],
-            input: Some(parquet_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &parquet_dir,
-    )
-    .expect("find sedbergh --gp --in cumbria");
-
-    let text = String::from_utf8(out).unwrap();
-    assert!(!text.contains("* Search:"));
-}
-
-// ===========================================================================
-// Full Release Tests (Requires ods_data/releases/2026-08-28)
-// Run with: cargo test --test find_in_exact_test -- --ignored
-// ===========================================================================
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task1_in_repeatable_and_union() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    // newcastle alone
-    let mut out_nc = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_nc,
-        &release_dir,
-    )
-    .expect("find --in newcastle");
-    let count_nc = String::from_utf8(out_nc).unwrap().lines().count();
-    assert_eq!(count_nc, 318);
-
-    // newcastle upon tyne alone
-    let mut out_nut = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle upon tyne".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_nut,
-        &release_dir,
-    )
-    .expect("find --in 'newcastle upon tyne'");
-    let count_nut = String::from_utf8(out_nut).unwrap().lines().count();
-    assert_eq!(count_nut, 1561);
-
-    // Union: --in newcastle --in "newcastle upon tyne"
-    let mut out_both = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string(), "newcastle upon tyne".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_both,
-        &release_dir,
-    )
-    .expect("find --in newcastle --in 'newcastle upon tyne'");
-    let count_both = String::from_utf8(out_both).unwrap().lines().count();
-    assert_eq!(count_both, count_nc + count_nut); // 318 + 1561 = 1879
-
-    // Duplicate value changes no count
-    let mut out_dup = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string(), "newcastle".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_dup,
-        &release_dir,
-    )
-    .expect("find --in newcastle --in newcastle");
-    let count_dup = String::from_utf8(out_dup).unwrap().lines().count();
-    assert_eq!(count_dup, count_nc);
-}
-
-// ---------------------------------------------------------------------------
-// Task 2: Exact match on normalised value
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task2_exact_match_london_no_londonderry() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    // ods find --gp --in london returns no rows with town LONDONDERRY
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            gp: true,
-            location: vec!["london".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --gp --in london");
-
-    let text = String::from_utf8(out).unwrap();
-    for line in text.lines() {
-        assert!(
-            !line.to_uppercase().contains("\"TOWN\":\"LONDONDERRY\""),
-            "Expected no LONDONDERRY rows, but found: {}",
-            line
-        );
-    }
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task2_newcastle_no_ne_postcodes() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    // At baseline, --in newcastle matched 1,559 rows via postcode prefix "ne".
-    // Today, only 318 rows match, none via postcode (313 ST, 3 BT, and 2 Tyne and Wear where town was entered NEWCASTLE).
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in newcastle");
-
-    let text = String::from_utf8(out).unwrap();
-    let mut ne_postcodes = 0;
-    for line in text.lines() {
-        let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        if let Some(postcode) = v["postcode"].as_str() {
-            if postcode.starts_with("NE") {
-                ne_postcodes += 1;
-            }
-        }
-    }
-    // Baseline was 1,559 NE postcodes. Now only 2 (where town was explicitly entered as NEWCASTLE).
-    assert_eq!(ne_postcodes, 2);
-
-    // Verify in table format that every single row matched on "town" and none on "postcode"
-    let mut out_table = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out_table,
-        &release_dir,
-    )
-    .expect("find --in newcastle table");
-
-    let table_text = String::from_utf8(out_table).unwrap();
-    for line in table_text.lines() {
-        if line.starts_with("│ ") && !line.contains("ODS Code") && !line.contains("records") {
-            let last_cell = line.split('┆').next_back().unwrap().trim().trim_end_matches('│').trim();
-            if !last_cell.is_empty() {
-                assert_eq!(last_cell, "town");
-            }
-        }
-    }
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task2_hyphenated_and_spaced_names_identical() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out_hyphen = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle-under-lyme".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_hyphen,
-        &release_dir,
-    )
-    .expect("find --in newcastle-under-lyme");
-
-    let mut out_space = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle under lyme".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_space,
-        &release_dir,
-    )
-    .expect("find --in newcastle under lyme");
-
-    let text_hyphen = String::from_utf8(out_hyphen).unwrap();
-    let text_space = String::from_utf8(out_space).unwrap();
-    assert_eq!(text_hyphen, text_space);
-    assert_eq!(text_hyphen.lines().count(), 33);
-}
-
-// ---------------------------------------------------------------------------
-// Task 3: Return every match (delete level collapse) & monotonicity property
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task3_durham_returns_all_674_matches() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["durham".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in durham");
-
-    let text = String::from_utf8(out).unwrap();
-    assert_eq!(text.lines().count(), 674);
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task3_monotonicity_property_adding_filter_never_increases_count() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    // ods find --in london
-    let mut out_london = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["london".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_london,
-        &release_dir,
-    )
-    .expect("find --in london");
-    let count_london = String::from_utf8(out_london).unwrap().lines().count();
-
-    // ods find --gp --in london
-    let mut out_gp_london = Vec::new();
-    find::run_with_writer(
-        Args {
-            gp: true,
-            location: vec!["london".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out_gp_london,
-        &release_dir,
-    )
-    .expect("find --gp --in london");
-    let count_gp_london = String::from_utf8(out_gp_london).unwrap().lines().count();
-
-    // Monotonicity property: adding --gp filter must never increase row count
-    assert!(
-        count_gp_london <= count_london,
-        "Monotonicity violated: --gp --in london ({}) > --in london ({})",
-        count_gp_london,
-        count_london
-    );
-    assert_eq!(count_london, 18374);
-}
-
-// ---------------------------------------------------------------------------
-// Task 4: Name the fields each row matched on (Matched column)
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_matched_column_durham() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["durham".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in durham");
-
-    let text = String::from_utf8(out).unwrap();
-    assert!(text.contains("Matched"));
-
-    // Header has Matched
-    let header_line = text.lines().find(|l| l.contains("ODS Code")).unwrap();
-    assert!(header_line.ends_with("Matched │"));
-
-    let mut county_count = 0;
-    let mut town_count = 0;
-    let mut both_count = 0;
-
-    for line in text.lines() {
-        if line.starts_with("│ ") && !line.contains("ODS Code") && !line.contains("records") {
-            let last_cell = line.split('┆').next_back().unwrap().trim().trim_end_matches('│').trim();
-            if last_cell == "county" {
-                county_count += 1;
-            } else if last_cell == "town" {
-                town_count += 1;
-            } else if last_cell.contains("county") && last_cell.contains("town") {
-                both_count += 1;
-            }
-        }
-    }
-
-    assert_eq!(county_count, 92);
-    assert_eq!(town_count, 582);
-    assert_eq!(both_count, 0);
-    assert_eq!(county_count + town_count, 674);
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_matched_column_isle_of_man() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["isle of man".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in 'isle of man'");
-
-    let text = String::from_utf8(out).unwrap();
-    let mut group_counts: HashMap<String, usize> = HashMap::new();
-
-    for line in text.lines() {
-        if line.starts_with("│ ") && !line.contains("ODS Code") && !line.contains("records") {
-            let last_cell = line.split('┆').next_back().unwrap().trim().trim_end_matches('│').trim();
-            if !last_cell.is_empty() {
-                *group_counts.entry(last_cell.to_string()).or_default() += 1;
-            }
-        }
-    }
-
-    assert_eq!(group_counts.get("county, country"), Some(&139));
-    assert_eq!(group_counts.get("town, county, country"), Some(&55));
-    assert_eq!(group_counts.get("country"), Some(&6));
-    assert_eq!(group_counts.get("county"), Some(&1));
-    assert_eq!(group_counts.values().sum::<usize>(), 201);
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_matched_column_london_single_town_county_row() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["london".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in london");
-
-    let text = String::from_utf8(out).unwrap();
-    let mut town_county_count = 0;
-
-    for line in text.lines() {
-        if line.starts_with("│ ") && !line.contains("ODS Code") && !line.contains("records") {
-            let last_cell = line.split('┆').next_back().unwrap().trim().trim_end_matches('│').trim();
-            if last_cell == "town, county" {
-                town_county_count += 1;
-            }
-        }
-    }
-
-    assert_eq!(town_county_count, 1);
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_matched_column_sedbergh() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["sedbergh".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in sedbergh");
-
-    let text = String::from_utf8(out).unwrap();
-    let mut row_count = 0;
-
-    for line in text.lines() {
-        if line.starts_with("│ ") && !line.contains("ODS Code") && !line.contains("records") {
-            let last_cell = line.split('┆').next_back().unwrap().trim().trim_end_matches('│').trim();
-            assert_eq!(last_cell, "town");
-            row_count += 1;
-        }
-    }
-
-    assert_eq!(row_count, 14);
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_json_has_no_matched_key() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["durham".to_string()],
-            format: OutputFormat::Json,
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in durham --format json");
-
-    let text = String::from_utf8(out).unwrap();
-    let first_line = text.lines().next().unwrap();
-    let v: serde_json::Value = serde_json::from_str(first_line).unwrap();
-    let obj = v.as_object().unwrap();
-
-    assert!(!obj.contains_key("matched"));
-    assert!(!obj.contains_key("matched_fields"));
-    assert_eq!(obj.len(), 25);
-}
-
-// ---------------------------------------------------------------------------
-// Task 5: Offer near-misses
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task5_also_line_for_newcastle() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            location: vec!["newcastle".to_string()],
-            format: OutputFormat::Table,
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find --in newcastle");
-
-    let text = String::from_utf8(out).unwrap();
-    let also_line = text.lines().find(|l| l.starts_with("* Also:")).expect("expected * Also: line");
-    assert_eq!(
-        also_line,
-        "* Also: \"newcastle upon tyne\" (1561) · \"newcastle under lyme\" (33) · \"newcastle emlyn\" (15) · +1 more"
-    );
-    assert!(!also_line.contains("newcastleton"));
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task5_also_line_absent_for_sedbergh_durham_london() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    for loc in ["sedbergh", "durham", "london"] {
-        let mut out = Vec::new();
-        find::run_with_writer(
-            Args {
-                location: vec![loc.to_string()],
-                format: OutputFormat::Table,
-                input: Some(release_dir.clone()),
-                plain: true,
-                ..Default::default()
-            },
-            &mut out,
-            &release_dir,
-        )
-        .expect("find should succeed");
-
-        let text = String::from_utf8(out).unwrap();
-        assert!(
-            !text.contains("* Also:"),
-            "Expected no * Also: line for {}, got:\n{}",
-            loc,
-            text
-        );
-    }
-}
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task5_zero_matches_newcastel_suggestions() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    let err = find::run_with_writer(
-        Args {
-            location: vec!["newcastel".to_string()],
-            input: Some(release_dir.clone()),
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .unwrap_err();
-
-    let err_msg = err.to_string();
-    assert!(err_msg.contains("✖ No location matches 'newcastel'"));
-    assert!(err_msg.contains("Did you mean: newcastle · newcastle upon tyne · newcastle emlyn"));
-}
-
-// ---------------------------------------------------------------------------
-// Task 6: Delete search line
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task6_no_search_line() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let mut out = Vec::new();
-    find::run_with_writer(
-        Args {
-            query: Some("sedbergh".to_string()),
-            gp: true,
-            location: vec!["cumbria".to_string()],
-            input: Some(release_dir.clone()),
-            plain: true,
-            ..Default::default()
-        },
-        &mut out,
-        &release_dir,
-    )
-    .expect("find sedbergh --gp --in cumbria");
-
-    let text = String::from_utf8(out).unwrap();
-    assert!(!text.contains("* Search:"));
-    assert!(text.contains("* Source: releases/2026-08-28/orgs.parquet"));
-    assert!(text.contains("1 active record"));
-}
 
 // ---------------------------------------------------------------------------
 // Task 7: Help text

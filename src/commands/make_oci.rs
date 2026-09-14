@@ -561,7 +561,6 @@ pub fn perform_all_checks(
     expected_version: &str,
     _tool_repo: Option<&Path>,
     _custom_index: Option<&crate::index::OdsReleaseIndex>,
-    _offline: bool,
 ) -> Result<Vec<String>> {
     perform_structural_checks(release_dir, expected_version)
 }

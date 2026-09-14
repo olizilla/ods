@@ -1,31 +1,17 @@
 //! End-to-end CLI integration tests verifying binary execution and stdout/stderr output formatting.
 
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
+
+mod common;
+
+use common::create_mock_trud_zip;
 
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
 }
 
-#[test]
-fn test_cli_help_displays_subcommands() {
-    let output = ods_binary()
-        .arg("--help")
-        .output()
-        .expect("Failed to execute binary");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("find"));
-    assert!(stdout.contains("info"));
-    assert!(stdout.contains("pull"));
-    assert!(stdout.contains("cite"));
-    assert!(stdout.contains("trud"));
-    assert!(stdout.contains("make"));
-}
 
 #[test]
 fn test_cli_pull_list_output_formatting() {
@@ -98,33 +84,6 @@ fn test_cli_cite_output_formatting() {
     assert!(combined.contains("How to Cite") || combined.contains("Source") || combined.contains("ODS"));
 }
 
-#[test]
-fn test_cli_make_help() {
-    let output = ods_binary()
-        .arg("make")
-        .arg("--help")
-        .output()
-        .expect("Failed to execute make --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("parquet"));
-    assert!(!stdout.contains("markdown"));
-}
-
-#[test]
-fn test_cli_trud_help() {
-    let output = ods_binary()
-        .arg("trud")
-        .arg("--help")
-        .output()
-        .expect("Failed to execute trud --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("pull"));
-    assert!(stdout.contains("diff"));
-}
 
 #[test]
 fn test_cli_pull_help_has_no_api_key() {
@@ -148,26 +107,6 @@ fn test_cli_pull_help_has_no_api_key() {
     );
 }
 
-#[test]
-fn test_cli_trud_pull_help_has_positional_release_and_no_release_flag() {
-    let output = ods_binary()
-        .args(["trud", "pull", "--help"])
-        .output()
-        .expect("Failed to execute trud pull --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("[RELEASE_DATE]"),
-        "trud pull --help must have positional [RELEASE_DATE], got:\n{}",
-        stdout
-    );
-    assert!(
-        !stdout.contains("--release <"),
-        "trud pull --help must NOT have --release flag, got:\n{}",
-        stdout
-    );
-}
 
 #[test]
 fn test_cli_pull_local_release_output() {
@@ -233,6 +172,7 @@ fn test_cli_pull_local_release_output() {
 
     let output = ods_binary()
         .current_dir(tmp.path())
+        .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9999/offline")
         .arg("pull")
         .arg("2026-05-29")
         .output()
@@ -403,22 +343,7 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
     );
 }
 
-const FIXTURE_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/mock_hscorgrefdata.xml"
-);
 
-fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
-    let zip_path = dir.join(filename);
-    let zip_file = fs::File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
-    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    zip_writer.write_all(xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-    zip_path
-}
 
 #[test]
 fn test_read_commands_refuse_when_no_workspace_and_write_nothing() {

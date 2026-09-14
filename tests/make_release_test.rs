@@ -125,7 +125,6 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-        offline: true,
     })?;
 
     let index_file = tmp.path().join("data").join("releases.json");
@@ -157,7 +156,6 @@ fn test_make_release_fails_on_dirty_working_tree() -> Result<()> {
         ods::datapackage::dataset_version(),
         Some(tmp.path()),
         None,
-        true,
     )?;
 
     assert!(failures.iter().any(|f| f.contains("tool_git_dirty is true")));
@@ -178,32 +176,9 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
         ods::datapackage::dataset_version(),
         Some(tmp.path()),
         None,
-        true,
     )?;
 
     assert!(failures.iter().any(|f| f.contains("tool_git_sha")));
-    Ok(())
-}
-
-#[test]
-fn test_make_release_fails_on_existing_git_tag() -> Result<()> {
-    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
-
-    let ver = ods::datapackage::dataset_version();
-    // Create the tag in git
-    git_cmd(tmp.path())
-        .args(["tag", "--no-sign", &format!("data/2026-07-31_{}", ver)])
-        .output()?;
-
-    let failures = perform_all_release_checks(
-        &rel_dir,
-        ver,
-        Some(tmp.path()),
-        None,
-        true,
-    )?;
-
-    assert!(failures.iter().any(|f| f.contains("already exists locally")));
     Ok(())
 }
 
@@ -229,7 +204,6 @@ fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
         ver,
         Some(tmp.path()),
         Some(&index),
-        true,
     )?;
 
     let expected_msg = format!("data/releases.json already has a row for 2026-07-31 {}", ver);
@@ -249,7 +223,6 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-        offline: true,
     })?;
 
     assert!(dist_dir.exists(), "dist/ directory must exist");
@@ -333,7 +306,6 @@ fn test_make_release_refuses_when_no_repo_found() {
         ods::datapackage::dataset_version(),
         None,
         None,
-        true,
     ).unwrap();
     assert!(failures.iter().any(|f| f.contains("cannot locate the ods repository")));
 
@@ -345,7 +317,6 @@ fn test_make_release_refuses_when_no_repo_found() {
         doi: None,
         tool_repo: Some(not_a_repo),
         index: None,
-        offline: true,
     });
 
     assert!(res.is_err(), "Must refuse when tool_repo is not a repo");
@@ -368,7 +339,6 @@ fn test_make_release_refuses_unverified_provenance() -> Result<()> {
         ods::datapackage::dataset_version(),
         None,
         None,
-        true,
     )?;
 
     assert!(
@@ -395,7 +365,6 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
         ods::datapackage::dataset_version(),
         None,
         None,
-        true,
     )?;
 
     assert!(
@@ -422,7 +391,6 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
         "1.0.0",
         Some(tmp.path()),
         None,
-        true,
     )?;
 
     let expected_ver = ods::datapackage::dataset_version();
@@ -442,7 +410,6 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-        offline: true,
     });
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
@@ -468,7 +435,6 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-        offline: true,
     });
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
@@ -492,7 +458,6 @@ fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
         "invalid-semver",
         Some(tmp.path()),
         None,
-        true,
     )?;
 
     assert!(failures.iter().any(|f| f.contains("is not valid SemVer")));

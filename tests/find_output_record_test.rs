@@ -140,7 +140,7 @@ fn dummy_org_row() -> OrgRow {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task1_org_row_matches_orgs_schema_and_nullability() {
+fn test_find_org_row_matches_orgs_schema_and_nullability() {
     let schema = orgs_schema();
     let dummy = dummy_org_row();
 
@@ -166,27 +166,6 @@ fn test_task1_org_row_matches_orgs_schema_and_nullability() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Task 2: role_name deleted from src/commands/find.rs
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_task2_grep_no_role_name_in_find_rs() {
-    let find_src = fs::read_to_string("src/commands/find.rs").expect("read src/commands/find.rs");
-    let re = regex_lite_or_manual_word_match(&find_src, "role_name");
-    assert_eq!(
-        re, 0,
-        "grep -c 'role_name\\b' src/commands/find.rs must return 0, found {} hits",
-        re
-    );
-
-    // Verify plural role_names is present
-    let re_plural = regex_lite_or_manual_word_match(&find_src, "role_names");
-    assert!(
-        re_plural > 0,
-        "role_names is a schema column and must remain present"
-    );
-}
 
 fn regex_lite_or_manual_word_match(src: &str, target_word: &str) -> usize {
     let mut count = 0;
@@ -224,7 +203,7 @@ fn regex_lite_or_manual_word_match(src: &str, target_word: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task3_find_sedbergh_json_keys_and_no_role_name() {
+fn test_find_json_keys_match_schema_and_exclude_role_name() {
     let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     // 1. Test JSON output
@@ -429,7 +408,7 @@ fn setup_two_hop_chain_workspace() -> (TempDir, PathBuf) {
 }
 
 #[test]
-fn test_task4_two_hop_chain_closure_and_predecessors_decoration() {
+fn test_find_transitive_predecessor_closure_and_successor_decoration() {
     let (_tmp, parquet_dir) = setup_two_hop_chain_workspace();
 
     // 1. Run find for A101
@@ -538,7 +517,7 @@ fn test_task4_two_hop_chain_closure_and_predecessors_decoration() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task5_csv_headers_and_real_csv_parsing() {
+fn test_find_csv_headers_match_schema_and_parse_valid_csv() {
     let (_tmp, parquet_dir) = setup_two_hop_chain_workspace();
 
     // 1. Produce CSV output
@@ -602,20 +581,6 @@ fn test_task5_csv_headers_and_real_csv_parsing() {
     assert!(!headers.contains(&"successors".to_string()));
 }
 
-// ---------------------------------------------------------------------------
-// Task 6: Zero copies in find.rs
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_task6_grep_ods_code_record_class_is_zero() {
-    let find_src = fs::read_to_string("src/commands/find.rs").expect("read src/commands/find.rs");
-    let hits = find_src.matches("ods_code,record_class").count();
-    assert_eq!(
-        hits, 0,
-        "grep -c 'ods_code,record_class' src/commands/find.rs must be 0, found {}",
-        hits
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Display formats: table, markdown, and tsv remain byte-identical

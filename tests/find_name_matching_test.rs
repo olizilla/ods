@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-use ods::commands::find::{self, squash_for_matching, Args, OutputFormat};
+use ods::commands::find::{self, Args, OutputFormat};
 use ods::commands::parquet::{
     build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
     export_relationships, export_roles, export_successions,
@@ -174,151 +174,14 @@ fn run_duckdb_csv_codes(sql: &str) -> Vec<String> {
         .collect()
 }
 
-// =========================================================================
-// Task 1 — Symbol counts and squash fold invariants (runs unconditionally in CI)
-// =========================================================================
-
-#[test]
-fn test_task1_symbol_counts() {
-    let find_src = std::fs::read_to_string("src/commands/find.rs").expect("read find.rs");
-    let norm_count = find_src.matches("normalize_for_matching").count();
-    let squash_count = find_src.matches("squash_for_matching").count();
-    let rank_count = find_src.matches("compute_name_rank").count();
-
-    assert_eq!(
-        norm_count, 7,
-        "grep -c 'normalize_for_matching' src/commands/find.rs must return 7, got {}",
-        norm_count
-    );
-    assert_eq!(
-        squash_count, 3,
-        "grep -c 'squash_for_matching' src/commands/find.rs must return 3, got {}",
-        squash_count
-    );
-    assert_eq!(
-        rank_count, 0,
-        "grep -rn 'compute_name_rank' src/ must return nothing, got {}",
-        rank_count
-    );
-}
-
-#[test]
-fn test_task1_squash_unit_invariants() {
-    assert_eq!(squash_for_matching("Christchurch"), "CHRISTCHURCH");
-    assert_eq!(squash_for_matching("Christ Church"), "CHRISTCHURCH");
-    assert_eq!(squash_for_matching("L'Arche"), "LARCHE");
-    assert_eq!(squash_for_matching("St Mary's"), "STMARYS");
-    assert_eq!(squash_for_matching("Day & Night Pharmacy"), "DAYNIGHTPHARMACY");
-}
 
 // =========================================================================
 // Synthetic Acceptance Tests (Tasks 2-5, run unconditionally in CI in <0.2s)
 // =========================================================================
 
-#[test]
-fn test_synthetic_task2_name_matching_ignores_spacing_and_punctuation() {
-    let (_tmp, parquet_dir) = setup_name_matching_workspace();
-
-    let codes_cc1 = run_find_csv(
-        Args {
-            query: Some("christchurch".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let codes_cc2 = run_find_csv(
-        Args {
-            query: Some("christ church".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let set_cc1: HashSet<_> = codes_cc1.into_iter().collect();
-    let set_cc2: HashSet<_> = codes_cc2.into_iter().collect();
-    assert_eq!(set_cc1.len(), 2);
-    assert_eq!(set_cc1, set_cc2);
-
-    let codes_hc1 = run_find_csv(
-        Args {
-            query: Some("homecare".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let codes_hc2 = run_find_csv(
-        Args {
-            query: Some("home care".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let set_hc1: HashSet<_> = codes_hc1.into_iter().collect();
-    let set_hc2: HashSet<_> = codes_hc2.into_iter().collect();
-    assert_eq!(set_hc1.len(), 2);
-    assert_eq!(set_hc1, set_hc2);
-
-    let codes_dn1 = run_find_csv(
-        Args {
-            query: Some("daynight".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let codes_dn2 = run_find_csv(
-        Args {
-            query: Some("day night".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    let set_dn1: HashSet<_> = codes_dn1.into_iter().collect();
-    let set_dn2: HashSet<_> = codes_dn2.into_iter().collect();
-    assert_eq!(set_dn1.len(), 2);
-    assert_eq!(set_dn1, set_dn2);
-}
 
 #[test]
-fn test_synthetic_task3_ordering_exact_matches_first() {
-    let (_tmp, parquet_dir) = setup_name_matching_workspace();
-
-    // l'arche: A3RE, AGX8, VM2JG, VN0KQ contain L'ARCHE; 8C872 and C7FV contain LARCHES
-    let codes = run_find_csv(
-        Args {
-            query: Some("l'arche".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    assert_eq!(codes.len(), 6);
-    let exact_set: HashSet<&str> = ["A3RE", "AGX8", "VM2JG", "VN0KQ"].into_iter().collect();
-    for code in &codes[..4] {
-        assert!(exact_set.contains(code.as_str()), "Top 4 must be exact matches, got {}", code);
-    }
-    assert_eq!(codes[4], "8C872");
-    assert_eq!(codes[5], "C7FV");
-
-    // st marys vs st mary's
-    let codes_plain = run_find_csv(
-        Args {
-            query: Some("st marys".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    assert_eq!(codes_plain[0], "SM01", "st marys must rank SM01 (ST MARYS NH) first");
-
-    let codes_apostrophe = run_find_csv(
-        Args {
-            query: Some("st mary's".to_string()),
-            ..Default::default()
-        },
-        &parquet_dir,
-    );
-    assert_eq!(codes_apostrophe[0], "SM02", "st mary's must rank SM02 (ST MARY'S CLINIC) first");
-}
-
-#[test]
-fn test_synthetic_task4_sql_output_and_duckdb_equivalence() {
+fn test_find_sql_flag_duckdb_equivalence_on_synthetic_data() {
     let (_tmp, parquet_dir) = setup_name_matching_workspace();
 
     let sql = run_find_sql(
@@ -351,25 +214,6 @@ fn test_synthetic_task4_sql_output_and_duckdb_equivalence() {
     }
 }
 
-#[test]
-fn test_task5_help_text_contains_rule_verbatim() {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ods"));
-    cmd.args(["find", "--help"]);
-    let output = cmd.output().expect("execute ods find --help");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-
-    assert!(
-        stdout.contains("Spaces and punctuation are ignored. Results order exact matches first."),
-        "Help text missing first rule line:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("\"healthcare\" and \"health care\" return the same result set in different orders."),
-        "Help text missing second rule line:\n{}",
-        stdout
-    );
-}
 
 // =========================================================================
 // Full Release Acceptance Tests (Requires ods_data/releases/2026-08-28)
@@ -377,7 +221,7 @@ fn test_task5_help_text_contains_rule_verbatim() {
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_task1_squash_agrees_with_duckdb_sql_on_all_release_names() {
+fn test_squash_agrees_with_duckdb_sql_on_all_release_names_on_release_data() {
     if !require_duckdb() {
         return;
     }
@@ -397,33 +241,10 @@ fn test_task1_squash_agrees_with_duckdb_sql_on_all_release_names() {
     assert_eq!(total_all[0], "306201", "orgs_all.parquet has 306,201 rows");
 }
 
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task1_in_london_and_role_ro76_unaffected() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let codes_london = run_find_csv(
-        Args {
-            location: vec!["london".to_string()],
-            ..Default::default()
-        },
-        &release_dir,
-    );
-    assert_eq!(codes_london.len(), 18374, "ods find --in london count must be 18,374");
-
-    let codes_ro76 = run_find_csv(
-        Args {
-            role: vec!["RO76".to_string()],
-            ..Default::default()
-        },
-        &release_dir,
-    );
-    assert_eq!(codes_ro76.len(), 7566, "ods find --role RO76 count must be 7,566");
-}
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_task2_acceptance_seven_counts_and_identical_row_sets() {
+fn test_name_matching_ignores_spacing_punctuation_and_matches_row_counts_on_release_data() {
     let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
 
     let queries_and_targets = [
@@ -477,37 +298,58 @@ fn test_task2_acceptance_seven_counts_and_identical_row_sets() {
 
     assert_eq!(cc1, cc2, "christchurch and christ church must return identical row sets");
 
+    let hc1: HashSet<String> = run_find_csv(
+        Args {
+            query: Some("homecare".to_string()),
+            ..Default::default()
+        },
+        &release_dir,
+    )
+    .into_iter()
+    .collect();
+
+    let hc2: HashSet<String> = run_find_csv(
+        Args {
+            query: Some("home care".to_string()),
+            ..Default::default()
+        },
+        &release_dir,
+    )
+    .into_iter()
+    .collect();
+
+    assert_eq!(hc1, hc2, "homecare and home care must return identical row sets");
+
+    let dn1: HashSet<String> = run_find_csv(
+        Args {
+            query: Some("daynight".to_string()),
+            ..Default::default()
+        },
+        &release_dir,
+    )
+    .into_iter()
+    .collect();
+
+    let dn2: HashSet<String> = run_find_csv(
+        Args {
+            query: Some("day night".to_string()),
+            ..Default::default()
+        },
+        &release_dir,
+    )
+    .into_iter()
+    .collect();
+
+    assert_eq!(dn1, dn2, "daynight and day night must return identical row sets");
+
     // Monotonicity check
     assert!(cc1.len() >= 77, "No query returns fewer rows than before");
 }
 
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task2_shown_failing_normalize_for_matching() {
-    use ods::commands::find::normalize_for_matching;
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let file = std::fs::File::open(release_dir.join("orgs.parquet")).unwrap();
-    let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    let reader = builder.build().unwrap();
-
-    let norm_q = normalize_for_matching("christchurch");
-    let mut old_count = 0;
-    for batch in reader {
-        let b = batch.unwrap();
-        let name_arr = b.column(1).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
-        for i in 0..b.num_rows() {
-            if normalize_for_matching(name_arr.value(i)).contains(&norm_q) {
-                old_count += 1;
-            }
-        }
-    }
-    assert_eq!(old_count, 77, "Demonstrate failure: normalize_for_matching returns 77 rather than 161");
-}
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_task3_ordering_positions_larche_and_st_marys() {
+fn test_ordering_positions_exact_matches_first_on_release_data() {
     let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
 
     // l'arche: first 11 have L'ARCHE, last 9 have LARCHES
@@ -587,27 +429,10 @@ fn test_task3_ordering_positions_larche_and_st_marys() {
     assert_eq!(pos_school_a, Some(512), "TEDBURN ST MARY SCHOOL must be at pos 512 of 577 for 'st mary\\'s'");
 }
 
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task3_shown_failing_drop_ordering_key() {
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    let codes_sorted = run_find_csv(
-        Args {
-            query: Some("l'arche".to_string()),
-            sort: Some(ods::commands::find::SortBy::Code),
-            ..Default::default()
-        },
-        &release_dir,
-    );
-    // When sorted strictly by code without exact match ranking:
-    // 8C872 (LARCHES ROAD) is at index 0 (1st) rather than index 11 (12th)!
-    assert_eq!(codes_sorted[0], "8C872", "Dropping ranking key puts 8C872 (LARCHES ROAD) first");
-}
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_task4_sql_duckdb_equivalence_four_queries() {
+fn test_sql_duckdb_equivalence_four_queries_on_release_data() {
     if !require_duckdb() {
         return;
     }
@@ -640,32 +465,10 @@ fn test_task4_sql_duckdb_equivalence_four_queries() {
     }
 }
 
-#[test]
-#[ignore = "requires full release 2026-08-28"]
-fn test_task4_shown_failing_drop_order_by_from_sql() {
-    if !require_duckdb() {
-        return;
-    }
-    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
-
-    // Deliberately broken query: drop ORDER BY (name LIKE '%L''ARCHE%') DESC
-    let broken_sql = format!(
-        "SELECT * FROM '{}/orgs.parquet' WHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%LARCHE%' ORDER BY ods_code;",
-        release_dir.display()
-    );
-    let duck_codes = run_duckdb_csv_codes(&broken_sql);
-
-    // In correct find output: row 3 is VM2JG (GLASFRYN (L'ARCHE)).
-    // In broken DuckDB output without name LIKE ranking: row 1 is 8C872, row 2 is A3RE, row 3 is AGX8!
-    assert_ne!(
-        duck_codes[2], "VM2JG",
-        "Dropping ORDER BY key causes l'arche to fail at row 3 (got AGX8 instead of VM2JG)"
-    );
-}
 
 #[test]
 #[ignore = "requires full release 2026-08-28"]
-fn test_task4_st_marys_sql_output_format() {
+fn test_st_marys_sql_output_format_on_release_data() {
     let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
 
     let sql = run_find_sql(

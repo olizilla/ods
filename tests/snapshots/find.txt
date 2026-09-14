@@ -1,0 +1,264 @@
+$ COLUMNS=100 ods find --in sedbergh --sort code
+* Source: releases/2026-07-31/orgs.parquet
+┌───────────┬────────────────────────────┬──────────┬─────────────────────────┬───────┬─────────┐
+│ ODS Code  ┆ Name                       ┆ Postcode ┆ Roles                   ┆ Class ┆ Matched │
+╞═══════════╪════════════════════════════╪══════════╪═════════════════════════╪═══════╪═════════╡
+│ 8GJ58     ┆ SEDBERGH HEALTH CENTRE     ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│           ┆ PHARMACY                   ┆          ┆                         ┆       ┆         │
+│ A82608    ┆ SEDBERGH MEDICAL PRACTICE  ┆ LA10 5DL ┆ GP Practice +1          ┆ org   ┆ town    │
+│ A82608001 ┆ DR LUMB W & PARTNER        ┆ LA10 5DL ┆ Primary Care Trust Site ┆ site  ┆ town    │
+│ D2E8H     ┆ SEDBERGH FIRST RESPONDERS  ┆ LA10 5AA ┆ GP Practice             ┆ org   ┆ town    │
+│ EE112233  ┆ SEDBERGH OPTOMETRY         ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ EE112331  ┆ SEDBERGH CARE HOME         ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ EE112451  ┆ SEDBERGH DENTAL CARE       ┆ LA10 5AA ┆ General Dental Practice ┆ site  ┆ town    │
+│ EE137269  ┆ SEDBERGH COMMUNITY CLINIC  ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ FLG02     ┆ SEDBERGH AMBULANCE STATION ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ RNN88     ┆ SEDBERGH NURSING HOME      ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ RW5OX     ┆ SEDBERGH PHYSIOTHERAPY     ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│ RX796     ┆ SEDBERGH MEDICAL SERVICES  ┆ LA10 5AA ┆ GP Practice             ┆ org   ┆ town    │
+│ V25604    ┆ MAIN STREET DENTAL SURGERY ┆ LA10 5AA ┆ General Dental Practice ┆ site  ┆ town    │
+│ VN6C2     ┆ SEDBERGH REHABILITATION    ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
+│           ┆ CENTRE                     ┆          ┆                         ┆       ┆         │
+├───────────┴────────────────────────────┴──────────┴─────────────────────────┴───────┴─────────┤
+│ 14 active records                                               Use --all to include inactive │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find sedbergh --gp --in cumbria
+* Source: releases/2026-07-31/orgs.parquet
+* --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
+┌──────────┬───────────────────────────┬──────────┬────────────────┬───────┬─────────┐
+│ ODS Code ┆ Name                      ┆ Postcode ┆ Roles          ┆ Class ┆ Matched │
+╞══════════╪═══════════════════════════╪══════════╪════════════════╪═══════╪═════════╡
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ GP Practice +1 ┆ org   ┆ county  │
+│ D2E8H    ┆ SEDBERGH FIRST RESPONDERS ┆ LA10 5AA ┆ GP Practice    ┆ org   ┆ county  │
+│ RX796    ┆ SEDBERGH MEDICAL SERVICES ┆ LA10 5AA ┆ GP Practice    ┆ org   ┆ county  │
+├──────────┴───────────────────────────┴──────────┴────────────────┴───────┴─────────┤
+│ 3 active records                                     Use --all to include inactive │
+└────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find FAH
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬──────┬──────────┬───────┬───────┐
+│ ODS Code ┆ Name ┆ Postcode ┆ Roles ┆ Class │
+╞══════════╪══════╪══════════╪═══════╪═══════╡
+├──────────┴──────┴──────────┴───────┴───────┤
+│ 0 active records                           │
+└────────────────────────────────────────────┘
+* Use --all to include inactive
+
+* 'FAH' is also an ODS code — ods info FAH
+
+$ COLUMNS=100 ods find
+--- stderr
+No search filters given. Try:
+
+  ods find sedbergh                 by name
+  ods find --in SW9                 by postcode, town, county or country
+  ods find --role RO76              by role
+
+Or browse with a fuzzy finder:
+
+  ods find --format tsv | fzf
+
+Pick one and open it:
+
+  ods find --format tsv | fzf | cut -f1 | xargs ods info
+
+$ COLUMNS=100 ods find --role 'General Practice'
+--- stderr
+Error: ✖ No role named 'General Practice'
+  Did you mean: General Dental Practice · GP Practice · Scottish GP Practice
+  Or use codes: ods find --role RO110,RO76,RO227
+--- exit 1
+
+$ COLUMNS=100 ods find 'SEDBERGH MEDICAL PRACTICE'
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬───────────────────────────┬──────────┬────────────────┬───────┐
+│ ODS Code ┆ Name                      ┆ Postcode ┆ Roles          ┆ Class │
+╞══════════╪═══════════════════════════╪══════════╪════════════════╪═══════╡
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ GP Practice +1 ┆ org   │
+├──────────┴───────────────────────────┴──────────┴────────────────┴───────┤
+│ 1 active record                            Use --all to include inactive │
+└──────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find 'SEDBERGH MEDICAL PRACTICE' --verbose
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬───────────────────────────┬──────────┬──────────────────────────────────────┬───────┐
+│ ODS Code ┆ Name                      ┆ Postcode ┆ Roles                                ┆ Class │
+╞══════════╪═══════════════════════════╪══════════╪══════════════════════════════════════╪═══════╡
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ Prescribing Cost Centre, GP Practice ┆ org   │
+├──────────┴───────────────────────────┴──────────┴──────────────────────────────────────┴───────┤
+│ 1 active record                                                  Use --all to include inactive │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find --code RJZ
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬────────────────────────────────────────┬──────────┬───────────────────────┬───────┐
+│ ODS Code ┆ Name                                   ┆ Postcode ┆ Roles                 ┆ Class │
+╞══════════╪════════════════════════════════════════╪══════════╪═══════════════════════╪═══════╡
+│ RJZ      ┆ KING'S COLLEGE HOSPITAL NHS FOUNDATION ┆ SE5 9RS  ┆ NHS Trust, Hospice +1 ┆ org   │
+│          ┆ TRUST                                  ┆          ┆                       ┆       │
+├──────────┴────────────────────────────────────────┴──────────┴───────────────────────┴───────┤
+│ 1 active record                                                Use --all to include inactive │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find --code A85619
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬───────────────────────┬──────────┬──────────────────────────────────┬───────┐
+│ ODS Code ┆ Name                  ┆ Postcode ┆ Roles                            ┆ Class │
+╞══════════╪═══════════════════════╪══════════╪══════════════════════════════════╪═══════╡
+│ A85619   ┆ DUMMY PRACTICE A85619 ┆ NE1 1AA  ┆ Other Prescribing Cost Centre +1 ┆ org   │
+├──────────┴───────────────────────┴──────────┴──────────────────────────────────┴───────┤
+│ 1 active record                                          Use --all to include inactive │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find CLWYD --all --sort code
+* Source: releases/2026-07-31/orgs_all.parquet
+┌──────────┬─────────────────────┬──────────┬─────────────┬───────┬──────────┐
+│ ODS Code ┆ Name                ┆ Postcode ┆ Roles       ┆ Class ┆ Status   │
+╞══════════╪═════════════════════╪══════════╪═════════════╪═══════╪══════════╡
+│ CLWYD    ┆ CLWYD → CONWY UA +4 ┆ CH7 1AA  ┆ GP Practice ┆ org   ┆ inactive │
+├──────────┴─────────────────────┴──────────┴─────────────┴───────┴──────────┤
+│ 1 record                                             0 active · 1 inactive │
+└────────────────────────────────────────────────────────────────────────────┘
+
+* 'CLWYD' is also an ODS code — ods info CLWYD
+
+$ COLUMNS=100 ods find sedbergh
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬─────────────────────────────────┬──────────┬─────────────────────────┬───────┐
+│ ODS Code ┆ Name                            ┆ Postcode ┆ Roles                   ┆ Class │
+╞══════════╪═════════════════════════════════╪══════════╪═════════════════════════╪═══════╡
+│ 8GJ58    ┆ SEDBERGH HEALTH CENTRE PHARMACY ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE       ┆ LA10 5DL ┆ GP Practice +1          ┆ org   │
+│ D2E8H    ┆ SEDBERGH FIRST RESPONDERS       ┆ LA10 5AA ┆ GP Practice             ┆ org   │
+│ EE112233 ┆ SEDBERGH OPTOMETRY              ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ EE112331 ┆ SEDBERGH CARE HOME              ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ EE112451 ┆ SEDBERGH DENTAL CARE            ┆ LA10 5AA ┆ General Dental Practice ┆ site  │
+│ EE137269 ┆ SEDBERGH COMMUNITY CLINIC       ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ FLG02    ┆ SEDBERGH AMBULANCE STATION      ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ RNN88    ┆ SEDBERGH NURSING HOME           ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ RW5OX    ┆ SEDBERGH PHYSIOTHERAPY          ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+│ RX796    ┆ SEDBERGH MEDICAL SERVICES       ┆ LA10 5AA ┆ GP Practice             ┆ org   │
+│ VN6C2    ┆ SEDBERGH REHABILITATION CENTRE  ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
+├──────────┴─────────────────────────────────┴──────────┴─────────────────────────┴───────┤
+│ 12 active records                                         Use --all to include inactive │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find sedbergh --all
+* Source: releases/2026-07-31/orgs_all.parquet
+┌──────────┬─────────────────────────────────┬──────────┬─────────────────────────┬───────┬────────┐
+│ ODS Code ┆ Name                            ┆ Postcode ┆ Roles                   ┆ Class ┆ Status │
+╞══════════╪═════════════════════════════════╪══════════╪═════════════════════════╪═══════╪════════╡
+│ 8GJ58    ┆ SEDBERGH HEALTH CENTRE PHARMACY ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE       ┆ LA10 5DL ┆ GP Practice +1          ┆ org   ┆ active │
+│ D2E8H    ┆ SEDBERGH FIRST RESPONDERS       ┆ LA10 5AA ┆ GP Practice             ┆ org   ┆ active │
+│ EE112233 ┆ SEDBERGH OPTOMETRY              ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ EE112331 ┆ SEDBERGH CARE HOME              ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ EE112451 ┆ SEDBERGH DENTAL CARE            ┆ LA10 5AA ┆ General Dental Practice ┆ site  ┆ active │
+│ EE137269 ┆ SEDBERGH COMMUNITY CLINIC       ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ FLG02    ┆ SEDBERGH AMBULANCE STATION      ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ RNN88    ┆ SEDBERGH NURSING HOME           ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ RW5OX    ┆ SEDBERGH PHYSIOTHERAPY          ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+│ RX796    ┆ SEDBERGH MEDICAL SERVICES       ┆ LA10 5AA ┆ GP Practice             ┆ org   ┆ active │
+│ VN6C2    ┆ SEDBERGH REHABILITATION CENTRE  ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
+├──────────┴─────────────────────────────────┴──────────┴─────────────────────────┴───────┴────────┤
+│ 12 records                                                                12 active · 0 inactive │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find --code A82608
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬───────────────────────────┬──────────┬────────────────┬───────┐
+│ ODS Code ┆ Name                      ┆ Postcode ┆ Roles          ┆ Class │
+╞══════════╪═══════════════════════════╪══════════╪════════════════╪═══════╡
+│ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ GP Practice +1 ┆ org   │
+├──────────┴───────────────────────────┴──────────┴────────────────┴───────┤
+│ 1 active record                            Use --all to include inactive │
+└──────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find nonexistentquery12345
+* Source: releases/2026-07-31/orgs.parquet
+┌──────────┬──────┬──────────┬───────┬───────┐
+│ ODS Code ┆ Name ┆ Postcode ┆ Roles ┆ Class │
+╞══════════╪══════╪══════════╪═══════╪═══════╡
+├──────────┴──────┴──────────┴───────┴───────┤
+│ 0 active records                           │
+└────────────────────────────────────────────┘
+* Use --all to include inactive
+
+$ COLUMNS=40 ods find sedbergh
+* Source: releases/2026-07-31/orgs.parquet
+┌───────┬───────┬───────┬───────┬──────┐
+│ ODS   ┆ Name  ┆ Postc ┆ Roles ┆ Clas │
+│ Code  ┆       ┆ ode   ┆       ┆ s    │
+╞═══════╪═══════╪═══════╪═══════╪══════╡
+│ 8GJ58 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│       ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ HEALT ┆       ┆       ┆      │
+│       ┆ H CEN ┆       ┆       ┆      │
+│       ┆ TRE   ┆       ┆       ┆      │
+│       ┆ PHARM ┆       ┆       ┆      │
+│       ┆ ACY   ┆       ┆       ┆      │
+│ A8260 ┆ SEDBE ┆ LA10  ┆ GP    ┆ org  │
+│ 8     ┆ RGH   ┆ 5DL   ┆ Pract ┆      │
+│       ┆ MEDIC ┆       ┆ ice   ┆      │
+│       ┆ AL    ┆       ┆ +1    ┆      │
+│       ┆ PRACT ┆       ┆       ┆      │
+│       ┆ ICE   ┆       ┆       ┆      │
+│ D2E8H ┆ SEDBE ┆ LA10  ┆ GP    ┆ org  │
+│       ┆ RGH   ┆ 5AA   ┆ Pract ┆      │
+│       ┆ FIRST ┆       ┆ ice   ┆      │
+│       ┆ RESPO ┆       ┆       ┆      │
+│       ┆ NDERS ┆       ┆       ┆      │
+│ EE112 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│ 233   ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ OPTOM ┆       ┆       ┆      │
+│       ┆ ETRY  ┆       ┆       ┆      │
+│ EE112 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│ 331   ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ CARE  ┆       ┆       ┆      │
+│       ┆ HOME  ┆       ┆       ┆      │
+│ EE112 ┆ SEDBE ┆ LA10  ┆ Gener ┆ site │
+│ 451   ┆ RGH   ┆ 5AA   ┆ al    ┆      │
+│       ┆ DENTA ┆       ┆ Denta ┆      │
+│       ┆ L     ┆       ┆ l Pra ┆      │
+│       ┆ CARE  ┆       ┆ ctice ┆      │
+│ EE137 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│ 269   ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ COMMU ┆       ┆       ┆      │
+│       ┆ NITY  ┆       ┆       ┆      │
+│       ┆ CLINI ┆       ┆       ┆      │
+│       ┆ C     ┆       ┆       ┆      │
+│ FLG02 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│       ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ AMBUL ┆       ┆       ┆      │
+│       ┆ ANCE  ┆       ┆       ┆      │
+│       ┆ STATI ┆       ┆       ┆      │
+│       ┆ ON    ┆       ┆       ┆      │
+│ RNN88 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│       ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ NURSI ┆       ┆       ┆      │
+│       ┆ NG    ┆       ┆       ┆      │
+│       ┆ HOME  ┆       ┆       ┆      │
+│ RW5OX ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│       ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ PHYSI ┆       ┆       ┆      │
+│       ┆ OTHER ┆       ┆       ┆      │
+│       ┆ APY   ┆       ┆       ┆      │
+│ RX796 ┆ SEDBE ┆ LA10  ┆ GP    ┆ org  │
+│       ┆ RGH   ┆ 5AA   ┆ Pract ┆      │
+│       ┆ MEDIC ┆       ┆ ice   ┆      │
+│       ┆ AL    ┆       ┆       ┆      │
+│       ┆ SERVI ┆       ┆       ┆      │
+│       ┆ CES   ┆       ┆       ┆      │
+│ VN6C2 ┆ SEDBE ┆ LA10  ┆ Pharm ┆ site │
+│       ┆ RGH   ┆ 5AA   ┆ acy   ┆      │
+│       ┆ REHAB ┆       ┆       ┆      │
+│       ┆ ILITA ┆       ┆       ┆      │
+│       ┆ TION  ┆       ┆       ┆      │
+│       ┆ CENTR ┆       ┆       ┆      │
+│       ┆ E     ┆       ┆       ┆      │
+├───────┴───────┴───────┴───────┴──────┤
+│ 12 active records                    │
+└──────────────────────────────────────┘
+* Use --all to include inactive

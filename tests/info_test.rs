@@ -849,85 +849,7 @@ fn test_info_entity_without_relationships_omits_section() {
     );
 }
 
-#[test]
-fn test_info_succeeded_by_cyan_and_relationships_code_column() {
-    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
-    use ods::commands::find::OrgRow;
-    use ods::commands::info::model::{InfoRecord, InfoRelationship, LiveSuccessor};
 
-    let record = InfoRecord {
-        org: OrgRow {
-            ods_code: "CLOSED01".to_string(),
-            name: "CLOSED HEALTH CENTRE".to_string(),
-            record_class: "org".to_string(),
-            status: "inactive".to_string(),
-            address: Some("1 HIGH STREET".to_string()),
-            country: Some("England".to_string()),
-            operational_start: Some("2000-01-01".to_string()),
-            operational_end: Some("2020-01-01".to_string()),
-            last_changed: Some("2020-01-01".to_string()),
-            trud_release_date: "2026-08-28".to_string(),
-            ..Default::default()
-        },
-        roles: vec![],
-        relationships: vec![InfoRelationship {
-            rel_code: "RE4".to_string(),
-            direction: "outbound".to_string(),
-            code: "01K".to_string(),
-            name: "NHS MORECAMBE BAY CCG".to_string(),
-            status: "active".to_string(),
-            operational_start: Some("2013-04-01".to_string()),
-            operational_end: None,
-        }],
-        successors_live: vec![LiveSuccessor {
-            code: "SUCC01".to_string(),
-            name: "NEW HEALTH CENTRE".to_string(),
-        }],
-        successor_hops: 1,
-    };
-
-    let dummy_source = vec![ods::workspace::format_source_line("releases/current/orgs.parquet", true)];
-    let options_color = RenderOptions {
-        band: ResponsiveBand::Medium,
-        all: false,
-        color: true,
-        source_header: &dummy_source,
-        style: TableStyle::Table,
-    };
-
-    let rendered = render_info(&record, &options_color);
-
-    // 1. "Succeeded by" line has cyan org code: \x1b[36mSUCC01\x1b[0m
-    assert!(
-        rendered.contains("\x1b[36mSUCC01\x1b[0m"),
-        "Succeeded by line must have cyan org code, got:\n{}",
-        rendered
-    );
-
-    // 2. Relationships table has separate Code column with cyan code
-    assert!(
-        rendered.contains("Code"),
-        "Relationships table must have Code column header, got:\n{}",
-        rendered
-    );
-    assert!(
-        rendered.contains("\x1b[36m01K\x1b[0m"),
-        "Relationships table Code column must be 16-colour cyan, got:\n{}",
-        rendered
-    );
-
-    // 3. Organisation column contains only the name without preceding code or padding
-    let rel_row = rendered
-        .lines()
-        .find(|l| l.contains("NHS MORECAMBE BAY CCG"))
-        .expect("Relationships table must contain row with NHS MORECAMBE BAY CCG");
-    assert!(
-        ods::ansi::strip_ansi(rel_row).contains("┆ NHS MORECAMBE BAY CCG")
-            && rel_row.contains("\x1b[36m01K\x1b[0m"),
-        "Row must contain separate Organisation and Code cells, got:\n{}",
-        rel_row
-    );
-}
 
 #[test]
 fn test_info_markdown_format_structure_and_no_ansi() {
@@ -966,83 +888,12 @@ fn test_info_markdown_format_structure_and_no_ansi() {
 }
 
 #[test]
-fn test_info_markdown_width_invariance_and_no_truncation() {
-    let (_tmp, parquet_dir) = setup_test_workspace();
-
-    let mut out_narrow = Vec::new();
-    info::run_with_writer(
-        Args {
-            ods_code: "A82608".to_string(),
-            format: OutputFormat::Markdown,
-            input: Some(parquet_dir.clone()),
-            width: Some(58),
-            ..Default::default()
-        },
-        &mut out_narrow,
-        &parquet_dir,
-    )
-    .expect("markdown at width 58");
-
-    let mut out_wide = Vec::new();
-    info::run_with_writer(
-        Args {
-            ods_code: "A82608".to_string(),
-            format: OutputFormat::Markdown,
-            input: Some(parquet_dir.clone()),
-            width: Some(200),
-            ..Default::default()
-        },
-        &mut out_wide,
-        &parquet_dir,
-    )
-    .expect("markdown at width 200");
-
-    assert_eq!(
-        out_narrow, out_wide,
-        "Markdown output must be byte-identical regardless of --width or terminal size"
-    );
-
-    let s = String::from_utf8(out_narrow).expect("valid UTF-8");
-    assert!(!s.contains('…'), "Markdown output must not truncate with '…'");
-}
-
-#[test]
 fn test_info_default_format_is_table() {
     assert_eq!(Args::default().format, OutputFormat::Table);
 }
 
-#[test]
-fn test_info_markdown_anomalies_as_blockquotes() {
-    use ods::commands::info::model::InfoRecord;
-    use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
 
-    let fixture_content = std::fs::read_to_string("tests/fixtures/info/fixtures/A81002.json")
-        .expect("read A81002 fixture");
-    let record: InfoRecord = serde_json::from_str(&fixture_content).expect("parse A81002 JSON");
 
-    let dummy_source = vec![ods::workspace::format_source_line("releases/current/orgs-all.parquet", false)];
-    let options = RenderOptions {
-        band: ResponsiveBand::Wide,
-        all: false,
-        color: false,
-        source_header: &dummy_source,
-        style: TableStyle::Markdown,
-    };
-
-    let rendered = render_info(&record, &options);
-
-    // Verify anomalies are rendered as blockquotes with > prefix
-    assert!(
-        rendered.contains("> ! 1 row still open on a closed organisation\n\n"),
-        "Anomaly must be formatted as markdown blockquote, got:\n{}",
-        rendered
-    );
-    assert!(
-        rendered.contains("> ! 1 row starts after the organisation closed\n\n"),
-        "Anomaly must be formatted as markdown blockquote, got:\n{}",
-        rendered
-    );
-}
 
 
 

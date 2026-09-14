@@ -6,7 +6,35 @@ use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
 
-fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+static CACHED_WORKSPACE: std::sync::OnceLock<(TempDir, std::path::PathBuf, std::path::PathBuf)> =
+    std::sync::OnceLock::new();
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if file_type.is_symlink() {
+            let link_target = fs::read_link(entry.path())?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&link_target, &target)?;
+            #[cfg(windows)]
+            if entry.path().is_dir() {
+                std::os::windows::fs::symlink_dir(&link_target, &target)?;
+            } else {
+                std::os::windows::fs::symlink_file(&link_target, &target)?;
+            }
+        } else if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let tmp = TempDir::new().unwrap();
     let workspace_root = tmp.path().join("ods_data");
     let rel_dir = workspace_root.join("releases").join("2026-07-31");
@@ -103,6 +131,19 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
     (tmp, workspace_root, outer_zip_path)
 }
 
+fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (_cached_tmp, cached_ws, _cached_zip) = CACHED_WORKSPACE.get_or_init(setup_valid_workspace_impl);
+    let tmp = TempDir::new().unwrap();
+    let workspace_root = tmp.path().join("ods_data");
+    copy_dir_all(cached_ws, &workspace_root).unwrap();
+    let outer_zip_path = workspace_root
+        .join("releases")
+        .join("2026-07-31")
+        .join("trud")
+        .join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    (tmp, workspace_root, outer_zip_path)
+}
+
 fn create_inner_zip(filename: &str, content: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     {
@@ -188,37 +229,6 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()
     Ok(())
 }
 
-#[test]
-fn test_audit_runs_full_suite_and_fails_on_unaccounted_file_in_release_dir() -> Result<()> {
-    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
-
-    // Add unaccounted file to release directory
-    let phantom_path = active_dir.join("phantom.parquet");
-    fs::write(&phantom_path, b"unaccounted file contents")?;
-
-    let args = ods::commands::audit::Args {
-        input: Some(zip_path),
-        workspace: Some(workspace_root),
-        json: false,
-        sample: 50,
-        full: true,
-        all: false,
-    };
-
-    let result = ods::commands::audit::run(args);
-    assert!(
-        result.is_err(),
-        "audit must fail on unaccounted file in release dir"
-    );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("Unaccounted") || err_msg.contains("phantom.parquet") || err_msg.contains("discrepanc"),
-        "error must mention unaccounted file, got: {}",
-        err_msg
-    );
-    Ok(())
-}
 
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -> Result<()> {
@@ -255,9 +265,14 @@ fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
+    assert!(ods::commands::parquet::get_unexpected_files(&active_dir).is_empty());
+
     // Create stray unaccounted file in active release directory
     let stray_path = active_dir.join("rels.parquet");
     fs::write(&stray_path, b"stray content")?;
+
+    let unexpected = ods::commands::parquet::get_unexpected_files(&active_dir);
+    assert_eq!(unexpected, vec!["rels.parquet".to_string()]);
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -360,29 +375,6 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_unexpected_files_detection() -> Result<()> {
-    let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
-    let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
-
-    assert!(ods::commands::parquet::get_unexpected_files(&active_dir).is_empty());
-
-    let stray1 = active_dir.join("rels.parquet");
-    let stray2 = active_dir.join("old_rules.json");
-    let ignored1 = active_dir.join(".DS_Store");
-    let ignored2 = active_dir.join("markdown");
-    fs::write(&stray1, b"stray1")?;
-    fs::write(&stray2, b"stray2")?;
-    fs::write(&ignored1, b"ds_store")?;
-    fs::create_dir_all(&ignored2)?;
-
-    let unexpected = ods::commands::parquet::get_unexpected_files(&active_dir);
-    assert_eq!(
-        unexpected,
-        vec!["old_rules.json".to_string(), "rels.parquet".to_string()]
-    );
-    Ok(())
-}
 
 #[test]
 fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {

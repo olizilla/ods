@@ -14,7 +14,7 @@ fn find_real_trud_zip() -> Option<PathBuf> {
     None
 }
 
-fn create_mock_trud_zip(dir: &std::path::Path, xml_path: &std::path::Path) -> PathBuf {
+fn create_mock_trud_zip_from_xml(dir: &std::path::Path, xml_path: &std::path::Path) -> PathBuf {
     use std::io::Write;
     let zip_path = dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let zip_file = std::fs::File::create(&zip_path).unwrap();
@@ -35,7 +35,7 @@ fn test_synthetic_parquet_hash_stability() {
     let tmp1 = TempDir::new().unwrap();
     let tmp2 = TempDir::new().unwrap();
 
-    let zip_path = create_mock_trud_zip(tmp1.path(), &xml_path);
+    let zip_path = create_mock_trud_zip_from_xml(tmp1.path(), &xml_path);
 
     parquet::run(parquet::Args {
         input: Some(zip_path.clone()),
@@ -94,7 +94,7 @@ fn test_real_trud_parquet_hash_stability() {
     .expect("run 1 on real TRUD zip should succeed");
 
     parquet::run(parquet::Args {
-        input: Some(zip_path),
+        input: Some(zip_path.clone()),
         output: Some(tmp2.path().to_path_buf()),
     })
     .expect("run 2 on real TRUD zip should succeed");
@@ -109,7 +109,7 @@ fn test_real_trud_parquet_hash_stability() {
         "_provenance.json",
     ];
 
-    for file_name in all_files {
+    for file_name in &all_files {
         let f1 = tmp1.path().join(file_name);
         let f2 = tmp2.path().join(file_name);
 
@@ -126,90 +126,31 @@ fn test_real_trud_parquet_hash_stability() {
             file_name, hash1, hash2
         );
     }
-}
-
-#[test]
-#[ignore]
-fn test_real_trud_parquet_stable_across_contexts() {
-    let zip_path = find_real_trud_zip().expect(
-        "TRUD_XML_PATH environment variable must point to an existing TRUD zip archive to run this test",
-    );
-
-    let tmp_workspace = TempDir::new().unwrap();
-    let tmp_isolated = TempDir::new().unwrap();
-
-    // Context 1: Run against zip_path in its original location where parent _provenance.json sits
-    parquet::run(parquet::Args {
-        input: Some(zip_path.clone()),
-        output: Some(tmp_workspace.path().to_path_buf()),
-    })
-    .expect("context 1 make should succeed");
 
     // Context 2: Copy archive alone to an isolated TempDir without _provenance.json
     let isolated_zip_dir = TempDir::new().unwrap();
     let isolated_zip = isolated_zip_dir.path().join(zip_path.file_name().unwrap());
     std::fs::copy(&zip_path, &isolated_zip).unwrap();
 
+    let tmp_isolated = TempDir::new().unwrap();
     parquet::run(parquet::Args {
         input: Some(isolated_zip),
         output: Some(tmp_isolated.path().to_path_buf()),
     })
     .expect("context 2 make should succeed");
 
-    // 1. Assert all 5 Parquet files are byte-identical across contexts
-    let parquet_files = [
-        "orgs.parquet",
-        "orgs_all.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-    ];
-
-    for file_name in parquet_files {
-        let f1 = tmp_workspace.path().join(file_name);
+    // Parquet and datapackage must match across contexts
+    for file_name in &all_files[..6] {
+        let f1 = tmp1.path().join(file_name);
         let f2 = tmp_isolated.path().join(file_name);
-
-        assert!(f1.exists(), "{} missing in context 1", file_name);
-        assert!(f2.exists(), "{} missing in context 2", file_name);
-
         let hash1 = compute_file_sha256(&f1).unwrap();
         let hash2 = compute_file_sha256(&f2).unwrap();
-
-        assert_eq!(
-            hash1, hash2,
-            "Parquet file {} diverged across contexts: {} vs {}",
-            file_name, hash1, hash2
-        );
+        assert_eq!(hash1, hash2, "File {} diverged across contexts", file_name);
     }
 
-    // 2. Assert datapackage.json is byte-identical across contexts
-    let dp1 = tmp_workspace.path().join("datapackage.json");
-    let dp2 = tmp_isolated.path().join("datapackage.json");
-    assert!(dp1.exists(), "datapackage.json missing in context 1");
-    assert!(dp2.exists(), "datapackage.json missing in context 2");
-
-    let dp_hash1 = compute_file_sha256(&dp1).unwrap();
-    let dp_hash2 = compute_file_sha256(&dp2).unwrap();
-    assert_eq!(
-        dp_hash1, dp_hash2,
-        "datapackage.json diverged across contexts: {} vs {}",
-        dp_hash1, dp_hash2
-    );
-
-    // 3. Assert _provenance.json differs across contexts
-    let prov1_file = tmp_workspace.path().join("_provenance.json");
+    // Provenance verification difference
+    let prov1_file = tmp1.path().join("_provenance.json");
     let prov2_file = tmp_isolated.path().join("_provenance.json");
-    assert!(prov1_file.exists(), "_provenance.json missing in context 1");
-    assert!(prov2_file.exists(), "_provenance.json missing in context 2");
-
-    let prov_hash1 = compute_file_sha256(&prov1_file).unwrap();
-    let prov_hash2 = compute_file_sha256(&prov2_file).unwrap();
-    assert_ne!(
-        prov_hash1, prov_hash2,
-        "_provenance.json must differ across contexts (trud_api vs unverified)"
-    );
-
-    // 4. Assert verification source difference specifically
     let prov1: ods::provenance::OdsProvenance =
         serde_json::from_str(&std::fs::read_to_string(&prov1_file).unwrap()).unwrap();
     let prov2: ods::provenance::OdsProvenance =

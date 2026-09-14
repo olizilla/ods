@@ -494,6 +494,15 @@ mod tests {
     }
 
     #[test]
+    fn test_role_csv_escaping_guards() {
+        assert_eq!(escape_csv("simple"), "simple");
+        assert_eq!(escape_csv("with,comma"), "\"with,comma\"");
+        assert_eq!(escape_csv("with\"quote"), "\"with\"\"quote\"");
+        assert_eq!(escape_csv("with\nnewline"), "\"with\nnewline\"");
+        assert_eq!(escape_csv("RO76; RO227"), "\"RO76; RO227\"");
+    }
+
+    #[test]
     fn test_damerau_levenshtein_distance() {
         assert_eq!(damerau_levenshtein("", ""), 0);
         assert_eq!(damerau_levenshtein("a", ""), 1);

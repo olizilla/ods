@@ -89,34 +89,9 @@ impl OciBlobFetcher for MockOciFetcher {
 // Task 1 — The flag
 // ----------------------------------------------------------------------------
 
-#[test]
-fn test_task1_index_flag_hidden_from_help() {
-    // 1. ods pull --help must not mention --index
-    let pull_help = ods_binary()
-        .arg("pull")
-        .arg("--help")
-        .output()
-        .expect("execute ods pull --help");
-    assert!(pull_help.status.success());
-    let pull_stdout = String::from_utf8_lossy(&pull_help.stdout);
-    let pull_stderr = String::from_utf8_lossy(&pull_help.stderr);
-    assert!(!pull_stdout.contains("--index"), "ods pull --help stdout must not contain --index");
-    assert!(!pull_stderr.contains("--index"), "ods pull --help stderr must not contain --index");
-
-    // 2. ods --help must not mention --index
-    let bin_help = ods_binary()
-        .arg("--help")
-        .output()
-        .expect("execute ods --help");
-    assert!(bin_help.status.success());
-    let bin_stdout = String::from_utf8_lossy(&bin_help.stdout);
-    let bin_stderr = String::from_utf8_lossy(&bin_help.stderr);
-    assert!(!bin_stdout.contains("--index"), "ods --help stdout must not contain --index");
-    assert!(!bin_stderr.contains("--index"), "ods --help stderr must not contain --index");
-}
 
 #[test]
-fn test_task1_index_flag_file_path_list() {
+fn test_index_flag_file_path_list() {
     let tmp = TempDir::new().unwrap();
     let index_file = tmp.path().join("myindex.json");
     let index = sample_release_index();
@@ -139,7 +114,7 @@ fn test_task1_index_flag_file_path_list() {
 }
 
 #[test]
-fn test_task1_index_flag_http_url_list() {
+fn test_index_flag_http_url_list() {
     let tmp = TempDir::new().unwrap();
     let index = sample_release_index();
     let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
@@ -168,7 +143,7 @@ fn test_task1_index_flag_http_url_list() {
 // ----------------------------------------------------------------------------
 
 #[test]
-fn test_task2_cannot_read_verbatim() {
+fn test_index_flag_cannot_read_error_verbatim() {
     let tmp = TempDir::new().unwrap();
 
     let output = ods_binary()
@@ -192,7 +167,7 @@ fn test_task2_cannot_read_verbatim() {
 }
 
 #[test]
-fn test_task2_cannot_parse_verbatim() {
+fn test_index_flag_cannot_parse_error_verbatim() {
     let tmp = TempDir::new().unwrap();
     let notjson_file = tmp.path().join("notjson.txt");
     fs::write(&notjson_file, b"this is not json").unwrap();
@@ -225,7 +200,7 @@ fn test_task2_cannot_parse_verbatim() {
 }
 
 #[test]
-fn test_task2_empty_releases_index_prints_message_and_exits_zero() {
+fn test_empty_releases_index_prints_message_and_exits_zero() {
     let tmp = TempDir::new().unwrap();
     let empty_file = tmp.path().join("empty.json");
     fs::write(
@@ -253,7 +228,7 @@ fn test_task2_empty_releases_index_prints_message_and_exits_zero() {
 }
 
 #[test]
-fn test_task2_env_var_and_flag_precedence() {
+fn test_index_flag_env_var_and_flag_precedence() {
     let tmp = TempDir::new().unwrap();
 
     // 1. When only ODS_RELEASE_INDEX_URL points to a missing file/URL,
@@ -304,7 +279,7 @@ fn test_task2_env_var_and_flag_precedence() {
 // ----------------------------------------------------------------------------
 
 #[test]
-fn test_task3_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
+fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("ods_data");
 
@@ -382,7 +357,7 @@ fn test_task3_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
 }
 
 #[test]
-fn test_task3_contradicting_digest_fails_with_security_error_naming_both_digests() {
+fn test_contradicting_digest_fails_with_security_error_naming_both_digests() {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
     fs::create_dir_all(&workspace).unwrap();

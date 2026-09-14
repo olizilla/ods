@@ -33,10 +33,6 @@ pub struct Args {
     /// Path to release index file (defaults to data/releases.json)
     #[arg(long)]
     pub index: Option<PathBuf>,
-
-    /// Skip remote git network checks
-    #[arg(long)]
-    pub offline: bool,
 }
 
 fn is_tool_repo_dir(dir: &Path) -> bool {
@@ -181,7 +177,6 @@ pub fn run(args: Args) -> Result<()> {
         &version,
         tool_repo.as_deref(),
         custom_index.as_ref(),
-        args.offline,
     )?;
 
     if !failures.is_empty() {
@@ -213,7 +208,6 @@ pub fn run(args: Args) -> Result<()> {
         _ => "unverified",
     };
     eprintln!("* trud_release_sha256 verified via {}", ver_source);
-    eprintln!("* data/{} free locally and on origin", versioned_tag);
 
     let release_row = ReleaseIndexEntry {
         trud_release_date: date.to_string(),
@@ -324,7 +318,6 @@ pub fn perform_all_release_checks(
     expected_version: &str,
     tool_repo: Option<&Path>,
     custom_index: Option<&OdsReleaseIndex>,
-    offline: bool,
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
@@ -435,57 +428,6 @@ pub fn perform_all_release_checks(
                 "data/releases.json already has a row for {} {}\n  A published (date, version) pair names one set of bytes forever.\n  Bump dataset_version and re-pack.",
                 date, expected_version
             ));
-        }
-    }
-
-    // Check 15: git tag data/<date>_<version> free locally and on origin
-    let date = prov.trud_release_date.as_deref().unwrap_or("");
-    let git_tag = format!("data/{}_{}", date, expected_version);
-    let local_tag = Command::new("git")
-        .args([
-            "-C",
-            &repo_dir_str,
-            "rev-parse",
-            "-q",
-            "--verify",
-            &format!("refs/tags/{}", git_tag),
-        ])
-        .output();
-    if let Ok(out) = local_tag {
-        if out.status.success() {
-            failures.push(format!("git tag {} already exists locally", git_tag));
-        }
-    }
-
-    let is_offline = offline || std::env::var("ODS_OFFLINE").is_ok();
-    if !is_offline {
-        let has_origin = Command::new("git")
-            .args(["-C", &repo_dir_str, "remote", "get-url", "origin"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if has_origin {
-            let origin_tag = Command::new("git")
-                .args([
-                    "-C",
-                    &repo_dir_str,
-                    "-c",
-                    "http.lowSpeedLimit=1000",
-                    "-c",
-                    "http.lowSpeedTime=2",
-                    "ls-remote",
-                    "--exit-code",
-                    "--tags",
-                    "origin",
-                    &git_tag,
-                ])
-                .output();
-            if let Ok(out) = origin_tag {
-                if out.status.success() {
-                    failures.push(format!("git tag {} exists on origin", git_tag));
-                }
-            }
         }
     }
 

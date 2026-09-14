@@ -93,7 +93,7 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task1_find_reports_release_in_header_source_line() {
+fn test_find_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -116,7 +116,7 @@ fn test_task1_find_reports_release_in_header_source_line() {
 }
 
 #[test]
-fn test_task1_info_reports_release_in_header_source_line() {
+fn test_info_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -142,7 +142,7 @@ fn test_task1_info_reports_release_in_header_source_line() {
 }
 
 #[test]
-fn test_task1_role_reports_release_in_header_source_line() {
+fn test_role_reports_release_in_header_source_line() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -197,7 +197,7 @@ fn test_task1_cite_reports_release_to_stderr() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task2_running_from_inside_older_release_reads_current_and_resolves_workspace() {
+fn test_running_from_inside_older_release_reads_current_and_resolves_workspace() {
     let (_tmp, ws_root) = setup_two_release_workspace();
     let older_rel_dir = ws_root.join("releases").join("2026-06-26");
 
@@ -321,7 +321,7 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task4_machine_readable_formats_suppress_release_and_disagreement_reporting() {
+fn test_machine_readable_formats_suppress_release_and_disagreement_reporting() {
     let (_tmp, ws_root) = setup_two_release_workspace();
     let older_rel_dir = ws_root.join("releases").join("2026-06-26");
 
@@ -465,7 +465,7 @@ fn test_explicit_input_to_non_current_release_prints_bare_date_without_current()
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task5_make_release_refuses_without_input() {
+fn test_make_release_refuses_without_input() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -490,7 +490,7 @@ fn test_task5_make_release_refuses_without_input() {
 }
 
 #[test]
-fn test_task5_make_oci_reports_inferred_release_and_directory_written() {
+fn test_make_oci_reports_inferred_release_and_directory_written() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()

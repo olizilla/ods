@@ -1714,6 +1714,15 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn test_squash_unit_invariants() {
+        assert_eq!(squash_for_matching("Christchurch"), "CHRISTCHURCH");
+        assert_eq!(squash_for_matching("Christ Church"), "CHRISTCHURCH");
+        assert_eq!(squash_for_matching("L'Arche"), "LARCHE");
+        assert_eq!(squash_for_matching("St Mary's"), "STMARYS");
+        assert_eq!(squash_for_matching("Day & Night Pharmacy"), "DAYNIGHTPHARMACY");
+    }
+
+    #[test]
     fn test_load_succession_graph_nonexistent() {
         let dir = tempdir().unwrap();
         let graph = load_succession_graph(dir.path());

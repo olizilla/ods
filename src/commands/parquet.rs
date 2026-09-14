@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn test_task_6_column_renames() {
+    fn test_column_renames_to_snake_case() {
         let orgs_s = orgs_schema();
         assert!(orgs_s.column_with_name("record_class").is_some());
         assert!(orgs_s.column_with_name("primary_role_code").is_some());
@@ -1487,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    fn test_task_7_trud_release_date_on_all_tables() {
+    fn test_trud_release_date_column_on_all_tables() {
         assert!(orgs_schema()
             .column_with_name("trud_release_date")
             .is_some());

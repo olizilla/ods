@@ -1,135 +1,26 @@
 //! Per-task acceptance tests for `.agents/briefs/make-commands-and-workspace-discovery.md`.
 
+mod common;
+
+use common::create_mock_trud_zip as create_mock_zip;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
-
-const FIXTURE_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/mock_hscorgrefdata.xml"
-);
 
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
 }
 
-fn create_mock_zip(dir: &Path, filename: &str) -> PathBuf {
-    let zip_path = dir.join(filename);
-    let zip_file = fs::File::create(&zip_path).unwrap();
-    let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
-    let xml_content = fs::read_to_string(FIXTURE_XML).unwrap();
-    std::io::Write::write_all(&mut zip_writer, xml_content.as_bytes()).unwrap();
-    zip_writer.finish().unwrap();
-    zip_path
-}
 
-/// Task 1 Acceptance: `ods make ndjson` is gone and returns unknown subcommand error.
-#[test]
-fn test_task_1_acceptance_make_ndjson_subcommand_is_gone() {
-    let output = ods_binary()
-        .arg("make")
-        .arg("ndjson")
-        .output()
-        .expect("execute ods make ndjson");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unrecognized subcommand") || stderr.contains("invalid subcommand") || stderr.contains("error:"),
-        "stderr should indicate unrecognized subcommand, got:\n{}",
-        stderr
-    );
-}
-
-/// Task 2 Acceptance: `ods make` ≡ `ods make parquet`, with identical output and unaffected by stray `ods.ndjson`.
-#[test]
-fn test_task_2_acceptance_make_identical_to_make_parquet_and_ignores_stray_ndjson() {
-    let tmp = TempDir::new().unwrap();
-    let zip_path = create_mock_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
-
-    let out_make = tmp.path().join("out_make");
-    let out_make_parquet = tmp.path().join("out_make_parquet");
-    fs::create_dir_all(&out_make).unwrap();
-    fs::create_dir_all(&out_make_parquet).unwrap();
-
-    // 1. Run `ods make`
-    let res_make = ods_binary()
-        .arg("make")
-        .arg("-i")
-        .arg(&zip_path)
-        .arg("-o")
-        .arg(&out_make)
-        .output()
-        .expect("execute ods make");
-    assert!(res_make.status.success(), "ods make must succeed");
-
-    // 2. Run `ods make parquet`
-    let res_make_parquet = ods_binary()
-        .arg("make")
-        .arg("parquet")
-        .arg("-i")
-        .arg(&zip_path)
-        .arg("-o")
-        .arg(&out_make_parquet)
-        .output()
-        .expect("execute ods make parquet");
-    assert!(res_make_parquet.status.success(), "ods make parquet must succeed");
-
-    // Assert all generated files are byte-for-byte identical
-    let expected_files = [
-        "orgs.parquet",
-        "orgs_all.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-        ods::provenance::PROVENANCE_FILENAME,
-    ];
-
-    for file in &expected_files {
-        let path1 = out_make.join(file);
-        let path2 = out_make_parquet.join(file);
-        assert!(path1.exists(), "file {} should exist in out_make", file);
-        assert!(path2.exists(), "file {} should exist in out_make_parquet", file);
-
-        let bytes1 = fs::read(&path1).unwrap();
-        let bytes2 = fs::read(&path2).unwrap();
-        assert_eq!(bytes1, bytes2, "file {} must be byte-for-byte identical between `make` and `make parquet`", file);
-    }
-
-    // 3. Create a stray ods.ndjson in cwd and rerun
-    let stray_ndjson = tmp.path().join("ods.ndjson");
-    fs::write(&stray_ndjson, b"{\"stray\": true}\n").unwrap();
-
-    let out_make_stray = tmp.path().join("out_make_stray");
-    let res_stray = ods_binary()
-        .current_dir(tmp.path())
-        .arg("make")
-        .arg("-i")
-        .arg(&zip_path)
-        .arg("-o")
-        .arg(&out_make_stray)
-        .output()
-        .expect("execute ods make with stray ndjson");
-    assert!(res_stray.status.success(), "ods make with stray ndjson must succeed");
-
-    for file in &expected_files {
-        let path1 = out_make.join(file);
-        let path2 = out_make_stray.join(file);
-        let bytes1 = fs::read(&path1).unwrap();
-        let bytes2 = fs::read(&path2).unwrap();
-        assert_eq!(bytes1, bytes2, "stray ndjson must have no effect on output of {}", file);
-    }
-}
 
 /// Task 3 Acceptance: Workspace not named `ods_data` (e.g. `nhs-archive/`).
 /// Discovers from inside workspace, from release dir, and when unpinned outside refuses with error.
 #[test]
-fn test_task_3_acceptance_non_default_workspace_discovery() {
+fn test_custom_named_workspace_discovery_from_inside_and_release_subdir() {
     let tmp = TempDir::new().unwrap();
+    // Isolate from ascending past tmp
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
     let ws = tmp.path().join("nhs-archive");
     let rel_dir = ws.join("releases").join("2026-07-31");
     let trud_dir = rel_dir.join("trud");
@@ -222,7 +113,7 @@ fn test_task_3_acceptance_non_default_workspace_discovery() {
 
 /// Task 4 Acceptance: `make` does not move `current` pointer.
 #[test]
-fn test_task_4_acceptance_make_does_not_move_current_pointer() {
+fn test_make_into_new_release_does_not_move_active_current_pointer() {
     let tmp = TempDir::new().unwrap();
     let ws = tmp.path().join("ods_data");
     let rel_a = ws.join("releases").join("2026-05-29");
@@ -273,7 +164,7 @@ fn test_task_4_acceptance_make_does_not_move_current_pointer() {
 
 /// Task 6 Acceptance: `ods audit --workspace <path> --full` against an unpinned external workspace succeeds.
 #[test]
-fn test_task_6_acceptance_audit_workspace_authoritative_on_unpinned_workspace() {
+fn test_audit_workspace_flag_authoritative_on_unpinned_workspace() {
     let tmp = TempDir::new().unwrap();
     let external_ws = tmp.path().join("external_archive");
     let rel_dir = external_ws.join("releases").join("2026-07-31");
