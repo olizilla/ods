@@ -84,7 +84,8 @@ jobs:
         run: npm ci --prefix worker
 
       - name: Typecheck ods.fyi worker
-        run: npx tsc --noEmit --project worker
+        working-directory: worker
+        run: npx tsc --noEmit
 
       - name: Run ods.fyi worker tests
         run: npm test --prefix worker
