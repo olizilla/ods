@@ -206,7 +206,7 @@ the schema freeze happening before publication.
 The `_code` suffix does two jobs, and a column name should be a phrase a
 practitioner would say out loud.
 
-**CLI output** `✓` success, `*` cached, `✖` error, progress lines, and status lines 
+**CLI output** `✓` success, `*` info, `✖` error, progress lines, and status lines 
 only for work actually done. Data to stdout, progress to stderr, so `ods pull --list > file` is useful. Always exit non-zero when the command couldn't do its job.
 
 ## Gotchas
