@@ -34,16 +34,11 @@ them: each test enforces one, and a failing test names the one that broke.
 ## Querying
 
 - **Q1. Names match however they are punctuated.** `ods find` ignores spacing, hyphens and punctuation in names, and ranks exact matches first.
-- **Q2. `--in` matches whole places.** A value matches a row whose `town`, `county` or `country` equals it, ignoring case, apostrophes and punctuation. `--in "King's Lynn"` and `--in "kings lynn"` return the same rows, as do `--in stoke-on-trent` and `--in "stoke on trent"`. Part of a name matches nothing: `--in london` does not return LONDONDERRY.
-- **Q3. Postcodes match by district, then sector.** `--in LA1` returns district LA1 and not LA10, while `--in SW1` returns SW1A to SW1Y, since a district also covers its lettered sub-districts. `--in "LA1 5"` returns sector LA1 5, and a full postcode returns that postcode with or without its space. A two-character district such as `--in N1` is accepted; any other value needs at least three characters.
-- **Q4. Values add rows, flags remove them.** Values given to `--in`, repeated or comma-separated, combine as a union. Different flags combine as an intersection, so adding `--gp` or `--role` never adds rows. A comma always separates values, so a town recorded with a comma in it, such as `ENFIELD, LONDON`, cannot be matched.
-- **Q5. Every matched field is named.** With `--in`, the `table` and `markdown` formats gain a `Matched` column listing each field the row matched, in schema order: `town`, `county`, `postcode`, `country`. Machine formats carry no match field.
-- **Q6. A place that matches nothing says so.** A value that matches no row in the file searched gets `! No location matches '<value>'` and up to three suggestions, and the rows the other values matched are still returned. When no value matches anything, it is an error, `✖ No location matches '<value>'`, and `ods find` exits 1.
-- **Q7. Near misses are offered.** When `--in` returns rows, `* Also:` names up to three other places that begin with the value followed by a space, most rows first: `--in newcastle` offers `"newcastle upon tyne" (1561)`.
-- **Q8. `--sql` returns what `find` returned.** Run in DuckDB, the query returns the same set of rows as `ods find`. The order matches wherever we can make it match, and the tests check it, but the order is not guaranteed.
-- **Q9. Rows are `orgs` rows.** In `--format json` and `csv`, `ods find` rows use the `orgs` column names.
-- **Q10. `info` shows the whole record.** `ods info <code>` accepts a code in any letter case, shows its relationships and succession chain, and fails on an unknown code.
-- **Q11. Holders are active holders.** `ods role` counts the active organisations that actively hold each role.
+- **Q2. `--in` finds places the way people write them, and says why each row matched.** A place matches whole, never as part of a longer name. A postcode matches its district or its sector. Each row names the fields it matched, and a value that matches nothing says so. [find.md](./find.md#2-location-filtering---in-place) gives the rules, and its examples are what the tests check.
+- **Q3. Values add rows, flags remove them.** Values given to `--in`, repeated or comma-separated, combine as a union. Different flags combine as an intersection, so adding `--gp` or `--role` never adds rows.
+- **Q4. `--sql` returns what `find` returned.** Run in DuckDB, the query returns the same set of rows as `ods find`. The order matches wherever we can make it match, and the tests check it, but the order is not guaranteed.
+- **Q5. `info` shows the whole record.** `ods info <code>` accepts a code in any letter case, shows its relationships and succession chain, and fails on an unknown code.
+- **Q6. Holders are active holders.** `ods role` counts the active organisations that actively hold each role.
 
 ## Output
 
@@ -52,7 +47,7 @@ them: each test enforces one, and a failing test names the one that broke.
 - **O3. Every query names its release.** In the human formats, `ods find`, `ods info`, `ods role` and `ods cite` open with a `* Source:` line naming the release they read.
 - **O4. Reading writes nothing.** `ods find`, `ods info`, `ods role` and `ods cite` create and change no files. Without a workspace, they fail with a message that says what to run.
 - **O5. Output changes on purpose.** Each command's human-readable output is compared against one committed snapshot, which is updated whenever that output is meant to change.
-- **O6. Only `ods pull` and `ods trud` use the network.** Every other command works from local files. When the release being read is the newest in the workspace and more than 45 days old, `ods find` and `ods cite` print one line: ``* 2026-08-28 release is 52 days old. Run `ods pull` to check for a newer one.``
+- **O6. Only `ods pull` and `ods trud` use the network.** Every other command works from local files. `ods find` and `ods cite` say when the release they read may be out of date, so working offline never hides that a newer release may exist.
 
 ## The workspace
 

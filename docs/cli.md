@@ -47,12 +47,27 @@ Options:
 ### JSON output is not yet stable
 
 `--format json` is intended for scripts and agents, but its shape is **not
-versioned**. Field names may change between `ods` releases without notice.
+versioned**. Today each `ods find` row carries the `orgs.parquet` column names.
+Later releases may add joined or derived fields, or change existing ones, without
+notice.
 
 The Parquet schema has `dataset_version` and a
 `datapackage.json` contract; the CLI's JSON output has no equivalent yet. If you
 are building something durable, read the Parquet files directly — they are the
 stable interface, and `datapackage.json` describes them.
+
+### Notices
+
+`ods find` and `ods cite` work from local files. When the release they read is
+the newest in the workspace and more than 45 days old, they end with one line on
+stderr:
+
+```text
+* 2026-08-28 release is 52 days old. Run `ods pull` to check for a newer one.
+```
+
+A release pinned older on purpose with `ods use` gets no notice, and neither do
+machine formats such as `--format json`.
 
 ### Reproducibility Guarantee
 

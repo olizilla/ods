@@ -2,7 +2,7 @@
 
 Search NHS organisations and sites across names, codes, locations, and roles.
 
-`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to TSV, CSV, and JSON.
+`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to TSV, CSV, and JSON. JSON and CSV rows use the `orgs.parquet` column names today, but that shape [is not versioned yet](./cli.md#json-output-is-not-yet-stable).
 
 ## Usage
 
@@ -44,8 +44,15 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 - **Places match whole.** Town, county and country must equal the value, ignoring case, apostrophes and punctuation. `--in "kings lynn"` finds KING'S LYNN, and `--in london` does not find LONDONDERRY.
 - **Postcodes match by district, then sector.** `--in LA1` is district LA1, not LA10. A district also covers its lettered sub-districts, so `--in SW1` returns SW1A to SW1Y and `--in W1` returns W1A to W1W. `--in "LA1 5"` is sector LA1 5. A full postcode matches with or without its space. Two-character districts such as `N1` are accepted; any other value needs at least three characters.
 - **Values add, flags narrow.** `--in durham --in cumbria` and `--in durham,cumbria` return rows in either place. Adding `--gp` or `--role` keeps only rows that match both. Commas always separate values, so the handful of towns recorded with a comma in their name (`ENFIELD, LONDON`) can't be matched.
+- **Every matched field is named.** In `table` and `markdown`, a `Matched` column lists each field the row matched, in schema order: `town`, `county`, `postcode`, `country`. Machine formats carry no match field.
+- **A place that matches nothing says so.** A value that matches no row in the file searched gets `! No location matches '<value>'` on stderr, with up to three suggestions, and the rows the other values matched are still returned. When no value matches anything, `ods find` prints `✖ No location matches '<value>'` and exits 1.
+- **Longer place names are offered.** When `--in` returns rows, `* Also:` names up to three other places whose names start with the value and a space, most rows first: `--in newcastle` offers `"newcastle upon tyne" (1561)`.
 
-Town and county are as ODS records them: postal and historic, not administrative. Some London-area practices are recorded under MIDDLESEX, ESSEX, KENT and SURREY, so some care is 
+`--in` returns what each record's address says, and doesn't correct it. Town is the post town and county is the postal county, so neither follows council or NHS boundaries:
+
+- **`--in liverpool`** returns records whose post town is LIVERPOOL. Bootle and Prescot have L postcodes but post towns of their own, so ask for them by name (`--in liverpool,bootle,prescot`) or by district (`--in L20`).
+- **`--in london`** returns records whose post town is LONDON. Outer boroughs have post towns of their own, such as HARROW and CROYDON.
+- **County is recorded unevenly.** Records with post town HARROW give MIDDLESEX, GREATER LONDON or no county at all, so `--in "greater london"` finds only the records that say so.
 
 ### 3. Role Filtering (`--role <roles>`)
 `--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
