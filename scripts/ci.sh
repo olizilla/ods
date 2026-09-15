@@ -10,7 +10,7 @@
 # a laptop and a CI runner differ several times over, and so do cold and warm caches.
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 release_data=0
 compare_old=""
@@ -116,7 +116,7 @@ smoke() {
   local ws="$tmp/ods_data"
   zip -j -q "$zip" tests/fixtures/mock_hscorgrefdata.xml &&
     ./target/debug/ods make --input "$zip" --output "$ws/releases/2026-07-31" &&
-    ./target/debug/ods audit --input "$zip" --workspace "$ws" --full &&
+    ./target/debug/ods trud audit --input "$zip" --workspace "$ws" --full &&
     ./target/debug/ods make oci --input "$ws/releases/2026-07-31" &&
     ./target/debug/ods make oci --input "$ws/releases/2026-07-31" --check
   status=$?
