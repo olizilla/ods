@@ -44,32 +44,12 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build binary
-        run: cargo build
-
       - name: Install DuckDB
         run: |
           curl -sSL https://github.com/duckdb/duckdb/releases/download/v1.4.1/duckdb_cli-linux-amd64.zip -o duckdb.zip
           sudo unzip -d /usr/local/bin duckdb.zip duckdb
           rm duckdb.zip
           duckdb --version
-
-      - name: Run ods tests
-        run: cargo test --no-fail-fast
-
-      - name: Test count
-        run: |
-          COUNT=$(cargo test -- --list 2>/dev/null | grep -c ': test$')
-          echo "$COUNT tests" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Test ods make oci and audit verification
-        run: |
-          TMP_ZIP=$(mktemp -d)/hscorgrefdataxml_data_7.0.0_20260731000001.zip
-          zip -j -q "$TMP_ZIP" tests/fixtures/mock_hscorgrefdata.xml
-          ./target/debug/ods make --input "$TMP_ZIP" --output ods_data/releases/2026-07-31
-          ./target/debug/ods audit --input "$TMP_ZIP" --workspace ods_data --full
-          ./target/debug/ods make oci --input ods_data/releases/2026-07-31
-          ./target/debug/ods make oci --input ods_data/releases/2026-07-31 --check
 
       # 24 is in the runner image's tool cache, so this downloads nothing
       - name: Setup Node.js
@@ -99,12 +79,7 @@ jobs:
         if: steps.conformance-cache.outputs.cache-hit != 'true'
         run: go install github.com/opencontainers/distribution-spec/conformance@3ecd27b5c78d
 
-      - name: Install Worker Dependencies
-        run: npm ci --prefix worker
-
-      - name: Typecheck ods.fyi worker
-        working-directory: worker
-        run: npx tsc --noEmit
-
-      - name: Run ods.fyi worker tests
-        run: npm test --prefix worker
+      # Build, tests, smoke test and worker checks: the steps `scripts/ci.sh` runs locally.
+      # Each step's log is a collapsible group, and the timings land in the job summary.
+      - name: Run CI steps
+        run: scripts/ci.sh
