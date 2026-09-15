@@ -109,8 +109,7 @@ impl Default for OdsProvenance {
 }
 
 impl OdsProvenance {
-    /// Declared Parquet key-value metadata subset.
-    /// Emits strictly the nine source and publication identity keys:
+    /// Declared Parquet key-value metadata subset:
     /// - ods.trud_release_date
     /// - ods.trud_release_name
     /// - ods.trud_release_file
@@ -119,10 +118,9 @@ impl OdsProvenance {
     /// - ods.publication_seq_num
     /// - ods.publication_type
     /// - ods.publication_source
-    /// - ods.dataset_version
     ///
-    /// Tool fields (tool_version, tool_git_sha, tool_git_dirty) and verification source
-    /// are strictly excluded so Parquet bytes are a pure function of the source archive.
+    /// Tool fields and verification source are excluded so Parquet bytes
+    /// are a function of the source archive and the derivation.
     pub fn to_parquet_declared_metadata(&self) -> std::collections::BTreeMap<String, String> {
         let mut meta = std::collections::BTreeMap::new();
         if let Some(ref d) = self.trud_release_date {
@@ -148,9 +146,6 @@ impl OdsProvenance {
         }
         if let Some(ref s) = self.publication_source {
             meta.insert("ods.publication_source".to_string(), s.clone());
-        }
-        if let Some(ref ver) = self.dataset_version {
-            meta.insert("ods.dataset_version".to_string(), ver.clone());
         }
         meta
     }
@@ -461,5 +456,38 @@ mod tests {
         let url = "https://isd.digital.nhs.uk/trud/api/v1/keys/SECRET123/items/341";
         let sanitized = sanitize_trud_url(url, Some("SECRET123"));
         assert_eq!(sanitized, "https://isd.digital.nhs.uk/trud/api/v1/keys/<REDACTED_API_KEY>/items/341");
+    }
+
+    #[test]
+    fn test_to_parquet_declared_metadata_pins_exact_eight_keys() {
+        let mut prov = OdsProvenance::default();
+        prov.trud_release_date = Some("2026-07-31".to_string());
+        prov.trud_release_name = Some("Release 7.0.0".to_string());
+        prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+        prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+        prov.publication_date = Some("2026-07-28".to_string());
+        prov.publication_seq_num = Some("4700".to_string());
+        prov.publication_type = Some("Full".to_string());
+        prov.publication_source = Some("HSCIC".to_string());
+        // Populate dataset_version and tool fields to verify they are strictly excluded
+        prov.dataset_version = Some("0.1.0".to_string());
+        prov.tool_version = Some("0.1.0".to_string());
+        prov.tool_git_sha = Some("abcdef123456".to_string());
+        prov.tool_git_dirty = Some(true);
+        prov.trud_release_sha256_verified = Some(TrudVerificationSource::TrudApi);
+
+        let meta = prov.to_parquet_declared_metadata();
+        let expected_keys = vec![
+            "ods.publication_date",
+            "ods.publication_seq_num",
+            "ods.publication_source",
+            "ods.publication_type",
+            "ods.trud_release_date",
+            "ods.trud_release_file",
+            "ods.trud_release_name",
+            "ods.trud_release_sha256",
+        ];
+        let actual_keys: Vec<&String> = meta.keys().collect();
+        assert_eq!(actual_keys, expected_keys);
     }
 }

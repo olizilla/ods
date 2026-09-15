@@ -242,7 +242,8 @@ pub fn run(args: Args) -> Result<PathBuf> {
     }
 
     // 7. Enrich _provenance.json with tool_* and dataset_* metadata
-    crate::provenance::update_provenance(&output_path, None)?;
+    let prov_dataset_ver = provenance.as_ref().and_then(|p| p.dataset_version.as_deref());
+    crate::provenance::update_provenance(&output_path, prov_dataset_ver)?;
 
     // 8. Ship the datapackage.json alongside the data so the schema and metadata
     //    are reproducible from a release alone, without the tool.

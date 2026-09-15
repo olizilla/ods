@@ -166,3 +166,128 @@ fn test_real_trud_parquet_hash_stability() {
         "Context 2 provenance must be unverified"
     );
 }
+
+#[test]
+fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
+    let xml_path = PathBuf::from("tests/fixtures/mock_hscorgrefdata.xml");
+    assert!(xml_path.exists(), "mock fixture missing");
+
+    let tmp1 = TempDir::new().unwrap();
+    let tmp2 = TempDir::new().unwrap();
+
+    let zip1 = create_mock_trud_zip_from_xml(tmp1.path(), &xml_path);
+    let zip2 = create_mock_trud_zip_from_xml(tmp2.path(), &xml_path);
+
+    // Setup _provenance.json in both directories with different dataset_version: 0.1.0 vs 1.0.0
+    let mut prov1 = ods::provenance::OdsProvenance::default();
+    prov1.trud_release_name = Some("Release 7.0.0".to_string());
+    prov1.trud_release_date = Some("2026-07-31".to_string());
+    prov1.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
+    prov1.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    prov1.dataset_version = Some("0.1.0".to_string());
+
+    let mut prov2 = prov1.clone();
+    prov2.dataset_version = Some("1.0.0".to_string());
+
+    std::fs::write(
+        tmp1.path().join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov1).unwrap(),
+    )
+    .unwrap();
+
+    std::fs::write(
+        tmp2.path().join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov2).unwrap(),
+    )
+    .unwrap();
+
+    // Run parquet generation on both releases
+    parquet::run(parquet::Args {
+        input: Some(zip1),
+        output: Some(tmp1.path().to_path_buf()),
+    })
+    .expect("run 1 should succeed");
+
+    parquet::run(parquet::Args {
+        input: Some(zip2),
+        output: Some(tmp2.path().to_path_buf()),
+    })
+    .expect("run 2 should succeed");
+
+    // 1. The five Parquet files must be byte-identical
+    let parquet_files = vec![
+        "orgs.parquet",
+        "orgs_all.parquet",
+        "roles.parquet",
+        "relationships.parquet",
+        "successions.parquet",
+    ];
+
+    for file_name in &parquet_files {
+        let f1 = tmp1.path().join(file_name);
+        let f2 = tmp2.path().join(file_name);
+
+        let hash1 = compute_file_sha256(&f1).unwrap();
+        let hash2 = compute_file_sha256(&f2).unwrap();
+
+        assert_eq!(
+            hash1, hash2,
+            "Parquet file {} differs between dataset versions ({} vs {})",
+            file_name, hash1, hash2
+        );
+    }
+
+    // 2. _provenance.json and datapackage.json must differ
+    let prov1_bytes = std::fs::read(tmp1.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+    let prov2_bytes = std::fs::read(tmp2.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+    assert_ne!(prov1_bytes, prov2_bytes, "_provenance.json must differ across dataset versions");
+
+    let dp1_bytes = std::fs::read(tmp1.path().join("datapackage.json")).unwrap();
+    let dp2_bytes = std::fs::read(tmp2.path().join("datapackage.json")).unwrap();
+    assert_ne!(dp1_bytes, dp2_bytes, "datapackage.json must differ across dataset versions");
+
+    // 3. The two manifest digests differ, and share five layer digests
+    let prov1_loaded = ods::provenance::OdsProvenance::load_from_dir(tmp1.path()).unwrap();
+    let prov2_loaded = ods::provenance::OdsProvenance::load_from_dir(tmp2.path()).unwrap();
+
+    let (manifest1, _) = ods::commands::make_oci::build_manifest_from_dir(tmp1.path(), &prov1_loaded, "0.1.0").unwrap();
+    let (manifest2, _) = ods::commands::make_oci::build_manifest_from_dir(tmp2.path(), &prov2_loaded, "1.0.0").unwrap();
+
+    let digest1 = manifest1.digest().unwrap();
+    let digest2 = manifest2.digest().unwrap();
+    assert_ne!(digest1, digest2, "Manifest digests must differ across dataset versions");
+
+    // Find and compare layer digests for the five Parquet files
+    for file_name in &parquet_files {
+        let layer1 = manifest1
+            .layers
+            .iter()
+            .find(|l| {
+                l.annotations
+                    .as_ref()
+                    .and_then(|a| a.get("org.opencontainers.image.title"))
+                    .map(|t| t == file_name)
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("layer for {} missing in manifest 1", file_name));
+
+        let layer2 = manifest2
+            .layers
+            .iter()
+            .find(|l| {
+                l.annotations
+                    .as_ref()
+                    .and_then(|a| a.get("org.opencontainers.image.title"))
+                    .map(|t| t == file_name)
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("layer for {} missing in manifest 2", file_name));
+
+        assert_eq!(
+            layer1.digest, layer2.digest,
+            "Manifest layer digest for {} must match across dataset versions: {} vs {}",
+            file_name, layer1.digest, layer2.digest
+        );
+    }
+}
+
