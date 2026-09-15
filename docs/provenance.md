@@ -4,7 +4,7 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ---
 
-## 1. Provenance Key Namespaces
+## Provenance Key Namespaces
 
 `OdsProvenance` records metadata across four distinct namespaces:
 
@@ -40,7 +40,7 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ---
 
-## 2. Complete `_provenance.json` Schema Example
+## Complete `_provenance.json` Schema Example
 
 ```json
 {
@@ -65,16 +65,16 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ---
 
-## 3. Automated Release Download & Verification Flow
+## Automated Release Download & Verification Flow
 
 ```mermaid
 flowchart TD
     A[ods trud pull --api-key KEY] --> B[Query TRUD REST API /items/341/releases]
     B --> C[Fetch Official archiveFileSha256 & archiveFileUrl]
-    C --> D[Download Archive .zip to ods_data/releases/DATE/raw/]
+    C --> D[Download Archive .zip to ods_data/releases/DATE/trud/]
     D --> E[Compute Local SHA-256 Hash]
     E --> F{Local SHA-256 == Official TRUD SHA-256?}
-    F -- Match --> G[✓ Set sha256_verified = true in provenance.json]
+    F -- Match --> G[✓ Set trud_release_sha256_verified = trud_api in _provenance.json]
     F -- Mismatch --> H[Retry once -> If fail, rename file to .zip.bad-sha]
 ```
 

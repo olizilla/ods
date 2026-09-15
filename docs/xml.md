@@ -4,7 +4,7 @@ This document details the internal structure, quirks, quality edge-cases, and pa
 
 ---
 
-## 1. Distribution & Archive Packaging
+## Distribution & Archive Packaging
 
 The NHS ODS data is published monthly on TRUD as a single root `.zip` archive (e.g., `hscorgrefdataxml_data_5.0.0_YYYYMMDD000001.zip`).
 
@@ -20,7 +20,7 @@ Inside this ZIP container are two core XML archives:
 
 ---
 
-## 2. Core XML Element Hierarchy
+## Core XML Element Hierarchy
 
 The XML root element `<MANIFEST>` contains publication metadata (`publication_date`), followed by a flat stream of `<Organisation>` elements:
 
@@ -70,7 +70,7 @@ The XML root element `<MANIFEST>` contains publication metadata (`publication_da
 
 ---
 
-## 3. Structural Quirks & Parser Gotchas
+## Structural Quirks & Parser Gotchas
 
 During the development of `ods`, we identified several non-obvious structural quirks in NHS TRUD XML files. Any parser or auditing tool built for NHS ODS XML **must** account for these behaviors:
 
@@ -136,7 +136,7 @@ During the development of `ods`, we identified several non-obvious structural qu
 
 ---
 
-## 4. Summary Matrix of XML File Variants
+## Summary Matrix of XML File Variants
 
 | Feature / Artifact | `fullfile.zip` (`HSCOrgRefData_Full_*.xml`) | `archive.zip` (`HSCOrgRefData_Archive_*.xml`) |
 | :--- | :--- | :--- |
@@ -147,17 +147,17 @@ During the development of `ods`, we identified several non-obvious structural qu
 
 ---
 
-## 5. Structural Challenges & Data Shape Gotchas
+## Structural Challenges & Data Shape Gotchas
 
-### 1. Significant Roles Relegated to Secondary Roles (`RO261` vs `RO318`)
+### Significant Roles Relegated to Secondary Roles (`RO261` vs `RO318`)
 - **The Challenge**: In raw NHS TRUD XML, the 42 Statutory Integrated Care Boards (ICBs) are assigned primary role code `RO261` (`"strategic partnership"`), while their defining statutory role `RO318` (`"integrated care board"`) is relegated to a secondary `<Role>` element.
 - **Impact**: Querying on primary role code alone misses ICBs. Use `list_contains(role_codes, 'RO318')` or `list_contains(role_names, 'Integrated Care Board')` on `orgs.parquet`.
 
-### 2. Regional Assignment Gaps & Unmapped Entities
+### Regional Assignment Gaps & Unmapped Entities
 - **The Challenge**: Out of ~294,000 total entities in `orgs_all.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy.
 - **Impact**: `RE5 IS LOCATED IN THE GEOGRAPHY OF` is marked legacy by NHS ODS and only links a subset of entities.
 
-### 3. Reporting Sub-ICB Locations vs Statutory ICB Boards
+### Reporting Sub-ICB Locations vs Statutory ICB Boards
 - **The Challenge**: In TRUD XML, primary care practices are linked via `RE4` to Sub-ICB Locations (`RO319` / former CCG reporting codes - 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`).
 - **Impact**: Grouping raw `RE4` target codes yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Finding the Statutory ICBs requires traversing relationships in `relationships.parquet`.
 

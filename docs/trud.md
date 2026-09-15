@@ -13,7 +13,7 @@ Publisher namespace for TRUD API interactions: query, download (`pull`), compare
 
 ---
 
-## 1. `ods trud pull`
+## `ods trud pull`
 
 Query, download, and verify official NHS England TRUD ODS XML release archives, generate cryptographic provenance metadata, and manage workspace active release symlinks.
 
@@ -86,7 +86,7 @@ The key is replaced with `<REDACTED_API_KEY>` before logging or printing.
 
 ---
 
-## 2. `ods trud diff`
+## `ods trud diff`
 
 Compare entity changes across two TRUD releases.
 
@@ -96,7 +96,7 @@ ods trud diff --baseline 2026-06-30 --target 2026-07-31
 
 ---
 
-## 3. `ods trud audit`
+## `ods trud audit`
 
 Verify that derived workspace artefacts are a faithful, complete, and unmodified projection of the source TRUD archive:
 
@@ -117,7 +117,7 @@ ods trud audit --json           # Output machine-readable audit report for CI
 
 ---
 
-## 4. `ods trud verify`
+## `ods trud verify`
 
 Check a TRUD archive you already have against a published SHA-256, without
 downloading it. `ods` looks the release up in the ods release index first, which

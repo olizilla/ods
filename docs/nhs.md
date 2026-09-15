@@ -4,7 +4,7 @@ This document defines the organisational hierarchies and structures of the healt
 
 ---
 
-## 1. Overview: Sovereign UK Health Systems
+## Overview: Sovereign UK Health Systems
 
 The NHS Organisation Data Service (ODS) dataset is not exclusive to England; it encompasses all four sovereign health systems of the United Kingdom, alongside the Crown Dependencies. Each jurisdiction operates its own distinct administrative and operational hierarchy:
 
@@ -19,7 +19,7 @@ The NHS Organisation Data Service (ODS) dataset is not exclusive to England; it 
 
 ---
 
-## 2. NHS England Hierarchy Architecture
+## NHS England Hierarchy Architecture
 
 In England, health service delivery is structured under the Health and Care Act 2022 into 4 distinct operational hierarchy archetypes that cover over 95% of active organisations:
 
@@ -65,7 +65,7 @@ Local Authority / County Council (RO141 — e.g. Camden Council)
 
 ---
 
-## 3. NHS Scotland (NHS Alba) Hierarchy Architecture
+## NHS Scotland (NHS Alba) Hierarchy Architecture
 
 In Scotland, healthcare delivery is unified under 14 territorial NHS Scottish Health Boards (`RO190`) that integrate primary, secondary, and community care within defined geographic regions:
 
@@ -96,7 +96,7 @@ NHS Scotland (National Strategic Level)
 
 ---
 
-## 4. NHS Wales (GIG Cymru) Hierarchy Architecture
+## NHS Wales (GIG Cymru) Hierarchy Architecture
 
 In Wales, healthcare is delivered through 7 integrated Local Health Boards (`RO272`) and 3 NHS Trusts, organized geographically across 7 Welsh Regions (`RO328`):
 
@@ -120,7 +120,7 @@ Welsh Government Health & Social Services Group
 
 ---
 
-## 5. Health and Social Care Northern Ireland (HSC NI) Hierarchy Architecture
+## Health and Social Care Northern Ireland (HSC NI) Hierarchy Architecture
 
 In Northern Ireland, health and social care services are integrated under the Department of Health NI and delivered via 5 regional Health and Social Care (HSC) Trusts:
 
@@ -142,7 +142,7 @@ Department of Health Northern Ireland (DoH NI)
 
 ---
 
-## 6. Crown Dependencies (Isle of Man & Channel Islands)
+## Crown Dependencies (Isle of Man & Channel Islands)
 
 The Crown Dependencies maintain autonomous health administrations represented in ODS data:
 
@@ -156,7 +156,7 @@ The Crown Dependencies maintain autonomous health administrations represented in
 
 ---
 
-## 7. Specialized & Cross-Jurisdictional Facilities
+## Specialized & Cross-Jurisdictional Facilities
 
 Across all jurisdictions, a set of specialized healthcare settings and infrastructure nodes exist outside standard regional commissioning models:
 
@@ -172,7 +172,7 @@ Across all jurisdictions, a set of specialized healthcare settings and infrastru
 
 ---
 
-## 8. Regional Resolution Coverage & Unmapped Entity Breakdown
+## Regional Resolution Coverage & Unmapped Entity Breakdown
 
 Through multi-hop transitive relationship resolution (`GP Practice ➔ Sub-ICB ➔ Statutory ICB ➔ NHS Region`), `ods` resolves regional assignments for **85.0% of all active entities** (183,864 orgs out of 216,886).
 

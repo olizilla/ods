@@ -28,7 +28,7 @@ ods find [QUERY] [OPTIONS]
 
 ## Search Model & Ranking
 
-### 1. Positional Name Matching & Relevance Ranking
+### Positional Name Matching & Relevance Ranking
 The positional argument matches the organisation `name` column exclusively. When a query is provided without an explicit `--sort` flag, results are ranked in 4 tiers:
 
 1. **Exact Match**: Normalised name equals query.
@@ -38,7 +38,7 @@ The positional argument matches the organisation `name` column exclusively. When
 
 If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes precedence over ranking.
 
-### 2. Location Filtering (`--in <place>`)
+### Location Filtering (`--in <place>`)
 `--in` checks every value against four columns at once: `town`, `county`, `country` and `postcode`.
 
 - **Places match whole.** Town, county and country must equal the value, ignoring case, apostrophes and punctuation. `--in "kings lynn"` finds KING'S LYNN, and `--in london` does not find LONDONDERRY.
@@ -54,7 +54,7 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 - **`--in london`** returns records whose post town is LONDON. Outer boroughs have post towns of their own, such as HARROW and CROYDON.
 - **County is recorded unevenly.** Records with post town HARROW give MIDDLESEX, GREATER LONDON or no county at all, so `--in "greater london"` finds only the records that say so.
 
-### 3. Role Filtering (`--role <roles>`)
+### Role Filtering (`--role <roles>`)
 `--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
 
 ```text
@@ -65,12 +65,12 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 
 Discover role codes and holder counts using `ods role [QUERY]`.
 
-### 4. Role Shortcuts (`--gp`, `--dentist`)
+### Role Shortcuts (`--gp`, `--dentist`)
 Convenience flags expand directly into `--role` with OR semantics:
 - `--gp`: Expands to England, Scotland, and Northern Ireland GP registers (`RO76,RO227,RO315`).
 - `--dentist`: Expands to general and private dental practices (`RO110,RO65`).
 
-### 5. Role Set Display & De-emphasis
+### Role Set Display & De-emphasis
 In tabular output, `find` displays descriptive roles first and tucks low-signal container/regulatory roles (`Prescribing Cost Centre`, `Social Care Site`, `Registered under Care Standards Act 2000`, `ePACT System`, `Foundation Trust`) behind a `+N` count:
 
 ```text
@@ -81,10 +81,10 @@ In tabular output, `find` displays descriptive roles first and tucks low-signal 
 
 Pass `-v, --verbose` to view the full role set in stored order. `--format json` and `--format csv` always export the complete `role_codes` and `role_names` lists in stored order.
 
-### 6. Normalisation
+### Normalisation
 Matching folds case, strips apostrophes, replaces symbols with spaces, and collapses whitespace. All displayed table headers, JSON fields, and CSV rows retain original source casing and punctuation verbatim.
 
-### 7. Pipe Workflows (`--format tsv`)
+### Pipe Workflows (`--format tsv`)
 `--format tsv` outputs the same five columns as the table (six with `--all`) separated by tabs, with **no header row** and no borders. This makes it pipe directly into fuzzy finders and standard Unix tools (`fzf`, `sk`, `cut`, `awk`, `xargs`):
 
 ```bash
