@@ -1689,21 +1689,9 @@ pub fn run_with_writer_color(
         }
     }
 
-    let is_machine = args.format == OutputFormat::Json
-        || args.format == OutputFormat::Csv
-        || args.format == OutputFormat::Tsv;
-
-    // Staleness nudge: check index age if human-readable output
-    if !is_machine {
-        let ws_root = crate::workspace::find_workspace_root_from(parquet_dir, None);
-        let index_opt = ws_root
-            .as_deref()
-            .and_then(|r| crate::index::OdsReleaseIndex::load_from_workspace(r).ok().flatten())
-            .or_else(|| crate::index::OdsReleaseIndex::baked().ok());
-        if let Some(index) = index_opt {
-            crate::workspace::check_and_emit_staleness_nudge(&index, false);
-        }
-    }
+    // Staleness nudge: check release age if human-readable output
+    let is_human = args.format == OutputFormat::Table || args.format == OutputFormat::Markdown;
+    crate::workspace::check_and_emit_staleness_nudge(parquet_dir, is_human);
 
     Ok(())
 }

@@ -520,7 +520,8 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let is_machine = args.format == "json" || args.format == "csljson" || args.format == "csl-json" || args.format == "bibtex";
     crate::workspace::report_release_resolution(d_tag, Some(&input_dir), is_machine);
-    crate::workspace::check_and_emit_staleness_nudge(&index, is_machine);
+    let is_human = args.format == "text";
+    crate::workspace::check_and_emit_staleness_nudge(&input_dir, is_human);
 
     Ok(())
 }

@@ -774,10 +774,10 @@ fn test_ods_use_seeds_missing_marker() {
 fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
     let tmp = TempDir::new().unwrap();
     let ws_dir = tmp.path().join("ods_data");
-    let rel_dir = ws_dir.join("releases").join("2026-07-31");
+    let rel_dir = ws_dir.join("releases").join("2020-01-01");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20200101000001.zip");
     let make_output = ods_binary()
         .arg("make")
         .arg("-i")
@@ -790,36 +790,14 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
 
     let use_output = ods_binary()
         .arg("use")
-        .arg("2026-07-31")
+        .arg("2020-01-01")
         .arg("--workspace")
         .arg(&ws_dir)
         .output()
         .expect("ods use");
     assert!(use_output.status.success());
 
-    // Create an old release index (e.g. from 2020-01-01) so it is definitely stale (>45 days)
-    let stale_index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![
-            ods::index::ReleaseIndexEntry {
-                trud_release_date: "2020-01-01".to_string(),
-                dataset_version: "0.1.0".to_string(),
-                tag: "2020-01-01_0.1.0".to_string(),
-                manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "0000".to_string(),
-                tool_version: "0.1.0".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-        ],
-    };
-    let stale_bytes = serde_json::to_vec_pretty(&stale_index).unwrap();
-    fs::write(ws_dir.join("_releases.json"), &stale_bytes).unwrap();
-
-    // 1. Table format (human): nudge MUST be emitted to stderr
+    // 1. Table format (human): notice MUST be emitted to stderr as the last line
     let find_table = ods_binary()
         .current_dir(tmp.path())
         .arg("find")
@@ -828,18 +806,21 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
         .expect("ods find");
     assert!(find_table.status.success());
     let stderr_table = String::from_utf8_lossy(&find_table.stderr);
+    let expected_start = "* 2020-01-01 release is ";
+    let expected_end = " days old. Run `ods pull` to check for a newer one.";
     assert!(
-        stderr_table.contains("2020-01-01 is") && stderr_table.contains("days old. TRUD ships roughly every 4 weeks"),
-        "stderr must contain staleness nudge, got:\n{}",
+        stderr_table.contains(expected_start) && stderr_table.contains(expected_end),
+        "stderr must contain staleness notice, got:\n{}",
         stderr_table
     );
+    let last_line = stderr_table.trim_end().lines().last().unwrap_or("");
     assert!(
-        stderr_table.contains("Check with: ods pull"),
-        "stderr must contain 'Check with: ods pull', got:\n{}",
-        stderr_table
+        last_line.starts_with(expected_start) && last_line.ends_with(expected_end),
+        "staleness notice must be the last line on stderr, got:\n{}",
+        last_line
     );
 
-    // 2. JSON format (machine-readable): nudge MUST be suppressed
+    // 2. JSON format (machine-readable): notice MUST be suppressed
     let find_json = ods_binary()
         .current_dir(tmp.path())
         .arg("find")
@@ -851,8 +832,8 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
     assert!(find_json.status.success());
     let stderr_json = String::from_utf8_lossy(&find_json.stderr);
     assert!(
-        !stderr_json.contains("days old. TRUD ships roughly every 4 weeks"),
-        "machine-readable JSON format must NOT output staleness nudge, got:\n{}",
+        !stderr_json.contains("release is") && !stderr_json.contains("ods pull"),
+        "machine-readable JSON format must NOT output staleness notice, got:\n{}",
         stderr_json
     );
 }

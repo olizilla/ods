@@ -331,24 +331,69 @@ fn ensure_workspace_readme(workspace_root: &Path) -> Result<()> {
 
 static NUDGE_EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Emits a one-line staleness nudge to stderr if the newest release in the index is older than 45 days.
+pub const STALENESS_THRESHOLD_DAYS: i64 = 45;
+
+/// Decides whether a release is stale and returns the notice line.
+/// Pure function: takes dates, reads no files and no clock.
+pub fn staleness_notice(
+    release_date: chrono::NaiveDate,
+    newest_local_date: chrono::NaiveDate,
+    today: chrono::NaiveDate,
+) -> Option<String> {
+    if release_date < newest_local_date {
+        return None;
+    }
+    let days = (today - release_date).num_days();
+    if days > STALENESS_THRESHOLD_DAYS {
+        Some(format!(
+            "* {} release is {} days old. Run `ods pull` to check for a newer one.",
+            release_date, days
+        ))
+    } else {
+        None
+    }
+}
+
+/// Emits a one-line staleness notice to stderr if the release being read is the newest local release
+/// and older than 45 days.
 /// At most once per process invocation.
-/// Strictly suppressed on machine-readable formats (`json`, `csv`, `tsv`, `ndjson`).
-pub fn check_and_emit_staleness_nudge(index: &crate::index::OdsReleaseIndex, is_machine_readable: bool) {
-    if is_machine_readable {
+/// Strictly suppressed on machine-readable formats.
+pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool) {
+    if !is_human_format {
         return;
     }
     if NUDGE_EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    let prov_file = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
+    let Ok(content) = fs::read_to_string(&prov_file) else {
+        return;
+    };
+    let Ok(prov) = serde_json::from_str::<crate::provenance::OdsProvenance>(&content) else {
+        return;
+    };
+    let Some(ref date_str) = prov.trud_release_date else {
+        return;
+    };
+    let Ok(rel_date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") else {
+        return;
+    };
+
+    let Some(ws_root) = find_workspace_root_from(release_dir, None) else {
+        return;
+    };
+    let Ok(releases) = list_releases(&ws_root) else {
+        return;
+    };
+    let Some(newest_local_date) = releases.iter().filter_map(|r| {
+        chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d").ok()
+    }).max() else {
+        return;
+    };
+
     let today = chrono::Utc::now().date_naive();
-    if let Some((newest_date, days)) = index.staleness(today) {
-        if days > crate::index::STALENESS_THRESHOLD_DAYS {
-            eprintln!(
-                "! {} is {} days old. TRUD ships roughly every 4 weeks\n  Check with: ods pull",
-                newest_date, days
-            );
-        }
+    if let Some(notice) = staleness_notice(rel_date, newest_local_date, today) {
+        eprintln!("{}", notice);
     }
 }
 
@@ -816,5 +861,57 @@ pub fn verify_release_dir(
 pub fn is_release_dir_verified(release_dir: &Path) -> bool {
     verify_release_dir(release_dir, None).is_verified()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn test_staleness_notice() {
+        struct TestCase {
+            name: &'static str,
+            release_date: NaiveDate,
+            newest_local_date: NaiveDate,
+            today: NaiveDate,
+            expected: Option<&'static str>,
+        }
+
+        let cases = [
+            TestCase {
+                name: "newest release at 46 days old emits notice",
+                release_date: NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
+                newest_local_date: NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
+                today: NaiveDate::from_ymd_opt(2026, 10, 13).unwrap(),
+                expected: Some("* 2026-08-28 release is 46 days old. Run `ods pull` to check for a newer one."),
+            },
+            TestCase {
+                name: "newest release at 45 days old is quiet",
+                release_date: NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
+                newest_local_date: NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
+                today: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+                expected: None,
+            },
+            TestCase {
+                name: "older release at 400 days old with newer local release is quiet",
+                release_date: NaiveDate::from_ymd_opt(2025, 9, 8).unwrap(),
+                newest_local_date: NaiveDate::from_ymd_opt(2026, 8, 28).unwrap(),
+                today: NaiveDate::from_ymd_opt(2026, 10, 13).unwrap(),
+                expected: None,
+            },
+        ];
+
+        for case in cases {
+            let actual = staleness_notice(case.release_date, case.newest_local_date, case.today);
+            assert_eq!(
+                actual.as_deref(),
+                case.expected,
+                "case '{}' failed",
+                case.name
+            );
+        }
+    }
+}
+
 
 
