@@ -12,6 +12,44 @@ fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
 }
 
+#[test]
+fn test_cli_version_output_formatting() {
+    let output = ods_binary()
+        .arg("--version")
+        .output()
+        .expect("Failed to execute ods --version");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    let output_short = ods_binary()
+        .arg("-V")
+        .output()
+        .expect("Failed to execute ods -V");
+    assert!(output_short.status.success());
+    let stdout_short = String::from_utf8_lossy(&output_short.stdout).trim().to_string();
+    assert_eq!(stdout, stdout_short, "-V and --version must match identically");
+
+    let pkg_ver = env!("CARGO_PKG_VERSION");
+    let git_sha = option_env!("ODS_GIT_SHA");
+    let git_dirty = option_env!("ODS_GIT_DIRTY");
+
+    match (git_sha, git_dirty) {
+        (Some(sha), Some("true")) => {
+            let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+            let expected = format!("ods {} ({}-dirty)", pkg_ver, short);
+            assert_eq!(stdout, expected);
+        }
+        (Some(sha), _) => {
+            let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+            let expected = format!("ods {} ({})", pkg_ver, short);
+            assert_eq!(stdout, expected);
+        }
+        (None, _) => {
+            let expected = format!("ods {}", pkg_ver);
+            assert_eq!(stdout, expected);
+        }
+    }
+}
 
 #[test]
 fn test_cli_pull_list_output_formatting() {

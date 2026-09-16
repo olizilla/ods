@@ -464,3 +464,272 @@ fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    // Remove oci directory to verify make_release doesn't write it if checks fail
+    let oci_dir = rel_dir.join("oci");
+    if oci_dir.exists() {
+        fs::remove_dir_all(&oci_dir)?;
+    }
+
+    // Set tool_git_dirty to true
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.tool_git_dirty = Some(true);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    // Record release directory entries and mtimes
+    let before_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.path(), e.metadata().unwrap().modified().unwrap()))
+        .collect();
+
+    let dist_dir = tmp.path().join("dist");
+    let res = run(Args {
+        input: Some(rel_dir.clone()),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    });
+    assert!(res.is_err(), "make release must fail when working tree is dirty");
+    let err = format!("{:#}", res.unwrap_err());
+    assert!(err.contains("tool_git_dirty is true"));
+    assert!(!oci_dir.exists(), "oci/ must not be written when checks fail");
+    assert!(!dist_dir.exists(), "dist/ must not be written when checks fail");
+
+    let after_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.path(), e.metadata().unwrap().modified().unwrap()))
+        .collect();
+    assert_eq!(before_files, after_files, "release files and mtimes must be untouched");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_missing_index_writes_nothing() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let oci_dir = rel_dir.join("oci");
+    if oci_dir.exists() {
+        fs::remove_dir_all(&oci_dir)?;
+    }
+
+    // Record release directory entries and mtimes before running
+    let before_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.path(), e.metadata().unwrap().modified().unwrap()))
+        .collect();
+
+    let non_existent_index = tmp.path().join("does_not_exist_releases.json");
+    let dist_dir = tmp.path().join("dist");
+
+    // Test programmatic run()
+    let res = run(Args {
+        input: Some(rel_dir.clone()),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: Some(non_existent_index.clone()),
+    });
+    assert!(res.is_err(), "make release must fail when index cannot be read");
+    let err = res.unwrap_err();
+    assert!(
+        err.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some(),
+        "error must be AlreadyReported so main exits cleanly with code 1"
+    );
+    assert!(!oci_dir.exists(), "oci/ must not be written when index cannot be read");
+    assert!(!dist_dir.exists(), "dist/ must not be written when index cannot be read");
+
+    let after_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.path(), e.metadata().unwrap().modified().unwrap()))
+        .collect();
+    assert_eq!(before_files, after_files, "release files and mtimes must be untouched");
+
+    // Also verify via CLI binary: exit 1, stderr names the path
+    let cli_out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .arg("make")
+        .arg("release")
+        .arg("--input")
+        .arg(&rel_dir)
+        .arg("--output")
+        .arg(&dist_dir)
+        .arg("--index")
+        .arg(&non_existent_index)
+        .output()?;
+    assert_eq!(cli_out.status.code(), Some(1), "CLI exit status must be 1");
+    let stderr = String::from_utf8_lossy(&cli_out.stderr);
+    assert!(
+        stderr.contains("Cannot read release index"),
+        "stderr must contain 'Cannot read release index', got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("does_not_exist_releases.json"),
+        "stderr must contain index path, got:\n{}",
+        stderr
+    );
+    assert!(!dist_dir.exists(), "dist/ must not exist after CLI run");
+    assert!(!oci_dir.exists(), "oci/ must not exist after CLI run");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_staging_with_relative_input() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let dist_dir = tmp.path().join("dist");
+    let index_file = tmp.path().join("releases.json");
+    let init_index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![],
+    };
+    fs::write(&index_file, serde_json::to_string_pretty(&init_index)? + "\n")?;
+
+    // Copy the real fixture release into temp directory
+    let fixture_release = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("ods_data")
+        .join("releases")
+        .join("2026-07-31");
+
+    let temp_ws = tmp.path().join("ods_data").join("releases").join("2026-07-31");
+    fs::create_dir_all(&temp_ws)?;
+    for entry in fs::read_dir(&fixture_release)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        if path.is_file() {
+            fs::copy(&path, temp_ws.join(file_name))?;
+        }
+    }
+
+    // Pass relative path from tmp.path()
+    let rel_input = PathBuf::from("ods_data").join("releases").join("2026-07-31");
+
+    let orig_dir = std::env::current_dir()?;
+    std::env::set_current_dir(tmp.path())?;
+
+    let res = run(Args {
+        input: Some(rel_input),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir.clone()),
+        doi: None,
+        tool_repo: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        index: Some(index_file),
+    });
+
+    let _ = std::env::set_current_dir(orig_dir);
+    res?;
+
+    // Must have 11 objects: 8 blobs (7 layer blobs + 1 config blob) + 3 manifests (versioned, date, latest)
+    let count = walkdir::WalkDir::new(&dist_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .count();
+    assert_eq!(count, 11, "staging tree must contain exactly 11 objects");
+
+    // Verify every blob's SHA-256 matches its filename
+    let blobs_dir = dist_dir.join("v2").join("ods-data").join("blobs").join("sha256");
+    for entry in fs::read_dir(&blobs_dir)? {
+        let entry = entry?;
+        let filename = entry.file_name().to_string_lossy().to_string();
+        let computed = compute_file_sha256(&entry.path())?.to_lowercase();
+        assert_eq!(filename, computed, "blob content must match its sha256 filename");
+    }
+
+    Ok(())
+}
+
+
+#[test]
+fn test_make_release_staged_blobs_are_copies_not_hardlinks() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let dist_dir = tmp.path().join("dist");
+
+    run(Args {
+        input: Some(rel_dir.clone()),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    // Read initial hash of _provenance.json in release directory
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    let original_prov_hash = compute_file_sha256(&prov_path)?.to_lowercase();
+
+    // Find the corresponding staged blob
+    let staged_blob_path = dist_dir
+        .join("v2")
+        .join("ods-data")
+        .join("blobs")
+        .join("sha256")
+        .join(&original_prov_hash);
+    assert!(staged_blob_path.exists(), "staged blob for provenance must exist");
+
+    // Mutate provenance file in place in release directory
+    fs::write(&prov_path, b"mutated provenance content after release")?;
+
+    // Verify the staged blob's hash still equals its original filename
+    let current_staged_hash = compute_file_sha256(&staged_blob_path)?.to_lowercase();
+    assert_eq!(
+        current_staged_hash, original_prov_hash,
+        "staged blob must not mutate when source file is modified (it must be a genuine copy, not hard link)"
+    );
+
+    Ok(())
+}
+
+
+#[test]
+fn test_make_release_staging_failure_leaves_index_identical() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let index_path = tmp.path().join("data").join("releases.json");
+    let original_index_bytes = fs::read(&index_path)?;
+
+    // Make output directory uncreatable / read-only
+    let read_only_parent = tmp.path().join("readonly_dir");
+    fs::create_dir_all(&read_only_parent)?;
+    let dist_dir = read_only_parent.join("dist");
+
+    // Set permissions of read_only_parent to 0o444
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&read_only_parent, fs::Permissions::from_mode(0o444))?;
+    }
+
+    let res = run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    });
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&read_only_parent, fs::Permissions::from_mode(0o755));
+    }
+
+    assert!(res.is_err(), "staging failure must return error");
+    let current_index_bytes = fs::read(&index_path)?;
+    assert_eq!(
+        original_index_bytes, current_index_bytes,
+        "index must be byte-identical if staging fails"
+    );
+
+    Ok(())
+}
+

@@ -87,15 +87,23 @@ pub fn find_tool_repo(release_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
+fn copy_blob(src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
+        if let Err(e) = fs::create_dir_all(parent) {
+            let err_str = e.to_string();
+            let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
+            eprintln!("✖ Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
+            bail!("Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
+        }
     }
     if dst.exists() {
-        fs::remove_file(dst)?;
+        let _ = fs::remove_file(dst);
     }
-    if fs::hard_link(src, dst).is_err() {
-        fs::copy(src, dst)?;
+    if let Err(e) = fs::copy(src, dst) {
+        let err_str = e.to_string();
+        let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
+        eprintln!("✖ Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
+        bail!("Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
     }
     Ok(())
 }
@@ -138,40 +146,57 @@ pub fn run(args: Args) -> Result<()> {
         None => find_tool_repo(&release_dir),
     };
 
-    // 1. Run ods make oci first to regenerate oci/ wholesale
-    crate::commands::make_oci::run(crate::commands::make_oci::Args {
-        input: Some(release_dir.clone()),
-        check: false,
-    })?;
-
-    // 2. Read back manifest from oci/
-    let oci_dir = release_dir.join("oci");
-    let blobs_dir = oci_dir.join("blobs").join("sha256");
-    let manifest_path = fs::read_dir(&blobs_dir)?
-        .flatten()
-        .find(|e| e.path().is_file() && !e.path().is_symlink())
-        .ok_or_else(|| anyhow::anyhow!("No manifest blob found in oci/blobs/sha256/"))?
-        .path();
-    let manifest_bytes = fs::read(&manifest_path)?;
-    let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
-    let manifest_digest = manifest.digest()?;
-
-    let custom_index = if let Some(ref p) = args.index {
-        let content = fs::read_to_string(p)?;
-        Some(serde_json::from_str::<OdsReleaseIndex>(&content)?)
+    // 1. Read index
+    let (custom_index, target_index_path) = if let Some(ref p) = args.index {
+        match fs::read(p) {
+            Ok(bytes) => {
+                let idx: OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+                    Ok(i) => i,
+                    Err(_) => {
+                        eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
+                        eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                        return Err(crate::commands::pull::AlreadyReported.into());
+                    }
+                };
+                (Some(idx), p.clone())
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
+                eprintln!("✖ Cannot read release index '{}': {}", p.display(), clean_err);
+                return Err(crate::commands::pull::AlreadyReported.into());
+            }
+        }
     } else if let Some(ref tr) = tool_repo {
         let p = tr.join("data").join("releases.json");
         if p.exists() {
-            let content = fs::read_to_string(&p)?;
-            Some(serde_json::from_str::<OdsReleaseIndex>(&content)?)
+            match fs::read(&p) {
+                Ok(bytes) => {
+                    let idx: OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+                        Ok(i) => i,
+                        Err(_) => {
+                            eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
+                            eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                            return Err(crate::commands::pull::AlreadyReported.into());
+                        }
+                    };
+                    (Some(idx), p)
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
+                    eprintln!("✖ Cannot read release index '{}': {}", p.display(), clean_err);
+                    return Err(crate::commands::pull::AlreadyReported.into());
+                }
+            }
         } else {
-            None
+            (None, p)
         }
     } else {
-        None
+        bail!("cannot locate the ods repository — data/releases.json is where a release row is reviewed\n  Pass --tool-repo, or run from inside the repo.");
     };
 
-    // 3. Run Checks 10-15
+    // 2. Run Checks 10-14 before any writes
     let failures = perform_all_release_checks(
         &release_dir,
         &version,
@@ -187,6 +212,24 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("{} check{} failed", count, if count == 1 { "" } else { "s" });
         bail!("Release checks failed:\n{}", failures.join("\n"));
     }
+
+    // 3. All checks passed: run ods make oci to generate oci/ wholesale
+    crate::commands::make_oci::run(crate::commands::make_oci::Args {
+        input: Some(release_dir.clone()),
+        check: false,
+    })?;
+
+    // 4. Read back manifest from oci/
+    let oci_dir = release_dir.join("oci");
+    let blobs_dir = oci_dir.join("blobs").join("sha256");
+    let manifest_path = fs::read_dir(&blobs_dir)?
+        .flatten()
+        .find(|e| e.path().is_file() && !e.path().is_symlink())
+        .ok_or_else(|| anyhow::anyhow!("No manifest blob found in oci/blobs/sha256/"))?
+        .path();
+    let manifest_bytes = fs::read(&manifest_path)?;
+    let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
+    let manifest_digest = manifest.digest()?;
 
     let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
     let versioned_tag = format!("{}_{}", date, version);
@@ -220,11 +263,56 @@ pub fn run(args: Args) -> Result<()> {
         withdrawn: None,
     };
 
-    // 4. Append to data/releases.json
-    let target_index_path = args.index.clone().or_else(|| {
-        tool_repo.as_ref().map(|tr| tr.join("data").join("releases.json"))
-    }).ok_or_else(|| anyhow::anyhow!("cannot locate the ods repository — data/releases.json is where a release row is reviewed\n  Pass --tool-repo, or run from inside the repo."))?;
+    // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
+    let dist_dir = args.output.unwrap_or_else(|| {
+        tool_repo
+            .as_ref()
+            .map(|tr| tr.join("dist"))
+            .unwrap_or_else(|| PathBuf::from("dist"))
+    });
 
+    if dist_dir.exists() {
+        fs::remove_dir_all(&dist_dir)?;
+    }
+    fs::create_dir_all(&dist_dir)?;
+
+    // 5a. dist/v2/{repository}/blobs/sha256/{hex} (for every blob in oci/blobs/sha256/)
+    let repo_name = &args.repository;
+    for entry in fs::read_dir(&blobs_dir)? {
+        let entry = entry?;
+        let p = entry.path();
+        let file_name = entry.file_name();
+        let dst_blob = dist_dir
+            .join("v2")
+            .join(repo_name)
+            .join("blobs")
+            .join("sha256")
+            .join(&file_name);
+
+        let canonical_source = if p.is_symlink() {
+            let target = fs::read_link(&p)?;
+            if target.is_relative() {
+                p.parent().unwrap().join(target)
+            } else {
+                target
+            }
+        } else {
+            p.clone()
+        };
+        copy_blob(&canonical_source, &dst_blob)?;
+    }
+
+    // 5c. Manifest tags: versioned, bare date, latest
+    let manifests_dir = dist_dir.join("v2").join(repo_name).join("manifests");
+    fs::create_dir_all(&manifests_dir)?;
+    fs::write(manifests_dir.join(&versioned_tag), &manifest_bytes)?;
+    fs::write(manifests_dir.join(date), &manifest_bytes)?;
+    fs::write(manifests_dir.join("latest"), &manifest_bytes)?;
+
+    let object_count = count_files_in_dir(&dist_dir);
+    eprintln!("✓ dist/ written, {} objects", object_count);
+
+    // 6. Append to data/releases.json (strictly after staging succeeds)
     if target_index_path.exists() {
         let content = fs::read_to_string(&target_index_path)?;
         let mut index: OdsReleaseIndex = serde_json::from_str(&content)?;
@@ -258,60 +346,12 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
     }
 
-    // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
-    let dist_dir = args.output.unwrap_or_else(|| {
-        tool_repo
-            .as_ref()
-            .map(|tr| tr.join("dist"))
-            .unwrap_or_else(|| PathBuf::from("dist"))
-    });
-
-    if dist_dir.exists() {
-        fs::remove_dir_all(&dist_dir)?;
-    }
-    fs::create_dir_all(&dist_dir)?;
-
-    // 5a. dist/v2/{repository}/blobs/sha256/{hex} (for every blob in oci/blobs/sha256/)
-    let repo_name = &args.repository;
-    for entry in fs::read_dir(&blobs_dir)? {
-        let entry = entry?;
-        let p = entry.path();
-        let file_name = entry.file_name();
-        let dst_blob = dist_dir
-            .join("v2")
-            .join(repo_name)
-            .join("blobs")
-            .join("sha256")
-            .join(&file_name);
-
-        let real_source = if p.is_symlink() {
-            fs::read_link(&p)?
-        } else {
-            p.clone()
-        };
-        let canonical_source = if real_source.is_relative() {
-            p.parent().unwrap().join(real_source)
-        } else {
-            real_source
-        };
-        link_or_copy(&canonical_source, &dst_blob)?;
-    }
-
-    // 5c. Manifest tags: versioned, bare date, latest
-    let manifests_dir = dist_dir.join("v2").join(repo_name).join("manifests");
-    fs::create_dir_all(&manifests_dir)?;
-    fs::write(manifests_dir.join(&versioned_tag), &manifest_bytes)?;
-    fs::write(manifests_dir.join(date), &manifest_bytes)?;
-    fs::write(manifests_dir.join("latest"), &manifest_bytes)?;
-
-    let object_count = count_files_in_dir(&dist_dir);
-    eprintln!("✓ dist/ written, {} objects", object_count);
-
-    // 6. Print new row to stdout (compact 1-line JSON)
+    // 7. Print new row to stdout (compact 1-line JSON)
     println!("{}", serde_json::to_string(&release_row)?);
 
     Ok(())
 }
+
 
 pub fn perform_all_release_checks(
     release_dir: &Path,

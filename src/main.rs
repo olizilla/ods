@@ -3,8 +3,27 @@ use clap::{Parser, Subcommand};
 
 use ods::commands;
 
+fn version_string() -> &'static str {
+    const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const GIT_SHA: Option<&str> = option_env!("ODS_GIT_SHA");
+    const GIT_DIRTY: Option<&str> = option_env!("ODS_GIT_DIRTY");
+
+    match (GIT_SHA, GIT_DIRTY) {
+        (Some(sha), Some("true")) => {
+            let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+            // Leak to &'static str so Clap can take &'static str without allocations
+            Box::leak(format!("{} ({}-dirty)", CARGO_PKG_VERSION, short).into_boxed_str())
+        }
+        (Some(sha), _) => {
+            let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+            Box::leak(format!("{} ({})", CARGO_PKG_VERSION, short).into_boxed_str())
+        }
+        (None, _) => CARGO_PKG_VERSION,
+    }
+}
+
 #[derive(Parser)]
-#[command(name = "ods", author, version, about, long_about = None)]
+#[command(name = "ods", author, version = version_string(), about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
