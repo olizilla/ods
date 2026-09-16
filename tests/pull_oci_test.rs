@@ -579,3 +579,168 @@ fn test_pull_oci_frontier_second_mirror_unreachable_uncorroborated() -> Result<(
 
     Ok(())
 }
+
+#[test]
+fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    let prov_bytes = serde_json::to_vec_pretty(&prov)?;
+    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
+
+    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
+
+    let fixture_dir = tmp.path().join("fixture_fail");
+    std::fs::create_dir_all(&fixture_dir)?;
+    std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
+    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let manifest_digest = manifest.digest()?;
+
+    let remote_index = OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![MirrorEntry {
+            url: "https://ods.fyi/v2/ods-data".to_string(),
+        }],
+        releases: vec![ReleaseIndexEntry {
+            trud_release_date: "2026-07-31".to_string(),
+            dataset_version: "1.0.1".to_string(),
+            tag: "2026-07-31_1.0.1".to_string(),
+            manifest_digest: manifest_digest.clone(),
+            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+            tool_version: "0.1.0".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }],
+    };
+
+    let mut responses = BTreeMap::new();
+    responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
+    // First layer succeeds
+    responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
+    // Second layer fails checksum (deliberately corrupt bytes)
+    responses.insert(format!("blobs/{}", orgs_sha), b"corrupted bytes".to_vec());
+
+    let fetcher = TestOciFetcher {
+        remote_index: Some(remote_index),
+        responses,
+    };
+
+    let res = run_with_fetcher(
+        Args {
+            release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        },
+        &workspace,
+        &fetcher,
+    );
+
+    assert!(res.is_err(), "pull must fail on checksum mismatch");
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("checksum mismatch") || err.contains("All mirrors failed"));
+
+    let scratch_dir = workspace.join("scratch");
+    if scratch_dir.exists() {
+        let pull_entries: Vec<_> = std::fs::read_dir(&scratch_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("pull_"))
+            .collect();
+        assert!(
+            pull_entries.is_empty(),
+            "scratch directory must hold no pull_* entry on failure, found: {:?}",
+            pull_entries
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.dataset_version = Some("1.0.1".to_string());
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    let prov_bytes = serde_json::to_vec_pretty(&prov)?;
+    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
+
+    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
+
+    let fixture_dir = tmp.path().join("fixture_success");
+    std::fs::create_dir_all(&fixture_dir)?;
+    std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
+    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let manifest_digest = manifest.digest()?;
+
+    let remote_index = OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![MirrorEntry {
+            url: "https://ods.fyi/v2/ods-data".to_string(),
+        }],
+        releases: vec![ReleaseIndexEntry {
+            trud_release_date: "2026-07-31".to_string(),
+            dataset_version: "1.0.1".to_string(),
+            tag: "2026-07-31_1.0.1".to_string(),
+            manifest_digest: manifest_digest.clone(),
+            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+            tool_version: "0.1.0".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }],
+    };
+
+    let mut responses = BTreeMap::new();
+    responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
+    responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
+    responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+
+    let fetcher = TestOciFetcher {
+        remote_index: Some(remote_index),
+        responses,
+    };
+
+    run_with_fetcher(
+        Args {
+            release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        },
+        &workspace,
+        &fetcher,
+    )?;
+
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    assert!(rel_dir.exists(), "release directory must exist");
+
+    let scratch_dir = workspace.join("scratch");
+    if scratch_dir.exists() {
+        let pull_entries: Vec<_> = std::fs::read_dir(&scratch_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("pull_"))
+            .collect();
+        assert!(
+            pull_entries.is_empty(),
+            "scratch directory must hold no pull_* entry on success, found: {:?}",
+            pull_entries
+        );
+    }
+
+    Ok(())
+}

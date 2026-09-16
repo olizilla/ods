@@ -218,56 +218,6 @@ fn test_pull_refuses_when_release_is_withdrawn() {
 }
 
 #[test]
-fn test_cite_online_fresh_fetch_disclosure() -> Result<()> {
-    let (tmp, rel_dir) = setup_test_release_for_cite(None);
-
-    let cached_file = tmp.path().join("_releases.json");
-    if cached_file.exists() {
-        let _ = fs::remove_file(cached_file);
-    }
-
-    let _prov = ods::provenance::OdsProvenance::load_from_dir(&rel_dir).unwrap();
-    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &_prov, "1.0.1")?;
-    let manifest_digest = manifest.digest()?;
-
-    let remote_index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ods::index::ReleaseIndexEntry {
-            trud_release_date: "2026-08-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-08-31_1.0.1".to_string(),
-            manifest_digest,
-            trud_release_sha256: _prov.trud_release_sha256.unwrap(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
-
-    let fetcher = MockCiteFetcher {
-        remote_index: Some(remote_index),
-    };
-
-    let mut buf = Vec::new();
-    ods::commands::cite::run_with_writer_and_fetcher(
-        CiteArgs {
-            format: "text".to_string(),
-            input: Some(rel_dir),
-        },
-        &mut buf,
-        &fetcher,
-    )?;
-
-    let out = String::from_utf8(buf)?;
-    assert!(out.contains("✓ 2026-08-31 (1.0.1) — checked against the index just now"));
-
-    Ok(())
-}
-
-#[test]
 fn test_cite_offline_cached_index_disclosure() -> Result<()> {
     let (_tmp, rel_dir) = setup_test_release_for_cite(None);
 
@@ -287,6 +237,171 @@ fn test_cite_offline_cached_index_disclosure() -> Result<()> {
 
     let out = String::from_utf8(buf)?;
     assert!(out.contains("✓ 2026-08-31 (1.0.1)"));
+
+    Ok(())
+}
+
+struct RequestRecordingFetcher {
+    pub requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ods::commands::pull::OciBlobFetcher for RequestRecordingFetcher {
+    fn fetch_bytes(&self, _url: &str) -> Result<Vec<u8>> {
+        self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("fetch_bytes should not be called")
+    }
+
+    fn fetch_release_index(&self) -> Result<Option<ods::index::OdsReleaseIndex>> {
+        self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(None)
+    }
+
+    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
+        self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(None)
+    }
+}
+
+#[test]
+fn test_cite_reads_workspace_index_and_never_fetches_or_writes() -> Result<()> {
+    // Run from a temp directory holding ods_data/
+    let (tmp, rel_dir) = setup_test_release_for_cite(None);
+    let ws_root = tmp.path().join("ods_data");
+    fs::create_dir_all(ws_root.join("releases"))?;
+
+    let moved_rel = ws_root.join("releases").join("2026-08-31");
+    fs::rename(&rel_dir, &moved_rel)?;
+
+    let index_file = ws_root.join("_releases.json");
+    let initial_index_bytes = fs::read(tmp.path().join("_releases.json"))?;
+    fs::write(&index_file, &initial_index_bytes)?;
+    let _ = fs::remove_file(tmp.path().join("_releases.json"));
+
+    let mtime_before = fs::metadata(&index_file)?.modified()?;
+
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let fetcher = RequestRecordingFetcher {
+        requests: requests.clone(),
+    };
+
+    let orig_dir = std::env::current_dir()?;
+    std::env::set_current_dir(tmp.path())?;
+
+    let mut buf = Vec::new();
+    let res = ods::commands::cite::run_with_writer_and_fetcher(
+        CiteArgs {
+            format: "text".to_string(),
+            input: Some(moved_rel),
+        },
+        &mut buf,
+        &fetcher,
+    );
+
+    let _ = std::env::set_current_dir(orig_dir);
+    res?;
+
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "ods cite must make zero network requests"
+    );
+    assert!(
+        !tmp.path().join("_releases.json").exists(),
+        "ods cite must NOT create _releases.json in parent directory"
+    );
+
+    let mtime_after = fs::metadata(&index_file)?.modified()?;
+    assert_eq!(
+        mtime_before, mtime_after,
+        "_releases.json mtime must remain unchanged"
+    );
+
+    let current_bytes = fs::read(&index_file)?;
+    assert_eq!(
+        initial_index_bytes, current_bytes,
+        "_releases.json content must remain byte-identical"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let ws_root = tmp.path().join("ods_data");
+    let rel_dir = ws_root.join("releases").join("2026-08-31");
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir)?;
+
+    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260831000001.zip");
+    {
+        let outer_file = File::create(&outer_zip_path)?;
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default();
+        outer_zip.start_file("dummy.txt", options)?;
+        outer_zip.write_all(b"dummy source zip")?;
+        outer_zip.finish()?;
+    }
+    let zip_sha256 = compute_file_sha256(&outer_zip_path)?;
+
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content")?;
+
+    let mut prov = OdsProvenance::default();
+    prov.trud_release_name = Some("Release 7.0.0".to_string());
+    prov.trud_release_date = Some("2026-08-31".to_string());
+    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260831000001.zip".to_string());
+    prov.trud_release_filesize_bytes = Some(37_983_173);
+    prov.trud_release_sha256 = Some(zip_sha256.clone());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    prov.publication_date = Some("2026-08-28".to_string());
+    prov.publication_seq_num = Some("4700".to_string());
+    prov.publication_type = Some("Full".to_string());
+    prov.publication_record_count = Some(2);
+    prov.tool_version = Some("0.4.3".to_string());
+    prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
+    prov.tool_git_dirty = Some(false);
+    prov.dataset_version = Some("1.0.1".to_string());
+
+    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
+    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1")?;
+    let manifest_digest = manifest.digest()?;
+
+    let release_entry = ods::index::ReleaseIndexEntry {
+        trud_release_date: "2026-08-31".to_string(),
+        dataset_version: "1.0.1".to_string(),
+        tag: "2026-08-31_1.0.1".to_string(),
+        manifest_digest,
+        trud_release_sha256: zip_sha256,
+        tool_version: "0.4.3".to_string(),
+        dataset_doi: None,
+        withdrawn: Some("critical schema defect discovered in release".to_string()),
+    };
+
+    let index = ods::index::OdsReleaseIndex {
+        type_tag: "ods_release_index".to_string(),
+        index_version: 2,
+        concept_doi: None,
+        mirrors: vec![],
+        releases: vec![release_entry],
+    };
+    let index_bytes = serde_json::to_vec_pretty(&index)?;
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &ws_root)?;
+
+    let mut buf = Vec::new();
+    let res = ods::commands::cite::run_with_writer(
+        CiteArgs {
+            format: "text".to_string(),
+            input: Some(rel_dir),
+        },
+        &mut buf,
+    );
+
+    assert!(res.is_err(), "cite must refuse withdrawn release");
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("This release was withdrawn: critical schema defect discovered in release"));
+    assert!(err.contains("Update to a valid release: ods pull 2026-08-31"));
 
     Ok(())
 }

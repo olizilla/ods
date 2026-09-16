@@ -268,9 +268,15 @@ fn test_index_flag_env_var_and_flag_precedence() {
 
     assert!(output_both.status.success(), "--index must succeed");
     let stdout_both = String::from_utf8_lossy(&output_both.stdout);
+    let stderr_both = String::from_utf8_lossy(&output_both.stderr);
     assert!(
         stdout_both.contains("2026-07-31"),
         "--index must take precedence over ODS_RELEASE_INDEX_URL"
+    );
+    assert!(
+        !stderr_both.contains("* Index:"),
+        "When --index is given, no fetch runs and '* Index:' line must be absent from stderr, got: {}",
+        stderr_both
     );
 }
 
@@ -451,4 +457,111 @@ fn test_contradicting_digest_fails_with_security_error_naming_both_digests() {
         "run_with_fetcher_and_baked must propagate SecurityError naming both digests: {}",
         run_err_str
     );
+}
+
+#[test]
+fn test_pull_index_flag_does_not_mutate_cached_workspace_index() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    fs::create_dir_all(&workspace)?;
+
+    // Create an initial workspace _releases.json
+    let initial_index = sample_release_index();
+    let initial_bytes = serde_json::to_vec_pretty(&initial_index)?;
+    let ws_index_file = workspace.join("_releases.json");
+    fs::write(&ws_index_file, &initial_bytes)?;
+
+    // Create a different index for --index
+    let mut supplied_index = sample_release_index();
+    supplied_index.releases[0].trud_release_date = "2026-08-31".to_string();
+    supplied_index.releases[0].tag = "2026-08-31_1.0.1".to_string();
+    let supplied_file = tmp.path().join("supplied_releases.json");
+    fs::write(&supplied_file, serde_json::to_vec_pretty(&supplied_index)?)?;
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("pull")
+        .arg("--index")
+        .arg(&supplied_file)
+        .arg("--list")
+        .output()?;
+
+    assert!(output.status.success(), "Command must succeed");
+    let current_bytes = fs::read(&ws_index_file)?;
+    assert_eq!(
+        initial_bytes, current_bytes,
+        "Workspace _releases.json must remain byte-identical after pull --index"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_ods_release_index_url_prints_stderr_notice_and_saves_exact_bytes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let index = sample_release_index();
+    let index_bytes = serde_json::to_vec_pretty(&index)?;
+
+    let (url, stop_server) = run_mock_http_server(index_bytes.clone());
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .env("ODS_RELEASE_INDEX_URL", &url)
+        .arg("pull")
+        .arg("--list")
+        .output()?;
+
+    let _ = stop_server.send(());
+
+    assert!(output.status.success(), "Command must succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_notice = format!("* Index: {} (ODS_RELEASE_INDEX_URL)", url);
+    assert!(
+        stderr.contains(&expected_notice),
+        "stderr must contain notice line '{}', got:\n{}",
+        expected_notice,
+        stderr
+    );
+
+    let ws_index = tmp.path().join("ods_data").join("_releases.json");
+    assert!(ws_index.exists(), "Workspace _releases.json must be written");
+    let saved_bytes = fs::read(&ws_index)?;
+    assert_eq!(
+        index_bytes, saved_bytes,
+        "Saved _releases.json must match served bytes verbatim"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_pull_index_fetch_invalid_json_does_not_mutate_workspace_index() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    fs::create_dir_all(&workspace)?;
+
+    let initial_index = sample_release_index();
+    let initial_bytes = serde_json::to_vec_pretty(&initial_index)?;
+    let ws_index_file = workspace.join("_releases.json");
+    fs::write(&ws_index_file, &initial_bytes)?;
+
+    let (url, stop_server) = run_mock_http_server(b"invalid unparseable json content".to_vec());
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .env("ODS_RELEASE_INDEX_URL", &url)
+        .arg("pull")
+        .arg("--list")
+        .output()?;
+
+    let _ = stop_server.send(());
+
+    assert!(output.status.success(), "Command must exit 0 falling back to cache");
+    let current_bytes = fs::read(&ws_index_file)?;
+    assert_eq!(
+        initial_bytes, current_bytes,
+        "Workspace _releases.json must remain unchanged when served unparseable index"
+    );
+
+    Ok(())
 }

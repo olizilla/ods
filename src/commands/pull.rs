@@ -80,7 +80,20 @@ pub trait OciBlobFetcher: Send + Sync {
         Ok(None)
     }
     fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
+        if let Some(idx) = self.fetch_release_index()? {
+            return Ok(Some(serde_json::to_vec_pretty(&idx)?));
+        }
         Ok(None)
+    }
+}
+
+static REPORTED_INDEX_URL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn log_custom_index_url_if_needed() {
+    if let Ok(u) = std::env::var("ODS_RELEASE_INDEX_URL") {
+        if !REPORTED_INDEX_URL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("* Index: {} (ODS_RELEASE_INDEX_URL)", u);
+        }
     }
 }
 
@@ -92,7 +105,7 @@ impl OciBlobFetcher for HttpOciFetcher {
     }
 
     fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
-        // Test/dev hook: allow pointing release index fetcher to a custom URL (e.g. local Miniflare test server)
+        log_custom_index_url_if_needed();
         let custom_url = std::env::var("ODS_RELEASE_INDEX_URL").ok();
         let default_urls = [
             "https://ods.fyi/releases.json",
@@ -316,27 +329,27 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
         }
 
         let merged = baked.merge(&fetched_index)?;
-        let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&bytes, workspace_root);
         return Ok((merged, Some("just now".to_string())));
     }
 
     // 1. Try fetching remote index
-    match fetcher.fetch_release_index() {
-        Ok(Some(fetched)) => {
-            match baked.merge(&fetched) {
-                Ok(merged) => {
-                    let raw = fetcher.fetch_release_index_raw()?.unwrap_or_else(|| {
-                        serde_json::to_vec_pretty(&merged).unwrap_or_default()
-                    });
-                    let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw, workspace_root);
-                    return Ok((merged, Some("just now".to_string())));
-                }
-                Err(e) => {
-                    // Security contradiction on a baked release MUST abort immediately!
-                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                        return Err(e);
+    match fetcher.fetch_release_index_raw() {
+        Ok(Some(raw_bytes)) => {
+            if let Ok(fetched) = serde_json::from_slice::<OdsReleaseIndex>(&raw_bytes) {
+                if fetched.validate().is_ok() {
+                    match baked.merge(&fetched) {
+                        Ok(merged) => {
+                            let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
+                            return Ok((merged, Some("just now".to_string())));
+                        }
+                        Err(e) => {
+                            // Security contradiction on a baked release MUST abort immediately!
+                            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
+                                return Err(e);
+                            }
+                            // Non-security fetch/parse/validation errors fall back to cache/baked
+                        }
                     }
-                    // Non-security fetch/parse/validation errors fall back to cache/baked
                 }
             }
         }
@@ -601,6 +614,22 @@ fn pull_single_release<F: OciBlobFetcher>(
     }
     fs::create_dir_all(&temp_path)?;
 
+    struct StagingGuard<'a> {
+        path: &'a Path,
+        installed: bool,
+    }
+    impl<'a> Drop for StagingGuard<'a> {
+        fn drop(&mut self) {
+            if !self.installed && self.path.exists() {
+                let _ = fs::remove_dir_all(self.path);
+            }
+        }
+    }
+    let mut staging_guard = StagingGuard {
+        path: &temp_path,
+        installed: false,
+    };
+
     let mut last_err = None;
 
     for mirror in mirrors {
@@ -711,6 +740,7 @@ fn pull_single_release<F: OciBlobFetcher>(
             fs::remove_dir_all(&rel_dir)?;
         }
         fs::rename(&temp_path, &rel_dir)?;
+        staging_guard.installed = true;
 
         // 5. Pin current and generate README
         let ws = Workspace::open_or_create(Some(workspace_root))?;

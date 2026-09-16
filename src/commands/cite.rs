@@ -34,56 +34,19 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()> {
-    let fetcher = crate::commands::pull::HttpOciFetcher;
-    run_with_writer_and_fetcher(args, writer, &fetcher)
+    run_with_writer_and_fetcher(args, writer, &crate::commands::pull::HttpOciFetcher)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IndexFetchStatus {
-    JustNow,
-    Workspace,
-    Baked,
-}
-
-pub fn resolve_cite_index<F: crate::commands::pull::OciBlobFetcher>(
+pub fn resolve_cite_index(
     workspace_root: Option<&Path>,
-    fetcher: &F,
-) -> Result<(crate::index::OdsReleaseIndex, IndexFetchStatus)> {
+) -> Result<crate::index::OdsReleaseIndex> {
     let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_default();
 
-    // 1. Try fetching remote index online
-    match fetcher.fetch_release_index() {
-        Ok(Some(fetched)) => {
-            match baked.merge(&fetched) {
-                Ok(merged) => {
-                    if let Some(ws) = workspace_root {
-                        let raw = fetcher.fetch_release_index_raw()?.unwrap_or_else(|| {
-                            serde_json::to_vec_pretty(&merged).unwrap_or_default()
-                        });
-                        let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw, ws);
-                    }
-                    return Ok((merged, IndexFetchStatus::JustNow));
-                }
-                Err(e) => {
-                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                return Err(e);
-            }
-        }
-    }
-
-    // 2. Try loading cached index from workspace
+    // 1. Try loading cached index from workspace
     if let Some(ws) = workspace_root {
         if let Ok(Some(loaded)) = crate::index::OdsReleaseIndex::load_from_workspace(ws) {
             match baked.merge(&loaded) {
-                Ok(merged) => return Ok((merged, IndexFetchStatus::Workspace)),
+                Ok(merged) => return Ok(merged),
                 Err(e) => {
                     if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
                         return Err(e);
@@ -93,14 +56,14 @@ pub fn resolve_cite_index<F: crate::commands::pull::OciBlobFetcher>(
         }
     }
 
-    // 3. Fall back to baked index
-    Ok((baked, IndexFetchStatus::Baked))
+    // 2. Fall back to baked index
+    Ok(baked)
 }
 
 pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     args: Args,
     writer: &mut dyn std::io::Write,
-    fetcher: &F,
+    _fetcher: &F,
 ) -> Result<()> {
     let files = vec![
         "orgs.parquet",
@@ -174,7 +137,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let workspace_root = crate::workspace::find_workspace_root_from(&input_dir, None)
         .or_else(|| crate::workspace::Workspace::open(None).ok().map(|ws| ws.root().to_path_buf()));
 
-    let (index, index_status) = resolve_cite_index(workspace_root.as_deref(), fetcher)?;
+    let index = resolve_cite_index(workspace_root.as_deref())?;
 
     // 3. Verify directory against index
     let outcome = crate::workspace::verify_release_dir(&input_dir, Some(&index));
@@ -428,14 +391,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         }
         _ => {
             // Header line per Task 4 of say-which-release
-            match index_status {
-                IndexFetchStatus::JustNow => {
-                    writeln!(writer, "✓ {} ({}) — checked against the index just now\n", d_tag, dataset_version)?;
-                }
-                IndexFetchStatus::Workspace | IndexFetchStatus::Baked => {
-                    writeln!(writer, "✓ {} ({})\n", d_tag, dataset_version)?;
-                }
-            }
+            writeln!(writer, "✓ {} ({})\n", d_tag, dataset_version)?;
 
             let data_url = if let Some(ref doi) = dataset_doi {
                 if doi.starts_with("http") {
