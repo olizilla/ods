@@ -13,8 +13,8 @@ The CLI serves three distinct users:
 | Goal | Need | Commands |
 |---|---|---|
 | **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `info`, `role`, `pull`, `cite` |
-| **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud pull`, `make`, `trud audit`, `trud verify` |
-| **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud pull`, `make`, `trud diff`, `trud audit` |
+| **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud list`, `trud pull`, `make`, `trud audit`, `trud verify` |
+| **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud list`, `trud pull`, `make`, `trud diff`, `trud audit` |
 
 
 # Usage

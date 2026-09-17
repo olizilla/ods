@@ -42,6 +42,7 @@ Build from official NHS source data (requires TRUD API key)
 Usage: ods trud <COMMAND>
 
 Commands:
+  list    List TRUD release archives, newest first
   pull    Pull official release archive from TRUD REST API and verify SHA-256
   diff    Compare two TRUD ODS releases and generate diff report
   audit   Audit workspace Parquet projections against ground-truth TRUD XML/ZIP
@@ -60,9 +61,6 @@ Arguments:
   [RELEASE_DATE]  Target TRUD release date in YYYY-MM-DD format (defaults to latest available)
 
 Options:
-  -l, --list                           List available TRUD release versions
-      --limit <LIMIT>                  Number of releases to display in listing [default: 10]
-      --all                            Fetch all available TRUD releases
   -f, --force                          Force re-download or re-pull of specified release
       --jobs <JOBS>                    Number of concurrent download workers (max: 8) [default: 4]
   -q, --quiet                          Show errors and summary only
@@ -75,6 +73,19 @@ Options:
   -w, --workspace <WORKSPACE>          Workspace directory (defaults to ./ods_data if omitted)
   -v, --verbose                        Print verbose output (URL fetched and raw API response text before deserialization)
   -h, --help                           Print help
+
+$ ods trud list --help
+List TRUD release archives, newest first
+
+Usage: ods trud list [OPTIONS]
+
+Options:
+      --all                    List all available TRUD releases without truncating
+      --format <FORMAT>        Output format (json for machine-readable list)
+      --api-key <API_KEY>      TRUD API Key [env: TRUD_API_KEY=]
+  -w, --workspace <WORKSPACE>  Workspace directory (defaults to ./ods_data if omitted)
+  -v, --verbose                Print verbose output (URL fetched and raw API response text before deserialization)
+  -h, --help                   Print help
 
 $ ods find --help
 Search NHS organisations and sites

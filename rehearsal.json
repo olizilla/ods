@@ -1,0 +1,17 @@
+{
+  "_type": "ods_release_index",
+  "index_version": 2,
+  "mirrors": [
+    { "url": "https://ods.fyi/v2/ods-data-rehearsal" }
+  ],
+  "releases": [
+    {
+      "trud_release_date": "2026-07-31",
+      "dataset_version": "0.1.0",
+      "tag": "2026-07-31_0.1.0",
+      "manifest_digest": "sha256:80f0a85f60386035dfdb187d90c8d0dd68b92d19e328d68b035b0c6c126b838c",
+      "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+      "tool_version": "0.1.0"
+    }
+  ]
+}

@@ -20,16 +20,8 @@ pub struct Args {
     /// Target TRUD release date in YYYY-MM-DD format (defaults to latest available)
     pub release_date: Option<String>,
 
-    /// List available TRUD release versions
-    #[arg(long, short = 'l')]
-    pub list: bool,
-
-    /// Number of releases to display in listing
-    #[arg(long, default_value_t = 10)]
-    pub limit: usize,
-
     /// Fetch all available TRUD releases
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub all: bool,
 
     /// Force re-download or re-pull of specified release
@@ -268,18 +260,6 @@ pub fn run(args: Args) -> Result<()> {
     let workspace_root = ws.root().to_path_buf();
 
     if let Some(ref local_path) = args.local_archive {
-        let resp_json_path = if local_path.is_dir() {
-            local_path.join("response.json")
-        } else {
-            local_path.with_file_name("response.json")
-        };
-        if resp_json_path.exists() {
-            let text = std::fs::read_to_string(&resp_json_path)?;
-            let resp: TrudApiResponse = serde_json::from_str(&text)?;
-            if args.list {
-                return display_trud_releases(&args, &workspace_root, resp.releases, &progress, &mut std::io::stdout());
-            }
-        }
         return run_local_archive(&args, &workspace_root, local_path, &progress);
     }
 
@@ -302,18 +282,6 @@ pub fn run_with_fetcher<F: TrudFetcher>(
     fetcher: &F,
     progress: &Progress,
 ) -> Result<()> {
-    if args.list {
-        progress.step("Querying NHS TRUD…");
-        let releases = match fetcher.fetch_releases() {
-            Ok(r) => r,
-            Err(e) => {
-                progress.error("Failed to query NHS TRUD API", &[&e.to_string()]);
-                return Err(crate::commands::pull::AlreadyReported.into());
-            }
-        };
-        return display_trud_releases(&args, workspace_root, releases, progress, &mut std::io::stdout());
-    }
-
     progress.step("Querying NHS TRUD…");
     let releases = match fetcher.fetch_releases() {
         Ok(r) => r,
@@ -336,106 +304,6 @@ pub fn run_with_fetcher<F: TrudFetcher>(
     };
 
     pull_single_release(&args, workspace_root, fetcher, target_release, progress)
-}
-
-fn display_trud_releases<W: std::io::Write>(
-    args: &Args,
-    workspace_root: &Path,
-    releases: Vec<TrudReleaseItem>,
-    progress: &Progress,
-    stdout: &mut W,
-) -> Result<()> {
-    let (active_date, _) = Workspace::open(Some(workspace_root))
-        .ok()
-        .and_then(|ws| ws.active_release().ok())
-        .unwrap_or_default();
-
-    let total_count = releases.len();
-    let display_limit = if args.limit > 0 { args.limit } else { 10 };
-    let to_display: Vec<&TrudReleaseItem> = releases.iter().take(display_limit).collect();
-
-    if args.format.as_deref() == Some("json") {
-        let json_items: Vec<ReleaseListItemJson> = to_display.iter().map(|r| {
-            let is_active = !active_date.is_empty() && active_date == r.release_date;
-            let release_dir = workspace_root.join("releases").join(&r.release_date).join("trud");
-            let archive_file = release_dir.join(&r.archive_file_name);
-            let is_local = archive_file.exists();
-
-            let status_str = if is_active {
-                "active (local)"
-            } else if is_local {
-                "local"
-            } else {
-                "remote"
-            };
-
-            ReleaseListItemJson {
-                date: r.release_date.clone(),
-                size_bytes: r.archive_file_size,
-                status: status_str.to_string(),
-            }
-        }).collect();
-
-        serde_json::to_writer_pretty(&mut *stdout, &json_items)?;
-        writeln!(stdout)?;
-        return Ok(());
-    }
-
-    let mut has_active = false;
-    let mut has_local = false;
-    let mut has_remote = false;
-
-    progress.clear_live();
-
-    for r in &to_display {
-        let is_active = !active_date.is_empty() && active_date == r.release_date;
-        let release_dir = workspace_root.join("releases").join(&r.release_date).join("trud");
-        let archive_file = release_dir.join(&r.archive_file_name);
-        let is_local = archive_file.exists();
-
-        let (status_str, marker) = if is_active {
-            has_active = true;
-            ("● active (local)", "●")
-        } else if is_local {
-            has_local = true;
-            ("○ local", "○")
-        } else {
-            has_remote = true;
-            ("○ remote", "○")
-        };
-        let _ = marker;
-
-        writeln!(
-            stdout,
-            "  {:10}  {:6}  {}",
-            r.release_date,
-            format_size(r.archive_file_size),
-            status_str
-        )?;
-    }
-
-    if total_count > display_limit {
-        eprintln!(
-            "\nShowing {} of {} TRUD releases. Use --limit <N> to view more.",
-            display_limit, total_count
-        );
-    }
-
-    if progress.caps().is_tty {
-        eprintln!("\nLegend:");
-        if has_active {
-            eprintln!("  ● active (local)  Active release pin (./ods_data/current)");
-        }
-        if has_local {
-            eprintln!("  ○ local           Cached locally in ./ods_data/releases/");
-        }
-        if has_remote {
-            eprintln!("  ○ remote          Available for pull from TRUD");
-        }
-        eprintln!("\nTo pull a specific release, run: ods trud pull <YYYY-MM-DD>");
-    }
-
-    Ok(())
 }
 
 fn pull_single_release<F: TrudFetcher>(
@@ -1151,9 +1019,13 @@ pub fn fetch_trud_releases(api_key: &str, verbose: bool) -> Result<Vec<TrudRelea
 }
 
 pub fn fetch_trud_releases_and_raw(api_key: &str, verbose: bool) -> Result<(Vec<TrudReleaseItem>, String)> {
+    let base_url = std::env::var("ODS_TRUD_API_URL")
+        .unwrap_or_else(|_| "https://isd.digital.nhs.uk/trud/api/v1".to_string());
     let url = format!(
-        "https://isd.digital.nhs.uk/trud/api/v1/keys/{}/items/{}/releases",
-        api_key, TRUD_ODS_ITEM_ID
+        "{}/keys/{}/items/{}/releases",
+        base_url.trim_end_matches('/'),
+        api_key,
+        TRUD_ODS_ITEM_ID
     );
 
     if verbose {

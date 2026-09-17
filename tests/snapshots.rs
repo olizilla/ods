@@ -2,8 +2,12 @@ mod common;
 
 use common::setup_find_test_workspace;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 
 struct TestCase {
     cmd_str: &'static str,
@@ -12,12 +16,23 @@ struct TestCase {
     use_input: bool,
 }
 
-fn run_case(case: &TestCase, input_dir: Option<&Path>) -> String {
+fn run_case_full(
+    case: &TestCase,
+    input_dir: Option<&Path>,
+    cwd: Option<&Path>,
+    envs: &[(&str, &str)],
+) -> String {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ods"));
     if let Some(cols) = case.columns {
         cmd.env("COLUMNS", cols.to_string());
     }
     cmd.env_remove("PAGER");
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
 
     for (i, arg) in case.args.iter().enumerate() {
         cmd.arg(arg);
@@ -51,6 +66,37 @@ fn run_case(case: &TestCase, input_dir: Option<&Path>) -> String {
         s.push_str(&format!("--- exit {}\n", exit_code));
     }
     s
+}
+
+fn run_case(case: &TestCase, input_dir: Option<&Path>) -> String {
+    run_case_full(case, input_dir, None, &[])
+}
+
+fn run_mock_trud_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&response_body);
+                let _ = stream.flush();
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    (format!("http://127.0.0.1:{}", port), tx)
 }
 
 fn parse_cases(content: &str) -> Vec<String> {
@@ -150,6 +196,12 @@ fn snapshot_help() {
             cmd_str: "ods trud pull --help",
             columns: Some(100),
             args: vec!["trud", "pull", "--help"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "ods trud list --help",
+            columns: Some(100),
+            args: vec!["trud", "list", "--help"],
             use_input: false,
         },
         TestCase {
@@ -304,4 +356,52 @@ fn snapshot_find() {
     let actual_cases: Vec<String> = cases.iter().map(|c| run_case(c, Some(&parquet_dir))).collect();
 
     check_snapshot("find.txt", &actual_cases, &case_names);
+}
+
+#[test]
+fn snapshot_trud_list() {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/trud_releases_response.json");
+    let fixture_bytes = fs::read(&fixture_path).expect("read trud_releases_response.json");
+    let (api_url, stop_server) = run_mock_trud_server(fixture_bytes);
+
+    let tmp = tempfile::TempDir::new().expect("create tempdir");
+    let rel_dir = tmp.path().join("ods_data/releases/2026-07-31/trud");
+    fs::create_dir_all(&rel_dir).expect("create release dir");
+    fs::write(
+        rel_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"),
+        b"dummy zip content",
+    )
+    .expect("write dummy zip");
+
+    let cases = [
+        TestCase {
+            cmd_str: "COLUMNS=100 ods trud list",
+            columns: Some(100),
+            args: vec!["trud", "list"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods trud list --all",
+            columns: Some(100),
+            args: vec!["trud", "list", "--all"],
+            use_input: false,
+        },
+    ];
+
+    let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
+    let actual_cases: Vec<String> = cases
+        .iter()
+        .map(|c| {
+            run_case_full(
+                c,
+                None,
+                Some(tmp.path()),
+                &[("TRUD_API_KEY", "test"), ("ODS_TRUD_API_URL", &api_url)],
+            )
+        })
+        .collect();
+
+    let _ = stop_server.send(());
+    check_snapshot("trud-list.txt", &actual_cases, &case_names);
 }

@@ -10,6 +10,9 @@ pub struct TrudArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum TrudCommand {
+    /// List TRUD release archives, newest first
+    List(crate::commands::trud_list::Args),
+
     /// Pull official release archive from TRUD REST API and verify SHA-256
     Pull(crate::commands::fetch::Args),
 
@@ -33,6 +36,7 @@ pub enum TrudCommand {
 
 pub fn run(args: TrudArgs) -> Result<()> {
     match args.command {
+        TrudCommand::List(list_args) => crate::commands::trud_list::run(list_args),
         TrudCommand::Pull(fetch_args) => crate::commands::fetch::run(fetch_args),
         TrudCommand::Diff(diff_args) => crate::commands::diff::run(diff_args),
         TrudCommand::Audit(audit_args) => crate::commands::audit::run(audit_args),

@@ -99,6 +99,7 @@ flowchart TD
 
 | Subcommand | Interaction with `ods_data` |
 | :--- | :--- |
+| **`ods trud list`** | Queries TRUD API and lists available release archives, indicating which are held in the workspace. |
 | **`ods trud pull`** | Queries TRUD API, downloads ZIP into `releases/<date>/trud/`, verifies SHA-256, writes `provenance.json`, and updates `current` symlink. |
 | **`ods cite`** | Displays active release pin, provenance metadata, local release versions, disk space, and SHA-256 verification status. |
 | **`ods pull`** | Pulls pre-built dataset release or switches active release pin to target release date. |

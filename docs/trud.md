@@ -1,11 +1,12 @@
 # `ods trud`
 
-Publisher namespace for TRUD API interactions: query, download (`pull`), compare releases (`diff`), verify checksums (`verify`), and audit workspace projections (`audit`).
+Publisher namespace for TRUD API interactions: list releases (`list`), download (`pull`), compare releases (`diff`), verify checksums (`verify`), and audit workspace projections (`audit`).
 
 ## Subcommands Overview
 
 | Subcommand | Description |
 | :--- | :--- |
+| **`ods trud list`** | List TRUD release archives, newest first, and show which are held in the workspace. |
 | **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, generate `provenance.json`, and set the active workspace release. |
 | **`ods trud diff`** | Compare two TRUD ODS releases (or workspace versions) and print a structured diff report of entity changes. |
 | **`ods trud audit`** | Audit workspace Parquet projections against ground-truth TRUD XML/ZIP releases to detect data drift or compilation anomalies. |
@@ -13,9 +14,45 @@ Publisher namespace for TRUD API interactions: query, download (`pull`), compare
 
 ---
 
+## `ods trud list`
+
+List available TRUD release versions, newest first, and show which are held in the workspace.
+
+```bash
+ods trud list
+```
+
+```text
+┌────────────────────────────────────┐
+│ Release        Size   State        │
+╞════════════════════════════════════╡
+│ 2026-07-31     36MB   pulled       │
+│ 2026-06-26     36MB                │
+│ 2026-05-29     36MB                │
+│ 2026-04-24     36MB                │
+│ 2026-03-27     36MB                │
+│ 2026-02-27     35MB                │
+│ 2026-01-30     35MB                │
+│ 2025-12-19     35MB                │
+│ 2025-11-28     35MB                │
+│ 2025-10-31     35MB                │
+│ ...85 more                         │
+│ 2018-06-29     20MB                │
+├────────────────────────────────────┤
+│ 96 releases      --all to see more │
+└────────────────────────────────────┘
+* To pull: ods trud pull 2026-06-26
+```
+
+Pass `--all` to list every release without truncating:
+
+---
+
 ## `ods trud pull`
 
 Query, download, and verify official NHS England TRUD ODS XML release archives, generate cryptographic provenance metadata, and manage workspace active release symlinks.
+
+Pulling every release is `--all`, hidden from the idle curious because it downloads the whole archive from TRUD. Use it if you need it.
 
 ### Usage
 
