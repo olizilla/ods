@@ -37,6 +37,12 @@ pub struct Workspace {
 impl Workspace {
     /// Find an existing workspace. Never creates. For read commands.
     pub fn open(explicit: Option<&Path>) -> Result<Workspace> {
+        let pwd = std::env::current_dir()?;
+        Self::open_from(&pwd, explicit)
+    }
+
+    /// Find an existing workspace starting from a specific directory. Never creates.
+    pub fn open_from(start: &Path, explicit: Option<&Path>) -> Result<Workspace> {
         let root = if let Some(path) = explicit {
             if !path.exists() {
                 anyhow::bail!(
@@ -55,7 +61,7 @@ impl Workspace {
                 );
             }
         } else {
-            find_workspace_root(None).ok_or_else(|| {
+            find_workspace_root_from(start, None).ok_or_else(|| {
                 anyhow!(
                     "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
                 )
@@ -244,11 +250,17 @@ fn find_workspace_root(explicit: Option<&Path>) -> Option<PathBuf> {
 ///    - if explicit/parquet is a directory, return explicit/parquet.
 ///    - otherwise return explicit directly.
 /// 4. If explicit does not exist, fail with diagnostic error.
-/// 5. Otherwise fall through to `Workspace::open(Some(explicit))?.parquet_dir()`.
+/// 5. Otherwise fall through to `Workspace::open_from(start, Some(explicit))?.parquet_dir()`.
 ///
 /// When no explicit path is given (None):
-/// Falls back to `Workspace::open(None)?.parquet_dir()`.
+/// Falls back to `Workspace::open_from(start, None)?.parquet_dir()`.
 pub fn resolve_parquet_input(explicit: Option<&Path>) -> Result<PathBuf> {
+    let pwd = std::env::current_dir()?;
+    resolve_parquet_input_from(&pwd, explicit)
+}
+
+/// Resolves the parquet directory starting from a specific directory.
+pub fn resolve_parquet_input_from(start: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(input) = explicit {
         if input.join("orgs.parquet").exists() {
             return Ok(input.to_path_buf());
@@ -268,11 +280,11 @@ pub fn resolve_parquet_input(explicit: Option<&Path>) -> Result<PathBuf> {
                 input.display()
             );
         }
-        let ws = Workspace::open(Some(input))?;
+        let ws = Workspace::open_from(start, Some(input))?;
         return ws.parquet_dir();
     }
 
-    let ws = Workspace::open(None)?;
+    let ws = Workspace::open_from(start, None)?;
     ws.parquet_dir()
 }
 

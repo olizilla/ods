@@ -87,7 +87,7 @@ impl ods::commands::pull::OciBlobFetcher for MockCiteFetcher {
 
 #[test]
 fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<()> {
-    let (_tmp, rel_dir) = setup_test_release_for_cite(None);
+    let (tmp, rel_dir) = setup_test_release_for_cite(None);
     let fetcher = MockCiteFetcher { remote_index: None };
 
     // 1. Text format
@@ -99,6 +99,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         },
         &mut text_buf,
         &fetcher,
+        tmp.path(),
     )?;
     let text_out = String::from_utf8(text_buf)?;
     assert!(text_out.contains("Dataset version:    v1.0.1"));
@@ -117,6 +118,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         },
         &mut bib_buf,
         &fetcher,
+        tmp.path(),
     )?;
     let bib_out = String::from_utf8(bib_buf)?;
     assert!(bib_out.contains("@misc{ods-2026-08-31-v1.0.1,"));
@@ -137,6 +139,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         },
         &mut apa_buf,
         &fetcher,
+        tmp.path(),
     )?;
     let apa_out = String::from_utf8(apa_buf)?;
     assert!(apa_out.contains("ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31"));
@@ -153,6 +156,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         },
         &mut csl_buf,
         &fetcher,
+        tmp.path(),
     )?;
     let csl_out = String::from_utf8(csl_buf)?;
     assert!(csl_out.contains("\"title\": \"ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31\""));
@@ -168,7 +172,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
 
 #[test]
 fn test_cite_refuses_when_release_is_withdrawn() {
-    let (_tmp, rel_dir) = setup_test_release_for_cite(Some(
+    let (tmp, rel_dir) = setup_test_release_for_cite(Some(
         "roles table truncated at 65535 rows by a bad build",
     ));
     let fetcher = MockCiteFetcher { remote_index: None };
@@ -181,6 +185,7 @@ fn test_cite_refuses_when_release_is_withdrawn() {
         },
         &mut buf,
         &fetcher,
+        tmp.path(),
     );
 
     assert!(res.is_err());
@@ -219,7 +224,7 @@ fn test_pull_refuses_when_release_is_withdrawn() {
 
 #[test]
 fn test_cite_offline_cached_index_disclosure() -> Result<()> {
-    let (_tmp, rel_dir) = setup_test_release_for_cite(None);
+    let (tmp, rel_dir) = setup_test_release_for_cite(None);
 
     let fetcher = MockCiteFetcher {
         remote_index: None,
@@ -233,6 +238,7 @@ fn test_cite_offline_cached_index_disclosure() -> Result<()> {
         },
         &mut buf,
         &fetcher,
+        tmp.path(),
     )?;
 
     let out = String::from_utf8(buf)?;
@@ -284,9 +290,6 @@ fn test_cite_reads_workspace_index_and_never_fetches_or_writes() -> Result<()> {
         requests: requests.clone(),
     };
 
-    let orig_dir = std::env::current_dir()?;
-    std::env::set_current_dir(tmp.path())?;
-
     let mut buf = Vec::new();
     let res = ods::commands::cite::run_with_writer_and_fetcher(
         CiteArgs {
@@ -295,9 +298,9 @@ fn test_cite_reads_workspace_index_and_never_fetches_or_writes() -> Result<()> {
         },
         &mut buf,
         &fetcher,
+        tmp.path(),
     );
 
-    let _ = std::env::set_current_dir(orig_dir);
     res?;
 
     assert_eq!(

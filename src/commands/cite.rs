@@ -34,7 +34,8 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()> {
-    run_with_writer_and_fetcher(args, writer, &crate::commands::pull::HttpOciFetcher)
+    let pwd = std::env::current_dir()?;
+    run_with_writer_and_fetcher(args, writer, &crate::commands::pull::HttpOciFetcher, &pwd)
 }
 
 pub fn resolve_cite_index(
@@ -64,6 +65,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     args: Args,
     writer: &mut dyn std::io::Write,
     _fetcher: &F,
+    cwd: &Path,
 ) -> Result<()> {
     let files = vec![
         "orgs.parquet",
@@ -76,7 +78,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let input_dir = match args.input {
         Some(ref dir) => dir.clone(),
-        None => crate::workspace::resolve_parquet_input(None)?,
+        None => crate::workspace::resolve_parquet_input_from(cwd, None)?,
     };
 
     // 1. Fail early: check if at least one expected Parquet file exists
@@ -135,7 +137,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     // 2. Discover workspace and load/cache index
     let workspace_root = crate::workspace::find_workspace_root_from(&input_dir, None)
-        .or_else(|| crate::workspace::Workspace::open(None).ok().map(|ws| ws.root().to_path_buf()));
+        .or_else(|| crate::workspace::Workspace::open_from(cwd, None).ok().map(|ws| ws.root().to_path_buf()));
 
     let index = resolve_cite_index(workspace_root.as_deref())?;
 

@@ -581,63 +581,72 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
 
 #[test]
 fn test_make_release_staging_with_relative_input() -> Result<()> {
-    let tmp = TempDir::new()?;
-    let dist_dir = tmp.path().join("dist");
-    let index_file = tmp.path().join("releases.json");
-    let init_index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![],
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let dist_relative = tmp.path().join("dist-relative");
+    let dist_absolute = tmp.path().join("dist-absolute");
+
+    let index_src = tmp.path().join("data").join("releases.json");
+    let index_a = tmp.path().join("releases-a.json");
+    let index_b = tmp.path().join("releases-b.json");
+    fs::copy(&index_src, &index_a)?;
+    fs::copy(&index_src, &index_b)?;
+
+    // 1. Run ods make release with relative --input and .current_dir(tmp.path())
+    let ods_bin = env!("CARGO_BIN_EXE_ods");
+    let rel_status = Command::new(ods_bin)
+        .current_dir(tmp.path())
+        .args([
+            "make",
+            "release",
+            "--input",
+            "releases/2026-07-31",
+            "--tool-repo",
+            tmp.path().to_str().unwrap(),
+            "--index",
+            index_a.to_str().unwrap(),
+            "--output",
+            dist_relative.to_str().unwrap(),
+        ])
+        .status()?;
+    assert!(rel_status.success(), "make release with relative input failed");
+
+    // 2. Run ods make release with absolute --input
+    let abs_status = Command::new(ods_bin)
+        .current_dir(tmp.path())
+        .args([
+            "make",
+            "release",
+            "--input",
+            rel_dir.to_str().unwrap(),
+            "--tool-repo",
+            tmp.path().to_str().unwrap(),
+            "--index",
+            index_b.to_str().unwrap(),
+            "--output",
+            dist_absolute.to_str().unwrap(),
+        ])
+        .status()?;
+    assert!(abs_status.success(), "make release with absolute input failed");
+
+    // 3. Assert both staging trees hold the exact same relative file paths
+    let collect_files = |base: &Path| -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = walkdir::WalkDir::new(base)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.path().strip_prefix(base).unwrap().to_path_buf())
+            .collect();
+        files.sort();
+        files
     };
-    fs::write(&index_file, serde_json::to_string_pretty(&init_index)? + "\n")?;
 
-    // Copy the real fixture release into temp directory
-    let fixture_release = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("ods_data")
-        .join("releases")
-        .join("2026-07-31");
+    let rel_files = collect_files(&dist_relative);
+    let abs_files = collect_files(&dist_absolute);
+    assert!(!rel_files.is_empty(), "staging tree must not be empty");
+    assert_eq!(rel_files, abs_files, "relative and absolute staging trees must hold identical files");
 
-    let temp_ws = tmp.path().join("ods_data").join("releases").join("2026-07-31");
-    fs::create_dir_all(&temp_ws)?;
-    for entry in fs::read_dir(&fixture_release)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        if path.is_file() {
-            fs::copy(&path, temp_ws.join(file_name))?;
-        }
-    }
-
-    // Pass relative path from tmp.path()
-    let rel_input = PathBuf::from("ods_data").join("releases").join("2026-07-31");
-
-    let orig_dir = std::env::current_dir()?;
-    std::env::set_current_dir(tmp.path())?;
-
-    let res = run(Args {
-        input: Some(rel_input),
-        repository: "ods-data".to_string(),
-        output: Some(dist_dir.clone()),
-        doi: None,
-        tool_repo: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
-        index: Some(index_file),
-    });
-
-    let _ = std::env::set_current_dir(orig_dir);
-    res?;
-
-    // Must have 11 objects: 8 blobs (7 layer blobs + 1 config blob) + 3 manifests (versioned, date, latest)
-    let count = walkdir::WalkDir::new(&dist_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .count();
-    assert_eq!(count, 11, "staging tree must contain exactly 11 objects");
-
-    // Verify every blob's SHA-256 matches its filename
-    let blobs_dir = dist_dir.join("v2").join("ods-data").join("blobs").join("sha256");
+    // 4. Assert every blob's SHA-256 equals its filename
+    let blobs_dir = dist_relative.join("v2").join("ods-data").join("blobs").join("sha256");
     for entry in fs::read_dir(&blobs_dir)? {
         let entry = entry?;
         let filename = entry.file_name().to_string_lossy().to_string();
