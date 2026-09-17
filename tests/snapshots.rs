@@ -286,6 +286,18 @@ fn snapshot_find() {
             args: vec!["find", "sedbergh"],
             use_input: true,
         },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods find --in SW1",
+            columns: Some(100),
+            args: vec!["find", "--in", "SW1"],
+            use_input: true,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods find --in E1",
+            columns: Some(100),
+            args: vec!["find", "--in", "E1"],
+            use_input: true,
+        },
     ];
 
     let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();

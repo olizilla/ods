@@ -94,7 +94,7 @@ Options:
           Filter by exact ODS code (repeatable and comma-separated, e.g. A82608,RJZ)
 
       --in <LOCATION>...
-          Filter by whole country, county or town, or a postcode prefix (minimum 3 characters)
+          Filter by whole town, county or country, or a postcode district, sub-district or whole postcode (repeatable and comma-separated)
 
   -r, --role <ROLE>...
           Filter by role code (e.g. RO76) or curated role name (repeatable and comma-separated). Codes never change; use codes for durable queries and scripts
@@ -144,8 +144,9 @@ combine with OR:
 --gp and --dentist add role codes to --role rather than filtering separately.
 --all reads orgs_all.parquet, which is why it adds a Status column.
 
---in matches a whole country, county or town, ignoring case and punctuation, or
-a postcode prefix. Town and county are as ODS records them: postal and historic,
-not administrative. London-area practices are recorded under MIDDLESEX (196 GP
-practices, none with town LONDON), ESSEX, KENT and SURREY, so no --in value
-selects a metropolitan area.
+--in matches a whole town, county or country, ignoring case and punctuation, or a
+postcode district, sub-district or whole postcode: LA1 is not LA10. A district
+includes its sub-districts, so SW1 covers SW1A to SW1Y and N1 covers N1C, while
+N1C matches only itself. Town and county come from each record's address, so they
+follow post towns, not council boundaries: --in liverpool leaves out Bootle, which
+has L20 postcodes and a post town of its own.

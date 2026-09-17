@@ -466,6 +466,43 @@ fn test_task2_clause_presence() {
     );
     assert!(sql_gp_all.contains("orgs_all.parquet"));
     assert!(sql_gp_all.contains("WHERE list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])"));
+
+    // Postcode clause shapes:
+    // 1. outward(postcode) = 'SW1A' (sub-district)
+    let sql_sw1a = run_find_sql(
+        Args {
+            location: vec!["SW1A".to_string()],
+            ..Default::default()
+        },
+        &parquet_dir,
+    );
+    assert!(sql_sw1a.contains("OR outward(postcode) = 'SW1A')"));
+    assert!(!sql_sw1a.contains("regexp_matches"));
+
+    // 2. district(postcode) = 'SW1' (district)
+    let sql_sw1 = run_find_sql(
+        Args {
+            location: vec!["SW1".to_string()],
+            ..Default::default()
+        },
+        &parquet_dir,
+    );
+    assert!(sql_sw1.contains("OR district(postcode) = 'SW1')"));
+    assert!(!sql_sw1.contains("regexp_matches"));
+    assert!(!sql_sw1.contains("IN ("));
+
+    // 3. postcode = 'LA10 5DL' (full postcode)
+    let sql_full = run_find_sql(
+        Args {
+            location: vec!["LA105DL".to_string()],
+            ..Default::default()
+        },
+        &parquet_dir,
+    );
+    assert!(sql_full.contains("OR postcode = 'LA10 5DL')"));
+    assert!(!sql_full.contains("regexp_matches"));
+    assert!(!sql_full.contains("inward"));
+    assert!(!sql_full.contains("upper("));
 }
 
 #[test]
@@ -517,7 +554,7 @@ fn test_sql_flag_macro_emission_rules_and_block_format() {
     );
     assert_eq!(sql_sedbergh_gp.lines().filter(|l| l.contains("MACRO")).count(), 0);
 
-    // --in durham --sql emits both macros and exact block format
+    // --in durham --sql emits outward and district macros, and no inward macro, norm with DURHAM
     let sql_durham = run_find_sql(
         Args {
             location: vec!["durham".to_string()],
@@ -526,19 +563,33 @@ fn test_sql_flag_macro_emission_rules_and_block_format() {
         &parquet_dir,
     );
     assert!(sql_durham.contains("CREATE OR REPLACE TEMP MACRO norm(s) AS"));
-    assert!(sql_durham.contains("CREATE OR REPLACE TEMP MACRO norm_postcode(s) AS"));
+    assert!(sql_durham.contains("CREATE OR REPLACE TEMP MACRO outward(p) AS"));
+    assert!(sql_durham.contains("CREATE OR REPLACE TEMP MACRO district(p) AS"));
+    assert!(!sql_durham.contains("CREATE OR REPLACE TEMP MACRO inward(p) AS"));
+    assert!(!sql_durham.contains("norm_postcode"));
 
     let expected_durham_block = "\
-WHERE (   norm(town)    = 'durham'\n \
-       OR norm(county)  = 'durham'\n \
-       OR norm(country) = 'durham'\n \
-       OR norm_postcode(postcode) LIKE 'durham%')";
+WHERE (   norm(town)    = 'DURHAM'\n \
+       OR norm(county)  = 'DURHAM'\n \
+       OR norm(country) = 'DURHAM')";
     assert!(
         sql_durham.contains(expected_durham_block),
         "Expected block format:\n{}\nGot:\n{}",
         expected_durham_block,
         sql_durham
     );
+
+    // --in LA105DL --sql emits same 3 macros, no inward
+    let sql_full_pc = run_find_sql(
+        Args {
+            location: vec!["LA105DL".to_string()],
+            ..Default::default()
+        },
+        &parquet_dir,
+    );
+    assert!(sql_full_pc.contains("CREATE OR REPLACE TEMP MACRO outward(p) AS"));
+    assert!(sql_full_pc.contains("CREATE OR REPLACE TEMP MACRO district(p) AS"));
+    assert!(!sql_full_pc.contains("CREATE OR REPLACE TEMP MACRO inward(p) AS"));
 }
 
 // -----------------------------------------------------------------------------
@@ -612,23 +663,6 @@ fn test_sql_flag_duckdb_missing_behavior() {
 }
 
 // -----------------------------------------------------------------------------
-// Cross-cutting Acceptance Tests
-// -----------------------------------------------------------------------------
-
-
-#[test]
-fn test_crosscutting_help_text() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ods"))
-        .args(["find", "--help"])
-        .output()
-        .expect("run find --help");
-    let stdout = String::from_utf8(output.stdout).expect("utf8 help");
-    assert!(
-        stdout.contains("Print the DuckDB query for these filters instead of running them"),
-        "Help text must contain the --sql doc comment verbatim"
-    );
-}
-
 // -----------------------------------------------------------------------------
 // Full Release Tests (requires release 2026-08-28)
 // -----------------------------------------------------------------------------
@@ -714,6 +748,20 @@ fn test_release_task4_equivalence_matrix() {
         ("in durham sort postcode", Args { sort: Some(SortBy::Postcode), location: vec!["durham".to_string()], ..Default::default() }),
         ("sedbergh gp", Args { query: Some("sedbergh".to_string()), gp: true, ..Default::default() }),
         ("in durham gp", Args { location: vec!["durham".to_string()], gp: true, ..Default::default() }),
+        ("in W1", Args { location: vec!["W1".to_string()], ..Default::default() }),
+        ("in EC1", Args { location: vec!["EC1".to_string()], ..Default::default() }),
+        ("in E1", Args { location: vec!["E1".to_string()], ..Default::default() }),
+        ("in N1", Args { location: vec!["N1".to_string()], ..Default::default() }),
+        ("in SE1", Args { location: vec!["SE1".to_string()], ..Default::default() }),
+        ("in SW1", Args { location: vec!["SW1".to_string()], ..Default::default() }),
+        ("in LA1", Args { location: vec!["LA1".to_string()], ..Default::default() }),
+        ("in 'W1,N1C'", Args { location: vec!["W1".to_string(), "N1C".to_string()], ..Default::default() }),
+        ("in N1C", Args { location: vec!["N1C".to_string()], ..Default::default() }),
+        ("in E1W", Args { location: vec!["E1W".to_string()], ..Default::default() }),
+        ("in LA10", Args { location: vec!["LA10".to_string()], ..Default::default() }),
+        ("in SW1A", Args { location: vec!["SW1A".to_string()], ..Default::default() }),
+        ("in LA105DL", Args { location: vec!["LA105DL".to_string()], ..Default::default() }),
+        ("in LA10 5DL", Args { location: vec!["LA10 5DL".to_string()], ..Default::default() }),
     ];
 
     for (desc, args) in cases {

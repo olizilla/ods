@@ -262,3 +262,26 @@ $ COLUMNS=40 ods find sedbergh
 │ 12 active records                    │
 └──────────────────────────────────────┘
 * Use --all to include inactive
+
+$ COLUMNS=100 ods find --in SW1
+* Source: releases/2026-07-31/orgs.parquet
+* SW1 includes its sub-district SW1A.
+┌──────────┬──────────────────────┬──────────┬──────────┬───────┬──────────┐
+│ ODS Code ┆ Name                 ┆ Postcode ┆ Roles    ┆ Class ┆ Matched  │
+╞══════════╪══════════════════════╪══════════╪══════════╪═══════╪══════════╡
+│ SW1A01   ┆ WESTMINSTER PRACTICE ┆ SW1A 1AA ┆ Pharmacy ┆ site  ┆ postcode │
+├──────────┴──────────────────────┴──────────┴──────────┴───────┴──────────┤
+│ 1 active record                            Use --all to include inactive │
+└──────────────────────────────────────────────────────────────────────────┘
+
+$ COLUMNS=100 ods find --in E1
+* Source: releases/2026-07-31/orgs.parquet
+* E1 includes its sub-district E1W.
+┌──────────┬────────────────────┬──────────┬──────────┬───────┬──────────┐
+│ ODS Code ┆ Name               ┆ Postcode ┆ Roles    ┆ Class ┆ Matched  │
+╞══════════╪════════════════════╪══════════╪══════════╪═══════╪══════════╡
+│ E101     ┆ WHITECHAPEL HEALTH ┆ E1 1AA   ┆ Pharmacy ┆ site  ┆ postcode │
+│ E1W01    ┆ WAPPING CLINIC     ┆ E1W 1AA  ┆ Pharmacy ┆ site  ┆ postcode │
+├──────────┴────────────────────┴──────────┴──────────┴───────┴──────────┤
+│ 2 active records                         Use --all to include inactive │
+└────────────────────────────────────────────────────────────────────────┘

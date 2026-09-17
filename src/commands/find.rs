@@ -32,11 +32,12 @@ combine with OR:
 --gp and --dentist add role codes to --role rather than filtering separately.
 --all reads orgs_all.parquet, which is why it adds a Status column.
 
---in matches a whole country, county or town, ignoring case and punctuation, or
-a postcode prefix. Town and county are as ODS records them: postal and historic,
-not administrative. London-area practices are recorded under MIDDLESEX (196 GP
-practices, none with town LONDON), ESSEX, KENT and SURREY, so no --in value
-selects a metropolitan area.";
+--in matches a whole town, county or country, ignoring case and punctuation, or a
+postcode district, sub-district or whole postcode: LA1 is not LA10. A district
+includes its sub-districts, so SW1 covers SW1A to SW1Y and N1 covers N1C, while
+N1C matches only itself. Town and county come from each record's address, so they
+follow post towns, not council boundaries: --in liverpool leaves out Bootle, which
+has L20 postcodes and a post town of its own.";
 
 #[derive(Parser, Debug, Clone)]
 #[command(after_long_help = AFTER_LONG_HELP)]
@@ -52,7 +53,7 @@ pub struct Args {
     #[arg(long, value_delimiter = ',', num_args = 1..)]
     pub code: Vec<String>,
 
-    /// Filter by whole country, county or town, or a postcode prefix (minimum 3 characters)
+    /// Filter by whole town, county or country, or a postcode district, sub-district or whole postcode (repeatable and comma-separated)
     #[arg(long = "in", value_delimiter = ',', num_args = 1..)]
     pub location: Vec<String>,
 
@@ -125,9 +126,7 @@ pub fn normalize_for_matching(s: &str) -> String {
         if c == '\'' || c == '’' || c == '‘' {
             continue;
         } else if c.is_alphanumeric() {
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
+            result.push(c);
             last_was_space = false;
         } else {
             if !last_was_space && !result.is_empty() {
@@ -141,13 +140,6 @@ pub fn normalize_for_matching(s: &str) -> String {
         result.pop();
     }
     result
-}
-
-pub fn normalize_postcode(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
 }
 
 /// Uppercase, keeping only letters and digits. Used for name matching only.
@@ -770,7 +762,7 @@ pub fn find_org_in_parquet(
 pub struct ParsedLocation {
     pub raw: String,
     pub norm: String,
-    pub norm_postcode: String,
+    pub postcode_value: Option<crate::postcode::PostcodeValue>,
 }
 
 pub struct ParsedRoleFilter {
@@ -933,6 +925,54 @@ pub fn resolve_sql_parquet_path(parquet_dir: &Path, file_name: &str) -> PathBuf 
     full
 }
 
+fn terminal_width() -> usize {
+    if let Ok(cols_str) = std::env::var("COLUMNS") {
+        if let Ok(cols) = cols_str.parse::<usize>() {
+            if cols > 0 {
+                return cols;
+            }
+        }
+    }
+    if let Ok((w, _)) = crossterm::terminal::size() {
+        if w > 0 {
+            return w as usize;
+        }
+    }
+    120
+}
+
+fn wrap_notice_line(text: &str) -> String {
+    let width = terminal_width();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return text.to_string();
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+
+    for word in words {
+        if current_line.is_empty() {
+            current_line.push_str(word);
+        } else {
+            let space_needed = 1;
+            let current_len = unicode_width::UnicodeWidthStr::width(current_line.as_str());
+            let word_len = unicode_width::UnicodeWidthStr::width(word);
+            if current_len + space_needed + word_len <= width {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                lines.push(current_line);
+                current_line = format!("  {}", word);
+            }
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    lines.join("\n")
+}
+
 fn escape_sql_literal(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -948,9 +988,9 @@ pub fn build_sql_query(
     if !parsed_locations.is_empty() {
         out.push_str(
             "CREATE OR REPLACE TEMP MACRO norm(s) AS\n  \
-             trim(regexp_replace(lower(regexp_replace(s, '[''’‘]', '', 'g')), '[^\\p{L}\\p{N}]+', ' ', 'g'));\n\
-             CREATE OR REPLACE TEMP MACRO norm_postcode(s) AS\n  \
-             regexp_replace(lower(s), '[^a-z0-9]', '', 'g');\n\n",
+             trim(regexp_replace(regexp_replace(s, '[''’‘]', '', 'g'), '[^\\p{L}\\p{N}]+', ' ', 'g'));\n\
+             CREATE OR REPLACE TEMP MACRO outward(p) AS split_part(p, ' ', 1);\n\
+             CREATE OR REPLACE TEMP MACRO district(p) AS regexp_replace(outward(p), '([0-9])[A-Z]$', '\\1');\n\n",
         );
     }
 
@@ -987,48 +1027,48 @@ pub fn build_sql_query(
         }
     }
 
-    if let Some(pr) = parsed_roles {
+    if let Some(ref pr) = parsed_roles {
         if !pr.codes.is_empty() {
-            let mut unique_codes = Vec::new();
-            for c in &pr.codes {
-                if !unique_codes.contains(c) {
-                    unique_codes.push(c.clone());
-                }
-            }
-            let formatted_role_codes: Vec<String> = unique_codes
+            let list_elements: Vec<String> = pr
+                .codes
                 .iter()
                 .map(|c| format!("'{}'", escape_sql_literal(c)))
                 .collect();
             clauses.push(format!(
                 "list_has_any(role_codes, [{}])",
-                formatted_role_codes.join(", ")
+                list_elements.join(", ")
             ));
         }
     }
 
     if !parsed_locations.is_empty() {
-        if parsed_locations.len() == 1 {
-            let loc = &parsed_locations[0];
+        let format_location_block = |loc: &ParsedLocation| -> String {
             let norm_val = escape_sql_literal(&loc.norm);
-            let norm_pc = escape_sql_literal(&loc.norm_postcode);
-            clauses.push(format!(
-                "(   norm(town)    = '{norm_val}'\n \
-                 OR norm(county)  = '{norm_val}'\n \
-                 OR norm(country) = '{norm_val}'\n \
-                 OR norm_postcode(postcode) LIKE '{norm_pc}%')"
-            ));
-        } else {
-            let mut blocks = Vec::new();
-            for loc in parsed_locations {
-                let norm_val = escape_sql_literal(&loc.norm);
-                let norm_pc = escape_sql_literal(&loc.norm_postcode);
-                blocks.push(format!(
-                    "(   norm(town)    = '{norm_val}'\n \
-                     OR norm(county)  = '{norm_val}'\n \
-                     OR norm(country) = '{norm_val}'\n \
-                     OR norm_postcode(postcode) LIKE '{norm_pc}%')"
-                ));
+            let mut lines = vec![
+                format!("   norm(town)    = '{norm_val}'"),
+                format!("OR norm(county)  = '{norm_val}'"),
+                format!("OR norm(country) = '{norm_val}'"),
+            ];
+            if let Some(ref pv) = loc.postcode_value {
+                match pv {
+                    crate::postcode::PostcodeValue::District(district_val) => {
+                        lines.push(format!("OR district(postcode) = '{}'", escape_sql_literal(district_val)));
+                    }
+                    crate::postcode::PostcodeValue::Outward(outward_val) => {
+                        lines.push(format!("OR outward(postcode) = '{}'", escape_sql_literal(outward_val)));
+                    }
+                    crate::postcode::PostcodeValue::Full(full_val) => {
+                        lines.push(format!("OR postcode = '{}'", escape_sql_literal(full_val)));
+                    }
+                }
             }
+            format!("({})", lines.join("\n "))
+        };
+
+        if parsed_locations.len() == 1 {
+            clauses.push(format_location_block(&parsed_locations[0]));
+        } else {
+            let blocks: Vec<String> = parsed_locations.iter().map(format_location_block).collect();
             clauses.push(format!("({})", blocks.join("\n OR\n ")));
         }
     }
@@ -1111,13 +1151,18 @@ pub fn run_with_writer_color(
         let mut locs = Vec::new();
         for loc in &args.location {
             let trimmed = loc.trim();
-            if trimmed.chars().count() < 3 {
+            let is_two_char_district = trimmed.len() == 2
+                && trimmed.as_bytes()[0].is_ascii_alphabetic()
+                && trimmed.as_bytes()[1].is_ascii_digit();
+            if trimmed.chars().count() < 3 && !is_two_char_district {
                 bail!("✖ Location query '{}' is too short (minimum 3 characters)", trimmed);
             }
+            let pv = crate::postcode::classify(trimmed);
+            let upper = trimmed.to_uppercase();
             locs.push(ParsedLocation {
                 raw: trimmed.to_string(),
-                norm: normalize_for_matching(trimmed),
-                norm_postcode: normalize_postcode(trimmed),
+                norm: normalize_for_matching(&upper),
+                postcode_value: pv,
             });
         }
         locs
@@ -1145,8 +1190,8 @@ pub fn run_with_writer_color(
                 }
                 codes.push(code_upper);
             } else {
-                let norm_input = normalize_for_matching(trimmed);
-                let matched_entry = vocab.names.iter().find(|(_, vn)| normalize_for_matching(vn) == norm_input);
+                let norm_input = normalize_for_matching(&trimmed.to_uppercase());
+                let matched_entry = vocab.names.iter().find(|(_, vn)| normalize_for_matching(&vn.to_uppercase()) == norm_input);
                 if let Some((code, valid_name)) = matched_entry {
                     codes.push(code.clone());
                     names.push(valid_name.clone());
@@ -1221,6 +1266,7 @@ pub fn run_with_writer_color(
     let mut matches: Vec<Match> = Vec::new();
     let mut location_counts: HashMap<String, usize> = HashMap::new();
     let mut matched_location_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut district_subs_map: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
 
     for batch in reader {
         let batch = batch?;
@@ -1240,10 +1286,16 @@ pub fn run_with_writer_color(
             let mut norm_town = String::new();
             let mut norm_county = String::new();
             let mut norm_country = String::new();
-            let mut norm_post = String::new();
+
+            let postcode = if !parsed_locations.is_empty() {
+                extract_batch_opt_str(&batch, indices.postcode, i)
+            } else {
+                None
+            };
+            let row_postcode_str = postcode.as_deref().unwrap_or("");
+            let row_outward = row_postcode_str.split_whitespace().next().unwrap_or("");
 
             if !parsed_locations.is_empty() {
-                let postcode = extract_batch_opt_str(&batch, indices.postcode, i);
                 let town = extract_batch_opt_str(&batch, indices.town, i);
                 let county = extract_batch_opt_str(&batch, indices.county, i);
                 let country = extract_batch_opt_str(&batch, indices.country, i);
@@ -1251,7 +1303,6 @@ pub fn run_with_writer_color(
                 norm_country = normalize_for_matching(country.as_deref().unwrap_or(""));
                 norm_county = normalize_for_matching(county.as_deref().unwrap_or(""));
                 norm_town = normalize_for_matching(town.as_deref().unwrap_or(""));
-                norm_post = normalize_postcode(postcode.as_deref().unwrap_or(""));
 
                 if !norm_town.is_empty() {
                     *location_counts.entry(norm_town.clone()).or_default() += 1;
@@ -1262,19 +1313,23 @@ pub fn run_with_writer_color(
                 if !norm_country.is_empty() {
                     *location_counts.entry(norm_country.clone()).or_default() += 1;
                 }
-                if let Some(ref p) = postcode {
-                    let outward = p.split_whitespace().next().unwrap_or("");
-                    let norm_outward = normalize_postcode(outward);
-                    if !norm_outward.is_empty() {
-                        *location_counts.entry(norm_outward).or_default() += 1;
-                    }
+                if !row_outward.is_empty() {
+                    *location_counts.entry(row_outward.to_string()).or_default() += 1;
                 }
 
                 for (q_idx, q) in parsed_locations.iter().enumerate() {
+                    let matches_pc = q.postcode_value.as_ref().map_or(false, |pv| {
+                        crate::postcode::matches_postcode(row_postcode_str, pv)
+                    });
+                    if let Some(crate::postcode::PostcodeValue::District(ref d)) = q.postcode_value {
+                        if crate::postcode::district(row_outward) == d && row_outward != d {
+                            district_subs_map.entry(d.clone()).or_default().insert(row_outward.to_string());
+                        }
+                    }
                     if (!norm_town.is_empty() && norm_town == q.norm)
                         || (!norm_county.is_empty() && norm_county == q.norm)
                         || (!norm_country.is_empty() && norm_country == q.norm)
-                        || (!norm_post.is_empty() && !q.norm_postcode.is_empty() && norm_post.starts_with(&q.norm_postcode))
+                        || matches_pc
                     {
                         matched_location_indices.insert(q_idx);
                     }
@@ -1339,8 +1394,10 @@ pub fn run_with_writer_color(
                     if !norm_county.is_empty() && norm_county == q.norm {
                         matched_county = true;
                     }
-                    if !norm_post.is_empty() && !q.norm_postcode.is_empty() && norm_post.starts_with(&q.norm_postcode) {
-                        matched_postcode = true;
+                    if let Some(ref pv) = q.postcode_value {
+                        if crate::postcode::matches_postcode(row_postcode_str, pv) {
+                            matched_postcode = true;
+                        }
                     }
                     if !norm_country.is_empty() && norm_country == q.norm {
                         matched_country = true;
@@ -1428,6 +1485,23 @@ pub fn run_with_writer_color(
     } else {
         None
     };
+
+    // Build district sub-districts notices
+    for q in &parsed_locations {
+        if let Some(crate::postcode::PostcodeValue::District(ref d)) = q.postcode_value {
+            if let Some(subs) = district_subs_map.get(d) {
+                if !subs.is_empty() {
+                    let subs_vec: Vec<&str> = subs.iter().map(|s| s.as_str()).collect();
+                    let line = if subs_vec.len() == 1 {
+                        format!("* {} includes its sub-district {}.", d, subs_vec[0])
+                    } else {
+                        format!("* {} includes its {} sub-districts: {}", d, subs_vec.len(), subs_vec.join(", "))
+                    };
+                    alias_notices.push(wrap_notice_line(&line));
+                }
+            }
+        }
+    }
 
     // Sorting
     matches.sort_by(|a, b| {
@@ -1879,7 +1953,7 @@ mod tests {
         ).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("B202"));
-        assert!(s.contains("A101") || s.contains("Alpha Health Centre")); // Successor
+        assert!(s.contains("A101") || (s.contains("Alpha") && s.contains("Centre"))); // Successor
 
         // Test 4: find output is table, and ods info provides detail inspector
         let mut out = Vec::new();

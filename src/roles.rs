@@ -306,6 +306,25 @@ where
     let max_count = cand_list.iter().map(|(_, c)| *c).max().unwrap_or(0);
     let min_threshold = if max_count >= 50 { 5 } else { 0 };
 
+    let input_trimmed = input.trim();
+    if let Some((cand1, cand2)) = parse_sector_candidates(input_trimmed) {
+        let mut results = Vec::new();
+        // Check cand1 (case-insensitive) in cand_list
+        if let Some((name, _)) = cand_list.iter().find(|(n, _)| n.eq_ignore_ascii_case(&cand1)) {
+            results.push(name.to_uppercase());
+        }
+        // Check cand2 (case-insensitive) in cand_list
+        if let Some((name, _)) = cand_list.iter().find(|(n, _)| n.eq_ignore_ascii_case(&cand2)) {
+            let name_upper = name.to_uppercase();
+            if !results.contains(&name_upper) {
+                results.push(name_upper);
+            }
+        }
+        if !results.is_empty() {
+            return results;
+        }
+    }
+
     let input_norm = input.to_lowercase();
     let input_words: Vec<&str> = input_norm.split_whitespace().collect();
 
@@ -329,6 +348,55 @@ where
     // Sort by score descending, then shorter name first, then name alphabetically
     scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)).then_with(|| a.0.cmp(&b.0)));
     scored.into_iter().take(3).map(|(n, _, _)| n).collect()
+}
+
+fn parse_sector_candidates(input: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let p1 = parts[0];
+    let p2 = parts[1];
+
+    // Check p1: 1 or 2 letters, 1 digit, optional letter or digit. Length 2 to 4.
+    let p1_bytes = p1.as_bytes();
+    if p1.len() < 2 || p1.len() > 4 {
+        return None;
+    }
+    let alpha_len = if p1_bytes[0].is_ascii_alphabetic() {
+        if p1.len() > 1 && p1_bytes[1].is_ascii_alphabetic() {
+            2
+        } else {
+            1
+        }
+    } else {
+        return None;
+    };
+    if p1.len() <= alpha_len || !p1_bytes[alpha_len].is_ascii_digit() {
+        return None;
+    }
+    if p1.len() == alpha_len + 2 && !p1_bytes[alpha_len + 1].is_ascii_alphanumeric() {
+        return None;
+    }
+
+    // Check p2: 1 digit, followed by 0 to 2 letters. Length 1 to 3.
+    let p2_bytes = p2.as_bytes();
+    if p2.is_empty() || p2.len() > 3 {
+        return None;
+    }
+    if !p2_bytes[0].is_ascii_digit() {
+        return None;
+    }
+    if p2.len() > 1 && !p2_bytes[1].is_ascii_alphabetic() {
+        return None;
+    }
+    if p2.len() > 2 && !p2_bytes[2].is_ascii_alphabetic() {
+        return None;
+    }
+
+    let cand1 = p1.to_uppercase();
+    let cand2 = format!("{}{}", p1, p2).to_uppercase();
+    Some((cand1, cand2))
 }
 
 #[cfg(test)]
@@ -528,6 +596,25 @@ mod tests {
         assert_eq!(
             suggestions,
             vec!["newcastle", "newcastle upon tyne", "newcastle emlyn"]
+        );
+    }
+
+    #[test]
+    fn test_find_location_suggestions_sector_shaped() {
+        let candidates = vec![
+            ("N1", 393),
+            ("N11", 97),
+            ("LA1", 228),
+            ("LA15", 17),
+        ];
+
+        assert_eq!(
+            find_location_suggestions("N1 1", candidates.clone()),
+            vec!["N1", "N11"]
+        );
+        assert_eq!(
+            find_location_suggestions("LA1 5", candidates),
+            vec!["LA1", "LA15"]
         );
     }
 

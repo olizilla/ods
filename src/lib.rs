@@ -5,6 +5,7 @@ pub mod datapackage;
 pub mod models;
 pub mod ods_codes;
 pub mod parquet_util;
+pub mod postcode;
 pub mod progress;
 pub mod provenance;
 pub mod index;
