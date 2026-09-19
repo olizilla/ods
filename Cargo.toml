@@ -30,12 +30,8 @@ comfy-table = { version = "8.0", features = ["custom_styling"] }
 unicode-width = "0.2"
 
 [dev-dependencies]
-criterion = "0.5"
 tempfile = "3.9"
-
-[[bench]]
-name = "compile_bench"
-harness = false
+jsonschema = "0.28"
 
 [profile.release]
 opt-level = 3

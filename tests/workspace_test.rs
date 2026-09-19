@@ -130,13 +130,13 @@ fn test_tightened_workspace_discovery_rules() {
     // 1. Explicit wins. No further checks (even if path looks like or sits under a releases folder).
     let explicit_root = PathBuf::from("/custom/path/ws");
     assert_eq!(
-        ods::workspace::find_workspace_root_from(tmp.path(), Some(&explicit_root)),
+        ods::workspace::find_workspace_root_from(tmp.path(), Some(&explicit_root)).unwrap(),
         Some(explicit_root)
     );
 
     let explicit_with_releases_parent = PathBuf::from("/foo/releases/ws");
     assert_eq!(
-        ods::workspace::find_workspace_root_from(tmp.path(), Some(&explicit_with_releases_parent)),
+        ods::workspace::find_workspace_root_from(tmp.path(), Some(&explicit_with_releases_parent)).unwrap(),
         Some(explicit_with_releases_parent),
         "Explicit path must not be second-guessed"
     );
@@ -147,7 +147,7 @@ fn test_tightened_workspace_discovery_rules() {
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&ws, None),
+        ods::workspace::find_workspace_root_from(&ws, None).unwrap(),
         Some(ws.clone()),
         "start must be recognized as root when _releases.json validates"
     );
@@ -162,7 +162,7 @@ fn test_tightened_workspace_discovery_rules() {
     ).unwrap();
 
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&rel_dir, None),
+        ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(),
         Some(ws.clone()),
         "release dir with _provenance.json must resolve to enclosing workspace root"
     );
@@ -171,7 +171,7 @@ fn test_tightened_workspace_discovery_rules() {
     ws_obj.set_active("2026-07-31").unwrap();
     let current_path = ws.join("current");
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&current_path, None),
+        ods::workspace::find_workspace_root_from(&current_path, None).unwrap(),
         Some(ws.clone()),
         "current pointer must resolve to enclosing workspace root"
     );
@@ -181,7 +181,7 @@ fn test_tightened_workspace_discovery_rules() {
     let deep_child = ws.join("subdir").join("nested").join("deep");
     fs::create_dir_all(&deep_child).unwrap();
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&deep_child, None),
+        ods::workspace::find_workspace_root_from(&deep_child, None).unwrap(),
         Some(ws.clone()),
         "deep child must walk up to find ancestor with valid _releases.json"
     );
@@ -195,7 +195,7 @@ fn test_tightened_workspace_discovery_rules() {
     fs::create_dir_all(&repo_child).unwrap();
 
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&repo_child, None),
+        ods::workspace::find_workspace_root_from(&repo_child, None).unwrap(),
         Some(repo_ods_data.clone()),
         "child in repo must find repo/ods_data"
     );
@@ -213,7 +213,7 @@ fn test_tightened_workspace_discovery_rules() {
     // inner_repo has .git but NO workspace inside it. Discovery starting inside inner_child
     // must stop at inner_repo (.git boundary) and must NOT discover outer_dir
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&inner_child, None),
+        ods::workspace::find_workspace_root_from(&inner_child, None).unwrap(),
         None,
         ".git boundary must stop upward traversal before ascending past git root"
     );
@@ -224,7 +224,7 @@ fn test_tightened_workspace_discovery_rules() {
     fs::create_dir_all(&home_child).unwrap();
 
     assert_eq!(
-        ods::workspace::find_workspace_root_from_with_home(&home_child, None, Some(&fake_home)),
+        ods::workspace::find_workspace_root_from_with_home(&home_child, None, Some(&fake_home)).unwrap(),
         None,
         "$HOME boundary must stop upward traversal before ascending past home"
     );
@@ -369,20 +369,20 @@ fn test_validate_releases_json_shapes() {
     // 3. Nested fetched_at / index (old cached wrapper shape) -> false
     let dir_nested = tmp.path().join("nested");
     fs::create_dir_all(&dir_nested).unwrap();
-    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"_type": "ods_release_index", "index_version": 2, "mirrors": [], "releases": []}}"#;
+    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"foo": "bar"}}"#;
     fs::write(dir_nested.join("_releases.json"), nested_json).unwrap();
     assert!(!ods::workspace::validate_releases_json(&dir_nested));
 
-    // 4. Loose JSON with only root _type -> false (fails to parse full OdsReleaseIndex)
+    // 4. Loose JSON with wrong schema -> false (fails to parse full OdsReleaseIndex)
     let dir_root_type_only = tmp.path().join("root_type_only");
     fs::create_dir_all(&dir_root_type_only).unwrap();
-    fs::write(dir_root_type_only.join("_releases.json"), r#"{"_type": "ods_release_index"}"#).unwrap();
+    fs::write(dir_root_type_only.join("_releases.json"), r#"{"$schema": "https://example.com/other"}"#).unwrap();
     assert!(!ods::workspace::validate_releases_json(&dir_root_type_only));
 
-    // 5. Loose JSON with only index._type -> false
+    // 5. Loose JSON with only index -> false
     let dir_index_type_only = tmp.path().join("index_type_only");
     fs::create_dir_all(&dir_index_type_only).unwrap();
-    fs::write(dir_index_type_only.join("_releases.json"), r#"{"index": {"_type": "ods_release_index"}}"#).unwrap();
+    fs::write(dir_index_type_only.join("_releases.json"), r#"{"index": {"foo": "bar"}}"#).unwrap();
     assert!(!ods::workspace::validate_releases_json(&dir_index_type_only));
 
     // 6. Valid OdsReleaseIndex -> true
@@ -397,11 +397,40 @@ fn test_find_workspace_root_rejects_nested_index_shape() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("nested_ws");
     fs::create_dir_all(&ws).unwrap();
-    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"_type": "ods_release_index", "index_version": 2, "mirrors": [], "releases": []}}"#;
+    let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"foo": "bar"}}"#;
     fs::write(ws.join("_releases.json"), nested_json).unwrap();
 
-    // Must return None because the shape is rejected
-    assert_eq!(ods::workspace::find_workspace_root_from(&ws, None), None);
+    // Must return Err because invalid _releases.json stops discovery with exit 1
+    assert!(ods::workspace::find_workspace_root_from(&ws, None).is_err());
+}
+
+#[test]
+fn test_workspace_marker_without_valid_schema_stops_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ods_data");
+    fs::create_dir_all(&ws).unwrap();
+    fs::write(ws.join("_releases.json"), b"{\"foo\":\"bar\"}").unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(tmp.path())
+        .arg("find")
+        .arg("foo")
+        .output()
+        .expect("execute ods find");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.clone());
+    let marker_canon = ws_canon.join("_releases.json");
+    let marker_plain = ws.join("_releases.json");
+    assert!(
+        stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_canon.display()))
+            || stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_plain.display())),
+        "stderr should contain expected marker, got:\n{}",
+        stderr
+    );
+    assert!(stderr.contains("Expected $schema https://ods.fyi/schema/releases.v1.json"));
+    assert!(stderr.contains("Delete it and run `ods pull` to replace it."));
 }
 
 #[test]
@@ -419,11 +448,11 @@ fn test_release_dir_with_no_releases_json_is_not_discovered() {
     // In a directory structure where ws has NO _releases.json, discovering from inside releases/2026-07-31 must fail
     // Boundary .git prevents discovery from escaping to repo root
     fs::create_dir_all(tmp.path().join(".git")).unwrap();
-    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None), None);
+    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(), None);
 
     // Now seed the marker in ws, and discovery succeeds
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
-    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None), Some(ws));
+    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(), Some(ws));
 }
 
 #[test]

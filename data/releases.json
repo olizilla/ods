@@ -1,6 +1,6 @@
 {
-  "_type": "ods_release_index",
-  "index_version": 2,
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
   "mirrors": [
     {
       "url": "https://ods.fyi/v2/ods-data"

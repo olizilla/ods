@@ -1,4 +1,7 @@
+mod common;
+
 use anyhow::Result;
+use common::make_v1_index;
 use ods::commands::cite::Args as CiteArgs;
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 use std::fs::{self, File};
@@ -47,24 +50,15 @@ fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, Path
     let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1").unwrap();
     let manifest_digest = manifest.digest().unwrap();
 
-    let release_entry = ods::index::ReleaseIndexEntry {
-        trud_release_date: "2026-08-31".to_string(),
-        dataset_version: "1.0.1".to_string(),
-        tag: "2026-08-31_1.0.1".to_string(),
-        manifest_digest,
-        trud_release_sha256: zip_sha256,
-        tool_version: "0.4.3".to_string(),
-        dataset_doi: None,
-        withdrawn: withdrawn_reason.map(|s| s.to_string()),
-    };
-
-    let index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![release_entry],
-    };
+    let mut index = make_v1_index(&[(
+        "2026-08-31",
+        &zip_sha256,
+        1_000_000,
+        &[("1.0.1", &manifest_digest)],
+    )]);
+    if let Some(reason) = withdrawn_reason {
+        index.releases[0].datasets[0].withdrawn = Some(reason.to_string());
+    }
     let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, tmp.path()).unwrap();
 
@@ -198,18 +192,21 @@ fn test_cite_refuses_when_release_is_withdrawn() {
 #[test]
 fn test_pull_refuses_when_release_is_withdrawn() {
     let json = r#"{
-      "_type": "ods_release_index",
-      "index_version": 2,
+      "$schema": "https://ods.fyi/schema/releases.v1.json",
+      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
       "mirrors": [],
       "releases": [
         {
           "trud_release_date": "2026-07-31",
-          "dataset_version": "1.0.0",
-          "tag": "2026-07-31_1.0.0",
-          "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
           "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "tool_version": "0.4.3",
-          "withdrawn": "roles table truncated at 65535 rows by a bad build"
+          "trud_release_filesize_bytes": 37983173,
+          "datasets": [
+            {
+              "dataset_version": "1.0.0",
+              "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
+              "withdrawn": "roles table truncated at 65535 rows by a bad build"
+            }
+          ]
         }
       ]
     }"#;
@@ -371,24 +368,14 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
     let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let release_entry = ods::index::ReleaseIndexEntry {
-        trud_release_date: "2026-08-31".to_string(),
-        dataset_version: "1.0.1".to_string(),
-        tag: "2026-08-31_1.0.1".to_string(),
-        manifest_digest,
-        trud_release_sha256: zip_sha256,
-        tool_version: "0.4.3".to_string(),
-        dataset_doi: None,
-        withdrawn: Some("critical schema defect discovered in release".to_string()),
-    };
-
-    let index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![release_entry],
-    };
+    let mut index = make_v1_index(&[(
+        "2026-08-31",
+        &zip_sha256,
+        1_000_000,
+        &[("1.0.1", &manifest_digest)],
+    )]);
+    index.releases[0].datasets[0].withdrawn =
+        Some("critical schema defect discovered in release".to_string());
     let index_bytes = serde_json::to_vec_pretty(&index)?;
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &ws_root)?;
 
@@ -407,4 +394,45 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
     assert!(err.contains("Update to a valid release: ods pull 2026-08-31"));
 
     Ok(())
+}
+
+#[test]
+fn test_cite_with_invalid_workspace_marker_stops_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ods_data");
+    let rel_dir = ws.join("releases").join("2026-08-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    let mut prov = OdsProvenance::default();
+    prov.trud_release_date = Some("2026-08-31".to_string());
+    prov.dataset_version = Some("0.1.0".to_string());
+    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    fs::write(
+        rel_dir.join(PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    ).unwrap();
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+
+    // Invalid marker in enclosing workspace
+    let marker_path = ws.join("_releases.json");
+    fs::write(&marker_path, b"{\"bad\":\"marker\"}").unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(tmp.path())
+        .args(["cite", "-i", rel_dir.to_str().unwrap()])
+        .output()
+        .expect("execute ods cite");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let marker_canon = marker_path.canonicalize().unwrap_or_else(|_| marker_path.clone());
+    assert!(
+        stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_canon.display()))
+            || stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_path.display())),
+        "stderr must contain marker refusal, got:\n{}",
+        stderr
+    );
+    assert!(stderr.contains("Expected $schema https://ods.fyi/schema/releases.v1.json"));
+    assert!(stderr.contains("Delete it and run `ods pull` to replace it."));
 }

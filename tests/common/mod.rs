@@ -1147,3 +1147,46 @@ pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     }
     outer_zip.finish().unwrap();
 }
+
+pub type DatasetFixture<'a> = (&'a str, &'a str);
+pub type ReleaseEntryFixture<'a> = (&'a str, &'a str, u64, &'a [DatasetFixture<'a>]);
+
+#[allow(dead_code)]
+pub fn make_v1_index(
+    releases: &[ReleaseEntryFixture],
+) -> ods::index::OdsReleaseIndex {
+    let rel_objs: Vec<ods::index::Release> = releases
+        .iter()
+        .map(|(date, sha256, size, datasets)| {
+            let ds_objs: Vec<ods::index::Dataset> = datasets
+                .iter()
+                .map(|(ver, dig)| ods::index::Dataset {
+                    dataset_version: ver.to_string(),
+                    manifest_digest: dig.to_string(),
+                    dataset_doi: None,
+                    withdrawn: None,
+                })
+                .collect();
+            ods::index::Release {
+                trud_release_date: date.to_string(),
+                trud_release_sha256: sha256.to_string(),
+                trud_release_filesize_bytes: *size,
+                datasets: ds_objs,
+            }
+        })
+        .collect();
+
+    ods::index::OdsReleaseIndex {
+        schema: ods::index::RELEASES_SCHEMA_V1_URL.to_string(),
+        trud_signing_key_fingerprint: "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+        mirrors: vec![
+            ods::index::MirrorEntry {
+                url: "https://ods.fyi/v2/ods-data".to_string(),
+            },
+            ods::index::MirrorEntry {
+                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
+            },
+        ],
+        releases: rel_objs,
+    }
+}

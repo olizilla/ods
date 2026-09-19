@@ -1,36 +1,69 @@
+mod common;
+
 use anyhow::Result;
-use ods::index::{OdsReleaseIndex, ReleaseIndexEntry};
+use common::make_v1_index;
+use ods::index::OdsReleaseIndex;
 
 #[test]
 fn test_baked_index_parses_and_validates() -> Result<()> {
     let index = OdsReleaseIndex::baked()?;
-    assert_eq!(index.index_version, 2);
-    assert_eq!(index.type_tag, "ods_release_index");
+    assert_eq!(index.schema, ods::index::RELEASES_SCHEMA_V1_URL);
+    assert_eq!(
+        index.trud_signing_key_fingerprint,
+        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+    );
+    assert_eq!(index.mirrors.len(), 2);
     Ok(())
 }
 
 #[test]
-fn test_index_rejects_duplicate_date_version_pair() {
+fn test_baked_index_matches_its_schema() -> Result<()> {
+    let schema_str = include_str!("../worker/schema/releases.v1.json");
+    let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
+    let validator = jsonschema::validator_for(&schema_json)
+        .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
+
+    // 1. Validate baked data/releases.json
+    let baked_str = include_str!("../data/releases.json");
+    let baked_json: serde_json::Value = serde_json::from_str(baked_str)?;
+    let errors: Vec<_> = validator.iter_errors(&baked_json).collect();
+    assert!(errors.is_empty(), "data/releases.json schema errors: {:?}", errors);
+
+    // 2. Validate index built by Task 7's test builder
+    let built_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let built_json: serde_json::Value = serde_json::to_value(&built_index)?;
+    let built_errors: Vec<_> = validator.iter_errors(&built_json).collect();
+    assert!(built_errors.is_empty(), "Built index schema errors: {:?}", built_errors);
+
+    Ok(())
+}
+
+#[test]
+fn test_index_rejects_duplicate_version_in_release() {
     let json = r#"{
-      "_type": "ods_release_index",
-      "index_version": 2,
+      "$schema": "https://ods.fyi/schema/releases.v1.json",
+      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
       "mirrors": [],
       "releases": [
         {
           "trud_release_date": "2026-07-31",
-          "dataset_version": "1.0.0",
-          "tag": "2026-07-31_1.0.0",
-          "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
           "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "tool_version": "0.4.3"
-        },
-        {
-          "trud_release_date": "2026-07-31",
-          "dataset_version": "1.0.0",
-          "tag": "2026-07-31_1.0.0",
-          "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000",
-          "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "tool_version": "0.4.3"
+          "trud_release_filesize_bytes": 37983173,
+          "datasets": [
+            {
+              "dataset_version": "1.0.0",
+              "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000"
+            },
+            {
+              "dataset_version": "1.0.0",
+              "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000"
+            }
+          ]
         }
       ]
     }"#;
@@ -39,23 +72,26 @@ fn test_index_rejects_duplicate_date_version_pair() {
     let result = index.validate();
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Duplicate (date, version) pair"));
+    assert!(err.contains("Duplicate dataset_version '1.0.0'"));
 }
 
 #[test]
 fn test_index_rejects_uppercase_manifest_digest() {
     let json = r#"{
-      "_type": "ods_release_index",
-      "index_version": 2,
+      "$schema": "https://ods.fyi/schema/releases.v1.json",
+      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
       "mirrors": [],
       "releases": [
         {
           "trud_release_date": "2026-07-31",
-          "dataset_version": "1.0.0",
-          "tag": "2026-07-31_1.0.0",
-          "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000",
           "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "tool_version": "0.4.3"
+          "trud_release_filesize_bytes": 37983173,
+          "datasets": [
+            {
+              "dataset_version": "1.0.0",
+              "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000"
+            }
+          ]
         }
       ]
     }"#;
@@ -64,56 +100,32 @@ fn test_index_rejects_uppercase_manifest_digest() {
     let result = index.validate();
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("must be lowercase hex"));
+    assert!(err.contains("64 lower-case hex"));
 }
 
 #[test]
 fn test_merge_allows_new_releases() -> Result<()> {
-    let baked = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2019-11-29".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2019-11-29_1.0.0".to_string(),
-            manifest_digest: "sha256:c1a8000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "3B7F91A2".to_string(),
-            tool_version: "0.4.2".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let baked = make_v1_index(&[(
+        "2019-11-29",
+        "3B7F91A200000000000000000000000000000000000000000000000000000000",
+        1000,
+        &[("1.0.0", "sha256:c1a8000000000000000000000000000000000000000000000000000000000000")],
+    )]);
 
-    let fetched = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![
-            ReleaseIndexEntry {
-                trud_release_date: "2019-11-29".to_string(),
-                dataset_version: "1.0.0".to_string(),
-                tag: "2019-11-29_1.0.0".to_string(),
-                manifest_digest: "sha256:c1a8000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "3B7F91A2".to_string(),
-                tool_version: "0.4.2".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-            ReleaseIndexEntry {
-                trud_release_date: "2026-07-31".to_string(),
-                dataset_version: "1.0.1".to_string(),
-                tag: "2026-07-31_1.0.1".to_string(),
-                manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "8151248D".to_string(),
-                tool_version: "0.4.3".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-        ],
-    };
+    let fetched = make_v1_index(&[
+        (
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.1", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+        ),
+        (
+            "2019-11-29",
+            "3B7F91A200000000000000000000000000000000000000000000000000000000",
+            1000,
+            &[("1.0.0", "sha256:c1a8000000000000000000000000000000000000000000000000000000000000")],
+        ),
+    ]);
 
     let merged = baked.merge(&fetched)?;
     assert_eq!(merged.releases.len(), 2);
@@ -122,100 +134,55 @@ fn test_merge_allows_new_releases() -> Result<()> {
 
 #[test]
 fn test_merge_rejects_contradiction_on_baked_release() {
-    let baked = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2026-07-31_1.0.0".to_string(),
-            manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248D".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let baked = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
 
-    let fetched = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2026-07-31_1.0.0".to_string(),
-            manifest_digest: "sha256:ffff000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248D".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let fetched = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:ffff000000000000000000000000000000000000000000000000000000000000")],
+    )]);
 
     let result = baked.merge(&fetched);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Security error: fetched index contradicts baked release"));
+    assert!(err.contains("Security error: fetched index contradicts baked dataset"));
 }
 
 #[test]
 fn test_resolve_prefers_highest_non_withdrawn_semver() -> Result<()> {
-    let index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![
-            ReleaseIndexEntry {
-                trud_release_date: "2026-07-31".to_string(),
-                dataset_version: "1.0.0".to_string(),
-                tag: "2026-07-31_1.0.0".to_string(),
-                manifest_digest: "sha256:7c4a000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "8151248D".to_string(),
-                tool_version: "0.4.2".to_string(),
-                dataset_doi: None,
-                withdrawn: Some("roles table truncated".to_string()),
-            },
-            ReleaseIndexEntry {
-                trud_release_date: "2026-07-31".to_string(),
-                dataset_version: "1.0.1".to_string(),
-                tag: "2026-07-31_1.0.1".to_string(),
-                manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "8151248D".to_string(),
-                tool_version: "0.4.3".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
+    let mut index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[
+            ("1.0.0", "sha256:7c4a000000000000000000000000000000000000000000000000000000000000"),
+            ("1.0.1", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000"),
         ],
-    };
+    )]);
+    index.releases[0].datasets[0].withdrawn = Some("roles table truncated".to_string());
 
-    let resolved = index.resolve(Some("2026-07-31"))?;
-    assert_eq!(resolved.dataset_version, "1.0.1");
+    let (rel, ds) = index.resolve(Some("2026-07-31"))?;
+    assert_eq!(rel.trud_release_date, "2026-07-31");
+    assert_eq!(ds.dataset_version, "1.0.1");
     Ok(())
 }
 
 #[test]
 fn test_resolve_refuses_when_all_versions_for_date_withdrawn() {
-    let index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2026-07-31_1.0.0".to_string(),
-            manifest_digest: "sha256:7c4a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248D".to_string(),
-            tool_version: "0.4.2".to_string(),
-            dataset_doi: None,
-            withdrawn: Some("roles table truncated at 65535 rows by a bad build".to_string()),
-        }],
-    };
+    let mut index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:7c4a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    index.releases[0].datasets[0].withdrawn =
+        Some("roles table truncated at 65535 rows by a bad build".to_string());
 
     let result = index.resolve(Some("2026-07-31"));
     assert!(result.is_err());
@@ -226,44 +193,21 @@ fn test_resolve_refuses_when_all_versions_for_date_withdrawn() {
 
 #[test]
 fn test_merge_propagates_withdrawal_to_baked_release() -> Result<()> {
-    let baked = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2026-07-31_1.0.0".to_string(),
-            manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248D".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let baked = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
 
-    let fetched = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2026-07-31_1.0.0".to_string(),
-            manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248D".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: Some("roles table truncated at 65535 rows by a bad build".to_string()),
-        }],
-    };
+    let mut fetched = baked.clone();
+    fetched.releases[0].datasets[0].withdrawn =
+        Some("roles table truncated at 65535 rows by a bad build".to_string());
 
     let merged = baked.merge(&fetched)?;
     assert_eq!(merged.releases.len(), 1);
     assert_eq!(
-        merged.releases[0].withdrawn.as_deref(),
+        merged.releases[0].datasets[0].withdrawn.as_deref(),
         Some("roles table truncated at 65535 rows by a bad build")
     );
     Ok(())
@@ -271,34 +215,21 @@ fn test_merge_propagates_withdrawal_to_baked_release() -> Result<()> {
 
 #[test]
 fn test_resolve_none_refuses_when_newest_date_is_withdrawn() {
-    let index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![
-            ReleaseIndexEntry {
-                trud_release_date: "2026-05-29".to_string(),
-                dataset_version: "1.0.0".to_string(),
-                tag: "2026-05-29_1.0.0".to_string(),
-                manifest_digest: "sha256:1111000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "AAAA".to_string(),
-                tool_version: "0.4.2".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-            ReleaseIndexEntry {
-                trud_release_date: "2026-07-31".to_string(),
-                dataset_version: "1.0.0".to_string(),
-                tag: "2026-07-31_1.0.0".to_string(),
-                manifest_digest: "sha256:2222000000000000000000000000000000000000000000000000000000000000".to_string(),
-                trud_release_sha256: "BBBB".to_string(),
-                tool_version: "0.4.3".to_string(),
-                dataset_doi: None,
-                withdrawn: Some("critical corruption in roles".to_string()),
-            },
-        ],
-    };
+    let mut index = make_v1_index(&[
+        (
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.0", "sha256:2222000000000000000000000000000000000000000000000000000000000000")],
+        ),
+        (
+            "2026-05-29",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.0", "sha256:1111000000000000000000000000000000000000000000000000000000000000")],
+        ),
+    ]);
+    index.releases[0].datasets[0].withdrawn = Some("critical corruption in roles".to_string());
 
     let result = index.resolve(None);
     assert!(result.is_err());
@@ -334,12 +265,16 @@ fn test_workspace_release_index_save_and_load() -> Result<()> {
     let baked = OdsReleaseIndex::baked()?;
 
     assert!(ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.is_none());
-    ods::index::OdsReleaseIndex::save_to_workspace_bytes(ods::index::BAKED_RELEASES_JSON_BYTES, tmp.path())?;
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(
+        ods::index::BAKED_RELEASES_JSON_BYTES,
+        tmp.path(),
+    )?;
 
     let loaded = ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
-    assert_eq!(loaded.index_version, baked.index_version);
-    assert_eq!(loaded.type_tag, "ods_release_index");
+    assert_eq!(loaded.schema, baked.schema);
+    assert_eq!(
+        loaded.trud_signing_key_fingerprint,
+        baked.trud_signing_key_fingerprint
+    );
     Ok(())
 }
-
-

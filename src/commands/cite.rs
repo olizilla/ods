@@ -128,8 +128,10 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let manifest_digest = manifest.digest()?;
 
     // 2. Discover workspace and load/cache index
-    let workspace_root = crate::workspace::find_workspace_root_from(&input_dir, None)
-        .or_else(|| crate::workspace::Workspace::open_from(cwd, None).ok().map(|ws| ws.root().to_path_buf()));
+    let workspace_root = match crate::workspace::find_workspace_root_from(&input_dir, None)? {
+        Some(ws) => Some(ws),
+        None => crate::workspace::find_workspace_root_from(cwd, None)?,
+    };
 
     let index = resolve_cite_index(workspace_root.as_deref())?;
 
@@ -153,7 +155,13 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     // 4. Check for withdrawal in index
     let mut dataset_doi: Option<String> = None;
     let d_ref = trud_date.as_deref().unwrap_or(&publication_date);
-    if let Some(entry) = index.releases.iter().find(|r| r.trud_release_date == d_ref && r.dataset_version == dataset_version) {
+    let dataset = index
+        .releases
+        .iter()
+        .find(|r| r.trud_release_date == d_ref)
+        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == dataset_version));
+
+    if let Some(entry) = dataset {
         if let Some(ref reason) = entry.withdrawn {
             anyhow::bail!(
                 "✖ Refusing to cite {} v{}\n  This release was withdrawn: {}\n  Update to a valid release: ods pull {}",

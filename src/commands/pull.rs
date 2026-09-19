@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use crate::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use crate::index::{Dataset, MirrorEntry, OdsReleaseIndex, Release};
 use crate::oci::*;
 use crate::progress::{Progress, ProgressCaps};
 use crate::workspace::{verify_release_dir, Workspace};
@@ -119,8 +119,13 @@ impl OciBlobFetcher for HttpOciFetcher {
         }
         for url in &index_urls {
             if let Ok(bytes) = download_bytes_with_auth(url, None) {
-                if serde_json::from_slice::<OdsReleaseIndex>(&bytes).is_ok() {
+                let valid = serde_json::from_slice::<OdsReleaseIndex>(&bytes)
+                    .map(|idx| idx.validate().is_ok())
+                    .unwrap_or(false);
+                if valid {
                     return Ok(Some(bytes));
+                } else {
+                    eprintln!("! Ignoring {}: it isn't a release index this ods can read", url);
                 }
             }
         }
@@ -275,8 +280,8 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
         return pull_all_releases_cmd(workspace_root, &index, &args, fetcher, &progress);
     }
 
-    let target_entry = index.resolve(args.release_date.as_deref())?;
-    pull_single_release(workspace_root, &index, target_entry, &args, fetcher, &progress)
+    let (target_release, target_dataset) = index.resolve(args.release_date.as_deref())?;
+    pull_single_release(workspace_root, &index, target_release, target_dataset, &args, fetcher, &progress)
 }
 
 pub fn resolve_index_with_baked<F: OciBlobFetcher>(
@@ -313,15 +318,15 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher>(
             Ok(idx) => idx,
             Err(_) => {
                 eprintln!("✖ Cannot parse release index '{}' as an ODS release index", val);
-                eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                eprintln!("  Expected $schema https://ods.fyi/schema/releases.v1.json");
                 return Err(AlreadyReported.into());
             }
         };
 
         if let Err(e) = fetched_index.validate() {
             eprintln!("✖ Cannot parse release index '{}' as an ODS release index", val);
-            if fetched_index.type_tag != "ods_release_index" {
-                eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+            if fetched_index.schema != crate::index::RELEASES_SCHEMA_V1_URL {
+                eprintln!("  Expected $schema https://ods.fyi/schema/releases.v1.json");
             } else {
                 eprintln!("  {}", e);
             }
@@ -395,24 +400,26 @@ fn list_releases_cmd(
     let mut items: Vec<ReleaseListItemJson> = Vec::new();
 
     for r in &index.releases {
-        let is_act = !active_date.is_empty() && active_date == r.trud_release_date;
-        let is_loc = local_releases.iter().any(|lr| lr.date == r.trud_release_date);
-        let status = if let Some(ref reason) = r.withdrawn {
-            format!("withdrawn ({})", reason)
-        } else if is_act {
-            "active (local)".to_string()
-        } else if is_loc {
-            "local".to_string()
-        } else {
-            "remote".to_string()
-        };
+        for ds in &r.datasets {
+            let is_act = !active_date.is_empty() && active_date == r.trud_release_date;
+            let is_loc = local_releases.iter().any(|lr| lr.date == r.trud_release_date);
+            let status = if let Some(ref reason) = ds.withdrawn {
+                format!("withdrawn ({})", reason)
+            } else if is_act {
+                "active (local)".to_string()
+            } else if is_loc {
+                "local".to_string()
+            } else {
+                "remote".to_string()
+            };
 
-        items.push(ReleaseListItemJson {
-            date: r.trud_release_date.clone(),
-            version: r.dataset_version.clone(),
-            status,
-            manifest_digest: Some(r.manifest_digest.clone()),
-        });
+            items.push(ReleaseListItemJson {
+                date: r.trud_release_date.clone(),
+                version: ds.dataset_version.clone(),
+                status,
+                manifest_digest: Some(ds.manifest_digest.clone()),
+            });
+        }
     }
 
     if args.format.as_deref() == Some("json") {
@@ -451,34 +458,37 @@ fn pull_all_releases_cmd<F: OciBlobFetcher>(
     fetcher: &F,
     progress: &Progress,
 ) -> Result<()> {
-    let mut valid_releases: Vec<&ReleaseIndexEntry> = index
-        .releases
-        .iter()
-        .filter(|r| r.withdrawn.is_none())
-        .collect();
+    let mut valid_releases: Vec<(&Release, &Dataset)> = Vec::new();
+    for r in &index.releases {
+        for ds in &r.datasets {
+            if ds.withdrawn.is_none() {
+                valid_releases.push((r, ds));
+            }
+        }
+    }
 
     if valid_releases.is_empty() {
         bail!("No valid releases available to pull");
     }
 
     // Sort by trud_release_date and dataset_version ascending
-    valid_releases.sort_by(|a, b| {
-        a.trud_release_date
-            .cmp(&b.trud_release_date)
+    valid_releases.sort_by(|(r_a, ds_a), (r_b, ds_b)| {
+        r_a.trud_release_date
+            .cmp(&r_b.trud_release_date)
             .then_with(|| {
-                crate::index::parse_semver(&a.dataset_version)
+                crate::index::parse_semver(&ds_a.dataset_version)
                     .ok()
-                    .cmp(&crate::index::parse_semver(&b.dataset_version).ok())
+                    .cmp(&crate::index::parse_semver(&ds_b.dataset_version).ok())
             })
     });
 
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
-    for entry in &valid_releases {
-        match pull_single_release(workspace_root, index, entry, args, fetcher, progress) {
-            Ok(()) => succeeded.push(entry.trud_release_date.clone()),
-            Err(e) => failed.push((entry.trud_release_date.clone(), e.to_string())),
+    for (rel, ds) in &valid_releases {
+        match pull_single_release(workspace_root, index, rel, ds, args, fetcher, progress) {
+            Ok(()) => succeeded.push(rel.trud_release_date.clone()),
+            Err(e) => failed.push((rel.trud_release_date.clone(), e.to_string())),
         }
     }
 
@@ -497,31 +507,32 @@ fn pull_all_releases_cmd<F: OciBlobFetcher>(
 fn pull_single_release<F: OciBlobFetcher>(
     workspace_root: &Path,
     index: &OdsReleaseIndex,
-    entry: &ReleaseIndexEntry,
+    release: &Release,
+    dataset: &Dataset,
     args: &Args,
     fetcher: &F,
     progress: &Progress,
 ) -> Result<()> {
-    let rel_dir = workspace_root.join("releases").join(&entry.trud_release_date);
+    let rel_dir = workspace_root.join("releases").join(&release.trud_release_date);
 
     // Cache hit & self-healing check
     if rel_dir.exists() && !args.force {
         let outcome = verify_release_dir(&rel_dir, Some(index));
         match outcome {
             crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
-                if digest == &entry.manifest_digest {
+                if digest == &dataset.manifest_digest {
                     let ws = Workspace::open_or_create(Some(workspace_root))?;
-                    ws.set_active(&entry.trud_release_date)?;
+                    ws.set_active(&release.trud_release_date)?;
                     eprintln!(
                         "✓ {} ({}) verified (cache hit)",
                         date, version
                     );
-                    eprintln!("  current → releases/{}", entry.trud_release_date);
+                    eprintln!("  current → releases/{}", release.trud_release_date);
                     return Ok(());
                 } else {
                     eprintln!(
                         "* existing releases/{} digest mismatch; re-fetching from registry...",
-                        entry.trud_release_date
+                        release.trud_release_date
                     );
                     let _ = fs::remove_dir_all(&rel_dir);
                 }
@@ -529,7 +540,7 @@ fn pull_single_release<F: OciBlobFetcher>(
             _ => {
                 eprintln!(
                     "* existing releases/{} corrupted or invalid; re-fetching from registry...",
-                    entry.trud_release_date
+                    release.trud_release_date
                 );
                 let _ = fs::remove_dir_all(&rel_dir);
             }
@@ -550,63 +561,13 @@ fn pull_single_release<F: OciBlobFetcher>(
         &index.mirrors[..]
     };
 
-    let is_baked = if let Ok(baked) = OdsReleaseIndex::baked() {
-        baked
-            .releases
-            .iter()
-            .any(|r| r.trud_release_date == entry.trud_release_date && r.dataset_version == entry.dataset_version)
-    } else {
-        false
-    };
-
-    let mut corroboration_status = None;
-
-    // Task 5: If release is frontier (newer than binary), corroborate with second mirror
-    if !is_baked && mirrors.len() >= 2 {
-        let mirror1 = &mirrors[0];
-        let mirror2 = &mirrors[1];
-
-        let m2_tag_url = mirror2.manifest_url(&entry.tag);
-        if let Ok(m2_bytes) = fetcher.fetch_bytes(&m2_tag_url) {
-            let m2_digest = format!("sha256:{:x}", sha2::Sha256::digest(&m2_bytes));
-            if m2_digest != entry.manifest_digest {
-                eprintln!(
-                    "✖ {} and {} disagree on {}\n  {:<8} {}\n  {:<8} {}\n  A published (date, version) names one set of bytes. Not proceeding.",
-                    mirror1.host(),
-                    mirror2.host(),
-                    entry.tag,
-                    mirror1.host(),
-                    entry.manifest_digest,
-                    mirror2.host(),
-                    m2_digest
-                );
-                bail!("Manifest digests disagree between mirrors");
-            }
-            corroboration_status = Some(format!(
-                "new release. hash verified by {} and {}",
-                mirror1.host(),
-                mirror2.host()
-            ));
-        } else {
-            corroboration_status = Some(format!(
-                "new release. hash from {} only, not corroborated",
-                mirror1.host()
-            ));
-        }
-    } else if !is_baked {
-        corroboration_status = Some(format!(
-            "new release. hash from {} only, not corroborated",
-            mirrors[0].host()
-        ));
-    }
-
     let scratch_dir = workspace_root.join("scratch");
     fs::create_dir_all(&scratch_dir)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_path = scratch_dir.join(format!("pull_{}_{}", entry.trud_release_date, timestamp));
+    let temp_path = scratch_dir.join(format!("pull_{}_{}", release.trud_release_date, timestamp));
     if temp_path.exists() {
         let _ = fs::remove_dir_all(&temp_path);
     }
@@ -633,13 +594,13 @@ fn pull_single_release<F: OciBlobFetcher>(
     for mirror in mirrors {
         progress.step(&format!(
             "{} ({}) fetching manifest from {}…",
-            entry.trud_release_date,
-            entry.dataset_version,
+            release.trud_release_date,
+            dataset.dataset_version,
             mirror.host()
         ));
 
         // 1. Fetch manifest
-        let manifest_url = mirror.manifest_url(&entry.manifest_digest);
+        let manifest_url = mirror.manifest_url(&dataset.manifest_digest);
         let manifest_bytes = match fetcher.fetch_bytes(&manifest_url) {
             Ok(b) => b,
             Err(e) => {
@@ -649,12 +610,12 @@ fn pull_single_release<F: OciBlobFetcher>(
         };
 
         let computed_digest = format!("sha256:{:x}", sha2::Sha256::digest(&manifest_bytes));
-        if computed_digest != entry.manifest_digest {
+        if computed_digest != dataset.manifest_digest {
             last_err = Some(format!(
                 "{}: manifest digest mismatch: computed {}, expected {}",
                 mirror.host(),
                 computed_digest,
-                entry.manifest_digest
+                dataset.manifest_digest
             ));
             continue;
         }
@@ -685,8 +646,8 @@ fn pull_single_release<F: OciBlobFetcher>(
 
             progress.step(&format!(
                 "{} ({}) downloading {} from {}…",
-                entry.trud_release_date,
-                entry.dataset_version,
+                release.trud_release_date,
+                dataset.dataset_version,
                 filename,
                 mirror.host()
             ));
@@ -725,7 +686,7 @@ fn pull_single_release<F: OciBlobFetcher>(
             continue;
         }
 
-        // 3. Verify assembled directory
+        // 3. Verify assembled release directory
         let outcome = verify_release_dir(&temp_path, Some(index));
         if !outcome.is_verified() {
             last_err = Some(format!("{}: assembled release directory failed verification", mirror.host()));
@@ -742,33 +703,27 @@ fn pull_single_release<F: OciBlobFetcher>(
 
         // 5. Pin current and generate README
         let ws = Workspace::open_or_create(Some(workspace_root))?;
-        ws.set_active(&entry.trud_release_date)?;
+        ws.set_active(&release.trud_release_date)?;
 
         let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
         let size_mb = (total_size as f64) / (1024.0 * 1024.0);
 
-        let verification_msg = if is_baked {
-            format!("hash verified by ods {}", env!("CARGO_PKG_VERSION"))
-        } else {
-            corroboration_status.unwrap_or_else(|| format!("from {}", mirror.host()))
-        };
-
         eprintln!(
-            "✓ {} ({})  {:.0}MB  {}",
-            entry.trud_release_date,
-            entry.dataset_version,
+            "✓ {} ({})  {:.0}MB  from {}",
+            release.trud_release_date,
+            dataset.dataset_version,
             size_mb,
-            verification_msg
+            mirror.host()
         );
-        eprintln!("  current → releases/{}", entry.trud_release_date);
+        eprintln!("  current → releases/{}", release.trud_release_date);
 
         return Ok(());
     }
 
     bail!(
         "✖ All mirrors failed to pull release {} ({}): {}",
-        entry.trud_release_date,
-        entry.dataset_version,
+        release.trud_release_date,
+        dataset.dataset_version,
         last_err.unwrap_or_else(|| "no reachable mirrors".to_string())
-    )
+    );
 }

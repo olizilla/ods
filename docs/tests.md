@@ -13,7 +13,7 @@ them: each test enforces one, and a failing test names the one that broke.
 ## Releases
 
 - **R1. Unverified files are clearly flagged.** `ods pull` gives a file its name only after its SHA-256 matches the release manifest. A file that fails on every mirror lands as `<name>.bad-sha`, so the verified files stay usable. `current` stays where it was, and the pull names each bad file with both digests and exits 1.
-- **R2. The index's digest decides.** A fetched or supplied index that contradicts a digest in the index built into `ods` stops the pull. A registry tag that names a different digest from the index is reported, and the index's release is what gets installed.
+- **R2. The index's digest decides.** A fetched or supplied [release index](./release-index.md) that contradicts a digest in the index built into `ods` stops the pull; a fetched index can't change a recorded TRUD hash or the signing-key fingerprint. A registry tag that names a different digest from the index is reported, and the index's release is what gets installed.
 - **R3. ods.fyi first, then ghcr.io.** `ods` asks ods.fyi first for the index and every file, and falls back to ghcr.io. It finds releases only through the index, and `ods pull` alone installs the newest release there.
 - **R4. Pulls repair, and repeat for free.** Pulling a verified release a second time downloads nothing. A local file that no longer matches its digest is fetched again.
 - **R5. Withdrawn releases are named, loudly.** `ods pull <date>` and `ods cite` still deliver a withdrawn release, then print the reason it was withdrawn and exit 1. `ods pull` with no date fetches the newest release that isn't withdrawn, and names any it skipped. A withdrawal published in a newer index applies to a release built into `ods`.
@@ -52,7 +52,7 @@ them: each test enforces one, and a failing test names the one that broke.
 ## The workspace
 
 - **W1. An explicit release directory wins.** A command given a release directory reads that release, whichever release is active.
-- **W2. A workspace is marked by `_releases.json`.** A directory is a workspace when it holds a `_releases.json` that parses as a release index with `_type` set to `ods_release_index`. That file holds the last blessed index: the one built into `ods`, or the bytes `ods pull` last fetched from ods.fyi or GitHub, saved exactly as served. An index passed with `--index` is used for that run only.
+- **W2. A workspace is marked by `_releases.json`.** A directory is a workspace when it holds a `_releases.json` that validates as the [ods release index](./release-index.md), named by its `$schema`. That file holds the last blessed index: the one built into `ods`, or the bytes `ods pull` last fetched from ods.fyi or GitHub, saved exactly as served. An index passed with `--index` is used for that run only.
 - **W3. The workspace is found by walking up.** Without an explicit path, `ods` checks the current directory and each parent, for a marked directory or a marked `ods_data` inside it. It stops at the first directory containing `.git`, at `$HOME`, or at the filesystem root.
 
 ## ods.fyi

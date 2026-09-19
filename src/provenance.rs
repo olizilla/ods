@@ -340,11 +340,11 @@ pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
 pub fn format_provenance_display_path(prov_path: &Path) -> String {
     let ws_root = prov_path
         .parent()
-        .and_then(|p| crate::workspace::find_workspace_root_from(p, None))
+        .and_then(|p| crate::workspace::find_workspace_root_from(p, None).ok().flatten())
         .or_else(|| {
             std::env::current_dir()
                 .ok()
-                .and_then(|pwd| crate::workspace::find_workspace_root_from(&pwd, None))
+                .and_then(|pwd| crate::workspace::find_workspace_root_from(&pwd, None).ok().flatten())
         });
 
     if let Some(ref root) = ws_root {

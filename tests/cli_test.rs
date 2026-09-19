@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 mod common;
 
-use common::create_mock_trud_zip;
+use common::{create_mock_trud_zip, make_v1_index};
 
 fn ods_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ods"))
@@ -184,34 +184,20 @@ fn test_cli_pull_local_release_output() {
     let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2, &prov2, "1.0.1").unwrap();
     let d2 = m2.digest().unwrap();
 
-    let index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![
-            ods::index::ReleaseIndexEntry {
-                trud_release_date: "2026-05-29".to_string(),
-                dataset_version: "1.0.1".to_string(),
-                tag: "2026-05-29_1.0.1".to_string(),
-                manifest_digest: d1,
-                trud_release_sha256: "AAAA".to_string(),
-                tool_version: "0.4.3".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-            ods::index::ReleaseIndexEntry {
-                trud_release_date: "2026-06-26".to_string(),
-                dataset_version: "1.0.1".to_string(),
-                tag: "2026-06-26_1.0.1".to_string(),
-                manifest_digest: d2,
-                trud_release_sha256: "BBBB".to_string(),
-                tool_version: "0.4.3".to_string(),
-                dataset_doi: None,
-                withdrawn: None,
-            },
-        ],
-    };
+    let index = make_v1_index(&[
+        (
+            "2026-06-26",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.1", &d2)],
+        ),
+        (
+            "2026-05-29",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.1", &d1)],
+        ),
+    ]);
     let bytes = serde_json::to_vec_pretty(&index).unwrap();
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&bytes, &ws).unwrap();
 
@@ -888,8 +874,11 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
 
 #[test]
 fn test_error_without_cross_sigil_is_prefixed_with_cross_and_has_no_error_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let idx_file = tmp.path().join("releases.json");
+    std::fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     let output = ods_binary()
-        .args(["pull", "1999-01-01"])
+        .args(["pull", "--index", idx_file.to_str().unwrap(), "1999-01-01"])
         .output()
         .expect("run ods pull 1999-01-01");
 

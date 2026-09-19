@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::index::{parse_semver, MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use crate::index::{parse_semver, Dataset, OdsReleaseIndex, Release, RELEASES_SCHEMA_V1_URL};
 use crate::oci::*;
 use crate::provenance::OdsProvenance;
 
@@ -154,10 +154,15 @@ pub fn run(args: Args) -> Result<()> {
                     Ok(i) => i,
                     Err(_) => {
                         eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
-                        eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                        eprintln!("  Expected $schema {}", RELEASES_SCHEMA_V1_URL);
                         return Err(crate::commands::pull::AlreadyReported.into());
                     }
                 };
+                if let Err(e) = idx.validate() {
+                    eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
+                    eprintln!("  {}", e);
+                    return Err(crate::commands::pull::AlreadyReported.into());
+                }
                 (Some(idx), p.clone())
             }
             Err(e) => {
@@ -176,10 +181,15 @@ pub fn run(args: Args) -> Result<()> {
                         Ok(i) => i,
                         Err(_) => {
                             eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
-                            eprintln!("  Expected an object with \"_type\": \"ods_release_index\"");
+                            eprintln!("  Expected $schema {}", RELEASES_SCHEMA_V1_URL);
                             return Err(crate::commands::pull::AlreadyReported.into());
                         }
                     };
+                    if let Err(e) = idx.validate() {
+                        eprintln!("✖ Cannot parse release index '{}' as an ODS release index", p.display());
+                        eprintln!("  {}", e);
+                        return Err(crate::commands::pull::AlreadyReported.into());
+                    }
                     (Some(idx), p)
                 }
                 Err(e) => {
@@ -252,17 +262,6 @@ pub fn run(args: Args) -> Result<()> {
     };
     eprintln!("* trud_release_sha256 verified via {}", ver_source);
 
-    let release_row = ReleaseIndexEntry {
-        trud_release_date: date.to_string(),
-        dataset_version: version.clone(),
-        tag: versioned_tag.clone(),
-        manifest_digest: manifest_digest.clone(),
-        trud_release_sha256: prov.trud_release_sha256.clone().unwrap_or_default().to_uppercase(),
-        tool_version: prov.tool_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
-        dataset_doi: args.doi.clone(),
-        withdrawn: None,
-    };
-
     // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
     let dist_dir = args.output.unwrap_or_else(|| {
         tool_repo
@@ -312,46 +311,76 @@ pub fn run(args: Args) -> Result<()> {
     let object_count = count_files_in_dir(&dist_dir);
     eprintln!("✓ dist/ written, {} objects", object_count);
 
-    // 6. Append to data/releases.json (strictly after staging succeeds)
-    if target_index_path.exists() {
+    // 6. Update data/releases.json (strictly after staging succeeds)
+    let mut index: OdsReleaseIndex = if target_index_path.exists() {
         let content = fs::read_to_string(&target_index_path)?;
-        let mut index: OdsReleaseIndex = serde_json::from_str(&content)?;
-        index.releases.push(release_row.clone());
-        let updated = serde_json::to_string_pretty(&index)? + "\n";
-        fs::write(&target_index_path, &updated)?;
-        eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
+        serde_json::from_str(&content)?
     } else {
-        let default_mirrors = OdsReleaseIndex::baked()
-            .map(|b| b.mirrors)
-            .unwrap_or_else(|_| vec![
-                MirrorEntry {
-                    url: "https://ods.fyi/v2/ods-data".to_string(),
-                },
-                MirrorEntry {
-                    url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-                },
-            ]);
-        let index = OdsReleaseIndex {
-            type_tag: "ods_release_index".to_string(),
-            index_version: 2,
-            concept_doi: None,
-            mirrors: default_mirrors,
-            releases: vec![release_row.clone()],
-        };
-        if let Some(parent) = target_index_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let updated = serde_json::to_string_pretty(&index)? + "\n";
-        fs::write(&target_index_path, &updated)?;
-        eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
+        OdsReleaseIndex::default()
+    };
+
+    // Guarantee the built date's row from _provenance.json before reading TRUD response
+    if !index.releases.iter().any(|r| r.trud_release_date == date) {
+        index.releases.push(Release {
+            trud_release_date: date.to_string(),
+            trud_release_sha256: prov.trud_release_sha256.clone().unwrap_or_default().to_uppercase(),
+            trud_release_filesize_bytes: prov.trud_release_filesize_bytes.unwrap_or_default(),
+            datasets: Vec::new(),
+        });
     }
 
-    // 7. Print new row to stdout (compact 1-line JSON)
-    println!("{}", serde_json::to_string(&release_row)?);
+    // Step 1: Record TRUD's releases
+    let trud_resp_path = release_dir.join("trud").join(format!("trud-releases-{}.json", date));
+    if trud_resp_path.exists() {
+        let bytes = fs::read(&trud_resp_path)?;
+        let resp: crate::commands::fetch::TrudApiResponse = serde_json::from_slice(&bytes)?;
+        for item in resp.releases {
+            if !index.releases.iter().any(|r| r.trud_release_date == item.release_date) {
+                index.releases.push(Release {
+                    trud_release_date: item.release_date,
+                    trud_release_sha256: item.archive_file_sha256.to_uppercase(),
+                    trud_release_filesize_bytes: item.archive_file_size,
+                    datasets: Vec::new(),
+                });
+            }
+        }
+    }
+
+    // Step 3: Add dataset
+    let new_dataset = Dataset {
+        dataset_version: version.clone(),
+        manifest_digest: manifest_digest.clone(),
+        dataset_doi: args.doi.clone(),
+        withdrawn: None,
+    };
+    let rel = index
+        .releases
+        .iter_mut()
+        .find(|r| r.trud_release_date == date)
+        .expect("Release row for date must exist");
+    rel.datasets.push(new_dataset.clone());
+    rel.datasets.sort_by(|a, b| {
+        let va = parse_semver(&a.dataset_version).unwrap_or((0, 0, 0));
+        let vb = parse_semver(&b.dataset_version).unwrap_or((0, 0, 0));
+        va.cmp(&vb)
+    });
+
+    index.releases.sort_by(|a, b| b.trud_release_date.cmp(&a.trud_release_date));
+
+    index.validate()?;
+
+    if let Some(parent) = target_index_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let updated = index.to_json_pretty()?;
+    fs::write(&target_index_path, &updated)?;
+    eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
+
+    // 7. Print new dataset to stdout (compact 1-line JSON)
+    println!("{}", serde_json::to_string(&new_dataset)?);
 
     Ok(())
 }
-
 
 pub fn perform_all_release_checks(
     release_dir: &Path,
@@ -450,24 +479,125 @@ pub fn perform_all_release_checks(
         failures.push("Provenance missing dataset_version".to_string());
     }
 
-    // Check 14: data/releases.json has no row for this (date, version)
-    let index_opt = if let Some(idx) = custom_index {
-        Some(idx.clone())
+    // Index checks (Steps 1, 2, 3)
+    let mut candidate_index = if let Some(idx) = custom_index {
+        idx.clone()
+    } else if let Some(tr) = tool_repo {
+        let p = tr.join("data").join("releases.json");
+        if p.exists() {
+            match fs::read(&p) {
+                Ok(bytes) => match serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        failures.push(format!(
+                            "Cannot parse release index '{}' as an ODS release index\n  Expected $schema {}\n  {}",
+                            p.display(),
+                            crate::index::RELEASES_SCHEMA_V1_URL,
+                            e
+                        ));
+                        return Ok(failures);
+                    }
+                },
+                Err(e) => {
+                    failures.push(format!("Cannot read release index '{}': {}", p.display(), e));
+                    return Ok(failures);
+                }
+            }
+        } else {
+            crate::index::OdsReleaseIndex::default()
+        }
     } else {
-        crate::index::OdsReleaseIndex::baked().ok()
+        crate::index::OdsReleaseIndex::default()
     };
 
-    if let Some(ref index) = index_opt {
-        let date = prov.trud_release_date.as_deref().unwrap_or("");
-        if index
-            .releases
-            .iter()
-            .any(|r| r.trud_release_date == date && r.dataset_version == expected_version)
-        {
+    let date = prov.trud_release_date.as_deref().unwrap_or("");
+    let prov_sha = prov.trud_release_sha256.as_deref().unwrap_or("").to_uppercase();
+    let prov_size = prov.trud_release_filesize_bytes.unwrap_or(0);
+
+    // Guarantee the built date's row from _provenance.json before the checks
+    if !date.is_empty() && !candidate_index.releases.iter().any(|r| r.trud_release_date == date) {
+        candidate_index.releases.push(Release {
+            trud_release_date: date.to_string(),
+            trud_release_sha256: prov_sha.clone(),
+            trud_release_filesize_bytes: prov_size,
+            datasets: Vec::new(),
+        });
+    }
+
+    let trud_resp_path = release_dir.join("trud").join(format!("trud-releases-{}.json", date));
+
+    // Step 1: Record TRUD's releases
+    if trud_resp_path.exists() {
+        if let Ok(bytes) = fs::read(&trud_resp_path) {
+            if let Ok(resp) = serde_json::from_slice::<crate::commands::fetch::TrudApiResponse>(&bytes) {
+                for item in &resp.releases {
+                    let item_sha = item.archive_file_sha256.to_uppercase();
+                    if let Some(existing) = candidate_index.releases.iter().find(|r| r.trud_release_date == item.release_date) {
+                        let existing_sha = existing.trud_release_sha256.to_uppercase();
+                        if existing_sha != item_sha {
+                            let ex_short = if existing_sha.len() >= 8 { &existing_sha[..8] } else { &existing_sha };
+                            let item_short = if item_sha.len() >= 8 { &item_sha[..8] } else { &item_sha };
+                            failures.push(format!(
+                                "The index records TRUD release {} with SHA-256 {}…, but trud/trud-releases-{}.json says {}…\n  TRUD may have reissued it. Nothing was written.",
+                                item.release_date, ex_short, date, item_short
+                            ));
+                        } else if existing.trud_release_filesize_bytes != item.archive_file_size {
+                            failures.push(format!(
+                                "The index records TRUD release {} with size {} bytes, but trud/trud-releases-{}.json says {} bytes\n  TRUD may have reissued it. Nothing was written.",
+                                item.release_date, existing.trud_release_filesize_bytes, date, item.archive_file_size
+                            ));
+                        }
+                    } else {
+                        candidate_index.releases.push(Release {
+                            trud_release_date: item.release_date.clone(),
+                            trud_release_sha256: item_sha,
+                            trud_release_filesize_bytes: item.archive_file_size,
+                            datasets: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 2: Check this release's source
+    if let Some(rel_row) = candidate_index.releases.iter().find(|r| r.trud_release_date == date) {
+        if !prov_sha.is_empty() && rel_row.trud_release_sha256.to_uppercase() != prov_sha {
             failures.push(format!(
-                "data/releases.json already has a row for {} {}\n  A published (date, version) pair names one set of bytes forever.\n  Bump dataset_version and re-pack.",
+                "The release row's trud_release_sha256 ({}) does not match _provenance.json ({})",
+                rel_row.trud_release_sha256, prov_sha
+            ));
+        }
+    }
+
+    // Step 3 (Check 14): no dataset with this dataset_version on this date
+    if let Some(rel_row) = candidate_index.releases.iter_mut().find(|r| r.trud_release_date == date) {
+        if rel_row.datasets.iter().any(|d| d.dataset_version == expected_version) {
+            failures.push(format!(
+                "data/releases.json already has a dataset for {} {}\n  A published (date, version) pair names one set of bytes forever.\n  Bump dataset_version and re-pack.",
                 date, expected_version
             ));
+        } else {
+            rel_row.datasets.push(Dataset {
+                dataset_version: expected_version.to_string(),
+                manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                dataset_doi: None,
+                withdrawn: None,
+            });
+            rel_row.datasets.sort_by(|a, b| {
+                let va = parse_semver(&a.dataset_version).unwrap_or((0, 0, 0));
+                let vb = parse_semver(&b.dataset_version).unwrap_or((0, 0, 0));
+                va.cmp(&vb)
+            });
+        }
+    }
+
+    candidate_index.releases.sort_by(|a, b| b.trud_release_date.cmp(&a.trud_release_date));
+
+    // Validate the candidate index inside perform_all_release_checks
+    if failures.is_empty() {
+        if let Err(e) = candidate_index.validate() {
+            failures.push(format!("Candidate release index fails validation: {}", e));
         }
     }
 

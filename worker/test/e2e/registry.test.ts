@@ -95,8 +95,8 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       fs.writeFileSync(
         path.join(repoDataDir, 'releases.json'),
         JSON.stringify({
-          _type: 'ods_release_index',
-          index_version: 2,
+          $schema: 'https://ods.fyi/schema/releases.v1.json',
+          trud_signing_key_fingerprint: '71ED5964BAE53E83556320A42BE59DADEE84BEB0',
           mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
           releases: [],
         })
@@ -237,17 +237,20 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
     // Frontier release newer than baked index
     const frontierIndex = {
-      _type: 'ods_release_index',
-      index_version: 2,
+      $schema: 'https://ods.fyi/schema/releases.v1.json',
+      trud_signing_key_fingerprint: '71ED5964BAE53E83556320A42BE59DADEE84BEB0',
       mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
       releases: [
         {
           trud_release_date: '2027-01-31',
-          dataset_version: '2.0.0',
-          tag: '2027-01-31_2.0.0',
-          manifest_digest: 'sha256:frontier123',
-          trud_release_sha256: 'FRONTIERSHA',
-          tool_version: '0.2.0',
+          trud_release_sha256: '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF',
+          trud_release_filesize_bytes: 38000000,
+          datasets: [
+            {
+              dataset_version: '2.0.0',
+              manifest_digest: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            },
+          ],
         },
       ],
     };

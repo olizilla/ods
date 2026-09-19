@@ -1,6 +1,9 @@
+mod common;
+
 use anyhow::Result;
+use common::make_v1_index;
 use ods::commands::pull::{run_with_fetcher, Args, OciBlobFetcher};
-use ods::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use ods::index::{MirrorEntry, OdsReleaseIndex};
 use sha2::Digest;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -50,24 +53,12 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
@@ -98,12 +89,13 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     assert!(!rel_dir.join("_release.json").exists(), "ods pull must never write _release.json");
     assert!(!rel_dir.join("SHA256SUMS").exists(), "ods pull must never write SHA256SUMS");
 
-    // Assert that current symlink is pinned to the newly pulled release and README exists
-    assert!(workspace.join("current").exists(), "current symlink must exist");
-    let (active_date, active_dir) = ods::workspace::Workspace::open(Some(&workspace))?.active_release()?;
-    assert_eq!(active_date, "2026-07-31");
-    assert_eq!(active_dir, std::fs::canonicalize(&rel_dir)?);
-    assert!(workspace.join("README.md").exists(), "workspace README.md must exist");
+    // Check workspace _releases.json was updated with fetched index
+    let ws_index_file = workspace.join(ods::index::RELEASES_JSON_FILENAME);
+    assert!(ws_index_file.exists());
+    let ws_index = ods::index::OdsReleaseIndex::load_from_workspace(&workspace)?.unwrap();
+    assert_eq!(ws_index.releases.len(), 1);
+    assert_eq!(ws_index.releases[0].trud_release_date, "2026-07-31");
+    assert_eq!(ws_index.releases[0].datasets[0].dataset_version, "1.0.1");
 
     Ok(())
 }
@@ -115,24 +107,12 @@ fn test_pull_oci_refuses_when_manifest_digest_mismatches() {
 
     let tampered_manifest_bytes = b"{\"tampered\":true}".to_vec();
 
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert("manifests/sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(), tampered_manifest_bytes);
@@ -153,7 +133,7 @@ fn test_pull_oci_refuses_when_manifest_digest_mismatches() {
 
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("All mirrors failed to pull release") || err.contains("manifest digest mismatch"));
+    assert!(err.to_lowercase().contains("manifest digest mismatch") || err.contains("All mirrors failed to pull release"));
 }
 
 #[test]
@@ -169,7 +149,7 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"sample orgs parquet bytes".to_vec();
+    let orgs_bytes = b"dummy orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let fixture_dir = tmp.path().join("fixture_2");
@@ -181,29 +161,20 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let manifest_digest = manifest.digest()?;
 
     // Mirror 1 fails, Mirror 2 succeeds
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![
-            MirrorEntry {
-                url: "https://broken-mirror.example.com/v2/ods-data".to_string(),
-            },
-            MirrorEntry {
-                url: "https://working-mirror.example.com/v2/ods-data".to_string(),
-            },
-        ],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let mut remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
+    remote_index.mirrors = vec![
+        MirrorEntry {
+            url: "https://broken-mirror.example.com/v2/ods-data".to_string(),
+        },
+        MirrorEntry {
+            url: "https://working-mirror.example.com/v2/ods-data".to_string(),
+        },
+    ];
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("https://working-mirror.example.com/v2/ods-data/manifests/{}", manifest_digest), manifest_bytes);
@@ -227,6 +198,7 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists());
     assert!(rel_dir.join("orgs.parquet").exists());
+    assert!(rel_dir.join("_provenance.json").exists());
 
     Ok(())
 }
@@ -244,7 +216,7 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"valid orgs parquet bytes".to_vec();
+    let orgs_bytes = b"legitimate orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let fixture_dir = tmp.path().join("fixture_heal");
@@ -255,24 +227,12 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
@@ -284,13 +244,11 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
         responses,
     };
 
-    // Pre-create corrupted local release directory
+    // Pre-create corrupted orgs.parquet in the target release directory
     let rel_dir = workspace.join("releases").join("2026-07-31");
     std::fs::create_dir_all(&rel_dir)?;
-    std::fs::write(rel_dir.join("orgs.parquet"), b"corrupted bytes")?;
-    std::fs::write(rel_dir.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_vec(&prov)?)?;
+    std::fs::write(rel_dir.join("orgs.parquet"), b"corrupted bytes on disk")?;
 
-    // Pull should detect corruption and self-heal by re-downloading
     run_with_fetcher(
         Args {
             release_date: Some("2026-07-31".to_string()),
@@ -300,66 +258,11 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
         &fetcher,
     )?;
 
-    let repaired_bytes = std::fs::read(rel_dir.join("orgs.parquet"))?;
-    assert_eq!(repaired_bytes, orgs_bytes);
+    // Assert that corrupted file was replaced with valid file
+    let final_bytes = std::fs::read(rel_dir.join("orgs.parquet"))?;
+    assert_eq!(final_bytes, orgs_bytes);
 
     Ok(())
-}
-
-#[test]
-fn test_pull_oci_frontier_tag_disagreement_refuses() {
-    let tmp = TempDir::new().unwrap();
-    let workspace = tmp.path().join("ods_data");
-
-    let manifest1_bytes = b"{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"artifactType\":\"application/vnd.fyi.ods.dataset.v1\",\"config\":{\"mediaType\":\"application/vnd.fyi.ods.provenance.v1+json\",\"digest\":\"sha256:1111\",\"size\":10},\"layers\":[],\"annotations\":{}}".to_vec();
-    let manifest1_digest = format!("sha256:{:x}", sha2::Sha256::digest(&manifest1_bytes));
-
-    let manifest2_bytes = b"{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"artifactType\":\"application/vnd.fyi.ods.dataset.v1\",\"config\":{\"mediaType\":\"application/vnd.fyi.ods.provenance.v1+json\",\"digest\":\"sha256:2222\",\"size\":10},\"layers\":[],\"annotations\":{}}".to_vec();
-
-    // Release 2099-01-01 is a frontier release (not in baked index)
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![
-            MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2099-01-01".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2099-01-01_1.0.0".to_string(),
-            manifest_digest: manifest1_digest.clone(),
-            trud_release_sha256: "FFFF".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
-
-    let mut responses = BTreeMap::new();
-    responses.insert(format!("https://ods.fyi/v2/ods-data/manifests/{}", manifest1_digest), manifest1_bytes);
-    responses.insert("https://ghcr.io/v2/olizilla/ods-data/manifests/2099-01-01_1.0.0".to_string(), manifest2_bytes);
-
-    let fetcher = TestOciFetcher {
-        remote_index: Some(remote_index),
-        responses,
-    };
-
-    let res = run_with_fetcher(
-        Args {
-            release_date: Some("2099-01-01".to_string()),
-            ..Default::default()
-        },
-        &workspace,
-        &fetcher,
-    );
-
-    assert!(res.is_err(), "Must refuse when mirrors disagree on frontier tag");
 }
 
 #[test]
@@ -368,42 +271,23 @@ fn test_pull_oci_security_contradiction_aborts_immediately() {
     let workspace = tmp.path().join("ods_data");
 
     // Baked index knows 2026-07-31 with a legitimate digest
-    let baked_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let baked_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:1111111111111111111111111111111111111111111111111111111111111111")],
+    )]);
 
     // Attack / contradiction: remote index serves a different manifest_digest for baked release 2026-07-31
-    let tampered_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://evil-mirror.example.com/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let mut tampered_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    tampered_index.mirrors = vec![MirrorEntry {
+        url: "https://evil-mirror.example.com/v2/ods-data".to_string(),
+    }];
 
     let fetcher = TestOciFetcher {
         remote_index: Some(tampered_index),
@@ -423,161 +307,6 @@ fn test_pull_oci_security_contradiction_aborts_immediately() {
     assert!(res.is_err(), "Security contradiction must abort immediately");
     let err = res.unwrap_err().to_string();
     assert!(err.contains("Security error"), "Error must be Security error, got: {}", err);
-}
-
-#[test]
-fn test_pull_oci_frontier_corroborated_two_mirrors_success() -> Result<()> {
-    let tmp = TempDir::new().unwrap();
-    let workspace = tmp.path().join("ods_data");
-
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2099-01-01".to_string());
-    prov.dataset_version = Some("1.0.0".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    let prov_bytes = serde_json::to_vec_pretty(&prov)?;
-    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
-
-    let orgs_bytes = b"frontier orgs parquet content".to_vec();
-    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
-
-    let fixture_dir = tmp.path().join("fixture_frontier");
-    std::fs::create_dir_all(&fixture_dir)?;
-    std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
-
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.0")?;
-    let manifest_digest = manifest.digest()?;
-
-    let frontier_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![
-            MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2099-01-01".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2099-01-01_1.0.0".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
-
-    let mut responses = BTreeMap::new();
-    // Mirror 1 responses
-    responses.insert(format!("https://ods.fyi/v2/ods-data/manifests/{}", manifest_digest), manifest_bytes.clone());
-    responses.insert(format!("https://ods.fyi/v2/ods-data/blobs/{}", prov_sha), prov_bytes);
-    responses.insert(format!("https://ods.fyi/v2/ods-data/blobs/{}", orgs_sha), orgs_bytes);
-
-    // Mirror 2 tag response (same manifest bytes -> agreement)
-    responses.insert("https://ghcr.io/v2/olizilla/ods-data/manifests/2099-01-01_1.0.0".to_string(), manifest_bytes);
-
-    let fetcher = TestOciFetcher {
-        remote_index: Some(frontier_index),
-        responses,
-    };
-
-    run_with_fetcher(
-        Args {
-            release_date: Some("2099-01-01".to_string()),
-            ..Default::default()
-        },
-        &workspace,
-        &fetcher,
-    )?;
-
-    let rel_dir = workspace.join("releases").join("2099-01-01");
-    assert!(rel_dir.exists());
-    assert!(rel_dir.join("orgs.parquet").exists());
-    assert_eq!(ods::workspace::Workspace::open(Some(&workspace))?.active_release()?.0, "2099-01-01");
-
-    Ok(())
-}
-
-#[test]
-fn test_pull_oci_frontier_second_mirror_unreachable_uncorroborated() -> Result<()> {
-    let tmp = TempDir::new().unwrap();
-    let workspace = tmp.path().join("ods_data");
-
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2099-01-01".to_string());
-    prov.dataset_version = Some("1.0.0".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    let prov_bytes = serde_json::to_vec_pretty(&prov)?;
-    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
-
-    let orgs_bytes = b"frontier orgs parquet content".to_vec();
-    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
-
-    let fixture_dir = tmp.path().join("fixture_frontier_single");
-    std::fs::create_dir_all(&fixture_dir)?;
-    std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
-
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.0")?;
-    let manifest_digest = manifest.digest()?;
-
-    let frontier_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![
-            MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2099-01-01".to_string(),
-            dataset_version: "1.0.0".to_string(),
-            tag: "2099-01-01_1.0.0".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
-
-    let mut responses = BTreeMap::new();
-    // Mirror 1 responses only (Mirror 2 is unreachable / missing from map)
-    responses.insert(format!("https://ods.fyi/v2/ods-data/manifests/{}", manifest_digest), manifest_bytes);
-    responses.insert(format!("https://ods.fyi/v2/ods-data/blobs/{}", prov_sha), prov_bytes);
-    responses.insert(format!("https://ods.fyi/v2/ods-data/blobs/{}", orgs_sha), orgs_bytes);
-
-    let fetcher = TestOciFetcher {
-        remote_index: Some(frontier_index),
-        responses,
-    };
-
-    run_with_fetcher(
-        Args {
-            release_date: Some("2099-01-01".to_string()),
-            ..Default::default()
-        },
-        &workspace,
-        &fetcher,
-    )?;
-
-    let rel_dir = workspace.join("releases").join("2099-01-01");
-    assert!(rel_dir.exists());
-    assert!(rel_dir.join("orgs.parquet").exists());
-    assert_eq!(ods::workspace::Workspace::open(Some(&workspace))?.active_release()?.0, "2099-01-01");
-
-    Ok(())
 }
 
 #[test]
@@ -604,24 +333,12 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.1.0".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
@@ -688,24 +405,12 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let remote_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.1.0".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);

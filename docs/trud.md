@@ -157,7 +157,7 @@ ods trud audit --json           # Output machine-readable audit report for CI
 ## `ods trud verify`
 
 Check a TRUD archive you already have against a published SHA-256, without
-downloading it. `ods` looks the release up in the ods release index first, which
+downloading it. `ods` looks the release up in the [ods release index](./release-index.md) first, which
 needs no API key, then asks the TRUD API when `TRUD_API_KEY` is set.
 
 ```bash

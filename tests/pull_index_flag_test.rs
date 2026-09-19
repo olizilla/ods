@@ -1,8 +1,11 @@
+mod common;
+
 use anyhow::Result;
+use common::make_v1_index;
 use ods::commands::pull::{
     resolve_index_with_baked, run_with_fetcher, run_with_fetcher_and_baked, Args, OciBlobFetcher,
 };
-use ods::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use ods::index::OdsReleaseIndex;
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,24 +21,12 @@ fn ods_binary() -> Command {
 }
 
 fn sample_release_index() -> OdsReleaseIndex {
-    OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: "sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0".to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.1.0".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    }
+    make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0")],
+    )])
 }
 
 fn run_mock_http_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
@@ -89,7 +80,6 @@ impl OciBlobFetcher for MockOciFetcher {
 // Task 1 — The flag
 // ----------------------------------------------------------------------------
 
-
 #[test]
 fn test_index_flag_file_path_list() {
     let tmp = TempDir::new().unwrap();
@@ -110,7 +100,7 @@ fn test_index_flag_file_path_list() {
     assert!(output.status.success(), "Command must exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("2026-07-31"), "stdout should list 2026-07-31");
-    assert!(stdout.contains("v1.0.1"), "stdout should list v1.0.1");
+    assert!(stdout.contains("1.0.1"), "stdout should list 1.0.1");
 }
 
 #[test]
@@ -135,7 +125,7 @@ fn test_index_flag_http_url_list() {
     assert!(output.status.success(), "Command must exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("2026-07-31"), "stdout should list 2026-07-31");
-    assert!(stdout.contains("v1.0.1"), "stdout should list v1.0.1");
+    assert!(stdout.contains("1.0.1"), "stdout should list 1.0.1");
 }
 
 // ----------------------------------------------------------------------------
@@ -184,7 +174,7 @@ fn test_index_flag_cannot_parse_error_verbatim() {
     assert!(!output.status.success(), "Command must exit non-zero on unparseable index");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let expected_line1 = "✖ Cannot parse release index './notjson.txt' as an ODS release index";
-    let expected_line2 = "  Expected an object with \"_type\": \"ods_release_index\"";
+    let expected_line2 = "  Expected $schema https://ods.fyi/schema/releases.v1.json";
     assert!(
         stderr.contains(expected_line1),
         "stderr must contain line 1 verbatim: '{}', got: {}",
@@ -205,7 +195,7 @@ fn test_empty_releases_index_prints_message_and_exits_zero() {
     let empty_file = tmp.path().join("empty.json");
     fs::write(
         &empty_file,
-        b"{\"_type\":\"ods_release_index\",\"index_version\":2,\"mirrors\":[],\"releases\":[]}",
+        b"{\"$schema\":\"https://ods.fyi/schema/releases.v1.json\",\"trud_signing_key_fingerprint\":\"71ED5964BAE53E83556320A42BE59DADEE84BEB0\",\"mirrors\":[],\"releases\":[]}",
     )
     .unwrap();
 
@@ -311,26 +301,12 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
 
-    let index_entry = ReleaseIndexEntry {
-        trud_release_date: "2026-07-31".to_string(),
-        dataset_version: "1.0.1".to_string(),
-        tag: "2026-07-31_1.0.1".to_string(),
-        manifest_digest: manifest_digest.clone(),
-        trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-        tool_version: "0.1.0".to_string(),
-        dataset_doi: None,
-        withdrawn: None,
-    };
-
-    let supplied_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![index_entry],
-    };
+    let supplied_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let index_file = tmp.path().join("supplied_index.json");
     fs::write(&index_file, serde_json::to_vec_pretty(&supplied_index)?)?;
@@ -371,39 +347,19 @@ fn test_contradicting_digest_fails_with_security_error_naming_both_digests() {
     let baked_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     let tampered_digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
-    let baked_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: baked_digest.to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.1.0".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let baked_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", baked_digest)],
+    )]);
 
-    let tampered_index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: tampered_digest.to_string(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.1.0".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let tampered_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", tampered_digest)],
+    )]);
 
     let tampered_file = tmp.path().join("tampered_index.json");
     fs::write(&tampered_file, serde_json::to_vec_pretty(&tampered_index).unwrap()).unwrap();
@@ -474,7 +430,6 @@ fn test_pull_index_flag_does_not_mutate_cached_workspace_index() -> Result<()> {
     // Create a different index for --index
     let mut supplied_index = sample_release_index();
     supplied_index.releases[0].trud_release_date = "2026-08-31".to_string();
-    supplied_index.releases[0].tag = "2026-08-31_1.0.1".to_string();
     let supplied_file = tmp.path().join("supplied_releases.json");
     fs::write(&supplied_file, serde_json::to_vec_pretty(&supplied_index)?)?;
 

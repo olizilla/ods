@@ -84,23 +84,10 @@ fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     // Create data/releases.json in repo
     fs::create_dir_all(tmp.path().join("data")).unwrap();
-    let init_index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![
-            ods::index::MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            ods::index::MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
-        releases: vec![],
-    };
+    let init_index = ods::index::OdsReleaseIndex::default();
     fs::write(
         tmp.path().join("data").join("releases.json"),
-        serde_json::to_string_pretty(&init_index).unwrap() + "\n",
+        init_index.to_json_pretty().unwrap(),
     )
     .unwrap();
 
@@ -134,10 +121,10 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
     let expected_ver = ods::datapackage::dataset_version();
     assert_eq!(index.releases.len(), 1);
     assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
-    assert_eq!(index.releases[0].dataset_version, expected_ver);
-    assert_eq!(index.releases[0].tag, format!("2026-07-31_{}", expected_ver));
-    assert_eq!(index.releases[0].dataset_doi, Some("10.5281/zenodo.12345".to_string()));
-    assert!(index.releases[0].manifest_digest.starts_with("sha256:"));
+    assert_eq!(index.releases[0].datasets.len(), 1);
+    assert_eq!(index.releases[0].datasets[0].dataset_version, expected_ver);
+    assert_eq!(index.releases[0].datasets[0].dataset_doi, Some("10.5281/zenodo.12345".to_string()));
+    assert!(index.releases[0].datasets[0].manifest_digest.starts_with("sha256:"));
 
     Ok(())
 }
@@ -187,16 +174,17 @@ fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let ver = ods::datapackage::dataset_version();
-    let mut index = ods::index::OdsReleaseIndex::baked()?;
-    index.releases.push(ods::index::ReleaseIndexEntry {
+    let mut index = ods::index::OdsReleaseIndex::default();
+    index.releases.push(ods::index::Release {
         trud_release_date: "2026-07-31".to_string(),
-        dataset_version: ver.to_string(),
-        tag: format!("2026-07-31_{}", ver),
-        manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-        trud_release_sha256: "8151248D".to_string(),
-        tool_version: "0.4.3".to_string(),
-        dataset_doi: None,
-        withdrawn: None,
+        trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+        trud_release_filesize_bytes: 37983173,
+        datasets: vec![ods::index::Dataset {
+            dataset_version: ver.to_string(),
+            manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }],
     });
 
     let failures = perform_all_release_checks(
@@ -206,7 +194,7 @@ fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
         Some(&index),
     )?;
 
-    let expected_msg = format!("data/releases.json already has a row for 2026-07-31 {}", ver);
+    let expected_msg = format!("data/releases.json already has a dataset for 2026-07-31 {}", ver);
     assert!(failures.iter().any(|f| f.contains(&expected_msg)));
     Ok(())
 }
@@ -738,6 +726,266 @@ fn test_make_release_staging_failure_leaves_index_identical() -> Result<()> {
         original_index_bytes, current_index_bytes,
         "index must be byte-identical if staging fails"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_response_listing_three_dates_adds_all_three() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Write trud/trud-releases-2026-07-31.json with 3 releases
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir)?;
+    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let zip_sha = prov.trud_release_sha256.unwrap();
+
+    let response_json = serde_json::json!({
+        "apiVersion": "1",
+        "releases": [
+            {
+                "id": "item1.zip",
+                "releaseDate": "2026-07-31",
+                "archiveFileName": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+                "archiveFileSizeBytes": 37983173,
+                "archiveFileSha256": zip_sha,
+                "archiveFileUrl": "https://example.com/item1.zip"
+            },
+            {
+                "id": "item2.zip",
+                "releaseDate": "2026-06-26",
+                "archiveFileName": "hscorgrefdataxml_data_6.0.0_20260626000001.zip",
+                "archiveFileSizeBytes": 37957865,
+                "archiveFileSha256": "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233",
+                "archiveFileUrl": "https://example.com/item2.zip"
+            },
+            {
+                "id": "item3.zip",
+                "releaseDate": "2026-05-29",
+                "archiveFileName": "hscorgrefdataxml_data_5.0.0_20260529000001.zip",
+                "archiveFileSizeBytes": 37900000,
+                "archiveFileSha256": "5555E6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233",
+                "archiveFileUrl": "https://example.com/item3.zip"
+            }
+        ]
+    });
+    fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
+
+    run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    let index_file = tmp.path().join("data").join("releases.json");
+    let content = fs::read_to_string(&index_file)?;
+    let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
+
+    assert_eq!(index.releases.len(), 3);
+    assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
+    assert_eq!(index.releases[0].datasets.len(), 1);
+    assert_eq!(index.releases[1].trud_release_date, "2026-06-26");
+    assert_eq!(index.releases[1].datasets.len(), 0);
+    assert_eq!(index.releases[2].trud_release_date, "2026-05-29");
+    assert_eq!(index.releases[2].datasets.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_date_already_recorded_same_hash_left_byte_for_byte() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    let index_file = tmp.path().join("data").join("releases.json");
+    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    initial_index.releases.push(ods::index::Release {
+        trud_release_date: "2026-06-26".to_string(),
+        trud_release_sha256: "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233".to_string(),
+        trud_release_filesize_bytes: 37957865,
+        datasets: vec![],
+    });
+    fs::write(&index_file, initial_index.to_json_pretty()?)?;
+
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir)?;
+    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let zip_sha = prov.trud_release_sha256.unwrap();
+
+    let response_json = serde_json::json!({
+        "apiVersion": "1",
+        "releases": [
+            {
+                "id": "item1.zip",
+                "releaseDate": "2026-07-31",
+                "archiveFileName": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+                "archiveFileSizeBytes": 37983173,
+                "archiveFileSha256": zip_sha,
+                "archiveFileUrl": "https://example.com/item1.zip"
+            },
+            {
+                "id": "item2.zip",
+                "releaseDate": "2026-06-26",
+                "archiveFileName": "hscorgrefdataxml_data_6.0.0_20260626000001.zip",
+                "archiveFileSizeBytes": 37957865,
+                "archiveFileSha256": "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233",
+                "archiveFileUrl": "https://example.com/item2.zip"
+            }
+        ]
+    });
+    fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
+
+    run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    let content = fs::read_to_string(&index_file)?;
+    let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
+    let rel_26 = index.releases.iter().find(|r| r.trud_release_date == "2026-06-26").unwrap();
+    assert_eq!(rel_26.trud_release_sha256, "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233");
+    assert_eq!(rel_26.trud_release_filesize_bytes, 37957865);
+    assert!(rel_26.datasets.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_contradicting_hash_refuses_index_and_output_unchanged() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    let index_file = tmp.path().join("data").join("releases.json");
+    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    initial_index.releases.push(ods::index::Release {
+        trud_release_date: "2026-06-26".to_string(),
+        trud_release_sha256: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        trud_release_filesize_bytes: 37957865,
+        datasets: vec![],
+    });
+    let original_bytes = initial_index.to_json_pretty()?;
+    fs::write(&index_file, &original_bytes)?;
+
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir)?;
+    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let zip_sha = prov.trud_release_sha256.unwrap();
+
+    let response_json = serde_json::json!({
+        "apiVersion": "1",
+        "releases": [
+            {
+                "id": "item1.zip",
+                "releaseDate": "2026-07-31",
+                "archiveFileName": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+                "archiveFileSizeBytes": 37983173,
+                "archiveFileSha256": zip_sha,
+                "archiveFileUrl": "https://example.com/item1.zip"
+            },
+            {
+                "id": "item2.zip",
+                "releaseDate": "2026-06-26",
+                "archiveFileName": "hscorgrefdataxml_data_6.0.0_20260626000001.zip",
+                "archiveFileSizeBytes": 37957865,
+                "archiveFileSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "archiveFileUrl": "https://example.com/item2.zip"
+            }
+        ]
+    });
+    fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
+
+    let dist_dir = tmp.path().join("dist");
+    let res = run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: Some(dist_dir.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    });
+
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("The index records TRUD release 2026-06-26 with SHA-256 11111111…, but trud/trud-releases-2026-07-31.json says 22222222…"));
+    assert!(err.contains("TRUD may have reissued it. Nothing was written."));
+
+    // Index file and dist/ are unchanged
+    assert_eq!(fs::read_to_string(&index_file)?, original_bytes);
+    assert!(!dist_dir.exists(), "dist/ directory must not exist");
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    let index_file = tmp.path().join("data").join("releases.json");
+    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    initial_index.releases.push(ods::index::Release {
+        trud_release_date: "2026-07-31".to_string(),
+        trud_release_sha256: "9999999999999999999999999999999999999999999999999999999999999999".to_string(),
+        trud_release_filesize_bytes: 37983173,
+        datasets: vec![],
+    });
+    fs::write(&index_file, initial_index.to_json_pretty()?)?;
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        ods::datapackage::dataset_version(),
+        Some(tmp.path()),
+        Some(&initial_index),
+    )?;
+
+    assert!(failures.iter().any(|f| f.contains("The release row's trud_release_sha256") && f.contains("does not match _provenance.json")));
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_second_dataset_version_on_same_date_added_beside_first() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    let index_file = tmp.path().join("data").join("releases.json");
+    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let zip_sha = prov.trud_release_sha256.unwrap();
+
+    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    initial_index.releases.push(ods::index::Release {
+        trud_release_date: "2026-07-31".to_string(),
+        trud_release_sha256: zip_sha,
+        trud_release_filesize_bytes: 37983173,
+        datasets: vec![ods::index::Dataset {
+            dataset_version: "0.0.1".to_string(),
+            manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            dataset_doi: None,
+            withdrawn: None,
+        }],
+    });
+    fs::write(&index_file, initial_index.to_json_pretty()?)?;
+
+    run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    let content = fs::read_to_string(&index_file)?;
+    let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
+
+    assert_eq!(index.releases.len(), 1);
+    assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
+    assert_eq!(index.releases[0].datasets.len(), 2);
+    assert_eq!(index.releases[0].datasets[0].dataset_version, "0.0.1");
+    assert_eq!(index.releases[0].datasets[1].dataset_version, ods::datapackage::dataset_version());
 
     Ok(())
 }

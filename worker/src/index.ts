@@ -10,6 +10,12 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Max-Age': '86400',
 };
 
+import releasesV1Schema from '../schema/releases.v1.json';
+
+const SCHEMAS: Record<string, unknown> = {
+  'releases.v1.json': releasesV1Schema,
+};
+
 const ROOT_TEXT = `ods.fyi — All the organisations and sites in the NHS Organisation Data Service,
 as queryable & verifiable Parquet files. An independent project.
 
@@ -72,7 +78,9 @@ export function deriveHeaders(pathname: string, etag?: string, computedDigest?: 
   const clean = pathname.replace(/^\/+/, '');
 
   // 1. Content-Type
-  if (clean.includes('/manifests/')) {
+  if (clean.startsWith('schema/')) {
+    headers.set('Content-Type', 'application/schema+json');
+  } else if (clean.includes('/manifests/')) {
     headers.set('Content-Type', 'application/vnd.oci.image.manifest.v1+json');
   } else if (clean.includes('/blobs/')) {
     headers.set('Content-Type', 'application/octet-stream');
@@ -98,6 +106,7 @@ export function deriveHeaders(pathname: string, etag?: string, computedDigest?: 
 
   // 3. Cache-Control
   const isImmutable =
+    clean.startsWith('schema/') ||
     clean.includes('/blobs/') ||
     /^\d{4}-\d{2}-\d{2}\/\d+\.\d+\.\d+\//.test(clean) ||
     /\/manifests\/\d{4}-\d{2}-\d{2}_\d+\.\d+\.\d+$/.test(clean);
@@ -145,7 +154,7 @@ export interface NamedPathMatch {
 
 export function matchNamedPath(pathname: string): NamedPathMatch | null {
   const clean = pathname.replace(/^\/+/, '');
-  if (!clean || clean === 'v2' || clean.startsWith('v2/') || clean === 'releases.json') {
+  if (!clean || clean === 'v2' || clean.startsWith('v2/') || clean === 'releases.json' || clean.startsWith('schema/')) {
     return null;
   }
 
@@ -279,6 +288,22 @@ export default {
       const headers = new Headers(CORS_HEADERS);
       headers.set('Content-Type', 'application/json');
       return new Response('{}', { status: 200, headers });
+    }
+
+    // Schema endpoint: /schema/<file>
+    const cleanPath = pathname.replace(/^\/+/, '');
+    if (cleanPath.startsWith('schema/')) {
+      const schemaFile = cleanPath.slice('schema/'.length);
+      if (schemaFile in SCHEMAS) {
+        const body = JSON.stringify(SCHEMAS[schemaFile], null, 2) + '\n';
+        const headers = deriveHeaders(pathname);
+        headers.set('Content-Length', new TextEncoder().encode(body).length.toString());
+        if (request.method === 'HEAD') {
+          return new Response(null, { status: 200, headers });
+        }
+        return new Response(body, { status: 200, headers });
+      }
+      return errorResponse(pathname);
     }
 
     const namedMatch = matchNamedPath(pathname);

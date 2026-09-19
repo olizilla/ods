@@ -1,6 +1,9 @@
+mod common;
+
 use anyhow::Result;
+use common::make_v1_index;
 use ods::commands::pull::{run_with_fetcher, Args, OciBlobFetcher};
-use ods::index::{MirrorEntry, OdsReleaseIndex, ReleaseIndexEntry};
+use ods::index::OdsReleaseIndex;
 use sha2::Digest;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -45,24 +48,12 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1").unwrap();
     let manifest_digest = manifest.digest().unwrap();
 
-    let index = OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![MirrorEntry {
-            url: "https://ods.fyi/v2/ods-data".to_string(),
-        }],
-        releases: vec![ReleaseIndexEntry {
-            trud_release_date: "2026-07-31".to_string(),
-            dataset_version: "1.0.1".to_string(),
-            tag: "2026-07-31_1.0.1".to_string(),
-            manifest_digest: manifest_digest.clone(),
-            trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            tool_version: "0.4.3".to_string(),
-            dataset_doi: None,
-            withdrawn: None,
-        }],
-    };
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", &manifest_digest)],
+    )]);
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);

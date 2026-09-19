@@ -1,4 +1,7 @@
+mod common;
+
 use anyhow::Result;
+use common::make_v1_index;
 use ods::commands::use_cmd::{run as use_run, Args as UseArgs};
 use std::fs;
 use tempfile::TempDir;
@@ -39,23 +42,12 @@ fn test_use_refuses_when_release_unverified() {
     fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
 
     // Cache an index with a different manifest digest
-    let release_entry = ods::index::ReleaseIndexEntry {
-        trud_release_date: "2026-07-31".to_string(),
-        dataset_version: "1.0.1".to_string(),
-        tag: "2026-07-31_1.0.1".to_string(),
-        manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        trud_release_sha256: "AAAA".to_string(),
-        tool_version: "0.4.3".to_string(),
-        dataset_doi: None,
-        withdrawn: None,
-    };
-    let index = ods::index::OdsReleaseIndex {
-        type_tag: "ods_release_index".to_string(),
-        index_version: 2,
-        concept_doi: None,
-        mirrors: vec![],
-        releases: vec![release_entry],
-    };
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
     let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &workspace).unwrap();
 

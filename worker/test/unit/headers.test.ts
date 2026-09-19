@@ -183,4 +183,14 @@ describe('Derived Headers & Caching Policies', () => {
     );
     expect(condRes.status).toBe(304);
   });
+
+  it('serves /schema/releases.v1.json with application/schema+json and immutable cache-control', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/schema/releases.v1.json'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/schema+json');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    const json = await res.json() as Record<string, unknown>;
+    expect(json['$id']).toBe('https://ods.fyi/schema/releases.v1.json');
+    expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
+  });
 });

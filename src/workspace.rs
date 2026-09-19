@@ -13,8 +13,6 @@ pub struct ReleaseInfo {
 }
 
 /// Validates whether a directory contains a valid `_releases.json` file.
-///
-/// Reduces to one accepted shape: parses as `OdsReleaseIndex`, and its `_type` is `ods_release_index`.
 pub fn validate_releases_json(dir: &Path) -> bool {
     let path = dir.join(crate::index::RELEASES_JSON_FILENAME);
     if !path.is_file() {
@@ -24,9 +22,40 @@ pub fn validate_releases_json(dir: &Path) -> bool {
         return false;
     };
     if let Ok(idx) = serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes) {
-        return idx.type_tag == "ods_release_index";
+        return idx.validate().is_ok();
     }
     false
+}
+
+/// Checks the `_releases.json` marker in `dir`:
+/// - Returns Ok(false) if file does not exist.
+/// - Returns Ok(true) if file exists and validates as OdsReleaseIndex.
+/// - Returns Err with actionable diagnostic if file exists and fails validation.
+pub fn check_releases_json(dir: &Path) -> Result<bool> {
+    let path = dir.join(crate::index::RELEASES_JSON_FILENAME);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let bytes = fs::read(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    match serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes) {
+        Ok(idx) => {
+            if idx.validate().is_ok() {
+                Ok(true)
+            } else {
+                anyhow::bail!(
+                    "✖ {} isn't a release index this ods can read\n  Expected $schema https://ods.fyi/schema/releases.v1.json\n  Delete it and run `ods pull` to replace it.",
+                    path.display()
+                )
+            }
+        }
+        Err(_) => {
+            anyhow::bail!(
+                "✖ {} isn't a release index this ods can read\n  Expected $schema https://ods.fyi/schema/releases.v1.json\n  Delete it and run `ods pull` to replace it.",
+                path.display()
+            )
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,9 +79,9 @@ impl Workspace {
                     path.display()
                 );
             }
-            if validate_releases_json(path) {
+            if check_releases_json(path)? {
                 path.to_path_buf()
-            } else if let Some(found) = find_workspace_root_from(path, None) {
+            } else if let Some(found) = find_workspace_root_from(path, None)? {
                 found
             } else {
                 anyhow::bail!(
@@ -61,7 +90,7 @@ impl Workspace {
                 );
             }
         } else {
-            find_workspace_root_from(start, None).ok_or_else(|| {
+            find_workspace_root_from(start, None)?.ok_or_else(|| {
                 anyhow!(
                     "✖ no ods workspace found here\n  Pass -i <trud.zip> -o <dir>, or run `ods pull` or `ods trud pull` to create a workspace."
                 )
@@ -73,7 +102,7 @@ impl Workspace {
     /// Find one, or establish it at `explicit` (else the default). For write commands.
     pub fn open_or_create(explicit: Option<&Path>) -> Result<Workspace> {
         let root = if let Some(path) = explicit {
-            if validate_releases_json(path) {
+            if check_releases_json(path)? {
                 path.to_path_buf()
             } else if path.join("releases").is_dir() || path.file_name().is_some_and(|n| n == DEFAULT_WORKSPACE_DIR) {
                 // An explicit workspace path missing the marker: that is the root, seed marker if absent
@@ -100,7 +129,7 @@ impl Workspace {
                 path.to_path_buf()
             }
         } else {
-            find_workspace_root(None).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR))
+            find_workspace_root(None)?.unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_DIR))
         };
 
         fs::create_dir_all(&root)
@@ -189,8 +218,9 @@ impl Workspace {
 ///    a/_releases.json validates -> root = a.
 ///    a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
 ///    Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
+///
 /// Returns None if no workspace root was found.
-pub fn find_workspace_root_from(start: &Path, explicit: Option<&Path>) -> Option<PathBuf> {
+pub fn find_workspace_root_from(start: &Path, explicit: Option<&Path>) -> Result<Option<PathBuf>> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from);
@@ -202,10 +232,10 @@ pub fn find_workspace_root_from_with_home(
     start: &Path,
     explicit: Option<&Path>,
     home: Option<&Path>,
-) -> Option<PathBuf> {
+) -> Result<Option<PathBuf>> {
     // 1. Explicit wins. No further checks.
     if let Some(path) = explicit {
-        return Some(path.to_path_buf());
+        return Ok(Some(path.to_path_buf()));
     }
 
     // 2. Walk up. For each ancestor a, starting at start and ascending:
@@ -214,12 +244,12 @@ pub fn find_workspace_root_from_with_home(
     // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
     let mut current = Some(start);
     while let Some(a) = current {
-        if validate_releases_json(a) {
-            return Some(a.to_path_buf());
+        if check_releases_json(a)? {
+            return Ok(Some(a.to_path_buf()));
         }
         let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
-        if validate_releases_json(&default_ws) {
-            return Some(default_ws);
+        if check_releases_json(&default_ws)? {
+            return Ok(Some(default_ws));
         }
 
         // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
@@ -230,15 +260,15 @@ pub fn find_workspace_root_from_with_home(
         current = a.parent();
     }
 
-    None
+    Ok(None)
 }
 
 /// Resolves the root workspace directory from current working directory or explicit option.
-fn find_workspace_root(explicit: Option<&Path>) -> Option<PathBuf> {
+fn find_workspace_root(explicit: Option<&Path>) -> Result<Option<PathBuf>> {
     if let Some(path) = explicit {
-        return Some(path.to_path_buf());
+        return Ok(Some(path.to_path_buf()));
     }
-    let pwd = std::env::current_dir().ok()?;
+    let pwd = std::env::current_dir()?;
     find_workspace_root_from(&pwd, explicit)
 }
 /// Resolves the parquet directory for read commands (`find`, `cite`, `info`, `role`).
@@ -391,7 +421,7 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
         return;
     };
 
-    let Some(ws_root) = find_workspace_root_from(release_dir, None) else {
+    let Some(ws_root) = find_workspace_root_from(release_dir, None).ok().flatten() else {
         return;
     };
     let Ok(releases) = list_releases(&ws_root) else {
@@ -441,7 +471,7 @@ pub fn detect_cwd_release() -> Option<String> {
 /// Resolves the active release date of the enclosing workspace (if any).
 pub fn workspace_active_release(dir: Option<&Path>) -> Option<String> {
     if let Some(d) = dir {
-        if let Some(root) = find_workspace_root_from(d, None) {
+        if let Some(root) = find_workspace_root_from(d, None).ok().flatten() {
             if let Ok((active, _)) = get_active_release(&root) {
                 return Some(active);
             }
@@ -520,6 +550,8 @@ pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) ->
         .and_then(|p| p.trud_release_date)
         .or_else(|| {
             find_workspace_root_from(release_dir, None)
+                .ok()
+                .flatten()
                 .and_then(|r| Workspace::open(Some(&r)).ok())
                 .and_then(|ws| ws.active_release().ok().map(|(d, _)| d))
         });
@@ -527,7 +559,7 @@ pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) ->
     let source_rel = if let Some(ref d) = release_date {
         format!("releases/{}/{}", d, file_name)
     } else {
-        let ws_root = find_workspace_root_from(release_dir, None);
+        let ws_root = find_workspace_root_from(release_dir, None).ok().flatten();
         if let Some(ref root) = ws_root {
             release_dir
                 .strip_prefix(root)
@@ -859,11 +891,13 @@ pub fn verify_release_dir(
     let index_to_check = custom_index.or(baked_index.as_ref());
 
     if let Some(index) = index_to_check {
-        if let Some(entry) = index
+        let dataset = index
             .releases
             .iter()
-            .find(|r| r.trud_release_date == date && r.dataset_version == version)
-        {
+            .find(|r| r.trud_release_date == date)
+            .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
+
+        if let Some(entry) = dataset {
             if entry.manifest_digest == reconstructed_digest {
                 return VerificationOutcome::VerifiedPublished {
                     date,
