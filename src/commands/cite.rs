@@ -22,15 +22,7 @@ pub fn run(args: Args) -> Result<()> {
         input: Some(input_dir),
         format: args.format,
     };
-    if let Err(e) = run_with_writer(args_with_dir, &mut std::io::stdout()) {
-        if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-            if io_err.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
-        }
-        return Err(e);
-    }
-    Ok(())
+    run_with_writer(args_with_dir, &mut std::io::stdout())
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()> {
@@ -392,8 +384,12 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             )?;
         }
         _ => {
-            // Header line per Task 4 of say-which-release
-            writeln!(writer, "✓ {} ({})\n", d_tag, dataset_version)?;
+            // Source header on stdout
+            let header_lines = crate::workspace::format_cite_source_header(&input_dir, d_tag, &dataset_version, Some(cwd));
+            for line in header_lines {
+                writeln!(writer, "{}", line)?;
+            }
+            writeln!(writer)?;
 
             let data_url = if let Some(ref doi) = dataset_doi {
                 if doi.starts_with("http") {
@@ -476,8 +472,6 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         }
     }
 
-    let is_machine = args.format == "json" || args.format == "csljson" || args.format == "csl-json" || args.format == "bibtex";
-    crate::workspace::report_release_resolution(d_tag, Some(&input_dir), is_machine);
     let is_human = args.format == "text";
     crate::workspace::check_and_emit_staleness_nudge(&input_dir, is_human);
 

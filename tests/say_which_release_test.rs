@@ -167,7 +167,7 @@ fn test_role_reports_release_in_header_source_line() {
 }
 
 #[test]
-fn test_task1_cite_reports_release_to_stderr() {
+fn test_cite_reports_release_in_header_source_line_on_stdout() {
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -186,8 +186,13 @@ fn test_task1_cite_reports_release_to_stderr() {
         stderr
     );
     assert!(
-        stderr.contains("  2026-07-31 (current)"),
-        "stderr should report active release, got:\n{}",
+        stdout.contains("* Source: releases/2026-07-31 (1.0.1)"),
+        "stdout should report active release in * Source: line, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stderr.contains("(current)"),
+        "stderr should not contain release resolution, got:\n{}",
         stderr
     );
 }
@@ -272,6 +277,30 @@ fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
         stdout_role_disagree.contains(expected_disagree),
         "role must name the disagreement with ! sigil, got:\n{}",
         stdout_role_disagree
+    );
+
+    let cite_disagree = ods_binary()
+        .current_dir(&older_rel_dir)
+        .arg("cite")
+        .output()
+        .expect("run ods cite");
+    assert!(cite_disagree.status.success());
+    let stdout_cite_disagree = String::from_utf8_lossy(&cite_disagree.stdout);
+    let stderr_cite_disagree = String::from_utf8_lossy(&cite_disagree.stderr);
+    assert!(
+        stdout_cite_disagree.contains(expected_disagree),
+        "cite must name the disagreement with ! sigil, got:\n{}",
+        stdout_cite_disagree
+    );
+    assert!(
+        !stderr_cite_disagree.contains("! Run from releases/2026-06-26"),
+        "cite stderr must not contain disagreement line, got:\n{}",
+        stderr_cite_disagree
+    );
+    assert!(
+        !stderr_cite_disagree.contains("(current)"),
+        "cite stderr must not contain release resolution, got:\n{}",
+        stderr_cite_disagree
     );
 
     // 2. Run from workspace root: normal run, NO disagreement line
@@ -427,15 +456,21 @@ fn test_explicit_input_to_non_current_release_prints_bare_date_without_current()
         .expect("run ods cite with explicit -i");
 
     assert!(cite_output.status.success());
-    let cite_stderr = String::from_utf8_lossy(&cite_output.stderr);
+    let cite_stdout = String::from_utf8_lossy(&cite_output.stdout);
     assert!(
-        cite_stderr.contains("  2026-06-26"),
-        "stderr should report release date, got:\n{}",
-        cite_stderr
+        cite_stdout.contains("* Source: releases/2026-06-26 (1.0.0)"),
+        "stdout should report release in * Source: line, got:\n{}",
+        cite_stdout
     );
     assert!(
-        !cite_stderr.contains("2026-06-26 (current)"),
+        !cite_stdout.contains("(current)"),
         "non-current release must not be labelled (current), got:\n{}",
+        cite_stdout
+    );
+    let cite_stderr = String::from_utf8_lossy(&cite_output.stderr);
+    assert!(
+        !cite_stderr.contains("2026-06-26"),
+        "stderr should not report release date, got:\n{}",
         cite_stderr
     );
 

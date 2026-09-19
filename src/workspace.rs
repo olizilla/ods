@@ -409,21 +409,20 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
     }
 }
 
-/// Detects if the current working directory is a release directory.
-/// Returns Some("YYYY-MM-DD") if cwd is a release directory, or None otherwise.
-pub fn detect_cwd_release() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    // 1. If cwd has _provenance.json with trud_release_date:
-    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(&cwd) {
+/// Detects if a directory is a release directory.
+/// Returns Some("YYYY-MM-DD") if dir is a release directory, or None otherwise.
+pub fn detect_release_from_dir(dir: &Path) -> Option<String> {
+    // 1. If dir has _provenance.json with trud_release_date:
+    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(dir) {
         if let Some(d) = prov.trud_release_date {
             return Some(d);
         }
     }
     // 2. If parent directory is named "releases" and folder name matches YYYY-MM-DD:
-    // Structural inspection of cwd is strictly for the disagreement UX nudge; it never discovers workspaces or selects data.
-    if let Some(parent) = cwd.parent() {
+    // Structural inspection of dir is strictly for the disagreement UX nudge; it never discovers workspaces or selects data.
+    if let Some(parent) = dir.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some("releases") {
-            if let Some(name) = cwd.file_name().and_then(|n| n.to_str()) {
+            if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
                 if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() {
                     return Some(name.to_string());
                 }
@@ -431,6 +430,12 @@ pub fn detect_cwd_release() -> Option<String> {
         }
     }
     None
+}
+
+/// Detects if the current working directory is a release directory.
+/// Returns Some("YYYY-MM-DD") if cwd is a release directory, or None otherwise.
+pub fn detect_cwd_release() -> Option<String> {
+    std::env::current_dir().ok().and_then(|cwd| detect_release_from_dir(&cwd))
 }
 
 /// Resolves the active release date of the enclosing workspace (if any).
@@ -462,13 +467,21 @@ pub enum ReleaseResolution {
 }
 
 /// Checks the resolution state of `release_date` relative to the workspace's active release and cwd.
-pub fn check_release_resolution(release_date: &str, release_dir: Option<&Path>) -> ReleaseResolution {
+pub fn check_release_resolution_with_cwd(
+    release_date: &str,
+    release_dir: Option<&Path>,
+    cwd: Option<&Path>,
+) -> ReleaseResolution {
     let is_current = workspace_active_release(release_dir)
         .map(|act| act == release_date)
         .unwrap_or(false);
 
     if is_current {
-        if let Some(cwd_date) = detect_cwd_release() {
+        let detected = match cwd {
+            Some(dir) => detect_release_from_dir(dir),
+            None => detect_cwd_release(),
+        };
+        if let Some(cwd_date) = detected {
             if cwd_date != release_date {
                 return ReleaseResolution::Disagreement { cwd_date };
             }
@@ -477,6 +490,10 @@ pub fn check_release_resolution(release_date: &str, release_dir: Option<&Path>) 
     } else {
         ReleaseResolution::ExplicitNonCurrent
     }
+}
+
+pub fn check_release_resolution(release_date: &str, release_dir: Option<&Path>) -> ReleaseResolution {
+    check_release_resolution_with_cwd(release_date, release_dir, None)
 }
 
 /// Formats a single `* Source: {path}` line, optionally muted with ANSI_MUTED.
@@ -539,31 +556,32 @@ pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) ->
     lines
 }
 
-/// Reports the release date read from to stderr in the two-space gutter.
-/// Appends `(current)` only when the resolved release equals the workspace's active release;
-/// otherwise prints the date bare.
-/// If cwd is a release directory other than current, reports the disagreement and offers `ods use <cwd_date>`.
-/// Suppressed entirely on machine-readable formats.
-pub fn report_release_resolution(
+/// Builds the source header lines for `ods cite`.
+///
+/// Returns:
+/// 1. `* Source: releases/{date} ({version})`
+/// 2. If running from a release directory different from the active workspace release,
+///    an additional disagreement line:
+///    `! Run from releases/{cwd_date}. Change source with: ods use {cwd_date}`
+pub fn format_cite_source_header(
+    release_dir: &Path,
     release_date: &str,
-    release_dir: Option<&Path>,
-    is_machine_readable: bool,
-) {
-    if is_machine_readable {
-        return;
+    dataset_version: &str,
+    cwd: Option<&Path>,
+) -> Vec<String> {
+    let path_display = format!("releases/{} ({})", release_date, dataset_version);
+    let mut lines = vec![format_source_line(&path_display, false)];
+
+    if let ReleaseResolution::Disagreement { cwd_date } =
+        check_release_resolution_with_cwd(release_date, Some(release_dir), cwd)
+    {
+        lines.push(format!(
+            "! Run from releases/{}. Change source with: ods use {}",
+            cwd_date, cwd_date
+        ));
     }
-    match check_release_resolution(release_date, release_dir) {
-        ReleaseResolution::Current => {
-            eprintln!("  {} (current)", release_date);
-        }
-        ReleaseResolution::Disagreement { cwd_date } => {
-            eprintln!("  {} (current), not the {} you're in", release_date, cwd_date);
-            eprintln!("  Switch with: ods use {}", cwd_date);
-        }
-        ReleaseResolution::ExplicitNonCurrent => {
-            eprintln!("  {}", release_date);
-        }
-    }
+
+    lines
 }
 
 /// Reports an inferred release input for write commands (make, make oci) and names the directory written.

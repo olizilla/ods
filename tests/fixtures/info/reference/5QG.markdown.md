@@ -1,4 +1,4 @@
-* Source: releases/2026-08-28/orgs-all.parquet
+* Source: releases/2026-08-28/orgs_all.parquet
 * Status: inactive, Class: org, Last Change: 2013-04-01
 
 | ODS Code     | 5QG                                                           |

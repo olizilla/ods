@@ -420,9 +420,7 @@ fn list_releases_cmd(
         return Ok(());
     }
 
-    if progress.caps().is_tty {
-        eprintln!("Available ODS dataset releases:\n");
-    }
+    println!("Available ODS dataset releases:\n");
 
     if items.is_empty() {
         println!("(No dataset releases available in index)");

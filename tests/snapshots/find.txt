@@ -66,7 +66,7 @@ Pick one and open it:
 
 $ COLUMNS=100 ods find --role 'General Practice'
 --- stderr
-Error: ✖ No role named 'General Practice'
+✖ No role named 'General Practice'
   Did you mean: General Dental Practice · GP Practice · Scottish GP Practice
   Or use codes: ods find --role RO110,RO76,RO227
 --- exit 1

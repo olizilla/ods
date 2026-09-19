@@ -1,4 +1,3 @@
-use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use ods::commands;
@@ -62,7 +61,7 @@ enum Command {
     Diff(commands::diff::Args),
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Find(args) => commands::find::run(args),
@@ -81,13 +80,26 @@ fn main() -> Result<()> {
     // the command only. Remove it on the way out, including on error.
     ods::ods_xml::cleanup_scratch();
 
-    // Commands that have already printed their own diagnostics signal failure
-    // with this marker: set a non-zero exit status without printing again.
-    if let Err(ref e) = result {
-        if e.downcast_ref::<commands::pull::AlreadyReported>().is_some() {
+    if let Err(err) = result {
+        if err.chain().any(|c| {
+            c.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+        }) {
+            std::process::exit(0);
+        }
+
+        if err.chain().any(|c| c.downcast_ref::<commands::pull::AlreadyReported>().is_some()) {
             std::process::exit(1);
         }
-    }
 
-    result
+        let causes: Vec<String> = err.chain().map(|c| c.to_string()).collect();
+        let message = causes.join(": ");
+        let formatted = if message.starts_with('✖') {
+            message
+        } else {
+            format!("✖ {}", message)
+        };
+        eprintln!("{}", formatted.trim_end_matches('\n'));
+        std::process::exit(1);
+    }
 }

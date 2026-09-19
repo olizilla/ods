@@ -6,8 +6,11 @@
 #   scripts/ci.sh --compare OLD.tsv        run, then compare with an earlier summary
 #   scripts/ci.sh --compare OLD.tsv NEW.tsv   compare two summaries without running
 #
-# Summaries and step logs go to target/ci-runs/. Compare runs from the same machine:
-# a laptop and a CI runner differ several times over, and so do cold and warm caches.
+# Summaries and step logs go to target/ci-runs/. A local run (not in CI, and not
+# itself a --compare) prints its own comparison against the most recent earlier
+# summary in that directory, so plain `scripts/ci.sh` output already shows the
+# diff. Compare runs from the same machine: a laptop and a CI runner differ
+# several times over, and so do cold and warm caches.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit
@@ -225,6 +228,15 @@ add_row total "$total_status" "$total" ""
   done
 } > "$summary"
 echo "saved $summary"
+
+if [ "$in_ci" != true ] && [ -z "$compare_old" ]; then
+  prev=$(ls -1 target/ci-runs/*.tsv 2>/dev/null | grep -v -x -F "$summary" | sort | tail -n 1)
+  if [ -n "$prev" ]; then
+    echo
+    echo "compared with $prev:"
+    compare "$prev" "$summary"
+  fi
+fi
 
 if [ "$in_ci" = true ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {

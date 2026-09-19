@@ -65,15 +65,7 @@ impl Default for Args {
 pub fn run(args: Args) -> Result<()> {
     let use_color = crate::ansi::stdout_color_enabled(args.plain);
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
-    if let Err(e) = run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, use_color) {
-        if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-            if io_err.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
-        }
-        return Err(e);
-    }
-    Ok(())
+    run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, use_color)
 }
 
 pub fn run_with_writer<W: Write + ?Sized>(
@@ -180,7 +172,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
             };
 
             let source_filename = if is_from_orgs_all {
-                "orgs-all.parquet"
+                "orgs_all.parquet"
             } else {
                 "orgs.parquet"
             };

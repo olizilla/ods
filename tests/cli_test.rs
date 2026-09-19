@@ -76,6 +76,16 @@ fn test_cli_pull_list_output_formatting() {
 
     if output.status.success() {
         assert!(!stdout.is_empty(), "pull --list must output rows to stdout when successful");
+        assert!(
+            stdout.contains("Available ODS dataset releases:\n"),
+            "stdout should contain heading, got:\n{}",
+            stdout
+        );
+        assert!(
+            !stderr.contains("Available ODS dataset releases:"),
+            "stderr should not contain heading, got:\n{}",
+            stderr
+        );
         assert!(!stderr.contains("Legend:"), "piped --list must not output TTY legend to stderr");
     } else {
         assert!(!stderr.is_empty(), "reported failure must write diagnostics to stderr");
@@ -873,6 +883,27 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
         !stderr_json.contains("release is") && !stderr_json.contains("ods pull"),
         "machine-readable JSON format must NOT output staleness notice, got:\n{}",
         stderr_json
+    );
+}
+
+#[test]
+fn test_error_without_cross_sigil_is_prefixed_with_cross_and_has_no_error_prefix() {
+    let output = ods_binary()
+        .args(["pull", "1999-01-01"])
+        .output()
+        .expect("run ods pull 1999-01-01");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("✖ "),
+        "stderr must start with '✖ ', got:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("Error:"),
+        "stderr must contain no 'Error:', got:\n{}",
+        stderr
     );
 }
 

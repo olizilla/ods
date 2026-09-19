@@ -120,7 +120,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
                 }
             }
             let display_path = crate::provenance::format_provenance_display_path(&prov_path);
-            println!("* Provenance: {}", display_path);
+            eprintln!("* Provenance: {}", display_path);
             Some(prov)
         }
         None => {
@@ -630,7 +630,7 @@ pub fn export_orgs(
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
-    println!("Exported {} records to orgs.parquet.", active_records.len());
+    eprintln!("Exported {} records to orgs.parquet.", active_records.len());
     Ok(())
 }
 
@@ -668,7 +668,7 @@ pub fn export_orgs_all(
         writer.write(&batch).context("writing orgs_all batch")?;
     }
     writer.close().context("finalising orgs_all writer")?;
-    println!(
+    eprintln!(
         "Exported {} records to orgs_all.parquet.",
         all_records.len()
     );
@@ -814,7 +814,7 @@ pub fn export_roles(
         writer.write(&batch).context("writing roles batch")?;
     }
     writer.close().context("finalising roles writer")?;
-    println!("Exported {} records to roles.parquet.", rows.len());
+    eprintln!("Exported {} records to roles.parquet.", rows.len());
     Ok(())
 }
 
@@ -958,7 +958,7 @@ pub fn export_relationships(
             .context("writing relationships batch")?;
     }
     writer.close().context("finalising relationships writer")?;
-    println!("Exported {} records to relationships.parquet.", rows.len());
+    eprintln!("Exported {} records to relationships.parquet.", rows.len());
     Ok(())
 }
 
@@ -1144,7 +1144,7 @@ pub fn export_successions(
         writer.write(&batch).context("writing successions batch")?;
     }
     writer.close().context("finalising successions writer")?;
-    println!("Exported {} records to successions.parquet.", edges.len());
+    eprintln!("Exported {} records to successions.parquet.", edges.len());
     Ok(())
 }
 

@@ -242,7 +242,7 @@ fn test_cite_offline_cached_index_disclosure() -> Result<()> {
     )?;
 
     let out = String::from_utf8(buf)?;
-    assert!(out.contains("✓ 2026-08-31 (1.0.1)"));
+    assert!(out.contains("* Source: releases/2026-08-31 (1.0.1)"));
 
     Ok(())
 }

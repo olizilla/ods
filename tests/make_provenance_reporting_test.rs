@@ -134,7 +134,7 @@ fn test_directory_input_without_provenance_fails_with_hard_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_task2_name_provenance_file_and_stream_segregation() {
+fn test_make_reports_provenance_file_on_stderr() {
     let tmp = TempDir::new().unwrap();
     let ws_root = tmp.path().join("workspace");
     fs::create_dir_all(&ws_root).unwrap();
@@ -175,11 +175,11 @@ fn test_task2_name_provenance_file_and_stream_segregation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "ods make must succeed, stderr:\n{}", stderr);
 
-    // 1. stdout has * Provenance: releases/2026-08-28/_provenance.json
+    // 1. Stderr has * Provenance: releases/2026-08-28/_provenance.json
     assert!(
-        stdout.contains("* Provenance: releases/2026-08-28/_provenance.json"),
-        "stdout must name provenance file relative to workspace, got:\n{}",
-        stdout
+        stderr.contains("* Provenance: releases/2026-08-28/_provenance.json"),
+        "stderr must name provenance file relative to workspace, got:\n{}",
+        stderr
     );
 
     // 2. The named file exists on disk
@@ -188,21 +188,18 @@ fn test_task2_name_provenance_file_and_stream_segregation() {
         "named provenance file must exist on disk"
     );
 
-    // 3. Stderr has Generating notice, and does NOT have * Provenance:
+    // 3. Stderr has Generating notice
     assert!(
         stderr.contains("Generating dataset target projections (Parquet)..."),
         "stderr must contain Generating notice, got:\n{}",
         stderr
     );
-    assert!(
-        !stderr.contains("* Provenance:"),
-        "stderr must NOT contain * Provenance: line (belongs to stdout)"
-    );
 
-    // 4. Stdout does NOT have Generating notice
+    // 4. Stdout is empty
     assert!(
-        !stdout.contains("Generating dataset target projections"),
-        "stdout must NOT contain Generating notice (belongs to stderr)"
+        stdout.trim().is_empty(),
+        "stdout must be empty, got:\n{}",
+        stdout
     );
 
     // 5. Stderr does not contain ! warning
@@ -247,7 +244,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("* Provenance:"));
+    assert!(stderr.contains("* Provenance:"));
+    assert!(stdout.trim().is_empty());
     assert!(!stderr.contains("! No provenance info found"));
 }

@@ -195,14 +195,16 @@ fn test_find_table_disagreement_becomes_exclamation_line() {
     let stdout_root = String::from_utf8_lossy(&out_root.stdout);
     assert!(!stdout_root.contains("! Run from releases/"));
 
-    // Verify cite keeps existing two-line stderr form
+    // Verify cite uses source header on stdout and no release gutter on stderr
     let cite_out = ods_binary()
         .current_dir(&ws_root)
         .arg("cite")
         .output()
         .expect("run cite");
+    let cite_stdout = String::from_utf8_lossy(&cite_out.stdout);
+    assert!(cite_stdout.contains("* Source: releases/2026-07-31 (1.0.1)"));
     let cite_stderr = String::from_utf8_lossy(&cite_out.stderr);
-    assert!(cite_stderr.contains("  2026-07-31 (current)"));
+    assert!(!cite_stderr.contains("  2026-07-31 (current)"));
 
     let role_out = ods_binary()
         .current_dir(&ws_root)

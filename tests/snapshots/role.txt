@@ -1,6 +1,6 @@
 $ COLUMNS=100 ods role 'general practice'
 --- stderr
-Error: ✖ No role matches 'general practice'
+✖ No role matches 'general practice'
   Did you mean: General Dental Practice · GP Practice · Scottish GP Practice
 --- exit 1
 
