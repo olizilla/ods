@@ -443,7 +443,7 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
 /// Returns Some("YYYY-MM-DD") if dir is a release directory, or None otherwise.
 pub fn detect_release_from_dir(dir: &Path) -> Option<String> {
     // 1. If dir has _provenance.json with trud_release_date:
-    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(dir) {
+    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(dir).ok() {
         if let Some(d) = prov.trud_release_date {
             return Some(d);
         }
@@ -547,6 +547,7 @@ pub fn format_source_line(path: &str, color: bool) -> String {
 ///    `! Run from releases/{cwd_date}. Change source with: ods use {cwd_date}`
 pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) -> Vec<String> {
     let release_date = crate::provenance::OdsProvenance::load_from_dir(release_dir)
+        .ok()
         .and_then(|p| p.trud_release_date)
         .or_else(|| {
             find_workspace_root_from(release_dir, None)
@@ -820,7 +821,7 @@ pub fn verify_release_dir(
     release_dir: &Path,
     custom_index: Option<&crate::index::OdsReleaseIndex>,
 ) -> VerificationOutcome {
-    let prov = match crate::provenance::OdsProvenance::load_from_dir(release_dir) {
+    let prov = match crate::provenance::OdsProvenance::load_from_dir(release_dir).ok() {
         Some(p) => p,
         None => return VerificationOutcome::Corrupted("Missing or unreadable _provenance.json".to_string()),
     };

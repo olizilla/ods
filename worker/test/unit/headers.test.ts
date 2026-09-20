@@ -48,15 +48,15 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/091145d75e23b23a22618ab63bc442bbf07cf362fcaca5c9b8a1b2dccba630f5': {
+    'v2/ods-data/blobs/sha256/750c7e6b0478d19a6a97af45e4d381666ad2610f3adde0517ef282940c7db63e': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/865ae1b1b0ad804aa57abc90de9805be6727516afd83cb86c808e33c78461ea0': {
+    'v2/ods-data/blobs/sha256/351ea9afafb4ce9887bb640c19b1851d85c9393d658b57ef80623307f28c9df8': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/434089f072f166fade4426cfc24c1e360c0273b1c562f410832890a2bb8fd623': {
+    'v2/ods-data/blobs/sha256/32c4f1885812758e321d2b1a980681bf960ac9061a8daad50bf3dcdb6f6c291d': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -191,6 +191,16 @@ describe('Derived Headers & Caching Policies', () => {
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     const json = await res.json() as Record<string, unknown>;
     expect(json['$id']).toBe('https://ods.fyi/schema/releases.v1.json');
+    expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
+  });
+
+  it('serves /schema/provenance.v1.json with application/schema+json and immutable cache-control', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/schema/provenance.v1.json'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/schema+json');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    const json = await res.json() as Record<string, unknown>;
+    expect(json['$id']).toBe('https://ods.fyi/schema/provenance.v1.json');
     expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
   });
 });

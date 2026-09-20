@@ -353,7 +353,7 @@ fn test_provenance_json_untouched_by_attestations() {
     let prov: serde_json::Value = serde_json::from_str(&prov_text).unwrap();
 
     // Verify _provenance.json keys - none of the new attestation files should appear
-    assert_eq!(prov["_type"], "ods_provenance");
+    assert_eq!(prov["$schema"], ods::provenance::PROVENANCE_SCHEMA_V1_URL);
     assert_eq!(prov["trud_release_date"], "2026-07-31");
     assert!(prov.get("checksumFileUrl").is_none());
     assert!(prov.get("signatureFileUrl").is_none());

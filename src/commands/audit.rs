@@ -322,20 +322,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         active_release_path.join("parquet")
     };
 
-    let prov_file = if active_release_path
-        .join(crate::provenance::PROVENANCE_FILENAME)
-        .exists()
-    {
-        active_release_path.join(crate::provenance::PROVENANCE_FILENAME)
-    } else {
-        active_release_path.join("provenance.json")
-    };
-    let workspace_prov: Option<OdsProvenance> = if prov_file.exists() {
-        let content = std::fs::read_to_string(&prov_file)?;
-        serde_json::from_str(&content).ok()
-    } else {
-        None
-    };
+    let workspace_prov: Option<OdsProvenance> = OdsProvenance::load_from_dir(&active_release_path).error_building()?;
 
     let mut warnings = Vec::new();
     let mut discrepancies = Vec::new();
@@ -344,6 +331,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // SECTION 1: File integrity
     // ------------------------------------------------------------------------
     let input_prov = OdsProvenance::load_from_dir(&input_path)
+        .error_building()?
         .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
         .unwrap_or_else(|| {
             crate::ods_xml::parse_single_pass(&xml_path)

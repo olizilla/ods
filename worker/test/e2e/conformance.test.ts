@@ -75,7 +75,7 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
     // Seed release objects
     const provBytes = new TextEncoder().encode(
       JSON.stringify({
-        _type: 'ods_provenance',
+        $schema: 'https://ods.fyi/schema/provenance.v1.json',
         trud_release_date: '2026-07-31',
         dataset_version: '1.0.1',
       })

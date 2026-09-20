@@ -11,6 +11,7 @@ fn extract_schema_subtree(pkg: &Value) -> Value {
         .map(|r| {
             serde_json::json!({
                 "name": r["name"],
+                "type": r["type"],
                 "path": r["path"],
                 "format": r["format"],
                 "mediatype": r["mediatype"],
@@ -49,6 +50,7 @@ fn test_datapackage_matches_committed_snapshot() -> Result<()> {
         );
     }
 
+    assert_eq!(generated["$schema"], committed["$schema"]);
     assert_eq!(generated["version"], committed["version"], "schema version in code must match committed package version");
     assert_eq!(generated["name"], committed["name"]);
     assert_eq!(generated["licenses"], committed["licenses"]);

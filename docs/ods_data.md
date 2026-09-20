@@ -63,7 +63,7 @@ Every release folder contains a `_provenance.json` file recording the integrity,
 
 ```json
 {
-  "_type": "ods_provenance",
+  "$schema": "https://ods.fyi/schema/provenance.v1.json",
   "trud_release_name": "Release 7.0.0",
   "trud_release_date": "2026-07-31",
   "trud_release_file": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",

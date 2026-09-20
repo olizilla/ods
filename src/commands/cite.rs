@@ -88,7 +88,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         );
     }
 
-    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir);
+    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).warn_reading();
 
     // Decline citation if source archive is unverified
     let verification_status = prov.as_ref().and_then(|p| p.trud_release_sha256_verified);

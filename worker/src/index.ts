@@ -11,9 +11,11 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 import releasesV1Schema from '../schema/releases.v1.json';
+import provenanceV1Schema from '../schema/provenance.v1.json';
 
 const SCHEMAS: Record<string, unknown> = {
   'releases.v1.json': releasesV1Schema,
+  'provenance.v1.json': provenanceV1Schema,
 };
 
 const ROOT_TEXT = `ods.fyi — All the organisations and sites in the NHS Organisation Data Service,

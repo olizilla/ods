@@ -896,6 +896,114 @@ fn test_error_without_cross_sigil_is_prefixed_with_cross_and_has_no_error_prefix
     );
 }
 
+#[test]
+fn test_unreadable_provenance_reading_commands_warn_and_continue() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    let rel_dir = ws.join("releases").join("2026-08-28");
+    fs::create_dir_all(&rel_dir).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+
+    let (_find_tmp, find_dir) = common::setup_find_test_workspace();
+    for entry in fs::read_dir(&find_dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.path().extension().is_some_and(|ext| ext == "parquet") {
+            fs::copy(entry.path(), rel_dir.join(entry.file_name())).unwrap();
+        }
+    }
+    fs::write(rel_dir.join("datapackage.json"), ods::datapackage::DATAPACKAGE_JSON).unwrap();
+
+    // 1. Unreadable provenance with no $schema
+    let bad_prov = r#"{
+  "trud_release_date": "2026-08-28",
+  "trud_release_name": "Release 8.0.0"
+}"#;
+    fs::write(rel_dir.join(ods::provenance::PROVENANCE_FILENAME), bad_prov).unwrap();
+
+    // ods find should return rows and print the '!' warning once on stderr
+    let find_out = ods_binary()
+        .current_dir(&ws)
+        .args(["find", "sedbergh", "-i", "releases/2026-08-28", "--plain"])
+        .output()
+        .expect("ods find");
+    assert!(find_out.status.success(), "find must succeed even with unreadable provenance");
+    let stdout = String::from_utf8_lossy(&find_out.stdout);
+    let stderr = String::from_utf8_lossy(&find_out.stderr);
+    assert!(stdout.contains("SEDBERGH"), "find output must contain rows");
+    assert!(
+        stderr.contains("! releases/2026-08-28/_provenance.json isn't provenance this ods can read. Rebuild the release with `ods make`, or pull it again."),
+        "stderr must contain '!' warning, got:\n{}",
+        stderr
+    );
+    // Ensure the warning is printed exactly once
+    assert_eq!(
+        stderr.matches("isn't provenance this ods can read").count(),
+        1,
+        "warning should be printed exactly once, got:\n{}",
+        stderr
+    );
+
+    // ods make oci should fail with exit 1, print the '✖' block, and leave oci/ absent
+    let make_oci_out = ods_binary()
+        .current_dir(&ws)
+        .args(["make", "oci", "-i", "releases/2026-08-28"])
+        .output()
+        .expect("ods make oci");
+    assert!(!make_oci_out.status.success(), "make oci must fail on unreadable provenance");
+    assert_eq!(make_oci_out.status.code(), Some(1));
+    let oci_stderr = String::from_utf8_lossy(&make_oci_out.stderr);
+    assert!(
+        oci_stderr.contains("✖ releases/2026-08-28/_provenance.json isn't provenance this ods can read"),
+        "stderr must contain '✖' error block, got:\n{}",
+        oci_stderr
+    );
+    assert!(
+        oci_stderr.contains("Expected $schema https://ods.fyi/schema/provenance.v1.json"),
+        "stderr must explain expected $schema, got:\n{}",
+        oci_stderr
+    );
+    assert!(
+        oci_stderr.contains("Pull the archive again with `ods trud pull 2026-08-28 --force`, then run `ods make`."),
+        "stderr must provide remediation hint, got:\n{}",
+        oci_stderr
+    );
+    assert!(
+        !rel_dir.join("oci").exists(),
+        "oci/ must remain absent on unreadable provenance failure"
+    );
+
+    // 2. Absent provenance: both commands behave as expected
+    fs::remove_file(rel_dir.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+
+    let find_absent = ods_binary()
+        .current_dir(&ws)
+        .args(["find", "sedbergh", "-i", "releases/2026-08-28", "--plain"])
+        .output()
+        .expect("ods find absent");
+    assert!(find_absent.status.success());
+    let absent_stdout = String::from_utf8_lossy(&find_absent.stdout);
+    let absent_stderr = String::from_utf8_lossy(&find_absent.stderr);
+    assert!(absent_stdout.contains("SEDBERGH"));
+    assert!(
+        !absent_stderr.contains("isn't provenance this ods can read"),
+        "absent provenance must NOT emit unreadable warning"
+    );
+
+    let make_oci_absent = ods_binary()
+        .current_dir(&ws)
+        .args(["make", "oci", "-i", "releases/2026-08-28"])
+        .output()
+        .expect("ods make oci absent");
+    let make_oci_stderr = String::from_utf8_lossy(&make_oci_absent.stderr);
+    assert!(!make_oci_absent.status.success(), "make oci must fail when provenance is absent");
+    assert_eq!(make_oci_absent.status.code(), Some(1));
+    assert!(
+        make_oci_stderr.contains("Missing or unreadable _provenance.json"),
+        "stderr should report missing provenance, got:\n{}",
+        make_oci_stderr
+    );
+}
+
 
 
 

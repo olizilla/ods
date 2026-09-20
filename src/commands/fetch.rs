@@ -1210,7 +1210,7 @@ fn write_provenance_json_with_verification(
     let header = crate::ods_xml::extract_manifest_header(&trud_dir)?;
 
     let prov = OdsProvenance {
-        type_tag: crate::provenance::PROVENANCE_TYPE_TAG.to_string(),
+        schema: crate::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
         trud_release_name: release.name.clone(),
         trud_release_date: Some(release.release_date.clone()),
         trud_release_sha256: Some(release.archive_file_sha256.clone()),

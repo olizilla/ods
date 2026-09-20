@@ -6,11 +6,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-pub const PROVENANCE_TYPE_TAG: &str = "ods_provenance";
-
-fn default_type_tag() -> String {
-    PROVENANCE_TYPE_TAG.to_string()
-}
+pub const PROVENANCE_SCHEMA_V1_URL: &str = "https://ods.fyi/schema/provenance.v1.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -25,9 +21,9 @@ pub enum TrudVerificationSource {
 /// and saved as `_provenance.json` in workspace release directories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OdsProvenance {
-    /// Discriminator tag distinguishing provenance header from organisation records
-    #[serde(rename = "_type", default = "default_type_tag")]
-    pub type_tag: String,
+    /// JSON Schema URI identifying this provenance document format
+    #[serde(rename = "$schema")]
+    pub schema: String,
 
     // --- 1. Official TRUD API Release Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +83,7 @@ pub const PROVENANCE_FILENAME: &str = "_provenance.json";
 impl Default for OdsProvenance {
     fn default() -> Self {
         Self {
-            type_tag: PROVENANCE_TYPE_TAG.to_string(),
+            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
             trud_release_name: None,
             trud_release_date: None,
             trud_release_file: None,
@@ -149,8 +145,159 @@ impl OdsProvenance {
         }
         meta
     }
+}
 
-    pub fn load_from_dir_with_path(dir: &Path) -> Option<(Self, PathBuf)> {
+#[derive(Debug, Clone)]
+pub enum ProvenanceLoad {
+    Read(Box<OdsProvenance>, PathBuf),
+    Unreadable {
+        path: PathBuf,
+        date: String,
+    },
+    Absent,
+}
+
+pub fn format_unreadable_provenance_error(path: &Path, date: &str) -> String {
+    let disp = format_provenance_display_path(path);
+    format!(
+        "✖ {} isn't provenance this ods can read\n  Expected $schema {}\n  Pull the archive again with `ods trud pull {} --force`, then run `ods make`.",
+        disp,
+        PROVENANCE_SCHEMA_V1_URL,
+        date
+    )
+}
+
+impl ProvenanceLoad {
+    pub fn ok(self) -> Option<OdsProvenance> {
+        match self {
+            Self::Read(prov, _) => Some(*prov),
+            _ => None,
+        }
+    }
+
+    pub fn ok_with_path(self) -> Option<(OdsProvenance, PathBuf)> {
+        match self {
+            Self::Read(prov, path) => Some((*prov, path)),
+            _ => None,
+        }
+    }
+
+    pub fn unwrap(self) -> OdsProvenance {
+        match self {
+            Self::Read(prov, _) => *prov,
+            Self::Unreadable { path, date } => {
+                panic!("unreadable provenance at {:?} (date: {})", path, date)
+            }
+            Self::Absent => panic!("expected provenance to be present, but was absent"),
+        }
+    }
+
+    pub fn unwrap_or_default(self) -> OdsProvenance {
+        self.ok().unwrap_or_default()
+    }
+
+    pub fn as_ref(&self) -> Option<&OdsProvenance> {
+        match self {
+            Self::Read(prov, _) => Some(prov.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn warn_reading(self) -> Option<OdsProvenance> {
+        match self {
+            Self::Read(prov, _) => Some(*prov),
+            Self::Unreadable { path, .. } => {
+                let disp = format_provenance_display_path(&path);
+                eprintln!(
+                    "! {} isn't provenance this ods can read. Rebuild the release with `ods make`, or pull it again.",
+                    disp
+                );
+                None
+            }
+            Self::Absent => None,
+        }
+    }
+
+    pub fn error_building(self) -> Result<Option<OdsProvenance>> {
+        match self {
+            Self::Read(prov, _) => Ok(Some(*prov)),
+            Self::Unreadable { path, date } => {
+                anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
+            }
+            Self::Absent => Ok(None),
+        }
+    }
+
+    pub fn error_building_with_path(self) -> Result<Option<(OdsProvenance, PathBuf)>> {
+        match self {
+            Self::Read(prov, path) => Ok(Some((*prov, path))),
+            Self::Unreadable { path, date } => {
+                anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
+            }
+            Self::Absent => Ok(None),
+        }
+    }
+}
+
+fn extract_date_for_unreadable_provenance(prov_path: &Path, content: Option<&str>) -> String {
+    if let Some(s) = content {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
+            if let Some(d) = val.get("trud_release_date").and_then(|d| d.as_str()) {
+                if !d.is_empty() {
+                    return d.to_string();
+                }
+            }
+        }
+    }
+    if let Some(parent) = prov_path.parent() {
+        if let Some(name) = parent.file_name().and_then(|n| n.to_str()) {
+            if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() {
+                return name.to_string();
+            }
+        }
+    }
+    "<date>".to_string()
+}
+
+impl OdsProvenance {
+    pub fn load_from_file(prov_file: &Path) -> ProvenanceLoad {
+        if !prov_file.exists() {
+            return ProvenanceLoad::Absent;
+        }
+        let content = match std::fs::read_to_string(prov_file) {
+            Ok(c) => c,
+            Err(_) => {
+                let date = extract_date_for_unreadable_provenance(prov_file, None);
+                return ProvenanceLoad::Unreadable {
+                    path: prov_file.to_path_buf(),
+                    date,
+                };
+            }
+        };
+
+        match serde_json::from_str::<Self>(&content) {
+            Ok(prov) => {
+                if prov.schema == PROVENANCE_SCHEMA_V1_URL {
+                    ProvenanceLoad::Read(Box::new(prov), prov_file.to_path_buf())
+                } else {
+                    let date = extract_date_for_unreadable_provenance(prov_file, Some(&content));
+                    ProvenanceLoad::Unreadable {
+                        path: prov_file.to_path_buf(),
+                        date,
+                    }
+                }
+            }
+            Err(_) => {
+                let date = extract_date_for_unreadable_provenance(prov_file, Some(&content));
+                ProvenanceLoad::Unreadable {
+                    path: prov_file.to_path_buf(),
+                    date,
+                }
+            }
+        }
+    }
+
+    pub fn load_from_dir_with_path(dir: &Path) -> ProvenanceLoad {
         let mut curr = if dir.is_file() {
             dir.parent().map(|p| p.to_path_buf())
         } else {
@@ -161,8 +308,8 @@ impl OdsProvenance {
             if let Some(ref path) = curr {
                 let prov_file = path.join(PROVENANCE_FILENAME);
                 if prov_file.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&prov_file) {
-                        if let Ok(mut prov) = serde_json::from_str::<Self>(&content) {
+                    match Self::load_from_file(&prov_file) {
+                        ProvenanceLoad::Read(mut prov, prov_path) => {
                             if prov.trud_release_date.is_none() || prov.trud_release_file.is_none() {
                                 if let Some(zip_prov) = Self::try_extract_trud_zip_provenance(path) {
                                     if prov.trud_release_date.is_none() { prov.trud_release_date = zip_prov.trud_release_date; }
@@ -171,8 +318,12 @@ impl OdsProvenance {
                                     if prov.trud_release_sha256.is_none() { prov.trud_release_sha256 = zip_prov.trud_release_sha256; }
                                 }
                             }
-                            return Some((prov, prov_file));
+                            return ProvenanceLoad::Read(prov, prov_path);
                         }
+                        ProvenanceLoad::Unreadable { path, date } => {
+                            return ProvenanceLoad::Unreadable { path, date };
+                        }
+                        ProvenanceLoad::Absent => {}
                     }
                 }
                 curr = path.parent().map(|p| p.to_path_buf());
@@ -180,11 +331,11 @@ impl OdsProvenance {
                 break;
             }
         }
-        None
+        ProvenanceLoad::Absent
     }
 
-    pub fn load_from_dir(dir: &Path) -> Option<Self> {
-        Self::load_from_dir_with_path(dir).map(|(prov, _)| prov)
+    pub fn load_from_dir(dir: &Path) -> ProvenanceLoad {
+        Self::load_from_dir_with_path(dir)
     }
 
     pub fn try_extract_trud_zip_provenance(input_path: &Path) -> Option<Self> {
@@ -243,7 +394,7 @@ impl OdsProvenance {
     ) -> Self {
         let source_file = source_path.and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
         Self {
-            type_tag: PROVENANCE_TYPE_TAG.to_string(),
+            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
             trud_release_name: None,
             trud_release_date: None,
             trud_release_file: source_file,
@@ -362,13 +513,22 @@ pub fn format_provenance_display_path(prov_path: &Path) -> String {
 
 pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
     let prov_path = output_dir.join(PROVENANCE_FILENAME);
-    let mut prov = if prov_path.exists() {
-        let content = std::fs::read_to_string(&prov_path)?;
-        serde_json::from_str::<OdsProvenance>(&content)?
-    } else if let Some(loaded) = OdsProvenance::load_from_dir(output_dir) {
-        loaded
-    } else {
-        OdsProvenance::try_extract_trud_zip_provenance(output_dir).unwrap_or_default()
+    let mut prov = match OdsProvenance::load_from_file(&prov_path) {
+        ProvenanceLoad::Read(p, _) => *p,
+        ProvenanceLoad::Unreadable { path, date } => {
+            anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
+        }
+        ProvenanceLoad::Absent => {
+            match OdsProvenance::load_from_dir(output_dir) {
+                ProvenanceLoad::Read(p, _) => *p,
+                ProvenanceLoad::Unreadable { path, date } => {
+                    anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
+                }
+                ProvenanceLoad::Absent => {
+                    OdsProvenance::try_extract_trud_zip_provenance(output_dir).unwrap_or_default()
+                }
+            }
+        }
     };
 
     // Pre-amend verification: Check archive in trud/ matches trud_release_file and trud_release_sha256
@@ -409,9 +569,7 @@ pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Re
         }
     }
 
-    if prov.type_tag.is_empty() {
-        prov.type_tag = PROVENANCE_TYPE_TAG.to_string();
-    }
+    prov.schema = PROVENANCE_SCHEMA_V1_URL.to_string();
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = option_env!("ODS_GIT_SHA").map(|s| s.to_string());
     prov.tool_git_dirty = if option_env!("ODS_GIT_DIRTY").is_some() {
@@ -444,7 +602,7 @@ mod tests {
         );
 
         let json = serde_json::to_string(&prov).unwrap();
-        assert!(json.contains("ods_provenance"));
+        assert!(json.contains("https://ods.fyi/schema/provenance.v1.json"));
         assert!(json.contains("2026-07-31"));
 
         let parsed: OdsProvenance = serde_json::from_str(&json).unwrap();

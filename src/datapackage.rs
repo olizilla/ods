@@ -37,7 +37,7 @@ fn schema_to_table_schema(
     let fields: Vec<Value> = schema.fields().iter().map(|f| field_to_json(f)).collect();
     let mut schema_obj = serde_json::Map::new();
     schema_obj.insert("fields".to_string(), json!(fields));
-    schema_obj.insert("primaryKey".to_string(), json!(primary_key));
+    schema_obj.insert("primaryKey".to_string(), json!([primary_key]));
     if !foreign_keys.is_empty() {
         schema_obj.insert("foreignKeys".to_string(), json!(foreign_keys));
     }
@@ -51,43 +51,43 @@ pub fn generate_datapackage() -> Value {
     let successions_schema = crate::commands::parquet::successions_schema();
 
     let roles_fk = vec![json!({
-        "fields": "ods_code",
+        "fields": ["ods_code"],
         "reference": {
             "resource": "orgs_all",
-            "fields": "ods_code"
+            "fields": ["ods_code"]
         }
     })];
 
     let relationships_fk = vec![
         json!({
-            "fields": "source_code",
+            "fields": ["source_code"],
             "reference": {
                 "resource": "orgs_all",
-                "fields": "ods_code"
+                "fields": ["ods_code"]
             }
         }),
         json!({
-            "fields": "target_code",
+            "fields": ["target_code"],
             "reference": {
                 "resource": "orgs_all",
-                "fields": "ods_code"
+                "fields": ["ods_code"]
             }
         }),
     ];
 
     let successions_fk = vec![
         json!({
-            "fields": "predecessor_code",
+            "fields": ["predecessor_code"],
             "reference": {
                 "resource": "orgs_all",
-                "fields": "ods_code"
+                "fields": ["ods_code"]
             }
         }),
         json!({
-            "fields": "successor_code",
+            "fields": ["successor_code"],
             "reference": {
                 "resource": "orgs_all",
-                "fields": "ods_code"
+                "fields": ["ods_code"]
             }
         }),
     ];
@@ -95,6 +95,7 @@ pub fn generate_datapackage() -> Value {
     let resources = vec![
         json!({
             "name": "orgs",
+            "type": "table",
             "path": "orgs.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
@@ -102,6 +103,7 @@ pub fn generate_datapackage() -> Value {
         }),
         json!({
             "name": "orgs_all",
+            "type": "table",
             "path": "orgs_all.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
@@ -109,6 +111,7 @@ pub fn generate_datapackage() -> Value {
         }),
         json!({
             "name": "roles",
+            "type": "table",
             "path": "roles.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
@@ -116,6 +119,7 @@ pub fn generate_datapackage() -> Value {
         }),
         json!({
             "name": "relationships",
+            "type": "table",
             "path": "relationships.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
@@ -123,6 +127,7 @@ pub fn generate_datapackage() -> Value {
         }),
         json!({
             "name": "successions",
+            "type": "table",
             "path": "successions.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
@@ -131,6 +136,7 @@ pub fn generate_datapackage() -> Value {
     ];
 
     json!({
+        "$schema": "https://datapackage.org/profiles/2.0/datapackage.json",
         "name": "ods-fyi",
         "title": "ods: NHS Organisation Data as verifiable Parquet files",
         "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",

@@ -69,6 +69,7 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 }
 
 pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path, color: bool) -> Result<()> {
+    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {

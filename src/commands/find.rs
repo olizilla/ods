@@ -1108,6 +1108,7 @@ pub fn run_with_writer_color(
     parquet_dir: &Path,
     color: bool,
 ) -> Result<()> {
+    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
     let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
 
     // Expand alias flags (--gp, --dentist) into role filters with OR semantics

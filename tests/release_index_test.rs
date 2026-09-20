@@ -44,6 +44,54 @@ fn test_baked_index_matches_its_schema() -> Result<()> {
 }
 
 #[test]
+fn test_built_provenance_matches_its_schema() -> Result<()> {
+    let schema_str = include_str!("../worker/schema/provenance.v1.json");
+    let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
+    let validator = jsonschema::validator_for(&schema_json)
+        .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
+
+    // 1. Validate provenance of a release built by setup_synthetic_repo_and_release()
+    let (_tmp, rel_dir) = common::setup_synthetic_repo_and_release();
+    let prov_str = std::fs::read_to_string(rel_dir.join("_provenance.json"))?;
+    let prov_json: serde_json::Value = serde_json::from_str(&prov_str)?;
+    let errors: Vec<_> = validator.iter_errors(&prov_json).collect();
+    assert!(errors.is_empty(), "Synthetic release provenance schema errors: {:?}", errors);
+
+    // 2. Validate provenance written by ods trud pull against the mock zip
+    let tmp_pull = tempfile::TempDir::new()?;
+    let fixture_zip = tmp_pull.path().join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PublicationType value="Full" />
+    <un:PublicationDate value="2026-07-28" />
+    <un:PublicationSeqNum value="4700" />
+    <un:PublicationSource value="HSCIC" />
+    <un:RecordCount value="305541" />
+  </un:ManifestHeader>
+</un:OrganisationManifest>"#;
+    let inner_bytes = common::create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content.as_bytes());
+    common::create_nested_trud_zip(&fixture_zip, &[("fullfile.zip", &inner_bytes)]);
+
+    let pull_out = tmp_pull.path().join("releases").join("2026-07-31");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .arg("trud")
+        .arg("pull")
+        .arg("--local-archive")
+        .arg(&fixture_zip)
+        .arg("-o")
+        .arg(&pull_out)
+        .status()?;
+    assert!(status.success(), "trud pull must succeed");
+    let pull_prov_str = std::fs::read_to_string(pull_out.join("_provenance.json"))?;
+    let pull_prov_json: serde_json::Value = serde_json::from_str(&pull_prov_str)?;
+    let pull_errors: Vec<_> = validator.iter_errors(&pull_prov_json).collect();
+    assert!(pull_errors.is_empty(), "trud pull provenance schema errors: {:?}", pull_errors);
+
+    Ok(())
+}
+
+#[test]
 fn test_index_rejects_duplicate_version_in_release() {
     let json = r#"{
       "$schema": "https://ods.fyi/schema/releases.v1.json",

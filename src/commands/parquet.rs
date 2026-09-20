@@ -105,8 +105,10 @@ pub fn run(args: Args) -> Result<PathBuf> {
 
     let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
 
-    let disk_prov = crate::provenance::OdsProvenance::load_from_dir_with_path(&input_path)
-        .or_else(|| crate::provenance::OdsProvenance::load_from_dir_with_path(&archive_info.archive_path));
+    let disk_prov = match crate::provenance::OdsProvenance::load_from_dir_with_path(&input_path).error_building_with_path()? {
+        Some(p) => Some(p),
+        None => crate::provenance::OdsProvenance::load_from_dir_with_path(&archive_info.archive_path).error_building_with_path()?,
+    };
 
     let parent_prov = match disk_prov {
         Some((prov, prov_path)) => {
@@ -247,7 +249,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
 
     // 8. Ship the datapackage.json alongside the data so the schema and metadata
     //    are reproducible from a release alone, without the tool.
-    let enriched_prov = crate::provenance::OdsProvenance::load_from_dir(&output_path);
+    let enriched_prov = crate::provenance::OdsProvenance::load_from_dir(&output_path).error_building()?;
     let release_pkg =
         crate::datapackage::generate_release_datapackage(&output_path, enriched_prov.as_ref(), None, None);
     let pkg_json = serde_json::to_string_pretty(&release_pkg)? + "\n";

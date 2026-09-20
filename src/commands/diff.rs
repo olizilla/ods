@@ -244,7 +244,7 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
         }
         if provenance.is_none() {
             if let Ok(prov) = serde_json::from_str::<OdsProvenance>(&line) {
-                if prov.type_tag == crate::provenance::PROVENANCE_TYPE_TAG {
+                if prov.schema == crate::provenance::PROVENANCE_SCHEMA_V1_URL {
                     provenance = Some(prov);
                     continue;
                 }

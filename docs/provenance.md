@@ -40,11 +40,11 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ---
 
-## Complete `_provenance.json` Schema Example
+## Complete `_provenance.json` example
 
 ```json
 {
-  "_type": "ods_provenance",
+  "$schema": "https://ods.fyi/schema/provenance.v1.json",
   "trud_release_name": "Release 7.0.0",
   "trud_release_date": "2026-07-31",
   "trud_release_file": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -62,6 +62,12 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
   "dataset_version": "0.1.0"
 }
 ```
+
+## The rules
+
+- **`$schema` names the format and links to the schema.** The schema at [provenance.v1.json](https://ods.fyi/schema/provenance.v1.json) (or `worker/schema/provenance.v1.json`) is the reference for every field.
+- **The schema version moves with the media type.** The manifest types this blob `application/vnd.fyi.ods.provenance.v1+json`. Any change to provenance's fields means a new schema file and a new media type version together. A published schema file never changes.
+- **Build-run facts live in the attestation, never in the file.** Machine names, runner IDs, and timestamps belong in the signed SLSA attestation outside the dataset. Inside provenance, they would prevent rebuilds reproducing identical layer digests.
 
 ---
 

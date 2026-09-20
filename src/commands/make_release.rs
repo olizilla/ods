@@ -129,6 +129,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let prov = OdsProvenance::load_from_dir(&release_dir)
+        .error_building()?
         .ok_or_else(|| anyhow::anyhow!("Missing _provenance.json in {}", release_dir.display()))?;
 
     let version = prov.dataset_version.clone().ok_or_else(|| {
@@ -390,7 +391,7 @@ pub fn perform_all_release_checks(
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
-    let prov = match OdsProvenance::load_from_dir(release_dir) {
+    let prov = match OdsProvenance::load_from_dir(release_dir).error_building()? {
         Some(p) => p,
         None => return Ok(vec!["Missing _provenance.json in release directory".to_string()]),
     };

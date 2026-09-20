@@ -6,22 +6,10 @@ use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::TempDir;
 
-fn git_cmd(repo_dir: &Path) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(repo_dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z");
-    cmd
-}
+mod common;
+use common::git_cmd;
 
 /// Sets up a synthetic release directory matching the golden fixture files.
 fn setup_golden_release_dir() -> (TempDir, PathBuf) {

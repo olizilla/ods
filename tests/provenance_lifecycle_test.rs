@@ -437,11 +437,11 @@ fn test_trud_pull_writes_no_tool_or_dataset_keys() -> Result<()> {
     let raw_val: serde_json::Value = serde_json::from_str(&prov_json)?;
     let obj = raw_val.as_object().expect("provenance must be JSON object");
 
-    // Must ONLY contain _type, trud_*, and publication_* keys
+    // Must ONLY contain $schema, trud_*, and publication_* keys
     for key in obj.keys() {
         assert!(
-            key == "_type" || key.starts_with("trud_") || key.starts_with("publication_"),
-            "trud pull baseline must NOT write key '{}'. Only _type, trud_*, and publication_* allowed.",
+            key == "$schema" || key.starts_with("trud_") || key.starts_with("publication_"),
+            "trud pull baseline must NOT write key '{}'. Only $schema, trud_*, and publication_* allowed.",
             key
         );
     }

@@ -125,7 +125,7 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let mut prov = match OdsProvenance::load_from_dir(&release_dir) {
+    let mut prov = match OdsProvenance::load_from_dir(&release_dir).error_building()? {
         Some(p) => p,
         None => bail!(
             "Missing or unreadable _provenance.json in {}",
@@ -297,7 +297,7 @@ fn find_manifest_in_blobs(blobs_dir: &Path) -> Result<PathBuf> {
 pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
-    let prov = match OdsProvenance::load_from_dir(release_dir) {
+    let prov = match OdsProvenance::load_from_dir(release_dir).error_building()? {
         Some(p) => p,
         None => {
             failures.push("Failed to load _provenance.json".to_string());

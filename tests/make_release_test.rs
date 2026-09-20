@@ -1,105 +1,13 @@
 use anyhow::Result;
 use ods::commands::make_release::{perform_all_release_checks, run, Args};
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-fn git_cmd(repo_dir: &Path) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(repo_dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z");
-    cmd
-}
-
-fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
-    let tmp = TempDir::new().unwrap();
-    let rel_dir = tmp.path().join("releases").join("2026-07-31");
-    let trud_dir = rel_dir.join("trud");
-    fs::create_dir_all(&trud_dir).unwrap();
-
-    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
-    {
-        let outer_file = File::create(&outer_zip_path).unwrap();
-        let mut outer_zip = zip::ZipWriter::new(outer_file);
-        let options = zip::write::SimpleFileOptions::default()
-            .last_modified_time(zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0).unwrap());
-        outer_zip.start_file("dummy.txt", options).unwrap();
-        outer_zip.write_all(b"dummy source zip").unwrap();
-        outer_zip.finish().unwrap();
-    }
-    let zip_sha256 = compute_file_sha256(&outer_zip_path).unwrap();
-
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
-    fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"0.1.0\"}").unwrap();
-    fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
-
-    // Create Cargo.toml and git repo
-    fs::write(
-        tmp.path().join("Cargo.toml"),
-        format!("[package]\nname = \"ods\"\nversion = \"{}\"\n", env!("CARGO_PKG_VERSION")),
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join("src")).unwrap();
-    fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
-
-    let _ = git_cmd(tmp.path()).args(["init", "-b", "main"]).output();
-    let _ = git_cmd(tmp.path()).args(["add", "."]).output();
-    let _ = git_cmd(tmp.path())
-        .args(["commit", "-m", "initial", "--no-gpg-sign"])
-        .output();
-    let head_out = git_cmd(tmp.path()).args(["rev-parse", "HEAD"]).output().unwrap();
-    let git_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
-    let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
-
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
-    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    prov.tool_git_sha = Some(git_sha);
-    prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some(ods::datapackage::dataset_version().to_string());
-
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
-
-    // Create data/releases.json in repo
-    fs::create_dir_all(tmp.path().join("data")).unwrap();
-    let init_index = ods::index::OdsReleaseIndex::default();
-    fs::write(
-        tmp.path().join("data").join("releases.json"),
-        init_index.to_json_pretty().unwrap(),
-    )
-    .unwrap();
-
-    // Generate OCI layout first via make oci
-    ods::commands::make_oci::run(ods::commands::make_oci::Args {
-        input: Some(rel_dir.clone()),
-        check: false,
-    })
-    .unwrap();
-
-    (tmp, rel_dir)
-}
+mod common;
+use common::setup_synthetic_repo_and_release;
 
 #[test]
 fn test_make_release_success_appends_to_releases_json() -> Result<()> {

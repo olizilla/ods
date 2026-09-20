@@ -109,7 +109,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       const gitSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
 
       const provenanceObj = {
-        _type: 'ods_provenance',
+        $schema: 'https://ods.fyi/schema/provenance.v1.json',
         dataset_version: '0.1.0',
         publication_date: '2026-07-28',
         publication_source: 'TRUD',

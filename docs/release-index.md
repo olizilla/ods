@@ -43,7 +43,7 @@ Every field and its constraints are defined in [releases.v1.json](https://ods.fy
 
 ## Naming
 
-Formats we own that travel alone carry `$schema` as their identifier. Facts carry namespace prefixes (`trud_`, `publication_`, `dataset_`, `tool_`).
+Formats we own that travel alone carry `$schema` as their identifier. Facts carry namespace prefixes (`trud_`, `publication_`, `dataset_`, `tool_`). `datapackage.json` follows Data Package v2.
 
 A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes` — named identically to `_provenance.json`, so one fact has one name everywhere. Datasets carry `dataset_version`, `manifest_digest`, and optional `dataset_doi` and `withdrawn`.
 
