@@ -72,6 +72,22 @@ ods trud pull [OPTIONS]
 
 ### Examples
 
+#### Pull Latest Release
+```console
+$ ods trud pull
+  2026-07-31    ████████████████████  36MB   5 files  in 3.1s
+  verified      sha256 from TRUD API
+  linked        current → releases/2026-07-31
+```
+
+If the archive is already held and matches:
+```console
+$ ods trud pull
+  2026-07-31    ████████████████████  36MB   5 files  cached
+  verified      sha256 from TRUD API
+  linked        current → releases/2026-07-31 (unchanged)
+```
+
 #### Pull Latest Release (via 1Password)
 ```bash
 op run --env-file=.env -- ods trud pull

@@ -55,6 +55,170 @@ pub fn format_duration(duration: Duration) -> String {
     }
 }
 
+/// Formats an elapsed duration: one decimal place under a minute (e.g. "3.1s", "59.9s"),
+/// then `format_duration`'s form ("1m00s", "3m12s").
+pub fn format_elapsed(duration: Duration) -> String {
+    let secs_f64 = duration.as_secs_f64();
+    if secs_f64 < 60.0 {
+        let s = format!("{:.1}s", secs_f64);
+        if s == "60.0s" {
+            "1m00s".to_string()
+        } else {
+            s
+        }
+    } else {
+        format_duration(duration)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ReleaseBlockState {
+    Downloading {
+        bytes_done: u64,
+        rate: Option<f64>,
+        eta: Option<Duration>,
+    },
+    Done {
+        elapsed: Duration,
+    },
+    Cached,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReleaseBlockLink<'a> {
+    pub target: &'a str,
+    pub unchanged: bool,
+}
+
+/// Parameters for rendering a release report block.
+#[derive(Debug, Clone)]
+pub struct ReleaseBlockParams<'a> {
+    pub date: &'a str,
+    pub archive_size: u64,
+    pub file_count: usize,
+    pub state: &'a ReleaseBlockState,
+    pub verified: &'a str,
+    pub linked: Option<ReleaseBlockLink<'a>>,
+    pub hash: Option<&'a str>,
+    pub color: bool,
+}
+
+/// Renders a release report as a multi-line block (2 to 4 lines).
+/// Given release block parameters, returns the block's lines.
+pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
+    let mut lines = Vec::with_capacity(4);
+
+    let (filled, empty, size_bytes, tail) = match params.state {
+        ReleaseBlockState::Downloading { bytes_done, rate, eta } => {
+            let done = (*bytes_done).min(params.archive_size);
+            let filled = if params.archive_size > 0 {
+                ((done as f64 / params.archive_size as f64) * 20.0).floor() as usize
+            } else {
+                0
+            }.min(20);
+            let empty = 20 - filled;
+            let mut parts = Vec::new();
+            if let Some(r) = rate {
+                parts.push(format_rate(*r));
+            }
+            if let Some(e) = eta {
+                parts.push(format!("eta {}", format_duration(*e)));
+            }
+            (filled, empty, *bytes_done, parts.join("  "))
+        }
+        ReleaseBlockState::Done { elapsed } => {
+            (20, 0, params.archive_size, format!("in {}", format_elapsed(*elapsed)))
+        }
+        ReleaseBlockState::Cached => {
+            (20, 0, params.archive_size, "cached".to_string())
+        }
+    };
+
+    let bar = if params.color {
+        let mut b = String::new();
+        if filled > 0 {
+            b.push_str(crate::ansi::ANSI_CYAN);
+            b.push_str(&"█".repeat(filled));
+            b.push_str(crate::ansi::ANSI_RESET);
+        }
+        if empty > 0 {
+            b.push_str(crate::ansi::ANSI_MUTED);
+            b.push_str(&"░".repeat(empty));
+            b.push_str(crate::ansi::ANSI_RESET);
+        }
+        b
+    } else {
+        format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+    };
+
+    let files_str = if params.file_count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{} files", params.file_count)
+    };
+    let size_str = format_size(size_bytes);
+
+    let stats_text = format!("  {:>4}   {}  {}", size_str, files_str, tail);
+    let stats = if params.color {
+        format!("{}{}{}", crate::ansi::ANSI_MUTED, stats_text, crate::ansi::ANSI_RESET)
+    } else {
+        stats_text
+    };
+
+    lines.push(format!("  {:<14}{}{}", params.date, bar, stats));
+
+    // Row 2: verified
+    let verified_val = match params.state {
+        ReleaseBlockState::Downloading { .. } => {
+            if params.color {
+                format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
+            } else {
+                "-".to_string()
+            }
+        }
+        _ => params.verified.to_string(),
+    };
+    lines.push(format!("  {:<14}{}", "verified", verified_val));
+
+    // Row 3: linked (if present)
+    if let Some(link) = params.linked {
+        let linked_val = match params.state {
+            ReleaseBlockState::Downloading { .. } => {
+                if params.color {
+                    format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
+                } else {
+                    "-".to_string()
+                }
+            }
+            _ => {
+                let arrow = if params.color {
+                    format!("{}→{}", crate::ansi::ANSI_CYAN, crate::ansi::ANSI_RESET)
+                } else {
+                    "→".to_string()
+                };
+                let unchanged_str = if link.unchanged {
+                    if params.color {
+                        format!("{} (unchanged){}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
+                    } else {
+                        " (unchanged)".to_string()
+                    }
+                } else {
+                    String::new()
+                };
+                format!("current {} {}{}", arrow, link.target, unchanged_str)
+            }
+        };
+        lines.push(format!("  {:<14}{}", "linked", linked_val));
+    }
+
+    // Row 4: sha256 (if verbose / hash present)
+    if let Some(h) = params.hash {
+        lines.push(format!("  {:<14}{}", "sha256", h));
+    }
+
+    lines
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProgressCaps {
     pub is_tty: bool,
@@ -105,6 +269,7 @@ struct ProgressInner {
     writer: Box<dyn Write + Send>,
     caps: ProgressCaps,
     live_step: Option<String>,
+    live_block: Option<Vec<String>>,
     in_flight: HashMap<String, InFlightRow>,
     in_flight_order: Vec<String>,
     batch_bar: Option<String>,
@@ -146,6 +311,7 @@ impl ProgressInner {
     fn clear_live_unlocked(&mut self) {
         self.erase_live_unlocked();
         self.live_step = None;
+        self.live_block = None;
         self.in_flight.clear();
         self.in_flight_order.clear();
         self.batch_bar = None;
@@ -158,7 +324,7 @@ impl ProgressInner {
         }
 
         if self.caps.is_tty {
-            let has_live = self.live_step.is_some() || !self.in_flight.is_empty() || self.batch_bar.is_some();
+            let has_live = self.live_block.is_some() || self.live_step.is_some() || !self.in_flight.is_empty() || self.batch_bar.is_some();
             if has_live {
                 self.repaint_live_unlocked(false);
             }
@@ -185,25 +351,30 @@ impl ProgressInner {
         }
 
         let mut lines_to_draw = Vec::new();
-        let spin = spinner_char(self.start_time);
 
-        if let Some(ref step) = self.live_step {
-            lines_to_draw.push(format!("{} {}", spin, step));
-        }
+        if let Some(ref block) = self.live_block {
+            lines_to_draw.extend(block.clone());
+        } else {
+            let spin = spinner_char(self.start_time);
 
-        for id in &self.in_flight_order {
-            if let Some(row) = self.in_flight.get(id) {
-                let elapsed = now.duration_since(row.last_updated);
-                if elapsed > Duration::from_secs(10) {
-                    lines_to_draw.push(format!("  {} (stalled {}s)", row.text, elapsed.as_secs()));
-                } else {
-                    lines_to_draw.push(format!("  {}", row.text));
+            if let Some(ref step) = self.live_step {
+                lines_to_draw.push(format!("{} {}", spin, step));
+            }
+
+            for id in &self.in_flight_order {
+                if let Some(row) = self.in_flight.get(id) {
+                    let elapsed = now.duration_since(row.last_updated);
+                    if elapsed > Duration::from_secs(10) {
+                        lines_to_draw.push(format!("  {} (stalled {}s)", row.text, elapsed.as_secs()));
+                    } else {
+                        lines_to_draw.push(format!("  {}", row.text));
+                    }
                 }
             }
-        }
 
-        if let Some(ref bar) = self.batch_bar {
-            lines_to_draw.push(format!("{} {}", spin, bar));
+            if let Some(ref bar) = self.batch_bar {
+                lines_to_draw.push(format!("{} {}", spin, bar));
+            }
         }
 
         if lines_to_draw.is_empty() {
@@ -271,6 +442,7 @@ impl Progress {
             writer,
             caps,
             live_step: None,
+            live_block: None,
             in_flight: HashMap::new(),
             in_flight_order: Vec::new(),
             batch_bar: None,
@@ -471,6 +643,7 @@ impl Progress {
     /// Error block: clears live line and prints headline + details.
     pub fn error(&self, headline: &str, details: &[&str]) {
         let mut inner = self.inner.lock().unwrap();
+        inner.live_block = None;
         inner.erase_live_unlocked();
         let _ = writeln!(inner.writer, "✖ {}", headline);
         for detail in details {
@@ -494,6 +667,27 @@ impl Progress {
     pub fn clear_live(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.clear_live_unlocked();
+    }
+
+    /// Repaints a multi-row live block in TTY mode.
+    pub fn update_live_block(&self, lines: Vec<String>) {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.caps.is_tty || inner.caps.quiet {
+            return;
+        }
+        inner.live_block = Some(lines);
+        inner.repaint_live_unlocked(false);
+    }
+
+    /// Emits a completed release block: clears live lines and writes block lines to stderr.
+    /// Preserved even in quiet mode.
+    pub fn finish_block(&self, lines: &[String]) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.clear_live_unlocked();
+        for line in lines {
+            let _ = writeln!(inner.writer, "{}", line);
+        }
+        let _ = inner.writer.flush();
     }
 }
 
@@ -750,5 +944,281 @@ mod tests {
         let out = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         assert!(out.contains("… 3 of 12"), "Plain mode heartbeat must write '…' line: {}", out);
         assert!(out.contains("61MB/246MB") || out.contains("61MB"));
+    }
+
+    #[test]
+    fn test_format_elapsed() {
+        assert_eq!(format_elapsed(Duration::from_millis(3100)), "3.1s");
+        assert_eq!(format_elapsed(Duration::from_millis(59900)), "59.9s");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m00s");
+        assert_eq!(format_elapsed(Duration::from_secs(192)), "3m12s");
+    }
+
+    #[test]
+    fn test_render_release_block_uncoloured() {
+        struct Case {
+            date: &'static str,
+            archive_size: u64,
+            file_count: usize,
+            state: ReleaseBlockState,
+            verified: &'static str,
+            linked: Option<ReleaseBlockLink<'static>>,
+            hash: Option<&'static str>,
+            expected: Vec<&'static str>,
+        }
+
+        let cases = vec![
+            // 1. Downloading block
+            Case {
+                date: "2026-07-31",
+                archive_size: 34_500_000,
+                file_count: 5,
+                state: ReleaseBlockState::Downloading {
+                    bytes_done: 22 * 1024 * 1024,
+                    rate: Some(13.6 * 1024.0 * 1024.0),
+                    eta: Some(Duration::from_secs(1)),
+                },
+                verified: "sha256 from TRUD API",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-07-31",
+                    unchanged: false,
+                }),
+                hash: None,
+                expected: vec![
+                    "  2026-07-31    █████████████░░░░░░░  22MB   5 files  13.6MB/s  eta 1s",
+                    "  verified      -",
+                    "  linked        -",
+                ],
+            },
+            // 2. Finished block
+            Case {
+                date: "2026-07-31",
+                archive_size: 37_983_173,
+                file_count: 5,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(3100),
+                },
+                verified: "sha256 from TRUD API",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-07-31",
+                    unchanged: false,
+                }),
+                hash: None,
+                expected: vec![
+                    "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
+                    "  verified      sha256 from TRUD API",
+                    "  linked        current → releases/2026-07-31",
+                ],
+            },
+            // 3. Cached block with (unchanged)
+            Case {
+                date: "2026-07-31",
+                archive_size: 37_983_173,
+                file_count: 5,
+                state: ReleaseBlockState::Cached,
+                verified: "sha256 from TRUD API",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-07-31",
+                    unchanged: true,
+                }),
+                hash: None,
+                expected: vec![
+                    "  2026-07-31    ████████████████████  36MB   5 files  cached",
+                    "  verified      sha256 from TRUD API",
+                    "  linked        current → releases/2026-07-31 (unchanged)",
+                ],
+            },
+            // 4. Verbose block
+            Case {
+                date: "2026-07-31",
+                archive_size: 37_983_173,
+                file_count: 5,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(3100),
+                },
+                verified: "sha256 from TRUD API",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-07-31",
+                    unchanged: false,
+                }),
+                hash: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933"),
+                expected: vec![
+                    "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
+                    "  verified      sha256 from TRUD API",
+                    "  linked        current → releases/2026-07-31",
+                    "  sha256        8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+                ],
+            },
+            // 5. Block with no linked row
+            Case {
+                date: "2026-07-31",
+                archive_size: 37_983_173,
+                file_count: 5,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(3100),
+                },
+                verified: "sha256 from TRUD API",
+                linked: None,
+                hash: None,
+                expected: vec![
+                    "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
+                    "  verified      sha256 from TRUD API",
+                ],
+            },
+            // 6. Single-file block reading "1 file"
+            Case {
+                date: "2026-07-31",
+                archive_size: 37_983_173,
+                file_count: 1,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(3100),
+                },
+                verified: "sha256 from TRUD API",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-07-31",
+                    unchanged: false,
+                }),
+                hash: None,
+                expected: vec![
+                    "  2026-07-31    ████████████████████  36MB   1 file  in 3.1s",
+                    "  verified      sha256 from TRUD API",
+                    "  linked        current → releases/2026-07-31",
+                ],
+            },
+        ];
+
+        for (i, c) in cases.into_iter().enumerate() {
+            let actual = render_release_block(&ReleaseBlockParams {
+                date: c.date,
+                archive_size: c.archive_size,
+                file_count: c.file_count,
+                state: &c.state,
+                verified: c.verified,
+                linked: c.linked,
+                hash: c.hash,
+                color: false,
+            });
+            assert_eq!(actual, c.expected, "Case {} failed", i + 1);
+        }
+    }
+
+    #[test]
+    fn test_render_release_block_coloured() {
+        // Test downloading case for filled, empty, stats, and "-"
+        let dl_lines = render_release_block(&ReleaseBlockParams {
+            date: "2026-07-31",
+            archive_size: 34_500_000,
+            file_count: 5,
+            state: &ReleaseBlockState::Downloading {
+                bytes_done: 22 * 1024 * 1024,
+                rate: Some(13.6 * 1024.0 * 1024.0),
+                eta: Some(Duration::from_secs(1)),
+            },
+            verified: "sha256 from TRUD API",
+            linked: Some(ReleaseBlockLink {
+                target: "releases/2026-07-31",
+                unchanged: false,
+            }),
+            hash: None,
+            color: true,
+        });
+
+        let cyan_filled = format!("{}{}{}", crate::ansi::ANSI_CYAN, "█".repeat(13), crate::ansi::ANSI_RESET);
+        let muted_empty = format!("{}{}{}", crate::ansi::ANSI_MUTED, "░".repeat(7), crate::ansi::ANSI_RESET);
+        let muted_stats = format!("{}  22MB   5 files  13.6MB/s  eta 1s{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET);
+        let muted_dash = format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET);
+
+        assert!(dl_lines[0].contains(&cyan_filled), "Row 1 must have colored filled bar: {}", dl_lines[0]);
+        assert!(dl_lines[0].contains(&muted_empty), "Row 1 must have colored empty bar: {}", dl_lines[0]);
+        assert!(dl_lines[0].contains(&muted_stats), "Row 1 must have colored stats: {}", dl_lines[0]);
+        assert!(dl_lines[1].contains(&muted_dash), "Row 2 must have colored '-': {}", dl_lines[1]);
+        assert!(dl_lines[2].contains(&muted_dash), "Row 3 must have colored '-': {}", dl_lines[2]);
+
+        // Test cached case for "→" and " (unchanged)"
+        let cached_lines = render_release_block(&ReleaseBlockParams {
+            date: "2026-07-31",
+            archive_size: 37_983_173,
+            file_count: 5,
+            state: &ReleaseBlockState::Cached,
+            verified: "sha256 from TRUD API",
+            linked: Some(ReleaseBlockLink {
+                target: "releases/2026-07-31",
+                unchanged: true,
+            }),
+            hash: None,
+            color: true,
+        });
+
+        let cyan_arrow = format!("{}→{}", crate::ansi::ANSI_CYAN, crate::ansi::ANSI_RESET);
+        let muted_unchanged = format!("{} (unchanged){}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET);
+
+        assert!(cached_lines[2].contains(&cyan_arrow), "Row 3 must have colored arrow: {}", cached_lines[2]);
+        assert!(cached_lines[2].contains(&muted_unchanged), "Row 3 must have colored unchanged suffix: {}", cached_lines[2]);
+    }
+
+    #[test]
+    fn test_error_after_update_live_block_leaves_cross_lines_last() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        struct BufferWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for BufferWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let caps = ProgressCaps {
+            is_tty: true,
+            no_color: true,
+            quiet: false,
+            verbose: false,
+            width: 80,
+        };
+
+        let progress = Progress::new(caps, Box::new(BufferWriter(buffer.clone())));
+        progress.update_live_block(vec![
+            "  2026-07-31    █████████████░░░░░░░  22MB   5 files  13.6MB/s  eta 1s".to_string(),
+            "  verified      -".to_string(),
+            "  linked        -".to_string(),
+        ]);
+
+        progress.error(
+            "SHA-256 mismatch for 2026-07-31",
+            &[
+                "Expected: 8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+                "Got:      938463DF0035AAD2D2D3291E47BE453509A4BAF21CF73ACD293FD4C141CD4CAB",
+                "File renamed to /path/to/archive.zip.bad-sha",
+            ],
+        );
+
+        let out = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+
+        // Must contain the error block
+        assert!(out.contains("✖ SHA-256 mismatch for 2026-07-31"));
+        assert!(out.contains("File renamed to /path/to/archive.zip.bad-sha"));
+
+        // The error block lines must be the last visible text; the live block must NOT be redrawn after the error
+        let error_pos = out
+            .rfind("File renamed to /path/to/archive.zip.bad-sha")
+            .unwrap();
+        let trailing = &out[error_pos..];
+        assert!(
+            !trailing.contains("2026-07-31"),
+            "Live block must not be redrawn after error: {}",
+            trailing
+        );
+        assert!(
+            !trailing.contains("verified"),
+            "Live block must not be redrawn after error: {}",
+            trailing
+        );
+        assert!(
+            !trailing.contains("linked"),
+            "Live block must not be redrawn after error: {}",
+            trailing
+        );
     }
 }

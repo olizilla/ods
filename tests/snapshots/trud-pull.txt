@@ -1,0 +1,17 @@
+$ COLUMNS=100 ods trud pull 2026-06-26
+--- stderr
+  2026-06-26    ████████████████████   2MB   5 files  in <duration>
+  verified      sha256 from TRUD API
+  linked        current → releases/2026-06-26
+
+$ COLUMNS=100 ods trud pull
+--- stderr
+  2026-07-31    ████████████████████   3MB   5 files  in <duration>
+  verified      sha256 from TRUD API
+  linked        current → releases/2026-07-31
+
+$ COLUMNS=100 ods trud pull
+--- stderr
+  2026-07-31    ████████████████████   3MB   5 files  cached
+  verified      sha256 from TRUD API
+  linked        current → releases/2026-07-31 (unchanged)

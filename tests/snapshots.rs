@@ -1,6 +1,7 @@
 mod common;
 
 use common::setup_find_test_workspace;
+use sha2::Digest;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -72,9 +73,33 @@ fn run_case(case: &TestCase, input_dir: Option<&Path>) -> String {
     run_case_full(case, input_dir, None, &[])
 }
 
-fn run_mock_trud_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
+fn extract_http_path(buf: &[u8]) -> Option<String> {
+    let line_end = buf.iter().position(|&b| b == b'\r' || b == b'\n')?;
+    let line_str = std::str::from_utf8(&buf[..line_end]).ok()?;
+    let mut parts = line_str.split_whitespace();
+    let _method = parts.next()?;
+    let full_path = parts.next()?;
+    let path = full_path.split('?').next().unwrap_or(full_path);
+    Some(path.to_string())
+}
+
+fn run_mock_trud_server(
+    mut routes: std::collections::HashMap<String, Vec<u8>>,
+) -> (String, mpsc::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
+    let base_url = format!("http://127.0.0.1:{}", port);
+
+    for body in routes.values_mut() {
+        if let Ok(s) = std::str::from_utf8(body) {
+            if s.contains("<BASE_URL>") {
+                let replaced = s.replace("<BASE_URL>", &base_url);
+                *body = replaced.into_bytes();
+            }
+        }
+    }
+
+    let routes = std::sync::Arc::new(routes);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
@@ -83,20 +108,84 @@ fn run_mock_trud_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
                 break;
             }
             if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
-                    response_body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(&response_body);
-                let _ = stream.flush();
+                let _ = stream.set_nonblocking(false);
+                let routes = routes.clone();
+                thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n > 0 {
+                        if let Some(path) = extract_http_path(&buf[..n]) {
+                            if let Some(body) = routes.get(&path) {
+                                let content_type =
+                                    if path.ends_with(".json") || path.contains("/releases") {
+                                        "application/json"
+                                    } else {
+                                        "application/octet-stream"
+                                    };
+                                let header = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                                    body.len(),
+                                    content_type
+                                );
+                                let _ = stream.write_all(header.as_bytes());
+                                let _ = stream.write_all(body);
+                                let _ = stream.flush();
+                            } else {
+                                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                let _ = stream.write_all(resp.as_bytes());
+                                let _ = stream.flush();
+                            }
+                        }
+                    }
+                });
             }
-            thread::sleep(std::time::Duration::from_millis(10));
+            thread::sleep(std::time::Duration::from_millis(5));
         }
     });
-    (format!("http://127.0.0.1:{}", port), tx)
+    (base_url, tx)
+}
+
+fn is_duration_str(s: &str) -> bool {
+    if s.is_empty() || !s.ends_with('s') {
+        return false;
+    }
+    if !s.chars().next().unwrap().is_ascii_digit() {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == 'm' || c == 'h' || c == 's')
+}
+
+fn normalise_durations(text: &str) -> String {
+    let mut result = String::new();
+    for line in text.lines() {
+        let mut new_line = String::new();
+        let mut rest = line;
+        while let Some(pos) = rest.find(" in ") {
+            new_line.push_str(&rest[..pos + 4]); // includes " in "
+            let after = &rest[pos + 4..];
+            let end = after.find(|c: char| c.is_whitespace()).unwrap_or(after.len());
+            let token = &after[..end];
+            if is_duration_str(token) {
+                new_line.push_str("<duration>");
+                rest = &after[end..];
+            } else {
+                new_line.push_str(token);
+                rest = &after[end..];
+            }
+        }
+        new_line.push_str(rest);
+        result.push_str(&new_line);
+        result.push('\n');
+    }
+    if !text.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+fn normalise_snapshot(text: &str) -> String {
+    normalise_durations(text)
 }
 
 fn parse_cases(content: &str) -> Vec<String> {
@@ -121,6 +210,8 @@ fn check_snapshot(file_name: &str, actual_cases: &[String], case_names: &[&str])
     let snapshot_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots");
     let file_path = snapshot_dir.join(file_name);
 
+    let actual_cases: Vec<String> = actual_cases.iter().map(|s| normalise_snapshot(s)).collect();
+
     if std::env::var("UPDATE_EXPECT").is_ok() {
         fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
         let mut full = String::new();
@@ -142,7 +233,10 @@ fn check_snapshot(file_name: &str, actual_cases: &[String], case_names: &[&str])
         );
     });
 
-    let expected_cases = parse_cases(&expected_content);
+    let expected_cases: Vec<String> = parse_cases(&expected_content)
+        .into_iter()
+        .map(|s| normalise_snapshot(&s))
+        .collect();
     assert_eq!(
         expected_cases.len(),
         actual_cases.len(),
@@ -363,7 +457,9 @@ fn snapshot_trud_list() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/trud_releases_response.json");
     let fixture_bytes = fs::read(&fixture_path).expect("read trud_releases_response.json");
-    let (api_url, stop_server) = run_mock_trud_server(fixture_bytes);
+    let mut routes = std::collections::HashMap::new();
+    routes.insert("/keys/test/items/341/releases".to_string(), fixture_bytes);
+    let (api_url, stop_server) = run_mock_trud_server(routes);
 
     let tmp = tempfile::TempDir::new().expect("create tempdir");
     let rel_dir = tmp.path().join("ods_data/releases/2026-07-31/trud");
@@ -405,3 +501,158 @@ fn snapshot_trud_list() {
     let _ = stop_server.send(());
     check_snapshot("trud-list.txt", &actual_cases, &case_names);
 }
+
+fn create_padded_zip(date_str: &str, target_size: usize) -> Vec<u8> {
+    let xml_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:PublicationType value="Full" />
+    <un:PublicationDate value="{date_str}" />
+    <un:PublicationSeqNum value="4700" />
+    <un:PublicationSource value="HSCIC" />
+    <un:RecordCount value="1" />
+  </un:ManifestHeader>
+</un:OrganisationManifest>"#
+    );
+
+    let build_zip = |pad_bytes: &[u8]| -> Vec<u8> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            zip.start_file("HSCOrgRefData_Full.xml", options).unwrap();
+            std::io::Write::write_all(&mut zip, xml_content.as_bytes()).unwrap();
+
+            zip.start_file("padding.bin", options).unwrap();
+            std::io::Write::write_all(&mut zip, pad_bytes).unwrap();
+
+            zip.finish().unwrap();
+        }
+        cursor.into_inner()
+    };
+
+    let base_zip = build_zip(&[]);
+    let base_len = base_zip.len();
+    assert!(target_size >= base_len);
+    let pad_len = target_size - base_len;
+    let pad: Vec<u8> = (0..pad_len).map(|i| (i % 251) as u8).collect();
+    let final_zip = build_zip(&pad);
+    assert_eq!(final_zip.len(), target_size);
+    final_zip
+}
+
+#[test]
+fn snapshot_trud_pull() {
+    let tmp = tempfile::TempDir::new().expect("create tempdir");
+
+    // Two releases: 2026-07-31 (3MB) and 2026-06-26 (2MB)
+    let archive_3mb = create_padded_zip("2026-07-31", 3_145_728);
+    let sha_3mb = format!("{:x}", sha2::Sha256::digest(&archive_3mb));
+
+    let archive_2mb = create_padded_zip("2026-06-26", 2_097_152);
+    let sha_2mb = format!("{:x}", sha2::Sha256::digest(&archive_2mb));
+
+    let checksum_content = b"<FCIV><FILE_ENTRY><name>archive.zip</name></FILE_ENTRY></FCIV>".to_vec();
+    let sig_content = b"-----BEGIN PGP SIGNATURE-----\nmock\n-----END PGP SIGNATURE-----".to_vec();
+    let pubkey_content = b"-----BEGIN PGP PUBLIC KEY BLOCK-----\nmock\n-----END PGP PUBLIC KEY BLOCK-----".to_vec();
+
+    let releases_json = serde_json::json!({
+        "apiVersion": "1",
+        "releases": [
+            {
+                "id": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+                "name": "Release 7.0.0",
+                "releaseDate": "2026-07-31",
+                "archiveFileUrl": "<BASE_URL>/files/2026-07-31/archive.zip",
+                "archiveFileName": "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+                "archiveFileSizeBytes": 3_145_728,
+                "archiveFileSha256": sha_3mb,
+                "checksumFileUrl": "<BASE_URL>/files/2026-07-31/checksum.xml",
+                "checksumFileName": "trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml",
+                "checksumFileSizeBytes": checksum_content.len(),
+                "signatureFileUrl": "<BASE_URL>/files/2026-07-31/signature.asc",
+                "signatureFileName": "trud_hscorgrefdataxml_data_7.0.0_20260731000001.sig",
+                "signatureFileSizeBytes": sig_content.len(),
+                "publicKeyFileUrl": "<BASE_URL>/files/2026-07-31/public_key.pgp",
+                "publicKeyFileName": "trud-public-key-2013-04-01.pgp",
+                "publicKeyFileSizeBytes": pubkey_content.len()
+            },
+            {
+                "id": "hscorgrefdataxml_data_6.0.0_20260626000001.zip",
+                "name": "Release 6.0.0",
+                "releaseDate": "2026-06-26",
+                "archiveFileUrl": "<BASE_URL>/files/2026-06-26/archive.zip",
+                "archiveFileName": "hscorgrefdataxml_data_6.0.0_20260626000001.zip",
+                "archiveFileSizeBytes": 2_097_152,
+                "archiveFileSha256": sha_2mb,
+                "checksumFileUrl": "<BASE_URL>/files/2026-06-26/checksum.xml",
+                "checksumFileName": "trud_hscorgrefdataxml_data_6.0.0_20260626000001.xml",
+                "checksumFileSizeBytes": checksum_content.len(),
+                "signatureFileUrl": "<BASE_URL>/files/2026-06-26/signature.asc",
+                "signatureFileName": "trud_hscorgrefdataxml_data_6.0.0_20260626000001.sig",
+                "signatureFileSizeBytes": sig_content.len(),
+                "publicKeyFileUrl": "<BASE_URL>/files/2026-06-26/public_key.pgp",
+                "publicKeyFileName": "trud-public-key-2013-04-01.pgp",
+                "publicKeyFileSizeBytes": pubkey_content.len()
+            }
+        ]
+    });
+
+    let mut routes = std::collections::HashMap::new();
+    routes.insert(
+        "/keys/test/items/341/releases".to_string(),
+        serde_json::to_vec(&releases_json).unwrap(),
+    );
+    routes.insert("/files/2026-07-31/archive.zip".to_string(), archive_3mb);
+    routes.insert("/files/2026-07-31/checksum.xml".to_string(), checksum_content.clone());
+    routes.insert("/files/2026-07-31/signature.asc".to_string(), sig_content.clone());
+    routes.insert("/files/2026-07-31/public_key.pgp".to_string(), pubkey_content.clone());
+
+    routes.insert("/files/2026-06-26/archive.zip".to_string(), archive_2mb);
+    routes.insert("/files/2026-06-26/checksum.xml".to_string(), checksum_content);
+    routes.insert("/files/2026-06-26/signature.asc".to_string(), sig_content);
+    routes.insert("/files/2026-06-26/public_key.pgp".to_string(), pubkey_content);
+
+    let (api_url, stop_server) = run_mock_trud_server(routes);
+
+    let cases = [
+        TestCase {
+            cmd_str: "COLUMNS=100 ods trud pull 2026-06-26",
+            columns: Some(100),
+            args: vec!["trud", "pull", "2026-06-26"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods trud pull",
+            columns: Some(100),
+            args: vec!["trud", "pull"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods trud pull",
+            columns: Some(100),
+            args: vec!["trud", "pull"],
+            use_input: false,
+        },
+    ];
+
+    let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
+    let actual_cases: Vec<String> = cases
+        .iter()
+        .map(|c| {
+            run_case_full(
+                c,
+                None,
+                Some(tmp.path()),
+                &[("TRUD_API_KEY", "test"), ("ODS_TRUD_API_URL", &api_url)],
+            )
+        })
+        .collect();
+
+    let _ = stop_server.send(());
+    check_snapshot("trud-pull.txt", &actual_cases, &case_names);
+}
+

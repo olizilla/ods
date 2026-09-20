@@ -9,7 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::progress::{format_duration, format_size, Progress, ProgressCaps};
+use crate::progress::{
+    format_duration, format_size, render_release_block, Progress, ProgressCaps, ReleaseBlockLink,
+    ReleaseBlockParams, ReleaseBlockState,
+};
 use crate::provenance::{compute_file_sha256, OdsProvenance};
 use crate::workspace::Workspace;
 
@@ -355,6 +358,8 @@ fn pull_single_release<F: TrudFetcher>(
 
     let dest_path = trud_dir.join(&target_release.archive_file_name);
 
+    let link_target = format!("releases/{}", target_release.release_date);
+
     if dest_path.exists() && !args.force {
         let local_sha256 = compute_file_sha256(&dest_path)?;
         if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
@@ -364,21 +369,47 @@ fn pull_single_release<F: TrudFetcher>(
                 pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
             }
 
-            progress.settle(&format!(
-                "* {}  {}  cached, SHA-256 verified by TRUD API",
-                target_release.release_date,
-                format_size(target_release.archive_file_size)
-            ));
-            let att_line = capture_attestations(
+            let att_result = capture_attestations(
                 &trud_dir,
                 &target_release,
                 fetcher,
                 fetcher.releases_raw_json().as_deref(),
                 args.api_key.as_deref(),
             );
-            progress.settle_detail(&att_line);
-            if pin_moved {
-                progress.settle_detail(&format!("current → releases/{}", target_release.release_date));
+            let file_count = 2 + att_result.captured.len();
+            let link = if is_workspace {
+                Some(ReleaseBlockLink {
+                    target: &link_target,
+                    unchanged: !pin_moved,
+                })
+            } else {
+                None
+            };
+            let hash_opt = if progress.caps().verbose {
+                Some(local_sha256.as_str())
+            } else {
+                None
+            };
+            let lines = render_release_block(&ReleaseBlockParams {
+                date: &target_release.release_date,
+                archive_size: target_release.archive_file_size,
+                file_count,
+                state: &ReleaseBlockState::Cached,
+                verified: "sha256 from TRUD API",
+                linked: link,
+                hash: hash_opt,
+                color: progress.caps().is_tty && !progress.caps().no_color,
+            });
+            progress.finish_block(&lines);
+
+            let failed_reasons: Vec<_> = att_result
+                .missing_reasons
+                .iter()
+                .filter(|r| r.contains("download failed"))
+                .cloned()
+                .collect();
+            for reason in failed_reasons {
+                eprintln!("! attestations: {}", reason);
             }
 
             if args.format.as_deref() == Some("ndjson") {
@@ -395,7 +426,6 @@ fn pull_single_release<F: TrudFetcher>(
                 });
             }
 
-            progress.finish("Done!");
             return Ok(());
         } else {
             let bad_path = mark_bad_sha_file(&dest_path);
@@ -405,6 +435,11 @@ fn pull_single_release<F: TrudFetcher>(
         }
     }
 
+    let initial_file_count = 2
+        + (target_release.checksum_file_url.is_some() as usize)
+        + (target_release.signature_file_url.is_some() as usize)
+        + (target_release.public_key_file_url.is_some() as usize);
+
     let part_path = trud_dir.join(format!("{}.part", target_release.archive_file_name));
     let downloaded_bytes = Arc::new(AtomicU64::new(0));
     let start_time = Instant::now();
@@ -413,6 +448,7 @@ fn pull_single_release<F: TrudFetcher>(
     let p = progress.clone();
     let date = target_release.release_date.clone();
     let total_size = target_release.archive_file_size;
+    let link_target_cb = link_target.clone();
 
     let res = fetcher.download_archive(
         &target_release.download_url,
@@ -426,12 +462,36 @@ fn pull_single_release<F: TrudFetcher>(
             } else {
                 None
             };
-            p.bar(&format!("{}   downloading", date), cur, total_size, Some(rate), eta);
+            let state = ReleaseBlockState::Downloading {
+                bytes_done: cur,
+                rate: Some(rate),
+                eta,
+            };
+            let link = if is_workspace {
+                Some(ReleaseBlockLink {
+                    target: &link_target_cb,
+                    unchanged: false,
+                })
+            } else {
+                None
+            };
+            let lines = render_release_block(&ReleaseBlockParams {
+                date: &date,
+                archive_size: total_size,
+                file_count: initial_file_count,
+                state: &state,
+                verified: "-",
+                linked: link,
+                hash: None,
+                color: p.caps().is_tty && !p.caps().no_color,
+            });
+            p.update_live_block(lines);
         },
     );
 
     if let Err(e) = res {
         let _ = std::fs::remove_file(&part_path);
+        progress.clear_live();
         progress.error(
             &format!("Download failed for {}", target_release.release_date),
             &[&e.to_string()],
@@ -451,6 +511,7 @@ fn pull_single_release<F: TrudFetcher>(
 
         if !local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
             let bad_path = mark_bad_sha_file(&part_path);
+            progress.clear_live();
             progress.error(
                 &format!("SHA-256 mismatch for {}", target_release.release_date),
                 &[
@@ -472,24 +533,49 @@ fn pull_single_release<F: TrudFetcher>(
         pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
     }
 
-    progress.settle(&format!(
-        "✓ {}  {}  SHA-256 verified by TRUD API",
-        target_release.release_date,
-        format_size(target_release.archive_file_size)
-    ));
-    let att_line = capture_attestations(
+    let elapsed = start_time.elapsed();
+    let att_result = capture_attestations(
         &trud_dir,
         &target_release,
         fetcher,
         fetcher.releases_raw_json().as_deref(),
         args.api_key.as_deref(),
     );
-    progress.settle_detail(&att_line);
-    if progress.caps().verbose {
-        progress.settle_detail(&format!("SHA-256: {}", local_sha256));
-    }
-    if pin_moved {
-        progress.settle_detail(&format!("current → releases/{}", target_release.release_date));
+    let final_file_count = 2 + att_result.captured.len();
+    let state = ReleaseBlockState::Done { elapsed };
+    let link = if is_workspace {
+        Some(ReleaseBlockLink {
+            target: &link_target,
+            unchanged: !pin_moved,
+        })
+    } else {
+        None
+    };
+    let hash_opt = if progress.caps().verbose {
+        Some(local_sha256.as_str())
+    } else {
+        None
+    };
+    let lines = render_release_block(&ReleaseBlockParams {
+        date: &target_release.release_date,
+        archive_size: target_release.archive_file_size,
+        file_count: final_file_count,
+        state: &state,
+        verified: "sha256 from TRUD API",
+        linked: link,
+        hash: hash_opt,
+        color: progress.caps().is_tty && !progress.caps().no_color,
+    });
+    progress.finish_block(&lines);
+
+    let failed_reasons: Vec<_> = att_result
+        .missing_reasons
+        .iter()
+        .filter(|r| r.contains("download failed"))
+        .cloned()
+        .collect();
+    for reason in failed_reasons {
+        eprintln!("! attestations: {}", reason);
     }
 
     if args.format.as_deref() == Some("ndjson") {
@@ -506,7 +592,6 @@ fn pull_single_release<F: TrudFetcher>(
         });
     }
 
-    progress.finish("Done!");
     Ok(())
 }
 
@@ -1243,13 +1328,25 @@ pub fn run_local_archive_with_progress(
     run_local_archive(args, workspace_root, local_path, progress)
 }
 
+#[derive(Debug, Clone)]
+pub struct AttestationCaptureResult {
+    pub captured: Vec<&'static str>,
+    pub missing_reasons: Vec<&'static str>,
+}
+
+impl AttestationCaptureResult {
+    pub fn formatted_line(&self) -> String {
+        format_attestations_line(&self.captured, &self.missing_reasons)
+    }
+}
+
 pub fn capture_attestations<F: TrudFetcher>(
     trud_dir: &Path,
     release: &TrudReleaseItem,
     fetcher: &F,
     raw_json: Option<&str>,
     api_key: Option<&str>,
-) -> String {
+) -> AttestationCaptureResult {
     let _ = std::fs::create_dir_all(trud_dir);
 
     // 1. Write trud-releases-<release_date>.json
@@ -1348,10 +1445,13 @@ pub fn capture_attestations<F: TrudFetcher>(
         missing_reasons.push("public key not offered for this release");
     }
 
-    format_attestations_line(&captured, &missing_reasons)
+    AttestationCaptureResult {
+        captured,
+        missing_reasons,
+    }
 }
 
-fn format_attestations_line(captured: &[&str], missing_reasons: &[&str]) -> String {
+pub fn format_attestations_line(captured: &[&str], missing_reasons: &[&str]) -> String {
     if missing_reasons.is_empty() {
         format!("attestations: {}", captured.join(", "))
     } else if captured.is_empty() {
