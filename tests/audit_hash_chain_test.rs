@@ -100,16 +100,10 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
 
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
@@ -126,7 +120,7 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
     })
     .unwrap();
 
-    ods::provenance::update_provenance(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     (tmp, workspace_root, outer_zip_path)
 }
@@ -308,7 +302,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
-    ods::provenance::update_provenance(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -356,7 +350,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
-    ods::provenance::update_provenance(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -416,7 +410,7 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
         &empty_closures,
         prov.as_ref(),
     )?;
-    ods::provenance::update_provenance(&active_dir, None)?;
+    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -506,7 +500,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
         output: Some(rel_dir.clone()),
     })
     .unwrap();
-    ods::provenance::update_provenance(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -674,7 +668,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
         output: Some(rel_dir.clone()),
     })
     .unwrap();
-    ods::provenance::update_provenance(&rel_dir, None).unwrap();
+    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -736,7 +730,7 @@ fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
     }
 
     // Update provenance
-    ods::provenance::update_provenance(&rel_dir, None)?;
+    ods::provenance::update_provenance(&rel_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -802,7 +796,7 @@ fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
         writer.close()?;
     }
 
-    ods::provenance::update_provenance(&rel_dir, None)?;
+    ods::provenance::update_provenance(&rel_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),

@@ -32,12 +32,12 @@ fn test_use_refuses_when_release_unverified() {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
     )
     .unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
     fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
 
@@ -71,11 +71,11 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov)?,
     )?;
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}")?;
 
     let orgs_bytes = b"sample orgs parquet bytes";
     fs::write(rel_dir.join("orgs.parquet"), orgs_bytes)?;

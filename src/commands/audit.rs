@@ -335,7 +335,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
         .unwrap_or_else(|| {
             crate::ods_xml::parse_single_pass(&xml_path)
-                .map(|(p, _, _)| p)
+                .map(|(p, _, _, _)| p)
                 .unwrap_or_default()
         });
 
@@ -399,16 +399,18 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                 warnings.push(pub_warn);
             }
         }
-        if let (Some(ref file), Some(ref exp_sha)) = (&prov.trud_release_file, &prov.trud_release_sha256) {
-            let archive_path = active_release_path.join("trud").join(file);
-            if archive_path.exists() {
-                if let Ok(act_sha) = crate::provenance::compute_file_sha256(&archive_path) {
-                    if !act_sha.eq_ignore_ascii_case(exp_sha) {
-                        discrepancies.push(format!(
-                            "Archive checksum mismatch for {file}: recorded {exp_sha} != actual {act_sha}"
-                        ));
-                    }
-                }
+        if let Some(ref exp_sha) = prov.trud_release_sha256 {
+            let trud_dir = active_release_path.join("trud");
+            let (matched, zip_paths) = crate::provenance::find_archive_by_sha(&trud_dir, exp_sha);
+            if !zip_paths.is_empty() && matched.is_none() {
+                let file_names: Vec<_> = zip_paths
+                    .iter()
+                    .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+                    .collect();
+                discrepancies.push(format!(
+                    "Archive checksum mismatch: no archive in trud/ matches recorded SHA-256 {exp_sha} (found {})",
+                    file_names.join(", ")
+                ));
             }
         }
     }
@@ -419,7 +421,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let mut reconstructed_manifest_opt: Option<crate::oci::OciManifest> = None;
 
     if let Some(ref prov) = workspace_prov {
-        if let Some(version) = prov.dataset_version.as_deref() {
+        let dataset_version_opt = crate::datapackage::read_dataset_version_from_dir(&active_release_path);
+        if let Some(version) = dataset_version_opt.as_deref() {
             match crate::commands::make_oci::build_manifest_from_dir(&parquet_dir, prov, version) {
                 Ok((manifest, _)) => {
                     manifest_layers_count = manifest.layers.len();
@@ -463,7 +466,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             }
         }
     } else {
-        discrepancies.push("_provenance.json missing dataset_version".to_string());
+        discrepancies.push("datapackage.json missing version".to_string());
     }
 } else {
     discrepancies.push("Missing _provenance.json in release directory".to_string());
@@ -1514,7 +1517,7 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
     }
 
     // Now populate full succession graph edges from XML parse if available or from fast pass
-    if let Ok((_, _, parsed_orgs)) = crate::ods_xml::parse_single_pass(xml_path) {
+    if let Ok((_, _, parsed_orgs, _)) = crate::ods_xml::parse_single_pass(xml_path) {
         for org in parsed_orgs.values() {
             for succ in &org.successors {
                 let is_pred = succ.succ_type.eq_ignore_ascii_case("predecessor");

@@ -294,14 +294,11 @@ which handle them natively.
 ## Provenance
 
 Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
-archive it came from and its verified SHA-256, the ODS publication date and
-sequence number, and the commit that built it. Hashes are uppercase throughout, matching TRUD.
+archive it came from and its verified SHA-256, the TRUD schema version, and the commit that built it. Hashes are uppercase throughout, matching TRUD.
 `ods cite` renders it as a citation.
 
 Each Parquet file carries a deliberate subset of provenance in its key-value metadata:
-source and publication identity only (`ods.trud_release_date`, `ods.trud_release_name`,
-`ods.trud_release_file`, `ods.trud_release_sha256`, `ods.publication_date`,
-`ods.publication_seq_num`, `ods.publication_type` and `ods.publication_source`). The dataset
+source identity only (`ods.trud_release_date` and `ods.trud_release_sha256`). The dataset
 version and the builder and tool fields (`ods.tool_version`, `ods.tool_git_sha`,
 `ods.tool_git_dirty`, and `trud_release_sha256_verified`) are excluded, so the Parquet bytes
 depend only on the source archive and how it was derived. Relabelling a release with a new
@@ -316,7 +313,7 @@ builders; the data files will match byte for byte.
 
 Three numbers, three jobs:
 - `trud_release_date` — which source? (recorded in `_provenance.json` and every Parquet row).
-- `dataset_version` — which cut, and which attempt at it? (SemVer recorded in `_provenance.json`, the manifest, and release index).
+- `dataset_version` — which cut, and which attempt at it? (SemVer recorded in `datapackage.json`, the manifest, and release index).
 - `ods` crate version — which tool? (`Cargo.toml`, `tool_version`).
 
 `dataset_version` is global and monotonic. It identifies a *cut* — the state of the tool and rules at the moment of packing — so once it moves, every release packed afterwards carries the new number.

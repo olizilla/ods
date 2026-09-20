@@ -1250,20 +1250,14 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
     let prov = OdsProvenance {
-        trud_release_name: Some("Release 7.0.0".to_string()),
         trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_file: Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string()),
         trud_release_filesize_bytes: Some(37_983_173),
         trud_release_sha256: Some(zip_sha256),
         trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
-        publication_date: Some("2026-07-28".to_string()),
-        publication_seq_num: Some("4700".to_string()),
-        publication_type: Some("Full".to_string()),
-        publication_record_count: Some(2),
+        trud_schema_version: Some("2-0-0".to_string()),
         tool_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         tool_git_sha: Some(git_sha),
         tool_git_dirty: Some(false),
-        dataset_version: Some(ods::datapackage::dataset_version().to_string()),
         ..Default::default()
     };
 

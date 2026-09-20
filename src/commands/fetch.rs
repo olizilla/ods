@@ -126,10 +126,6 @@ pub struct ReleaseOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_filesize_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_sha256: Option<String>,
@@ -415,8 +411,6 @@ fn pull_single_release<F: TrudFetcher>(
             if args.format.as_deref() == Some("ndjson") {
                 emit_ndjson_outcome(&ReleaseOutcome {
                     trud_release_date: Some(target_release.release_date.clone()),
-                    trud_release_name: target_release.name.clone(),
-                    trud_release_file: Some(target_release.archive_file_name.clone()),
                     trud_release_filesize_bytes: Some(target_release.archive_file_size),
                     trud_release_sha256: Some(target_release.archive_file_sha256.clone()),
                     trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
@@ -581,8 +575,6 @@ fn pull_single_release<F: TrudFetcher>(
     if args.format.as_deref() == Some("ndjson") {
         emit_ndjson_outcome(&ReleaseOutcome {
             trud_release_date: Some(target_release.release_date.clone()),
-            trud_release_name: target_release.name.clone(),
-            trud_release_file: Some(target_release.archive_file_name.clone()),
             trud_release_filesize_bytes: Some(target_release.archive_file_size),
             trud_release_sha256: Some(local_sha256),
             trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
@@ -667,8 +659,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
             for r in cached_releases {
                 emit_ndjson_outcome(&ReleaseOutcome {
                     trud_release_date: Some(r.release_date.clone()),
-                    trud_release_name: r.name.clone(),
-                    trud_release_file: Some(r.archive_file_name.clone()),
                     trud_release_filesize_bytes: Some(r.archive_file_size),
                     trud_release_sha256: Some(r.archive_file_sha256.clone()),
                     trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
@@ -787,8 +777,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                 line: format!("✖ {}  failed to prepare release directory — {}", release.release_date, e),
                                 outcome: ReleaseOutcome {
                                     trud_release_date: Some(release.release_date.clone()),
-                                    trud_release_name: release.name.clone(),
-                                    trud_release_file: Some(release.archive_file_name.clone()),
                                     trud_release_filesize_bytes: Some(release.archive_file_size),
                                     trud_release_sha256: None,
                                     trud_release_sha256_verified: None,
@@ -849,8 +837,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                 line: format!("✖ {}  download failed after 2 attempts — {}", release.release_date, e),
                                 outcome: ReleaseOutcome {
                                     trud_release_date: Some(release.release_date.clone()),
-                                    trud_release_name: release.name.clone(),
-                                    trud_release_file: Some(release.archive_file_name.clone()),
                                     trud_release_filesize_bytes: Some(release.archive_file_size),
                                     trud_release_sha256: None,
                                     trud_release_sha256_verified: None,
@@ -873,8 +859,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         line: format!("✖ {}  SHA-256 compute failed — {}", release.release_date, e),
                                         outcome: ReleaseOutcome {
                                             trud_release_date: Some(release.release_date.clone()),
-                                            trud_release_name: release.name.clone(),
-                                            trud_release_file: Some(release.archive_file_name.clone()),
                                             trud_release_filesize_bytes: Some(release.archive_file_size),
                                             trud_release_sha256: None,
                                             trud_release_sha256_verified: None,
@@ -911,8 +895,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                     ),
                                     outcome: ReleaseOutcome {
                                         trud_release_date: Some(release.release_date.clone()),
-                                        trud_release_name: release.name.clone(),
-                                        trud_release_file: Some(release.archive_file_name.clone()),
                                         trud_release_filesize_bytes: Some(release.archive_file_size),
                                         trud_release_sha256: Some(local_sha),
                                         trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
@@ -949,8 +931,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                     ),
                                     outcome: ReleaseOutcome {
                                         trud_release_date: Some(release.release_date.clone()),
-                                        trud_release_name: release.name.clone(),
-                                        trud_release_file: Some(release.archive_file_name.clone()),
                                         trud_release_filesize_bytes: Some(release.archive_file_size),
                                         trud_release_sha256: Some(local_sha),
                                         trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
@@ -984,8 +964,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
         for r in &cached_releases {
             emit_ndjson_outcome(&ReleaseOutcome {
                 trud_release_date: Some(r.release_date.clone()),
-                trud_release_name: r.name.clone(),
-                trud_release_file: Some(r.archive_file_name.clone()),
                 trud_release_filesize_bytes: Some(r.archive_file_size),
                 trud_release_sha256: Some(r.archive_file_sha256.clone()),
                 trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
@@ -1268,8 +1246,6 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
     if args.format.as_deref() == Some("ndjson") {
         emit_ndjson_outcome(&ReleaseOutcome {
             trud_release_date: Some(release_date),
-            trud_release_name: release_item.name,
-            trud_release_file: Some(release_item.archive_file_name),
             trud_release_filesize_bytes: Some(file_size),
             trud_release_sha256: Some(local_sha256),
             trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
@@ -1296,22 +1272,14 @@ fn write_provenance_json_with_verification(
 
     let prov = OdsProvenance {
         schema: crate::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
-        trud_release_name: release.name.clone(),
         trud_release_date: Some(release.release_date.clone()),
         trud_release_sha256: Some(release.archive_file_sha256.clone()),
         trud_release_sha256_verified: Some(verified),
-        trud_release_file: Some(release.archive_file_name.clone()),
         trud_release_filesize_bytes: Some(release.archive_file_size),
-        publication_date: header.publication_date,
-        publication_seq_num: header.publication_seq_num,
-        publication_type: header.publication_type,
-        publication_source: header.publication_source,
-        publication_schema_version: header.publication_schema_version,
-        publication_record_count: header.publication_record_count,
+        trud_schema_version: header.trud_schema_version,
         tool_version: None,
         tool_git_sha: None,
         tool_git_dirty: None,
-        dataset_version: None,
     };
 
     let json = serde_json::to_string_pretty(&prov)?;

@@ -29,24 +29,17 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     // Create synthetic Parquet tables and notes
     fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
     fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"0.1.0\"}").unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
     fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
     let mut prov = OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.1".to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -458,14 +451,12 @@ fn test_make_oci_refuses_missing_trud_release_sha256() -> Result<()> {
 }
 
 #[test]
-fn test_make_oci_reads_version_from_provenance_json() -> Result<()> {
+fn test_make_oci_reads_version_from_datapackage_json() -> Result<()> {
     let (_tmp, rel_dir) = setup_synthetic_release_dir();
 
-    // Set dataset_version to 1.2.3 in _provenance.json
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.dataset_version = Some("1.2.3".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Set dataset_version to 1.2.3 in datapackage.json
+    let dp_path = rel_dir.join("datapackage.json");
+    fs::write(&dp_path, b"{\"name\": \"test\", \"version\": \"1.2.3\"}")?;
 
     run(test_args(rel_dir.clone(), false))?;
 
@@ -511,18 +502,16 @@ fn test_make_oci_reads_version_from_provenance_json() -> Result<()> {
 fn test_make_oci_refuses_when_missing_dataset_version() -> Result<()> {
     let (_tmp, rel_dir) = setup_synthetic_release_dir();
 
-    // Remove dataset_version from _provenance.json
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.dataset_version = None;
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Remove version from datapackage.json
+    let dp_path = rel_dir.join("datapackage.json");
+    fs::write(&dp_path, b"{\"name\": \"test\"}")?;
 
     let result = run(test_args(rel_dir.clone(), false));
     assert!(result.is_err(), "ods make oci must refuse when dataset_version is missing");
     let err_str = format!("{:#}", result.unwrap_err());
     assert!(
-        err_str.contains("Missing dataset_version in _provenance.json"),
-        "error must mention missing dataset_version, got: {}",
+        err_str.contains("Missing version in datapackage.json"),
+        "error must mention missing version in datapackage.json, got: {}",
         err_str
     );
     assert!(

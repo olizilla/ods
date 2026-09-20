@@ -100,17 +100,11 @@ fn test_cli_cite_output_formatting() {
     fs::create_dir_all(&rel_dir).unwrap();
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(305541);
-    prov.dataset_version = Some("1.0.1".to_string());
     fs::write(rel_dir.join("orgs.parquet"), b"dummy").unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -164,22 +158,22 @@ fn test_cli_pull_local_release_output() {
 
     let mut prov1 = ods::provenance::OdsProvenance::default();
     prov1.trud_release_date = Some("2026-05-29".to_string());
-    prov1.dataset_version = Some("1.0.1".to_string());
     let rel1 = ws.join("releases").join("2026-05-29");
     fs::create_dir_all(&rel1).unwrap();
     fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov1).unwrap()).unwrap();
     fs::write(rel1.join("orgs.parquet"), b"dummy parquet 1").unwrap();
+    fs::write(rel1.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
     let (m1, _) = ods::commands::make_oci::build_manifest_from_dir(&rel1, &prov1, "1.0.1").unwrap();
     let d1 = m1.digest().unwrap();
 
     let mut prov2 = ods::provenance::OdsProvenance::default();
     prov2.trud_release_date = Some("2026-06-26".to_string());
-    prov2.dataset_version = Some("1.0.1".to_string());
     let rel2 = ws.join("releases").join("2026-06-26");
     fs::create_dir_all(&rel2).unwrap();
     fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov2).unwrap()).unwrap();
     fs::write(rel2.join("orgs.parquet"), b"dummy parquet 2").unwrap();
+    fs::write(rel2.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
     let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2, &prov2, "1.0.1").unwrap();
     let d2 = m2.digest().unwrap();
@@ -916,7 +910,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     // 1. Unreadable provenance with no $schema
     let bad_prov = r#"{
   "trud_release_date": "2026-08-28",
-  "trud_release_name": "Release 8.0.0"
+  "unrecognised_field": "some_value"
 }"#;
     fs::write(rel_dir.join(ods::provenance::PROVENANCE_FILENAME), bad_prov).unwrap();
 

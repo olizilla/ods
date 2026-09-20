@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ods.fyi/schema/provenance.v1.json",
   "title": "ODS Dataset Provenance",
-  "description": "Unified provenance document identifying the source TRUD archive, inner XML publication manifest facts, tool build identity, and dataset release version for an ods dataset. The document is written incrementally: 'ods trud pull' records source TRUD and publication metadata, while 'ods make' records tool build information and dataset version. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (trud_release_name, trud_release_date, trud_release_file, trud_release_filesize_bytes, trud_release_sha256, trud_release_sha256_verified, tool_git_dirty, tool_git_sha, tool_version, and dataset_version), verified by ods's own checks as the authority; all other fields are optional.",
-  "$comment": "Build-run facts such as runner machine identifiers, execution timestamps, job IDs, and build environment details are intentionally excluded from this document so rebuilds reproduce byte-identical datasets and identical manifest digests. Build-run facts belong in an external SLSA provenance attestation accompanying the release.",
+  "description": "Unified provenance document identifying the source TRUD archive and tool build identity for an ods dataset release. Provenance records where data came from and what built it; the dataset descriptor (datapackage.json) records what it is and its version. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (validate_publishable and perform_all_release_checks): trud_release_date, trud_release_sha256, trud_release_sha256_verified (not unverified), trud_release_filesize_bytes, tool_version, tool_git_sha, and tool_git_dirty, verified by ods's own checks as the authority; all other fields are optional.",
+  "$comment": "Build-run facts such as runner machine identifiers, execution timestamps, job IDs, and build environment details are intentionally excluded from this document so rebuilds reproduce byte-identical datasets and identical manifest digests. dataset_version belongs in datapackage.json (Frictionless version field) rather than provenance so that relabelling or re-tagging a release produces byte-identical provenance. Build-run facts belong in an external SLSA provenance attestation accompanying the release.",
   "type": "object",
   "required": [
     "$schema"
@@ -15,23 +15,10 @@
       "const": "https://ods.fyi/schema/provenance.v1.json",
       "description": "URI of the JSON Schema describing this provenance document format."
     },
-    "trud_release_name": {
-      "type": "string",
-      "description": "Human-readable release name of the TRUD item from NHS England's TRUD API (e.g. 'Release 8.0.0'). Source metadata recorded by ods trud pull."
-    },
     "trud_release_date": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
       "description": "The release date of the source archive on NHS TRUD in YYYY-MM-DD format. Extracted from TRUD release metadata; recorded by ods trud pull."
-    },
-    "trud_release_file": {
-      "type": "string",
-      "description": "Filename of the source archive ZIP file downloaded from NHS England TRUD (e.g. 'ods_data_20260828.zip'). Recorded by ods trud pull."
-    },
-    "trud_release_filesize_bytes": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Size in bytes of the source TRUD ZIP archive file, greater than zero. Measured and recorded by ods trud pull."
     },
     "trud_release_sha256": {
       "type": "string",
@@ -47,31 +34,14 @@
       ],
       "description": "Method used to verify the TRUD release archive SHA-256 hash: 'trud_api' if verified directly against NHS England's authenticated TRUD API, 'published_release' if verified against a previously published trusted release, or 'unverified' if the archive was provided locally without API verification. Recorded by ods trud pull."
     },
-    "publication_date": {
-      "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-      "description": "Publication date declared in the inner XML publication manifest extracted from the TRUD archive in YYYY-MM-DD format. Recorded by ods trud pull."
-    },
-    "publication_seq_num": {
-      "type": "string",
-      "description": "Sequential publication sequence number declared in the inner XML publication manifest. Recorded by ods trud pull."
-    },
-    "publication_type": {
-      "type": "string",
-      "description": "Type of publication declared in the inner XML publication manifest (e.g. 'Full' or 'Snapshot'). Recorded by ods trud pull."
-    },
-    "publication_source": {
-      "type": "string",
-      "description": "Publishing organization or source system declared in the inner XML publication manifest (e.g. 'NHS England'). Recorded by ods trud pull."
-    },
-    "publication_schema_version": {
-      "type": "string",
-      "description": "Schema version of the data files declared in the inner XML publication manifest. Recorded by ods trud pull."
-    },
-    "publication_record_count": {
+    "trud_release_filesize_bytes": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Total record count declared across tables in the inner XML publication manifest. Measured and recorded by ods trud pull."
+      "minimum": 1,
+      "description": "Size in bytes of the source TRUD ZIP archive file, greater than zero. Measured and recorded by ods trud pull."
+    },
+    "trud_schema_version": {
+      "type": "string",
+      "description": "The schema version declared in the <Version> attribute of the source XML manifest in the TRUD archive (e.g. '2-0-0'). Recorded by ods make."
     },
     "tool_version": {
       "type": "string",
@@ -86,11 +56,6 @@
     "tool_git_dirty": {
       "type": "boolean",
       "description": "Boolean flag indicating whether uncommitted working tree changes were present when the ods tool binary was compiled. Recorded by ods make."
-    },
-    "dataset_version": {
-      "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
-      "description": "Semantic version string (SemVer) of the published dataset release build (e.g. '0.1.0'). Recorded by ods make."
     }
   }
 }

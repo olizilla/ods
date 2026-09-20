@@ -617,12 +617,8 @@ fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) ->
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ManifestHeader {
-    pub publication_date: Option<String>,
-    pub publication_seq_num: Option<String>,
-    pub publication_type: Option<String>,
-    pub publication_source: Option<String>,
-    pub publication_schema_version: Option<String>,
-    pub publication_record_count: Option<usize>,
+    pub trud_schema_version: Option<String>,
+    pub record_count: Option<usize>,
     pub primary_role_scope: Option<Vec<String>>,
 }
 
@@ -640,18 +636,10 @@ pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Resu
                 if name_ref.eq_ignore_ascii_case(b"Organisation") || name_ref.eq_ignore_ascii_case(b"Organisations") {
                     break;
                 }
-                if name_ref == b"PublicationDate" {
-                    header.publication_date = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSeqNum" {
-                    header.publication_seq_num = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationType" {
-                    header.publication_type = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSource" {
-                    header.publication_source = get_manifest_attr(e, &reader);
-                } else if name_ref == b"Version" {
-                    header.publication_schema_version = get_manifest_attr(e, &reader);
+                if name_ref == b"Version" {
+                    header.trud_schema_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
-                    header.publication_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
+                    header.record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") {
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref().eq_ignore_ascii_case(b"id") {
@@ -775,24 +763,20 @@ pub fn extract_manifest_header(path: &Path) -> Result<ManifestHeader> {
 
 pub fn parse_single_pass(
     xml_path: &Path,
-) -> Result<(crate::provenance::OdsProvenance, HashMap<String, String>, HashMap<String, ParsedOrg>)> {
+) -> Result<(crate::provenance::OdsProvenance, HashMap<String, String>, HashMap<String, ParsedOrg>, Option<usize>)> {
     let file = File::open(xml_path)?;
     let buf_reader = BufReader::with_capacity(128 * 1024, file);
     let mut reader = Reader::from_reader(buf_reader);
     reader.trim_text(true);
- 
+
     let mut concept_map = HashMap::new();
     let mut parsed: HashMap<String, ParsedOrg> = HashMap::new();
     let mut parser_state = ParserState::new();
     let mut buf = Vec::new();
 
-    let mut pub_date = None;
-    let mut pub_seq = None;
-    let mut pub_type = None;
-    let mut pub_source = None;
     let mut xml_version = None;
     let mut manifest_record_count = None;
- 
+
     let mut primary_role_scope: Vec<String> = Vec::new();
 
     loop {
@@ -802,14 +786,6 @@ pub fn parse_single_pass(
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
-                } else if name_ref == b"PublicationDate" {
-                    pub_date = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSeqNum" {
-                    pub_seq = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationType" {
-                    pub_type = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSource" {
-                    pub_source = get_manifest_attr(e, &reader);
                 } else if name_ref == b"Version" {
                     xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
@@ -831,14 +807,6 @@ pub fn parse_single_pass(
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
-                } else if name_ref == b"PublicationDate" {
-                    pub_date = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSeqNum" {
-                    pub_seq = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationType" {
-                    pub_type = get_manifest_attr(e, &reader);
-                } else if name_ref == b"PublicationSource" {
-                    pub_source = get_manifest_attr(e, &reader);
                 } else if name_ref == b"Version" {
                     xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
@@ -871,18 +839,12 @@ pub fn parse_single_pass(
         buf.clear();
     }
 
-    let mut provenance = crate::provenance::OdsProvenance::new(
-        pub_date.clone(),
-        Some(xml_path),
-    );
-    provenance.publication_date = pub_date;
-    provenance.publication_seq_num = pub_seq;
-    provenance.publication_type = pub_type;
-    provenance.publication_source = pub_source;
-    provenance.publication_schema_version = xml_version;
-    provenance.publication_record_count = manifest_record_count;
+    let provenance = crate::provenance::OdsProvenance {
+        trud_schema_version: xml_version,
+        ..Default::default()
+    };
 
-    Ok((provenance, concept_map, parsed))
+    Ok((provenance, concept_map, parsed, manifest_record_count))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

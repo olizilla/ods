@@ -168,8 +168,8 @@ pub fn media_type_for_file(filename: &str) -> &'static str {
     }
 }
 
-/// Derives `org.opencontainers.image.created` timestamp strictly from `publication_date`.
+/// Derives `org.opencontainers.image.created` timestamp strictly from `trud_release_date`.
 /// Never calls wall clock APIs.
-pub fn derive_created_timestamp(publication_date: &str) -> String {
-    format!("{}T00:00:00Z", publication_date)
+pub fn derive_created_timestamp(release_date: &str) -> String {
+    format!("{}T00:00:00Z", release_date)
 }

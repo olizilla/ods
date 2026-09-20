@@ -147,13 +147,10 @@ fn test_make_reports_provenance_file_on_stderr() {
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
     let prov = ods::provenance::OdsProvenance {
-        trud_release_name: Some("Release 8.0.0".to_string()),
         trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_file: Some("hscorgrefdataxml_data_8.0.0_20260828000001.zip".to_string()),
         trud_release_sha256: Some(zip_sha256),
         trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         trud_release_filesize_bytes: Some(37_000_000),
-        dataset_version: Some("1.0.0".to_string()),
         ..Default::default()
     };
 
@@ -218,9 +215,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
     let prov = ods::provenance::OdsProvenance {
-        trud_release_name: Some("Release 8.0.0".to_string()),
         trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_file: Some("hscorgrefdataxml_data_8.0.0_20260828000001.zip".to_string()),
         trud_release_sha256: Some(zip_sha256),
         trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         trud_release_filesize_bytes: Some(37_000_000),

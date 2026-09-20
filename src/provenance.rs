@@ -27,16 +27,7 @@ pub struct OdsProvenance {
 
     // --- 1. Official TRUD API Release Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_name: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_date: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_file: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_filesize_bytes: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_sha256: Option<String>,
@@ -44,24 +35,12 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_sha256_verified: Option<TrudVerificationSource>,
 
-    // --- 2. Inner XML Manifest Metadata (publication_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_date: Option<String>,
+    pub trud_release_filesize_bytes: Option<u64>,
 
+    // --- 2. Inner XML Manifest Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_seq_num: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_type: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_source: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_schema_version: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_record_count: Option<usize>,
+    pub trud_schema_version: Option<String>,
 
     // --- 3. Tool Build Info (tool_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,10 +51,6 @@ pub struct OdsProvenance {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_git_dirty: Option<bool>,
-
-    // --- 4. Dataset Identity (dataset_*) ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dataset_version: Option<String>,
 }
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
@@ -84,22 +59,14 @@ impl Default for OdsProvenance {
     fn default() -> Self {
         Self {
             schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_name: None,
             trud_release_date: None,
-            trud_release_file: None,
-            trud_release_filesize_bytes: None,
             trud_release_sha256: None,
             trud_release_sha256_verified: None,
-            publication_date: None,
-            publication_seq_num: None,
-            publication_type: None,
-            publication_source: None,
-            publication_schema_version: None,
-            publication_record_count: None,
+            trud_release_filesize_bytes: None,
+            trud_schema_version: None,
             tool_version: None,
             tool_git_sha: None,
             tool_git_dirty: None,
-            dataset_version: None,
         }
     }
 }
@@ -107,41 +74,17 @@ impl Default for OdsProvenance {
 impl OdsProvenance {
     /// Declared Parquet key-value metadata subset:
     /// - ods.trud_release_date
-    /// - ods.trud_release_name
-    /// - ods.trud_release_file
     /// - ods.trud_release_sha256
-    /// - ods.publication_date
-    /// - ods.publication_seq_num
-    /// - ods.publication_type
-    /// - ods.publication_source
     ///
-    /// Tool fields and verification source are excluded so Parquet bytes
-    /// are a function of the source archive and the derivation.
+    /// Tool fields, publication fields, and verification source are excluded so Parquet bytes
+    /// are a function of the source archive and survive a dataset relabel or tool re-tag.
     pub fn to_parquet_declared_metadata(&self) -> std::collections::BTreeMap<String, String> {
         let mut meta = std::collections::BTreeMap::new();
         if let Some(ref d) = self.trud_release_date {
             meta.insert("ods.trud_release_date".to_string(), d.clone());
         }
-        if let Some(ref n) = self.trud_release_name {
-            meta.insert("ods.trud_release_name".to_string(), n.clone());
-        }
-        if let Some(ref f) = self.trud_release_file {
-            meta.insert("ods.trud_release_file".to_string(), f.clone());
-        }
         if let Some(ref s) = self.trud_release_sha256 {
             meta.insert("ods.trud_release_sha256".to_string(), s.clone());
-        }
-        if let Some(ref d) = self.publication_date {
-            meta.insert("ods.publication_date".to_string(), d.clone());
-        }
-        if let Some(ref s) = self.publication_seq_num {
-            meta.insert("ods.publication_seq_num".to_string(), s.clone());
-        }
-        if let Some(ref t) = self.publication_type {
-            meta.insert("ods.publication_type".to_string(), t.clone());
-        }
-        if let Some(ref s) = self.publication_source {
-            meta.insert("ods.publication_source".to_string(), s.clone());
         }
         meta
     }
@@ -309,15 +252,7 @@ impl OdsProvenance {
                 let prov_file = path.join(PROVENANCE_FILENAME);
                 if prov_file.exists() {
                     match Self::load_from_file(&prov_file) {
-                        ProvenanceLoad::Read(mut prov, prov_path) => {
-                            if prov.trud_release_date.is_none() || prov.trud_release_file.is_none() {
-                                if let Some(zip_prov) = Self::try_extract_trud_zip_provenance(path) {
-                                    if prov.trud_release_date.is_none() { prov.trud_release_date = zip_prov.trud_release_date; }
-                                    if prov.trud_release_file.is_none() { prov.trud_release_file = zip_prov.trud_release_file; }
-                                    if prov.trud_release_name.is_none() { prov.trud_release_name = zip_prov.trud_release_name; }
-                                    if prov.trud_release_sha256.is_none() { prov.trud_release_sha256 = zip_prov.trud_release_sha256; }
-                                }
-                            }
+                        ProvenanceLoad::Read(prov, prov_path) => {
                             return ProvenanceLoad::Read(prov, prov_path);
                         }
                         ProvenanceLoad::Unreadable { path, date } => {
@@ -370,12 +305,9 @@ impl OdsProvenance {
         let zip_path = find_zip(input_path)?;
         let file_name = zip_path.file_name()?.to_string_lossy().to_string();
 
-        let (_version, release_name, release_date) = crate::archive::parse_trud_archive_filename(&file_name)?;
+        let (_version, _release_name, release_date) = crate::archive::parse_trud_archive_filename(&file_name)?;
 
-        let mut prov = Self::new(None, Some(&zip_path));
-        prov.trud_release_file = Some(file_name);
-        prov.trud_release_date = Some(release_date);
-        prov.trud_release_name = Some(release_name);
+        let mut prov = Self::new(Some(release_date));
 
         if let Ok(meta) = std::fs::metadata(&zip_path) {
             prov.trud_release_filesize_bytes = Some(meta.len());
@@ -388,58 +320,21 @@ impl OdsProvenance {
         Some(prov)
     }
 
-    pub fn new(
-        publication_date: Option<String>,
-        source_path: Option<&Path>,
-    ) -> Self {
-        let source_file = source_path.and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
+    pub fn new(trud_release_date: Option<String>) -> Self {
         Self {
             schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_name: None,
-            trud_release_date: None,
-            trud_release_file: source_file,
-            trud_release_filesize_bytes: None,
-            trud_release_sha256: None,
-            trud_release_sha256_verified: None,
-            publication_date,
-            publication_seq_num: None,
-            publication_type: None,
-            publication_source: None,
-            publication_schema_version: None,
-            publication_record_count: None,
-            tool_version: None,
-            tool_git_sha: None,
-            tool_git_dirty: None,
-            dataset_version: None,
+            trud_release_date,
+            ..Default::default()
         }
     }
 
     pub fn validate_baseline(&self) -> Result<()> {
-        let name = self.trud_release_name.as_deref().unwrap_or("");
-        if name.is_empty() {
-            anyhow::bail!("Missing trud_release_name in _provenance.json");
-        }
         let date = self.trud_release_date.as_deref().unwrap_or("");
         if date.is_empty() {
             anyhow::bail!("Missing trud_release_date in _provenance.json");
         }
-        let file = self.trud_release_file.as_deref().unwrap_or("");
-        if file.is_empty() {
-            anyhow::bail!("Missing trud_release_file in _provenance.json");
-        }
         if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
             anyhow::bail!("Missing trud_release_sha256 in _provenance.json");
-        }
-
-        // Validate release file matches version and date
-        let date_digits: String = date.chars().filter(|c| c.is_ascii_digit()).collect();
-        if !date_digits.is_empty() && !file.contains(&date_digits) {
-            anyhow::bail!("trud_release_file '{}' does not match release date '{}'", file, date);
-        }
-        if let Some(ver) = name.strip_prefix("Release ").or_else(|| name.strip_prefix("release ")) {
-            if !file.contains(ver) {
-                anyhow::bail!("trud_release_file '{}' does not match release version '{}'", file, ver);
-            }
         }
 
         Ok(())
@@ -477,6 +372,32 @@ pub fn compute_file_sha256(path: &Path) -> Result<String> {
     Ok(format!("{:X}", hasher.finalize()))
 }
 
+/// Scans `trud_dir` for `.zip` files and finds the one matching `expected_sha` (case-insensitive SHA-256).
+/// Returns `(matching_zip_path, all_zip_paths)`.
+pub fn find_archive_by_sha(trud_dir: &Path, expected_sha: &str) -> (Option<PathBuf>, Vec<PathBuf>) {
+    let mut zip_paths = Vec::new();
+    let mut matched = None;
+    if trud_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(trud_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|e| e == "zip") {
+                    if matched.is_none() {
+                        if let Ok(actual_sha) = compute_file_sha256(&path) {
+                            if actual_sha.eq_ignore_ascii_case(expected_sha) {
+                                matched = Some(path.clone());
+                            }
+                        }
+                    }
+                    zip_paths.push(path);
+                }
+            }
+        }
+    }
+    zip_paths.sort();
+    (matched, zip_paths)
+}
+
 pub fn sanitize_trud_url(url: &str, api_key: Option<&str>) -> String {
     if let Some(key) = api_key {
         if !key.is_empty() {
@@ -511,7 +432,7 @@ pub fn format_provenance_display_path(prov_path: &Path) -> String {
     prov_path.display().to_string()
 }
 
-pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Result<()> {
+pub fn update_provenance(output_dir: &Path) -> Result<()> {
     let prov_path = output_dir.join(PROVENANCE_FILENAME);
     let mut prov = match OdsProvenance::load_from_file(&prov_path) {
         ProvenanceLoad::Read(p, _) => *p,
@@ -531,58 +452,30 @@ pub fn update_provenance(output_dir: &Path, dataset_version: Option<&str>) -> Re
         }
     };
 
-    // Pre-amend verification: Check archive in trud/ matches trud_release_file and trud_release_sha256
-    if let (Some(ref file), Some(ref expected_sha)) = (&prov.trud_release_file, &prov.trud_release_sha256) {
-        let archive_path = output_dir.join("trud").join(file);
-        if archive_path.exists() {
-            let actual_sha = compute_file_sha256(&archive_path)?;
-            if !actual_sha.eq_ignore_ascii_case(expected_sha) {
-                anyhow::bail!(
-                    "✖ Pre-build archive verification mismatch for {}: expected SHA-256 {}, got {}",
-                    file,
-                    expected_sha,
-                    actual_sha
-                );
-            }
+    // Pre-amend verification: Check archive in trud/ matches trud_release_sha256
+    if let Some(ref expected_sha) = prov.trud_release_sha256 {
+        let trud_dir = output_dir.join("trud");
+        let (matched, zips) = find_archive_by_sha(&trud_dir, expected_sha);
+        if !zips.is_empty() && matched.is_none() {
+            anyhow::bail!(
+                "✖ Pre-build archive verification mismatch in {}: expected SHA-256 {}",
+                trud_dir.display(),
+                expected_sha
+            );
         }
     }
 
-    // Freshly parsed XML manifest publication_* fields win over stale or missing fields on disk
+    // Freshly parsed XML manifest trud_schema_version wins over stale or missing fields on disk
     if let Ok(header) = crate::ods_xml::extract_manifest_header(output_dir) {
-        if header.publication_date.is_some() {
-            prov.publication_date = header.publication_date;
-        }
-        if header.publication_seq_num.is_some() {
-            prov.publication_seq_num = header.publication_seq_num;
-        }
-        if header.publication_type.is_some() {
-            prov.publication_type = header.publication_type;
-        }
-        if header.publication_source.is_some() {
-            prov.publication_source = header.publication_source;
-        }
-        if header.publication_schema_version.is_some() {
-            prov.publication_schema_version = header.publication_schema_version;
-        }
-        if header.publication_record_count.is_some() {
-            prov.publication_record_count = header.publication_record_count;
+        if header.trud_schema_version.is_some() {
+            prov.trud_schema_version = header.trud_schema_version;
         }
     }
 
     prov.schema = PROVENANCE_SCHEMA_V1_URL.to_string();
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = option_env!("ODS_GIT_SHA").map(|s| s.to_string());
-    prov.tool_git_dirty = if option_env!("ODS_GIT_DIRTY").is_some() {
-        Some(true)
-    } else {
-        None
-    };
-
-    prov.dataset_version = Some(
-        dataset_version
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| crate::datapackage::dataset_version().to_string()),
-    );
+    prov.tool_git_dirty = Some(option_env!("ODS_GIT_DIRTY").is_some());
 
     let updated_json = serde_json::to_string_pretty(&prov)?;
     std::fs::write(&prov_path, updated_json)?;
@@ -598,7 +491,6 @@ mod tests {
     fn test_provenance_serde() {
         let prov = OdsProvenance::new(
             Some("2026-07-31".to_string()),
-            Some(Path::new("HSCOrgRefData.xml")),
         );
 
         let json = serde_json::to_string(&prov).unwrap();
@@ -606,7 +498,7 @@ mod tests {
         assert!(json.contains("2026-07-31"));
 
         let parsed: OdsProvenance = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.publication_date, Some("2026-07-31".to_string()));
+        assert_eq!(parsed.trud_release_date, Some("2026-07-31".to_string()));
     }
 
     #[test]
@@ -617,35 +509,57 @@ mod tests {
     }
 
     #[test]
-    fn test_to_parquet_declared_metadata_pins_exact_eight_keys() {
+    fn test_to_parquet_declared_metadata_pins_exact_two_keys() {
         let mut prov = OdsProvenance::default();
         prov.trud_release_date = Some("2026-07-31".to_string());
-        prov.trud_release_name = Some("Release 7.0.0".to_string());
-        prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
         prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-        prov.publication_date = Some("2026-07-28".to_string());
-        prov.publication_seq_num = Some("4700".to_string());
-        prov.publication_type = Some("Full".to_string());
-        prov.publication_source = Some("HSCIC".to_string());
-        // Populate dataset_version and tool fields to verify they are strictly excluded
-        prov.dataset_version = Some("0.1.0".to_string());
+        prov.trud_schema_version = Some("2-0-0".to_string());
         prov.tool_version = Some("0.1.0".to_string());
         prov.tool_git_sha = Some("abcdef123456".to_string());
         prov.tool_git_dirty = Some(true);
         prov.trud_release_sha256_verified = Some(TrudVerificationSource::TrudApi);
 
+        // The Parquet files carry two metadata keys: ods.trud_release_date and ods.trud_release_sha256.
+        // The rule is nothing that changes when a release is relabelled or the tool is re-tagged.
         let meta = prov.to_parquet_declared_metadata();
         let expected_keys = vec![
-            "ods.publication_date",
-            "ods.publication_seq_num",
-            "ods.publication_source",
-            "ods.publication_type",
             "ods.trud_release_date",
-            "ods.trud_release_file",
-            "ods.trud_release_name",
             "ods.trud_release_sha256",
         ];
         let actual_keys: Vec<&String> = meta.keys().collect();
         assert_eq!(actual_keys, expected_keys);
+    }
+
+    #[test]
+    fn test_find_archive_by_sha() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let trud_dir = tmp.path().join("trud");
+        std::fs::create_dir(&trud_dir).unwrap();
+
+        let zip1 = trud_dir.join("release_1.zip");
+        let zip2 = trud_dir.join("release_2.zip");
+        std::fs::write(&zip1, b"first-archive-content").unwrap();
+        std::fs::write(&zip2, b"second-archive-content").unwrap();
+
+        let sha1 = compute_file_sha256(&zip1).unwrap();
+        let (matched, all) = find_archive_by_sha(&trud_dir, &sha1);
+        assert_eq!(matched, Some(zip1.clone()));
+        assert_eq!(all.len(), 2);
+
+        // Case insensitivity
+        let (matched_lower, _) = find_archive_by_sha(&trud_dir, &sha1.to_lowercase());
+        assert_eq!(matched_lower, Some(zip1));
+
+        // Unknown sha
+        let (matched_none, all) = find_archive_by_sha(&trud_dir, "0000000000000000000000000000000000000000000000000000000000000000");
+        assert_eq!(matched_none, None);
+        assert_eq!(all.len(), 2);
+
+        // Empty dir
+        let empty_dir = tmp.path().join("empty");
+        std::fs::create_dir(&empty_dir).unwrap();
+        let (matched_empty, all_empty) = find_archive_by_sha(&empty_dir, &sha1);
+        assert_eq!(matched_empty, None);
+        assert!(all_empty.is_empty());
     }
 }

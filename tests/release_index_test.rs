@@ -63,10 +63,7 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
   <un:ManifestHeader>
-    <un:PublicationType value="Full" />
-    <un:PublicationDate value="2026-07-28" />
-    <un:PublicationSeqNum value="4700" />
-    <un:PublicationSource value="HSCIC" />
+    <un:Version value="2-0-0" />
     <un:RecordCount value="305541" />
   </un:ManifestHeader>
 </un:OrganisationManifest>"#;
@@ -87,6 +84,15 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
     let pull_prov_json: serde_json::Value = serde_json::from_str(&pull_prov_str)?;
     let pull_errors: Vec<_> = validator.iter_errors(&pull_prov_json).collect();
     assert!(pull_errors.is_empty(), "trud pull provenance schema errors: {:?}", pull_errors);
+
+    // 3. Verify that adding dropped keys causes validation to fail
+    let dropped_keys = ["dataset_version", "trud_release_name", "trud_release_file"];
+    for key in dropped_keys {
+        let mut mutated = prov_json.clone();
+        mutated[key] = serde_json::json!("should_fail");
+        let errs: Vec<_> = validator.iter_errors(&mutated).collect();
+        assert!(!errs.is_empty(), "Schema validation must fail when dropped key '{}' is added back", key);
+    }
 
     Ok(())
 }

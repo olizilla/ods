@@ -276,11 +276,11 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
 fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    // Mutate provenance to 1.0.0, differing from tool constant 0.1.0
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.dataset_version = Some("1.0.0".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Mutate datapackage.json to 1.0.0, differing from tool constant 0.1.0
+    let dp_path = rel_dir.join("datapackage.json");
+    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
+    dp["version"] = serde_json::json!("1.0.0");
+    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
 
     let failures = perform_all_release_checks(
         &rel_dir,
@@ -292,7 +292,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
     let expected_ver = ods::datapackage::dataset_version();
     let mismatch_failure = failures
         .iter()
-        .find(|f| f.contains("Provenance dataset_version"))
+        .find(|f| f.contains("datapackage.json version"))
         .expect("must have dataset_version mismatch failure");
     assert!(mismatch_failure.contains("1.0.0"));
     assert!(mismatch_failure.contains(expected_ver));
@@ -309,7 +309,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
     });
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
-    assert!(err.contains("Provenance dataset_version (1.0.0) does not match this build of ods"));
+    assert!(err.contains("datapackage.json version (1.0.0) does not match this build of ods"));
 
     Ok(())
 }
@@ -318,11 +318,11 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
 fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    // Mutate provenance to None
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.dataset_version = None;
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Mutate datapackage.json to remove version
+    let dp_path = rel_dir.join("datapackage.json");
+    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
+    dp.as_object_mut().unwrap().remove("version");
+    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
 
     let res = run(Args {
         input: Some(rel_dir),
@@ -334,7 +334,7 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     });
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
-    assert!(err.contains("Missing dataset_version in _provenance.json"));
+    assert!(err.contains("Missing version in datapackage.json"));
     assert!(err.contains("ods make"));
 
     Ok(())
@@ -344,10 +344,10 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
 fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.dataset_version = Some("invalid-semver".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    let dp_path = rel_dir.join("datapackage.json");
+    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
+    dp["version"] = serde_json::json!("invalid-semver");
+    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
 
     let failures = perform_all_release_checks(
         &rel_dir,

@@ -23,10 +23,7 @@ fn create_mock_trud_zip_with_manifest(dir: &std::path::Path) -> std::path::PathB
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
   <un:ManifestHeader>
-    <un:PublicationType value="Full" />
-    <un:PublicationDate value="2026-07-28" />
-    <un:PublicationSeqNum value="4700" />
-    <un:PublicationSource value="HSCIC" />
+    <un:Version value="2-0-0" />
     <un:RecordCount value="305541" />
   </un:ManifestHeader>
 </un:OrganisationManifest>"#;
@@ -435,7 +432,7 @@ fn test_batch_downloads_in_newest_to_oldest_order() {
     };
 
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
-    assert!(res.is_ok());
+    assert!(res.is_ok(), "run_with_fetcher failed: {:?}", res.err());
 
     let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     let download_lines: Vec<&str> = output
@@ -491,11 +488,8 @@ fn test_extract_manifest_header_from_nested_real_trud_fixture() {
     let header = ods::ods_xml::extract_manifest_header(&fixture_zip)
         .expect("extract_manifest_header must succeed on real TRUD zip-of-zips fixture");
 
-    assert_eq!(header.publication_date.as_deref(), Some("2026-07-28"));
-    assert_eq!(header.publication_seq_num.as_deref(), Some("4700"));
-    assert_eq!(header.publication_type.as_deref(), Some("Full"));
-    assert_eq!(header.publication_source.as_deref(), Some("HSCIC"));
-    assert_eq!(header.publication_record_count, Some(305541));
+    assert_eq!(header.trud_schema_version.as_deref(), Some("2-0-0"));
+    assert_eq!(header.record_count, Some(305541));
 }
 
 #[test]
@@ -538,18 +532,15 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     let prov_content = fs::read_to_string(&prov_file).unwrap();
     let prov: serde_json::Value = serde_json::from_str(&prov_content).unwrap();
 
-    assert_eq!(prov.get("publication_date").and_then(|v| v.as_str()), Some("2026-07-28"));
-    assert_eq!(prov.get("publication_seq_num").and_then(|v| v.as_str()), Some("4700"));
-    assert_eq!(prov.get("publication_type").and_then(|v| v.as_str()), Some("Full"));
-    assert_eq!(prov.get("publication_source").and_then(|v| v.as_str()), Some("HSCIC"));
-    assert_eq!(prov.get("publication_record_count").and_then(|v| v.as_u64()), Some(305541));
+    assert_eq!(prov.get("trud_schema_version").and_then(|v| v.as_str()), Some("2-0-0"));
+    assert_eq!(prov.get("trud_release_date").and_then(|v| v.as_str()), Some("2026-07-31"));
 
-    // Ownership rule: trud pull writes ONLY trud_* and publication_* (and $schema)
+    // Ownership rule: trud pull writes ONLY trud_* (and $schema)
     let obj = prov.as_object().unwrap();
     for key in obj.keys() {
         assert!(
-            key == "$schema" || key.starts_with("trud_") || key.starts_with("publication_"),
-            "trud pull must NOT write key '{}'. Only $schema, trud_*, and publication_* allowed.",
+            key == "$schema" || key.starts_with("trud_"),
+            "trud pull must NOT write key '{}'. Only $schema and trud_* allowed.",
             key
         );
     }

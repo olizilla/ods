@@ -36,7 +36,6 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     // Prepare layer files
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -45,10 +44,19 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let orgs_bytes = b"dummy orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
     let fixture_dir = tmp.path().join("fixture_1");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
     std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
@@ -64,6 +72,7 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
     let fetcher = TestOciFetcher {
         remote_index: Some(remote_index),
@@ -143,7 +152,6 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -152,10 +160,19 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let orgs_bytes = b"dummy orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
     let fixture_dir = tmp.path().join("fixture_2");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
     std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
@@ -180,6 +197,7 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     responses.insert(format!("https://working-mirror.example.com/v2/ods-data/manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("https://working-mirror.example.com/v2/ods-data/blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("https://working-mirror.example.com/v2/ods-data/blobs/{}", orgs_sha), orgs_bytes);
+    responses.insert(format!("https://working-mirror.example.com/v2/ods-data/blobs/{}", dp_sha), dp_bytes);
 
     let fetcher = TestOciFetcher {
         remote_index: Some(remote_index),
@@ -210,7 +228,6 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -219,10 +236,19 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let orgs_bytes = b"legitimate orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
     let fixture_dir = tmp.path().join("fixture_heal");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
     std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
@@ -238,6 +264,7 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes.clone());
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
     let fetcher = TestOciFetcher {
         remote_index: Some(remote_index),
@@ -316,7 +343,6 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -388,7 +414,6 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -397,10 +422,19 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let orgs_bytes = b"dummy orgs parquet content".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
     let fixture_dir = tmp.path().join("fixture_success");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
     std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
@@ -416,6 +450,7 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
     let fetcher = TestOciFetcher {
         remote_index: Some(remote_index),

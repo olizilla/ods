@@ -9,9 +9,7 @@ fn test_provenance_validate_baseline_missing_fields() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     assert!(prov.validate_baseline().is_err(), "empty provenance must fail baseline validation");
 
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
@@ -23,9 +21,7 @@ fn test_provenance_validate_baseline_missing_fields() -> Result<()> {
 #[test]
 fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
@@ -45,9 +41,7 @@ fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result
 #[test]
 fn test_provenance_validate_baseline_allows_unverified_and_publishable_reports_it() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
@@ -65,16 +59,13 @@ fn test_provenance_validate_baseline_allows_unverified_and_publishable_reports_i
 }
 
 #[test]
-fn test_provenance_validate_baseline_rejects_filename_mismatch() -> Result<()> {
+fn test_provenance_validate_baseline_rejects_missing_sha256() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
-    prov.trud_release_file = Some("hscorgrefdataxml_data_6.0.0_20250627000001.zip".to_string());
-    assert!(prov.validate_baseline().is_err(), "mismatched version/date in trud_release_file must be rejected");
+    assert!(prov.validate_baseline().is_err(), "missing trud_release_sha256 must be rejected");
 
     Ok(())
 }
@@ -85,12 +76,9 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     let input_dir = temp_dir.path().join("input");
     fs::create_dir_all(&input_dir)?;
 
-    // Write an invalid _provenance.json with mismatched date and filename
+    // Write an invalid _provenance.json with missing sha256
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_6.0.0_20250627000001.zip".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     fs::write(input_dir.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov)?)?;
 
     let zip_path = input_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
@@ -118,45 +106,32 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
 }
 
 #[test]
-fn test_provenance_preserves_xml_manifest_fields_on_make() -> Result<()> {
+fn test_provenance_keys_on_make() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_source = Some("HSCIC".to_string());
-    prov.publication_record_count = Some(305541);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
 
     // Run update_provenance
-    ods::provenance::update_provenance(output_dir, None)?;
+    ods::provenance::update_provenance(output_dir)?;
 
     let saved_json = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
-    assert!(saved_json.contains("publication_date"), "publication_date must be preserved");
-    assert!(saved_json.contains("2026-07-28"), "publication_date value must be preserved");
-    assert!(saved_json.contains("publication_seq_num"), "publication_seq_num must be preserved");
-    assert!(saved_json.contains("4700"), "publication_seq_num value must be preserved");
-    assert!(saved_json.contains("publication_type"), "publication_type must be preserved");
-    assert!(saved_json.contains("Full"), "publication_type value must be preserved");
-    assert!(saved_json.contains("publication_source"), "publication_source must be preserved");
-    assert!(saved_json.contains("publication_record_count"), "publication_record_count must be preserved");
-    assert!(saved_json.contains("305541"), "publication_record_count value must be preserved");
+    assert!(saved_json.contains("tool_version"), "tool_version must be added");
+    assert!(saved_json.contains("tool_git_sha"), "tool_git_sha must be added");
+    assert!(saved_json.contains("tool_git_dirty"), "tool_git_dirty must be added");
     assert!(!saved_json.contains("xml_manifest_created"), "xml_manifest_created must NOT be in JSON");
     assert!(!saved_json.contains("ods_cmd_version"), "ods_cmd_version must NOT be in JSON");
     assert!(!saved_json.contains("tool_parquet_version"), "tool_parquet_version must NOT be in JSON");
     assert!(!saved_json.contains("tool_arrow_version"), "tool_arrow_version must NOT be in JSON");
     assert!(!saved_json.contains("tool_zstd_level"), "tool_zstd_level must NOT be in JSON");
+    assert!(!saved_json.contains("dataset_version"), "dataset_version must NOT be in JSON");
 
     Ok(())
 }
@@ -167,22 +142,14 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
     let output_dir = temp_dir.path();
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_source = Some("HSCIC".to_string());
-    prov.publication_record_count = Some(305541);
-    prov.dataset_version = Some("0.1.0".to_string());
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
     fs::write(output_dir.join("orgs.parquet"), b"mock parquet data")?;
+    fs::write(output_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.1.0\"}")?;
 
     for fmt in ["text", "bibtex", "csljson", "apa"] {
         let args = ods::commands::cite::Args {
@@ -197,8 +164,7 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
         assert!(!output.contains("NHS Digital"), "cite format {} must NOT mention NHS Digital", fmt);
         assert!(!output.contains("HSCIC"), "cite format {} must NOT mention HSCIC", fmt);
         if fmt == "text" || fmt == "csljson" {
-            assert!(output.contains("2026-07-28"), "cite format {} must contain publication date 2026-07-28", fmt);
-            assert!(output.contains("4700"), "cite format {} must contain publication sequence number 4700", fmt);
+            assert!(output.contains("2026-07-31"), "cite format {} must contain trud_release_date 2026-07-31", fmt);
         } else {
             assert!(output.contains("2026"), "cite format {} must contain year 2026", fmt);
         }
@@ -213,16 +179,14 @@ fn test_cite_declines_unverified_release() -> Result<()> {
     let output_dir = temp_dir.path();
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
-    prov.dataset_version = Some("0.1.0".to_string());
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
     fs::write(output_dir.join("orgs.parquet"), b"mock parquet data")?;
+    fs::write(output_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.1.0\"}")?;
 
     let args = ods::commands::cite::Args {
         input: Some(output_dir.to_path_buf()),
@@ -238,88 +202,40 @@ fn test_cite_declines_unverified_release() -> Result<()> {
 }
 
 #[test]
-fn test_cite_publication_date_no_cross_namespace_fallback() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let output_dir = temp_dir.path();
-
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.dataset_version = Some("0.1.0".to_string());
-
-    // NOTE: publication_date is deliberately None here!
-    prov.publication_date = None;
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-
-    let prov_json = serde_json::to_string_pretty(&prov)?;
-    fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
-    fs::write(output_dir.join("orgs.parquet"), b"mock parquet data")?;
-
-    let args = ods::commands::cite::Args {
-        input: Some(output_dir.to_path_buf()),
-        format: "text".to_string(),
-    };
-    let mut buf = Vec::new();
-    ods::commands::cite::run_with_writer(args, &mut buf)?;
-    let output = String::from_utf8(buf)?;
-
-    // Must NOT borrow trud_release_date ("2026-07-31") for Publication date
-    assert!(
-        !output.contains("Publication date:   2026-07-31"),
-        "ods cite must NOT borrow trud_release_date for publication date, output was:\n{}",
-        output
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_update_provenance_populates_missing_publication_fields_from_xml() -> Result<()> {
+fn test_update_provenance_populates_trud_schema_version_from_xml() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
     let trud_dir = output_dir.join("trud");
     fs::create_dir_all(&trud_dir)?;
 
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<Manifest>
-    <Version value="2-0-0" />
-    <PublicationType value="Full" />
-    <PublicationSource value="HSCIC" />
-    <PublicationDate value="2026-07-28" />
-    <PublicationSeqNum value="4700" />
-    <RecordCount value="0" />
-</Manifest>"#;
-    fs::write(trud_dir.join("HSCOrgRefData.xml"), xml_content)?;
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
+  <un:ManifestHeader>
+    <un:Version value="2-0-0" />
+    <un:RecordCount value="0" />
+  </un:ManifestHeader>
+</un:OrganisationManifest>"#;
+    let inner_zip = common::create_inner_zip("HSCOrgRefData.xml", xml_content.as_bytes());
+    let zip_path = trud_dir.join("hscorgrefdata.zip");
+    fs::write(&zip_path, inner_zip)?;
+    let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path)?;
 
-    // Write a legacy/stale _provenance.json containing ONLY trud_* fields
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    prov.trud_release_sha256 = Some(zip_sha256);
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    
-    // Explicitly NO publication_* fields set here!
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
 
-    // Run update_provenance
-    ods::provenance::update_provenance(output_dir, None)?;
+    ods::provenance::update_provenance(output_dir)?;
 
     let saved_json = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
     let updated_prov: ods::provenance::OdsProvenance = serde_json::from_str(&saved_json)?;
 
-    assert_eq!(updated_prov.publication_date, Some("2026-07-28".to_string()), "publication_date must be populated from XML manifest");
-    assert_eq!(updated_prov.publication_seq_num, Some("4700".to_string()), "publication_seq_num must be populated from XML manifest");
-    assert_eq!(updated_prov.publication_type, Some("Full".to_string()), "publication_type must be populated from XML manifest");
-    assert_eq!(updated_prov.publication_source, Some("HSCIC".to_string()), "publication_source must be populated from XML manifest");
-    assert_eq!(updated_prov.trud_release_name, Some("Release 7.0.0".to_string()), "trud_release_name must be preserved");
+    assert_eq!(updated_prov.trud_schema_version, Some("2-0-0".to_string()), "trud_schema_version must be populated from XML manifest");
+    assert_eq!(updated_prov.trud_release_date, Some("2026-07-31".to_string()), "trud_release_date must be preserved");
 
     Ok(())
 }
@@ -359,22 +275,9 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
 }
 
 #[test]
-fn test_provenance_has_dataset_version() -> Result<()> {
+fn test_provenance_does_not_have_dataset_version() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
-
-    // Create dummy files for artifacts
-    let files = [
-        "orgs.parquet",
-        "orgs_all.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-    ];
-    for f in &files {
-        fs::write(output_dir.join(f), format!("dummy content for {}", f))?;
-    }
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
@@ -383,12 +286,10 @@ fn test_provenance_has_dataset_version() -> Result<()> {
         serde_json::to_string_pretty(&prov)?,
     )?;
 
-    ods::provenance::update_provenance(output_dir, Some("0.1.0"))?;
+    ods::provenance::update_provenance(output_dir)?;
 
     let prov_content = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
-    let updated_prov: ods::provenance::OdsProvenance = serde_json::from_str(&prov_content)?;
-
-    assert_eq!(updated_prov.dataset_version, Some("0.1.0".to_string()));
+    assert!(!prov_content.contains("dataset_version"), "dataset_version must not be in _provenance.json");
     Ok(())
 }
 
@@ -403,17 +304,21 @@ fn test_update_provenance_fails_when_archive_hash_mismatches() -> Result<()> {
     fs::write(trud_dir.join(archive_file), b"corrupted archive bytes")?;
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_file = Some(archive_file.to_string());
+    prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     fs::write(
         output_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov)?,
     )?;
 
-    let result = ods::provenance::update_provenance(output_dir, None);
+    let result = ods::provenance::update_provenance(output_dir);
     assert!(result.is_err(), "update_provenance must fail when trud archive hash mismatches");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("verification mismatch"), "error must mention verification mismatch, got: {}", err);
+    assert!(
+        err.contains("verification mismatch") || err.contains("matched trud_release_sha256") || err.contains("No archive"),
+        "error must mention archive match failure, got: {}",
+        err
+    );
 
     Ok(())
 }
@@ -421,27 +326,20 @@ fn test_update_provenance_fails_when_archive_hash_mismatches() -> Result<()> {
 #[test]
 fn test_trud_pull_writes_no_tool_or_dataset_keys() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37983173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_source = Some("HSCIC".to_string());
-    prov.publication_record_count = Some(305541);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     let raw_val: serde_json::Value = serde_json::from_str(&prov_json)?;
     let obj = raw_val.as_object().expect("provenance must be JSON object");
 
-    // Must ONLY contain $schema, trud_*, and publication_* keys
+    // Must ONLY contain $schema and trud_* keys
     for key in obj.keys() {
         assert!(
-            key == "$schema" || key.starts_with("trud_") || key.starts_with("publication_"),
-            "trud pull baseline must NOT write key '{}'. Only $schema, trud_*, and publication_* allowed.",
+            key == "$schema" || key.starts_with("trud_"),
+            "trud pull baseline must NOT write key '{}'. Only $schema and trud_* allowed.",
             key
         );
     }
@@ -472,13 +370,8 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
         fs::write(output_dir.join(f), format!("data for {}", f))?;
     }
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
-    prov.trud_release_date = Some("2026-07-31".to_string());
-
     let release_pkg = ods::datapackage::generate_release_datapackage(
         output_dir,
-        Some(&prov),
         Some("10.5281/zenodo.1234567"),
         Some("1.0.1"),
     );

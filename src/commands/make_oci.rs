@@ -67,10 +67,10 @@ pub fn build_manifest_from_dir(
     }
 
     let mut annotations = BTreeMap::new();
-    if let Some(ref pub_date) = prov.publication_date {
+    if let Some(ref release_date) = prov.trud_release_date {
         annotations.insert(
             ANNOTATION_CREATED.to_string(),
-            derive_created_timestamp(pub_date),
+            derive_created_timestamp(release_date),
         );
     }
     annotations.insert(
@@ -125,7 +125,7 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let mut prov = match OdsProvenance::load_from_dir(&release_dir).error_building()? {
+    let prov = match OdsProvenance::load_from_dir(&release_dir).error_building()? {
         Some(p) => p,
         None => bail!(
             "Missing or unreadable _provenance.json in {}",
@@ -133,8 +133,8 @@ pub fn run(args: Args) -> Result<()> {
         ),
     };
 
-    let version = prov.dataset_version.clone().ok_or_else(|| {
-        anyhow::anyhow!("Missing dataset_version in _provenance.json\n  Run `ods make` to build the release directory.")
+    let version = crate::datapackage::read_dataset_version_from_dir(&release_dir).ok_or_else(|| {
+        anyhow::anyhow!("Missing version in datapackage.json\n  Run `ods make` to build the release directory.")
     })?;
 
     let date = prov
@@ -155,16 +155,9 @@ pub fn run(args: Args) -> Result<()> {
             fs::remove_dir_all(&oci_dir)?;
         }
 
-        // Step 1: Update dataset_version in _provenance.json on disk
-        prov.dataset_version = Some(version.clone());
-        let prov_path = release_dir.join(PROVENANCE_FILENAME);
-        let updated_prov_json = serde_json::to_string_pretty(&prov)?;
-        fs::write(&prov_path, updated_prov_json)?;
-
         // Step 1b: Regenerate datapackage.json with the full dataset SemVer
         let pkg = crate::datapackage::generate_release_datapackage(
             &release_dir,
-            Some(&prov),
             None,
             Some(&version),
         );

@@ -178,26 +178,20 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     let zip1 = create_mock_trud_zip_from_xml(tmp1.path(), &xml_path);
     let zip2 = create_mock_trud_zip_from_xml(tmp2.path(), &xml_path);
 
-    // Setup _provenance.json in both directories with different dataset_version: 0.1.0 vs 1.0.0
-    let mut prov1 = ods::provenance::OdsProvenance::default();
-    prov1.trud_release_name = Some("Release 7.0.0".to_string());
-    prov1.trud_release_date = Some("2026-07-31".to_string());
-    prov1.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
-    prov1.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov1.dataset_version = Some("0.1.0".to_string());
-
-    let mut prov2 = prov1.clone();
-    prov2.dataset_version = Some("1.0.0".to_string());
+    // Setup _provenance.json in both directories
+    let mut prov = ods::provenance::OdsProvenance::default();
+    prov.trud_release_date = Some("2026-07-31".to_string());
+    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     std::fs::write(
         tmp1.path().join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov1).unwrap(),
+        serde_json::to_string_pretty(&prov).unwrap(),
     )
     .unwrap();
 
     std::fs::write(
         tmp2.path().join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov2).unwrap(),
+        serde_json::to_string_pretty(&prov).unwrap(),
     )
     .unwrap();
 
@@ -213,6 +207,16 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
         output: Some(tmp2.path().to_path_buf()),
     })
     .expect("run 2 should succeed");
+
+    // Relabel dataset_version in tmp2's datapackage.json: 0.1.0 -> 1.0.0
+    let mut dp2: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(tmp2.path().join("datapackage.json")).unwrap()).unwrap();
+    dp2["version"] = serde_json::json!("1.0.0");
+    std::fs::write(
+        tmp2.path().join("datapackage.json"),
+        serde_json::to_string_pretty(&dp2).unwrap(),
+    )
+    .unwrap();
 
     // 1. The five Parquet files must be byte-identical
     let parquet_files = vec![
@@ -237,10 +241,10 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
         );
     }
 
-    // 2. _provenance.json and datapackage.json must differ
+    // 2. _provenance.json is unchanged; datapackage.json differs
     let prov1_bytes = std::fs::read(tmp1.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
     let prov2_bytes = std::fs::read(tmp2.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-    assert_ne!(prov1_bytes, prov2_bytes, "_provenance.json must differ across dataset versions");
+    assert_eq!(prov1_bytes, prov2_bytes, "_provenance.json must not change on relabel");
 
     let dp1_bytes = std::fs::read(tmp1.path().join("datapackage.json")).unwrap();
     let dp2_bytes = std::fs::read(tmp2.path().join("datapackage.json")).unwrap();

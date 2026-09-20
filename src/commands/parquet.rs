@@ -145,11 +145,11 @@ pub fn run(args: Args) -> Result<PathBuf> {
     eprintln!("Generating dataset target projections (Parquet)...");
 
     let xml_path = crate::ods_xml::find_xml_file(&archive_info.archive_path)?;
-    let (mut prov, _concept_map, parsed) =
+    let (mut prov, _concept_map, parsed, manifest_record_count) =
         crate::ods_xml::parse_single_pass(&xml_path)?;
 
     let actual_parsed_count = parsed.len();
-    if let Some(declared_count) = prov.publication_record_count {
+    if let Some(declared_count) = manifest_record_count {
         if declared_count != actual_parsed_count {
             anyhow::bail!(
                 "✖ Manifest record count mismatch: declared {} != parsed {}",
@@ -170,8 +170,6 @@ pub fn run(args: Args) -> Result<PathBuf> {
             }
         }
         prov.trud_release_date = Some(archive_info.release_date);
-        prov.trud_release_name = parent.trud_release_name.or(Some(archive_info.release_name));
-        prov.trud_release_file = parent.trud_release_file.or(Some(archive_info.filename));
         if parent.trud_release_sha256.is_some() {
             prov.trud_release_sha256 = parent.trud_release_sha256;
         }
@@ -181,12 +179,8 @@ pub fn run(args: Args) -> Result<PathBuf> {
         if parent.trud_release_filesize_bytes.is_some() {
             prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
         }
-        prov.dataset_version = parent.dataset_version.or_else(|| Some(crate::datapackage::dataset_version().to_string()));
     } else {
         prov.trud_release_date = Some(archive_info.release_date);
-        prov.trud_release_name = Some(archive_info.release_name);
-        prov.trud_release_file = Some(archive_info.filename);
-        prov.dataset_version = Some(crate::datapackage::dataset_version().to_string());
         if let Ok(meta) = std::fs::metadata(&archive_info.archive_path) {
             prov.trud_release_filesize_bytes = Some(meta.len());
         }
@@ -243,15 +237,13 @@ pub fn run(args: Args) -> Result<PathBuf> {
         }
     }
 
-    // 7. Enrich _provenance.json with tool_* and dataset_* metadata
-    let prov_dataset_ver = provenance.as_ref().and_then(|p| p.dataset_version.as_deref());
-    crate::provenance::update_provenance(&output_path, prov_dataset_ver)?;
+    // 7. Enrich _provenance.json with tool_* metadata
+    crate::provenance::update_provenance(&output_path)?;
 
     // 8. Ship the datapackage.json alongside the data so the schema and metadata
     //    are reproducible from a release alone, without the tool.
-    let enriched_prov = crate::provenance::OdsProvenance::load_from_dir(&output_path).error_building()?;
     let release_pkg =
-        crate::datapackage::generate_release_datapackage(&output_path, enriched_prov.as_ref(), None, None);
+        crate::datapackage::generate_release_datapackage(&output_path, None, None);
     let pkg_json = serde_json::to_string_pretty(&release_pkg)? + "\n";
     std::fs::write(output_path.join("datapackage.json"), pkg_json)
         .context("writing datapackage.json")?;
@@ -1426,7 +1418,6 @@ mod tests {
         assert!(schema.column_with_name("target").is_none());
         assert!(schema.column_with_name("rel_type").is_none());
         assert!(schema.column_with_name("status").is_none());
-        assert!(schema.column_with_name("publication_date").is_none());
 
         let record = OdsRecord {
             ods_code: "0AF".to_string(),
@@ -1503,16 +1494,5 @@ mod tests {
         assert!(successions_schema()
             .column_with_name("trud_release_date")
             .is_some());
-
-        assert!(orgs_schema().column_with_name("publication_date").is_none());
-        assert!(roles_schema()
-            .column_with_name("publication_date")
-            .is_none());
-        assert!(relationships_schema()
-            .column_with_name("publication_date")
-            .is_none());
-        assert!(successions_schema()
-            .column_with_name("publication_date")
-            .is_none());
     }
 }

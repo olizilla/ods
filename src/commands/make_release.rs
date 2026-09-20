@@ -132,8 +132,8 @@ pub fn run(args: Args) -> Result<()> {
         .error_building()?
         .ok_or_else(|| anyhow::anyhow!("Missing _provenance.json in {}", release_dir.display()))?;
 
-    let version = prov.dataset_version.clone().ok_or_else(|| {
-        anyhow::anyhow!("Missing dataset_version in _provenance.json\n  Run `ods make` to build the release directory.")
+    let version = crate::datapackage::read_dataset_version_from_dir(&release_dir).ok_or_else(|| {
+        anyhow::anyhow!("Missing version in datapackage.json\n  Run `ods make` to build the release directory.")
     })?;
 
     let tool_repo = match args.tool_repo {
@@ -464,20 +464,21 @@ pub fn perform_all_release_checks(
         _ => {}
     }
 
-    // Check 13: dataset_version matches built-in constant and parses as semver
-    if let Some(ref prov_ver) = prov.dataset_version {
+    // Check 13: datapackage.json version matches built-in constant and parses as semver
+    let dp_ver = crate::datapackage::read_dataset_version_from_dir(release_dir);
+    if let Some(ref ver) = dp_ver {
         let tool_dataset_ver = crate::datapackage::dataset_version();
-        if prov_ver != tool_dataset_ver {
+        if ver != tool_dataset_ver {
             failures.push(format!(
-                "Provenance dataset_version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
-                prov_ver, tool_dataset_ver
+                "datapackage.json version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
+                ver, tool_dataset_ver
             ));
         }
-        if let Err(e) = parse_semver(expected_version) {
-            failures.push(format!("Dataset version {} is not valid SemVer: {}", expected_version, e));
+        if let Err(e) = parse_semver(ver) {
+            failures.push(format!("Dataset version {} is not valid SemVer: {}", ver, e));
         }
     } else {
-        failures.push("Provenance missing dataset_version".to_string());
+        failures.push("datapackage.json missing version".to_string());
     }
 
     // Index checks (Steps 1, 2, 3)

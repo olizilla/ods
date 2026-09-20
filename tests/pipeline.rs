@@ -15,9 +15,7 @@ fn create_mock_trud_zip_with_provenance(dir: &Path) -> PathBuf {
     let zip_path = common::create_mock_trud_zip(dir, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
 
     let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     std::fs::write(
         dir.join(ods::provenance::PROVENANCE_FILENAME),

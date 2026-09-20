@@ -831,9 +831,9 @@ pub fn verify_release_dir(
         None => return VerificationOutcome::Corrupted("Provenance missing trud_release_date".to_string()),
     };
 
-    let version = match prov.dataset_version.clone() {
+    let version = match crate::datapackage::read_dataset_version_from_dir(release_dir) {
         Some(v) => v,
-        None => return VerificationOutcome::Corrupted("Provenance missing dataset_version".to_string()),
+        None => return VerificationOutcome::Corrupted("datapackage.json missing version".to_string()),
     };
 
     let (manifest, _) = match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, &version) {

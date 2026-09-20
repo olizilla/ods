@@ -1,6 +1,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use serde_json::{json, Value};
 
+pub const DATAPACKAGE_FILENAME: &str = "datapackage.json";
 pub const DATAPACKAGE_JSON: &str = include_str!("../data/datapackage.json");
 
 pub fn dataset_version() -> &'static str {
@@ -164,7 +165,6 @@ pub fn generate_datapackage() -> Value {
 /// and `hash` (SHA-256).
 pub fn generate_release_datapackage(
     output_dir: &std::path::Path,
-    provenance: Option<&crate::provenance::OdsProvenance>,
     dataset_doi: Option<&str>,
     dataset_version_opt: Option<&str>,
 ) -> Value {
@@ -178,7 +178,6 @@ pub fn generate_release_datapackage(
 
     let ver = dataset_version_opt
         .map(|s| s.to_string())
-        .or_else(|| provenance.and_then(|p| p.dataset_version.clone()))
         .unwrap_or_else(|| dataset_version().to_string());
     pkg["version"] = json!(ver);
 
@@ -199,5 +198,39 @@ pub fn generate_release_datapackage(
     }
 
     pkg
+}
+
+/// Reads the `version` field from `datapackage.json` in a release directory.
+/// Returns `None` if the file is absent, unreadable, or lacks a string `version`.
+pub fn read_dataset_version_from_dir(release_dir: &std::path::Path) -> Option<String> {
+    let dp_path = release_dir.join("datapackage.json");
+    if dp_path.exists() {
+        if let Ok(bytes) = std::fs::read(&dp_path) {
+            if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
+                if let Some(v) = val.get("version").and_then(|v| v.as_str()) {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_dataset_version_from_descriptor() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(read_dataset_version_from_dir(tmp.path()), None);
+
+        let dp_path = tmp.path().join("datapackage.json");
+        std::fs::write(&dp_path, r#"{"version": "1.2.3"}"#).unwrap();
+        assert_eq!(read_dataset_version_from_dir(tmp.path()), Some("1.2.3".to_string()));
+
+        std::fs::write(&dp_path, r#"{"name": "test"}"#).unwrap();
+        assert_eq!(read_dataset_version_from_dir(tmp.path()), None);
+    }
 }
 

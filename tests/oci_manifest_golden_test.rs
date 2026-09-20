@@ -34,6 +34,7 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     // Create files with exact contents needed to match golden fixture digests and sizes
     fs::write(rel_dir.join("NOTES.md"), vec![b'a'; 4102]).unwrap();
     fs::write(rel_dir.join("orgs.parquet"), vec![b'b'; 9892725]).unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
 
     fs::write(
         tmp.path().join("Cargo.toml"),
@@ -54,20 +55,13 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
     let mut prov = OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256);
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-07-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
     prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
     prov.tool_git_sha = Some(git_sha);
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.1".to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();

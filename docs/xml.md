@@ -22,7 +22,7 @@ Inside this ZIP container are two core XML archives:
 
 ## Core XML Element Hierarchy
 
-The XML root element `<MANIFEST>` contains publication metadata (`publication_date`), followed by a flat stream of `<Organisation>` elements:
+The XML root element `<MANIFEST>` contains publication metadata (`PublicationDate`), followed by a flat stream of `<Organisation>` elements:
 
 ```xml
 <MANIFEST>

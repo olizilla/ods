@@ -31,7 +31,6 @@ impl OciBlobFetcher for MockOciFetcher {
 fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTreeMap<String, Vec<u8>>) {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.dataset_version = Some("1.0.1".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
@@ -44,6 +43,15 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
     std::fs::create_dir_all(&fixture_dir).unwrap();
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
     std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
+
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp).unwrap();
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+    std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1").unwrap();
     let manifest_digest = manifest.digest().unwrap();
@@ -59,6 +67,7 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
     (index, responses)
 }

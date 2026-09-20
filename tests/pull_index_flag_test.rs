@@ -282,7 +282,6 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     // Prepare layer files for a mock OCI pull
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-07-31".to_string()),
-        dataset_version: Some("1.0.1".to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
         trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
@@ -293,10 +292,19 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let orgs_bytes = b"sample orgs parquet bytes".to_vec();
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": "1.0.1",
+        "resources": []
+    });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
     let fixture_dir = tmp.path().join("fixture_task3");
     fs::create_dir_all(&fixture_dir)?;
     fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
     fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
     let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
     let manifest_digest = manifest.digest()?;
@@ -315,6 +323,7 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
     responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
     let fetcher = MockOciFetcher {
         remote_index: None,

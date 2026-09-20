@@ -110,23 +110,14 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       const provenanceObj = {
         $schema: 'https://ods.fyi/schema/provenance.v1.json',
-        dataset_version: '0.1.0',
-        publication_date: '2026-07-28',
-        publication_source: 'TRUD',
-        publication_seq_num: '4700',
-        publication_type: 'Full',
-        publication_record_count: 2,
-        trud_release_name: 'Release 7.0.0',
         trud_release_date: '2026-07-31',
-        trud_release_file: 'hscorgrefdataxml_data_7.0.0_20260731000001.zip',
-        trud_release_filesize_bytes: 37983173,
         trud_release_sha256: zipSha256,
         trud_release_sha256_verified: 'trud_api',
-        tool_name: 'ods',
+        trud_release_filesize_bytes: 37983173,
+        trud_schema_version: '2-0-0',
         tool_version: '0.1.0',
         tool_git_sha: gitSha,
         tool_git_dirty: false,
-        dataset_doi: '10.5281/zenodo.12345',
       };
       fs.writeFileSync(path.join(fixtureDir, '_provenance.json'), JSON.stringify(provenanceObj, null, 2));
 

@@ -39,19 +39,17 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
         }
     }
     let mut active_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_active).unwrap_or_default();
-    active_prov.trud_release_name = Some("Release 7.0.0".to_string());
     active_prov.trud_release_date = Some("2026-07-31".to_string());
-    active_prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string());
     active_prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     active_prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    active_prov.publication_date = Some("2026-07-28".to_string());
-    active_prov.publication_seq_num = Some("4700".to_string());
-    active_prov.publication_type = Some("Full".to_string());
-    active_prov.publication_record_count = Some(305541);
-    active_prov.dataset_version = Some("1.0.1".to_string());
     fs::write(
         rel_active.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&active_prov).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        rel_active.join("datapackage.json"),
+        b"{\"name\": \"ods\", \"version\": \"1.0.1\"}",
     )
     .unwrap();
 
@@ -65,19 +63,17 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
         }
     }
     let mut older_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_older).unwrap_or_default();
-    older_prov.trud_release_name = Some("Release 6.9.0".to_string());
     older_prov.trud_release_date = Some("2026-06-26".to_string());
-    older_prov.trud_release_file = Some("hscorgrefdataxml_data_6.9.0_20260626000001.zip".to_string());
     older_prov.trud_release_sha256 = Some("7151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     older_prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    older_prov.publication_date = Some("2026-06-24".to_string());
-    older_prov.publication_seq_num = Some("4650".to_string());
-    older_prov.publication_type = Some("Full".to_string());
-    older_prov.publication_record_count = Some(305000);
-    older_prov.dataset_version = Some("1.0.0".to_string());
     fs::write(
         rel_older.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&older_prov).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        rel_older.join("datapackage.json"),
+        b"{\"name\": \"ods\", \"version\": \"1.0.0\"}",
     )
     .unwrap();
 

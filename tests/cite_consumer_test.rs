@@ -27,22 +27,16 @@ fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, Path
     let zip_sha256 = compute_file_sha256(&outer_zip_path).unwrap();
 
     fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
     let mut prov = OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260831000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-08-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
     prov.tool_version = Some("0.4.3".to_string());
     prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.1".to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -99,7 +93,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
     assert!(text_out.contains("Dataset version:    v1.0.1"));
     assert!(text_out.contains("Manifest digest:    sha256:"));
     assert!(text_out.contains("ods: NHS Organisation Data as verifiable Parquet files,"));
-    assert!(text_out.contains("ods (Version 1.0.1) [Computer software]"));
+    assert!(text_out.contains("ods (Version 0.4.3) [Computer software]"));
     assert!(text_out.contains("NHS Organisation Data Service XML Data, release 2026-08-31"));
     assert!(!text_out.contains("Dataset DOI:")); // DOI absent, no fallback
 
@@ -115,13 +109,13 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
         tmp.path(),
     )?;
     let bib_out = String::from_utf8(bib_buf)?;
-    assert!(bib_out.contains("@misc{ods-2026-08-31-v1.0.1,"));
+    assert!(bib_out.contains("@misc{ods-data/2026-08-31_1.0.1,"));
     assert!(bib_out.contains("title = {ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31}"));
     assert!(bib_out.contains("title = {ods}"));
     assert!(bib_out.contains("howpublished = {Computer software}"));
     assert!(bib_out.contains("title = {NHS Organisation Data Service XML Data, release 2026-08-31}"));
     assert!(bib_out.contains("version = {1.0.1}"));
-    assert!(bib_out.contains("note = {Manifest: sha256:"));
+    assert!(bib_out.contains("note = {Release 2026-08-31, SHA-256 "));
     assert!(!bib_out.contains("doi =")); // DOI absent, no fallback
 
     // 3. APA format
@@ -137,7 +131,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
     )?;
     let apa_out = String::from_utf8(apa_buf)?;
     assert!(apa_out.contains("ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31"));
-    assert!(apa_out.contains("ods (Version 1.0.1) [Computer software]"));
+    assert!(apa_out.contains("ods (Version 0.4.3) [Computer software]"));
     assert!(apa_out.contains("NHS Organisation Data Service XML Data, release 2026-08-31"));
     assert!(!apa_out.contains("https://doi.org/"));
 
@@ -158,7 +152,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
     assert!(csl_out.contains("\"type\": \"software\""));
     assert!(csl_out.contains("\"title\": \"NHS Organisation Data Service XML Data, release 2026-08-31\""));
     assert!(csl_out.contains("\"version\": \"1.0.1\""));
-    assert!(csl_out.contains("\"note\": \"Manifest: sha256:"));
+    assert!(csl_out.contains("\"note\": \"Release 2026-08-31, SHA-256 "));
     assert!(!csl_out.contains("\"DOI\":"));
 
     Ok(())
@@ -345,22 +339,16 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
     let zip_sha256 = compute_file_sha256(&outer_zip_path)?;
 
     fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content")?;
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}")?;
 
     let mut prov = OdsProvenance::default();
-    prov.trud_release_name = Some("Release 7.0.0".to_string());
     prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.trud_release_file = Some("hscorgrefdataxml_data_7.0.0_20260831000001.zip".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.publication_date = Some("2026-08-28".to_string());
-    prov.publication_seq_num = Some("4700".to_string());
-    prov.publication_type = Some("Full".to_string());
-    prov.publication_record_count = Some(2);
     prov.tool_version = Some("0.4.3".to_string());
     prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
     prov.tool_git_dirty = Some(false);
-    prov.dataset_version = Some("1.0.1".to_string());
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
@@ -405,7 +393,6 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
 
     let mut prov = OdsProvenance::default();
     prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.dataset_version = Some("0.1.0".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
     prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(
@@ -413,6 +400,7 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
         serde_json::to_string_pretty(&prov).unwrap(),
     ).unwrap();
     fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.1.0\"}").unwrap();
 
     // Invalid marker in enclosing workspace
     let marker_path = ws.join("_releases.json");

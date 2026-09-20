@@ -260,7 +260,7 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
 
 fn load_xml(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
     let xml_path = find_xml_file(path)?;
-    let (prov, _, parsed) = parse_single_pass(&xml_path)?;
+    let (prov, _, parsed, _) = parse_single_pass(&xml_path)?;
     let map: HashMap<String, OdsRecord> = convert_parsed_orgs(parsed).into_iter().collect();
     Ok((Some(prov), map))
 }
