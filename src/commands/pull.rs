@@ -3,7 +3,7 @@ use clap::Parser;
 use serde::Serialize;
 use sha2::Digest;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::index::{Dataset, MirrorEntry, OdsReleaseIndex, Release};
@@ -250,7 +250,17 @@ pub fn run_with_fetcher<F: OciBlobFetcher>(
     workspace_root: &Path,
     fetcher: &F,
 ) -> Result<()> {
-    run_with_fetcher_and_baked(args, workspace_root, fetcher, None)
+    let mut stderr = std::io::stderr();
+    run_with_fetcher_and_writer(args, workspace_root, fetcher, &mut stderr)
+}
+
+pub fn run_with_fetcher_and_writer<F: OciBlobFetcher, W: Write>(
+    args: Args,
+    workspace_root: &Path,
+    fetcher: &F,
+    writer: &mut W,
+) -> Result<()> {
+    run_with_fetcher_and_baked_and_writer(args, workspace_root, fetcher, None, writer)
 }
 
 pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
@@ -258,6 +268,17 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
     workspace_root: &Path,
     fetcher: &F,
     baked_override: Option<OdsReleaseIndex>,
+) -> Result<()> {
+    let mut stderr = std::io::stderr();
+    run_with_fetcher_and_baked_and_writer(args, workspace_root, fetcher, baked_override, &mut stderr)
+}
+
+pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
+    args: Args,
+    workspace_root: &Path,
+    fetcher: &F,
+    baked_override: Option<OdsReleaseIndex>,
+    writer: &mut W,
 ) -> Result<()> {
     let caps = ProgressCaps::detect(args.quiet, args.verbose, args.no_progress);
     let progress = Progress::stderr(caps);
@@ -272,26 +293,40 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
         args.index.as_deref(),
     )?;
 
+    let mut ctx = PullContext {
+        args: &args,
+        fetcher,
+        progress: &progress,
+        writer,
+    };
+
     if args.list {
         return list_releases_cmd(workspace_root, &index, &args, &progress);
     }
 
     if args.all {
-        return pull_all_releases_cmd(workspace_root, &index, &args, fetcher, &progress);
+        return pull_all_releases_cmd(workspace_root, &index, &mut ctx);
     }
 
     let resolved = index.resolve(args.release_date.as_deref())?;
     for (skipped_rel, skipped_ds) in &resolved.skipped {
         let reason = skipped_ds.withdrawn.as_deref().unwrap_or("withdrawn by maintainer");
-        eprintln!(
+        writeln!(
+            ctx.writer,
             "! {} ({}) was withdrawn: {}\n  Pulling {} instead",
             skipped_rel.trud_release_date,
             skipped_ds.dataset_version,
             reason,
             resolved.release.trud_release_date,
-        );
+        )?;
     }
-    pull_single_release(workspace_root, &index, resolved.release, resolved.dataset, &args, fetcher, &progress)
+    pull_single_release(
+        workspace_root,
+        &index,
+        resolved.release,
+        resolved.dataset,
+        &mut ctx,
+    )
 }
 
 pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
@@ -461,12 +496,27 @@ fn list_releases_cmd(
     Ok(())
 }
 
-fn pull_all_releases_cmd<F: OciBlobFetcher>(
+fn format_fetch_error(err: &anyhow::Error) -> String {
+    if let Some(ureq_err) = err.downcast_ref::<ureq::Error>() {
+        match ureq_err {
+            ureq::Error::Status(code, _) => return format!("HTTP {}", code),
+            ureq::Error::Transport(t) => return format!("transport error: {}", t),
+        }
+    }
+    err.to_string()
+}
+
+struct PullContext<'a, F, W> {
+    pub args: &'a Args,
+    pub fetcher: &'a F,
+    pub progress: &'a Progress,
+    pub writer: &'a mut W,
+}
+
+fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
     workspace_root: &Path,
     index: &OdsReleaseIndex,
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
+    ctx: &mut PullContext<'_, F, W>,
 ) -> Result<()> {
     let mut valid_releases: Vec<(&Release, &Dataset)> = Vec::new();
     for r in &index.releases {
@@ -496,9 +546,16 @@ fn pull_all_releases_cmd<F: OciBlobFetcher>(
     let mut failed = Vec::new();
 
     for (rel, ds) in &valid_releases {
-        match pull_single_release(workspace_root, index, rel, ds, args, fetcher, progress) {
+        match pull_single_release(workspace_root, index, rel, ds, ctx) {
             Ok(()) => succeeded.push(rel.trud_release_date.clone()),
-            Err(e) => failed.push((rel.trud_release_date.clone(), e.to_string())),
+            Err(e) => {
+                let err_msg = if e.chain().any(|c| c.downcast_ref::<AlreadyReported>().is_some()) {
+                    "arrived incomplete".to_string()
+                } else {
+                    e.to_string()
+                };
+                failed.push((rel.trud_release_date.clone(), err_msg));
+            }
         }
     }
 
@@ -514,53 +571,56 @@ fn pull_all_releases_cmd<F: OciBlobFetcher>(
     Ok(())
 }
 
-fn pull_single_release<F: OciBlobFetcher>(
+fn pull_single_release<F: OciBlobFetcher, W: Write>(
     workspace_root: &Path,
     index: &OdsReleaseIndex,
     release: &Release,
     dataset: &Dataset,
-    args: &Args,
-    fetcher: &F,
-    progress: &Progress,
+    ctx: &mut PullContext<'_, F, W>,
 ) -> Result<()> {
     let rel_dir = workspace_root.join("releases").join(&release.trud_release_date);
 
     // Cache hit & self-healing check
-    if rel_dir.exists() && !args.force {
+    if rel_dir.exists() && !ctx.args.force {
         let outcome = verify_release_dir(&rel_dir, Some(index));
         match outcome {
             crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
                 if digest == &dataset.manifest_digest {
                     let ws = Workspace::open_or_create(Some(workspace_root))?;
                     ws.set_active(&release.trud_release_date)?;
-                    eprintln!(
+                    ctx.progress.clear_live();
+                    writeln!(
+                        ctx.writer,
                         "✓ {} ({}) verified (cache hit)",
                         date, version
-                    );
-                    eprintln!("  current → releases/{}", release.trud_release_date);
+                    )?;
+                    writeln!(ctx.writer, "  current → releases/{}", release.trud_release_date)?;
                     if let Some(ref reason) = dataset.withdrawn {
-                        eprintln!(
+                        writeln!(
+                            ctx.writer,
                             "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
                             release.trud_release_date,
                             dataset.dataset_version,
                             reason
-                        );
+                        )?;
                         return Err(AlreadyReported.into());
                     }
                     return Ok(());
                 } else {
-                    eprintln!(
+                    writeln!(
+                        ctx.writer,
                         "* existing releases/{} digest mismatch; re-fetching from registry...",
                         release.trud_release_date
-                    );
+                    )?;
                     let _ = fs::remove_dir_all(&rel_dir);
                 }
             }
             _ => {
-                eprintln!(
+                writeln!(
+                    ctx.writer,
                     "* existing releases/{} corrupted or invalid; re-fetching from registry...",
                     release.trud_release_date
-                );
+                )?;
                 let _ = fs::remove_dir_all(&rel_dir);
             }
         }
@@ -608,29 +668,31 @@ fn pull_single_release<F: OciBlobFetcher>(
         installed: false,
     };
 
-    let mut last_err = None;
+    // 1. Fetch manifest from first mirror whose manifest hashes to dataset.manifest_digest
+    let mut manifest_opt = None;
+    let mut manifest_mirror = None;
+    let mut manifest_err = None;
 
     for mirror in mirrors {
-        progress.step(&format!(
+        ctx.progress.step(&format!(
             "{} ({}) fetching manifest from {}…",
             release.trud_release_date,
             dataset.dataset_version,
             mirror.host()
         ));
 
-        // 1. Fetch manifest
         let manifest_url = mirror.manifest_url(&dataset.manifest_digest);
-        let manifest_bytes = match fetcher.fetch_bytes(&manifest_url) {
+        let manifest_bytes = match ctx.fetcher.fetch_bytes(&manifest_url) {
             Ok(b) => b,
             Err(e) => {
-                last_err = Some(format!("{}: {}", mirror.host(), e));
+                manifest_err = Some(format!("{}: {}", mirror.host(), e));
                 continue;
             }
         };
 
         let computed_digest = format!("sha256:{:x}", sha2::Sha256::digest(&manifest_bytes));
         if computed_digest != dataset.manifest_digest {
-            last_err = Some(format!(
+            manifest_err = Some(format!(
                 "{}: manifest digest mismatch: computed {}, expected {}",
                 mirror.host(),
                 computed_digest,
@@ -642,28 +704,62 @@ fn pull_single_release<F: OciBlobFetcher>(
         let manifest: OciManifest = match serde_json::from_slice(&manifest_bytes) {
             Ok(m) => m,
             Err(e) => {
-                last_err = Some(format!("{}: invalid manifest JSON: {}", mirror.host(), e));
+                manifest_err = Some(format!("{}: invalid manifest JSON: {}", mirror.host(), e));
                 continue;
             }
         };
 
-        // 2. Fetch each layer
-        let mut failed_layer = false;
-        for layer in &manifest.layers {
-            let filename = match layer
-                .annotations
-                .as_ref()
-                .and_then(|a| a.get(ANNOTATION_TITLE))
-            {
-                Some(f) => f,
-                None => {
-                    failed_layer = true;
-                    last_err = Some(format!("{}: layer missing title annotation", mirror.host()));
-                    break;
-                }
-            };
+        manifest_opt = Some(manifest);
+        manifest_mirror = Some(mirror);
+        break;
+    }
 
-            progress.step(&format!(
+    let (manifest, manifest_mirror) = match (manifest_opt, manifest_mirror) {
+        (Some(m), Some(mm)) => (m, mm),
+        _ => {
+            bail!(
+                "✖ All mirrors failed to pull release {} ({}): {}",
+                release.trud_release_date,
+                dataset.dataset_version,
+                manifest_err.unwrap_or_else(|| "no reachable mirrors".to_string())
+            );
+        }
+    };
+
+    // 2. Fetch each layer from any mirror that serves it correctly
+    struct FailedLayer {
+        filename: String,
+        expected_digest: String,
+        mirror_attempts: Vec<(String, String)>,
+        bad_bytes: Option<Vec<u8>>,
+    }
+
+    let mut failed_layers = Vec::new();
+
+    for layer in &manifest.layers {
+        let filename = match layer
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(ANNOTATION_TITLE))
+        {
+            Some(f) => f.to_string(),
+            None => {
+                failed_layers.push(FailedLayer {
+                    filename: "unknown".to_string(),
+                    expected_digest: layer.digest.clone(),
+                    mirror_attempts: vec![("all".to_string(), "layer missing title annotation".to_string())],
+                    bad_bytes: None,
+                });
+                continue;
+            }
+        };
+
+        let mut layer_verified = false;
+        let mut mirror_attempts = Vec::new();
+        let mut first_bad_bytes = None;
+
+        for mirror in mirrors {
+            ctx.progress.step(&format!(
                 "{} ({}) downloading {} from {}…",
                 release.trud_release_date,
                 dataset.dataset_version,
@@ -672,47 +768,46 @@ fn pull_single_release<F: OciBlobFetcher>(
             ));
 
             let blob_url = mirror.blob_url(&layer.digest);
-            let layer_bytes = match fetcher.fetch_bytes(&blob_url) {
-                Ok(b) => b,
-                Err(e) => {
-                    failed_layer = true;
-                    last_err = Some(format!("{}: failed to download {}: {}", mirror.host(), filename, e));
-                    break;
+            match ctx.fetcher.fetch_bytes(&blob_url) {
+                Ok(bytes) => {
+                    let computed = format!("sha256:{:x}", sha2::Sha256::digest(&bytes));
+                    if computed == layer.digest {
+                        if let Err(e) = fs::write(temp_path.join(&filename), &bytes) {
+                            mirror_attempts.push((mirror.host().to_string(), format!("write error: {}", e)));
+                            continue;
+                        }
+                        layer_verified = true;
+                        break;
+                    } else {
+                        mirror_attempts.push((mirror.host().to_string(), computed));
+                        if first_bad_bytes.is_none() {
+                            first_bad_bytes = Some(bytes);
+                        }
+                    }
                 }
-            };
-
-            let computed_layer_digest = format!("sha256:{:x}", sha2::Sha256::digest(&layer_bytes));
-            if computed_layer_digest != layer.digest {
-                failed_layer = true;
-                last_err = Some(format!(
-                    "{}: layer {} checksum mismatch: computed {}, expected {}",
-                    mirror.host(),
-                    filename,
-                    computed_layer_digest,
-                    layer.digest
-                ));
-                break;
-            }
-
-            if let Err(e) = fs::write(temp_path.join(filename), &layer_bytes) {
-                failed_layer = true;
-                last_err = Some(format!("Failed to write {}: {}", filename, e));
-                break;
+                Err(e) => {
+                    mirror_attempts.push((mirror.host().to_string(), format_fetch_error(&e)));
+                }
             }
         }
 
-        if failed_layer {
-            continue;
+        if !layer_verified {
+            failed_layers.push(FailedLayer {
+                filename,
+                expected_digest: layer.digest.clone(),
+                mirror_attempts,
+                bad_bytes: first_bad_bytes,
+            });
         }
+    }
 
-        // 3. Verify assembled release directory
+    // 3. All verified
+    if failed_layers.is_empty() {
         let outcome = verify_release_dir(&temp_path, Some(index));
         if !outcome.is_verified() {
-            last_err = Some(format!("{}: assembled release directory failed verification", mirror.host()));
-            continue;
+            bail!("✖ Assembled release directory failed verification");
         }
 
-        // 4. Atomic install
         fs::create_dir_all(workspace_root.join("releases"))?;
         if rel_dir.exists() {
             fs::remove_dir_all(&rel_dir)?;
@@ -720,39 +815,195 @@ fn pull_single_release<F: OciBlobFetcher>(
         fs::rename(&temp_path, &rel_dir)?;
         staging_guard.installed = true;
 
-        // 5. Pin current and generate README
         let ws = Workspace::open_or_create(Some(workspace_root))?;
         ws.set_active(&release.trud_release_date)?;
 
         let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
         let size_mb = (total_size as f64) / (1024.0 * 1024.0);
 
-        eprintln!(
+        ctx.progress.clear_live();
+        writeln!(
+            ctx.writer,
             "✓ {} ({})  {:.0}MB  from {}",
             release.trud_release_date,
             dataset.dataset_version,
             size_mb,
-            mirror.host()
-        );
-        eprintln!("  current → releases/{}", release.trud_release_date);
+            manifest_mirror.host()
+        )?;
+        writeln!(ctx.writer, "  current → releases/{}", release.trud_release_date)?;
 
         if let Some(ref reason) = dataset.withdrawn {
-            eprintln!(
+            writeln!(
+                ctx.writer,
                 "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
                 release.trud_release_date,
                 dataset.dataset_version,
                 reason
-            );
+            )?;
             return Err(AlreadyReported.into());
         }
 
         return Ok(());
     }
 
-    bail!(
-        "✖ All mirrors failed to pull release {} ({}): {}",
+    // 4. One or more layers failed verification on every mirror
+    for failed in &failed_layers {
+        if let Some(ref bad_bytes) = failed.bad_bytes {
+            let bad_path = temp_path.join(format!("{}.bad-sha", failed.filename));
+            fs::write(&bad_path, bad_bytes)?;
+        }
+    }
+
+    let has_verified_existing =
+        rel_dir.exists() && verify_release_dir(&rel_dir, Some(index)).is_verified();
+
+    let mut max_width = 8;
+    for failed in &failed_layers {
+        for (host, _) in &failed.mirror_attempts {
+            max_width = max_width.max(host.len());
+        }
+    }
+
+    if has_verified_existing {
+        if temp_path.exists() {
+            let _ = fs::remove_dir_all(&temp_path);
+        }
+        staging_guard.installed = true;
+
+        ctx.progress.clear_live();
+        writeln!(
+            ctx.writer,
+            "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
+            release.trud_release_date,
+            dataset.dataset_version,
+            failed_layers.len(),
+            manifest.layers.len()
+        )?;
+        for failed in &failed_layers {
+            writeln!(ctx.writer, "  {}", failed.filename)?;
+            writeln!(
+                ctx.writer,
+                "    {:<width$}  {}",
+                "expected",
+                failed.expected_digest,
+                width = max_width
+            )?;
+            for (host, result) in &failed.mirror_attempts {
+                writeln!(
+                    ctx.writer,
+                    "    {:<width$}  {}",
+                    host,
+                    result,
+                    width = max_width
+                )?;
+            }
+        }
+        writeln!(
+            ctx.writer,
+            "  Kept the verified copy already in releases/{}/",
+            release.trud_release_date
+        )?;
+        writeln!(
+            ctx.writer,
+            "  Report it: https://github.com/olizilla/ods/issues"
+        )?;
+
+        if let Some(ref reason) = dataset.withdrawn {
+            writeln!(
+                ctx.writer,
+                "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
+                release.trud_release_date,
+                dataset.dataset_version,
+                reason
+            )?;
+        }
+
+        return Err(AlreadyReported.into());
+    }
+
+    // Normal incomplete install
+    fs::create_dir_all(workspace_root.join("releases"))?;
+    if rel_dir.exists() {
+        let _ = fs::remove_dir_all(&rel_dir);
+    }
+    fs::rename(&temp_path, &rel_dir)?;
+    staging_guard.installed = true;
+
+    ctx.progress.clear_live();
+    writeln!(
+        ctx.writer,
+        "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
         release.trud_release_date,
         dataset.dataset_version,
-        last_err.unwrap_or_else(|| "no reachable mirrors".to_string())
-    );
+        failed_layers.len(),
+        manifest.layers.len()
+    )?;
+    for failed in &failed_layers {
+        if failed.bad_bytes.is_some() {
+            writeln!(
+                ctx.writer,
+                "  {} → releases/{}/{}.bad-sha",
+                failed.filename, release.trud_release_date, failed.filename
+            )?;
+        } else {
+            writeln!(ctx.writer, "  {}  not downloaded", failed.filename)?;
+        }
+        writeln!(
+            ctx.writer,
+            "    {:<width$}  {}",
+            "expected",
+            failed.expected_digest,
+            width = max_width
+        )?;
+        for (host, result) in &failed.mirror_attempts {
+            writeln!(
+                ctx.writer,
+                "    {:<width$}  {}",
+                host,
+                result,
+                width = max_width
+            )?;
+        }
+    }
+
+    let verified_count = manifest.layers.len() - failed_layers.len();
+    if verified_count == 1 {
+        writeln!(
+            ctx.writer,
+            "  The other 1 file is verified, in releases/{}/",
+            release.trud_release_date
+        )?;
+    } else if verified_count > 1 {
+        writeln!(
+            ctx.writer,
+            "  The other {} files are verified, in releases/{}/",
+            verified_count, release.trud_release_date
+        )?;
+    }
+
+    let current_line = if let Ok(ws) = Workspace::open(Some(workspace_root)) {
+        if let Ok((active_date, _)) = ws.active_release() {
+            format!("  current is still releases/{}", active_date)
+        } else {
+            "  current is not set".to_string()
+        }
+    } else {
+        "  current is not set".to_string()
+    };
+    writeln!(ctx.writer, "{}", current_line)?;
+    writeln!(ctx.writer, "  Retry: ods pull {}", release.trud_release_date)?;
+    writeln!(ctx.writer, "  Use it anyway: ods use {}", release.trud_release_date)?;
+    writeln!(ctx.writer, "  Report it: https://github.com/olizilla/ods/issues")?;
+
+    if let Some(ref reason) = dataset.withdrawn {
+        writeln!(
+            ctx.writer,
+            "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
+            release.trud_release_date,
+            dataset.dataset_version,
+            reason
+        )?;
+    }
+
+    Err(AlreadyReported.into())
 }
