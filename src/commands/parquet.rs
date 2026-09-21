@@ -63,6 +63,17 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
 }
 
 pub fn run(args: Args) -> Result<PathBuf> {
+    build(args, false)
+}
+
+/// `run` for a command line that ends when it returns: the big collections are left for the
+/// operating system to reclaim instead of being freed one allocation at a time (about two
+/// seconds of the 2026-08-28 build). Library callers and tests use `run`, which drops them.
+pub fn run_before_process_exit(args: Args) -> Result<PathBuf> {
+    build(args, true)
+}
+
+fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     let (input_path, inferred_date) = match args.input {
         Some(p) => (p, None),
         None => {
@@ -231,23 +242,39 @@ pub fn run(args: Args) -> Result<PathBuf> {
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
-    // 1. Export orgs.parquet (every organisation, active first)
-    export_orgs(
-        &output_path,
-        &records,
-        &successor_closures,
-        &predecessor_closures,
-        provenance.as_ref(),
-    )?;
-
-    // 2. Export roles.parquet (one per organisation per role holding)
-    export_roles(&output_path, &records, provenance.as_ref())?;
-
-    // 3. Export relationships.parquet
-    export_relationships(&output_path, &records, provenance.as_ref())?;
-
-    // 4. Export successions.parquet
-    export_successions(&output_path, &records, provenance.as_ref())?;
+    // The four tables share nothing mutable, so each is built and written by one thread of
+    // its own. Parallelism goes across files, never inside one: a file's bytes don't depend
+    // on how many cores the machine has.
+    let prov = provenance.as_ref();
+    let (orgs, roles, relationships, successions) = std::thread::scope(|scope| {
+        let orgs = scope.spawn(|| {
+            export_orgs(&output_path, &records, &successor_closures, &predecessor_closures, prov)
+                .context("writing orgs.parquet")
+        });
+        let roles = scope.spawn(|| export_roles(&output_path, &records, prov).context("writing roles.parquet"));
+        let relationships = scope
+            .spawn(|| export_relationships(&output_path, &records, prov).context("writing relationships.parquet"));
+        let successions =
+            scope.spawn(|| export_successions(&output_path, &records, prov).context("writing successions.parquet"));
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<usize>>, table: &str| {
+            h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("writing {table}.parquet: the writer thread panicked")))
+        };
+        (
+            join(orgs, "orgs"),
+            join(roles, "roles"),
+            join(relationships, "relationships"),
+            join(successions, "successions"),
+        )
+    });
+    // Reported in the order the tables are listed everywhere else, whichever finished first.
+    for (table, rows) in [
+        ("orgs", orgs?),
+        ("roles", roles?),
+        ("relationships", relationships?),
+        ("successions", successions?),
+    ] {
+        eprintln!("Exported {rows} records to {table}.parquet.");
+    }
 
     // 6. Write initial _provenance.json to output directory if present
     if let Some(ref p) = provenance {
@@ -271,6 +298,16 @@ pub fn run(args: Args) -> Result<PathBuf> {
         .context("writing datapackage.json")?;
 
     warn_unexpected_files(&output_path);
+
+    if abandon_memory {
+        // Every writer is closed and every file is flushed. What is left is plain data: no
+        // handle, no writer, nothing whose `Drop` does work. `cleanup_scratch()` in `main`
+        // still runs, so the extracted XML goes as before.
+        std::mem::forget(records);
+        std::mem::forget(successor_closures);
+        std::mem::forget(predecessor_closures);
+        std::mem::forget(edges);
+    }
 
     Ok(output_path)
 }
@@ -383,13 +420,53 @@ fn append_opt(builder: &mut StringBuilder, val: Option<&str>) {
     }
 }
 
+/// Days since 1970-01-01 for a `YYYY-MM-DD` date, or `None` when it doesn't parse.
+///
+/// The XML writes every date in that shape, so the common case is read in place. Anything else,
+/// including a well-shaped date that isn't one (`2026-02-30`), goes to chrono, which is what
+/// decided the answer before this fast path existed; a malformed date stays null exactly as it
+/// did, and an oddity chrono accepts (`2026-8-3`) still parses.
 fn parse_date_to_days(val: &str) -> Option<i32> {
+    canonical_date_to_days(val).or_else(|| chrono_date_to_days(val))
+}
+
+fn chrono_date_to_days(val: &str) -> Option<i32> {
     chrono::NaiveDate::parse_from_str(val, "%Y-%m-%d")
         .ok()
         .map(|date| {
             date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
                 .num_days() as i32
         })
+}
+
+/// `dddd-dd-dd` that is a real calendar date, read without allocating or formatting machinery.
+fn canonical_date_to_days(val: &str) -> Option<i32> {
+    let b = val.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let digit = |i: usize| b[i].checked_sub(b'0').filter(|d| *d <= 9).map(i32::from);
+    let year = digit(0)? * 1000 + digit(1)? * 100 + digit(2)? * 10 + digit(3)?;
+    let month = (digit(5)? * 10 + digit(6)?) as u32;
+    let day = (digit(8)? * 10 + digit(9)?) as u32;
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let last_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day < 1 || day > last_day {
+        return None;
+    }
+    // Days from civil, after Howard Hinnant's algorithm.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) as i32 + 2) / 5 + day as i32 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe - 719468)
 }
 
 fn append_date(builder: &mut Date32Builder, val: Option<&str>) {
@@ -668,7 +745,7 @@ pub fn export_orgs(
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::OdsProvenance>,
-) -> Result<()> {
+) -> Result<usize> {
     let mut all_records: Vec<&OdsRecord> = records.iter().collect();
     all_records.sort_by(|a, b| (&a.status, &a.ods_code).cmp(&(&b.status, &b.ods_code)));
 
@@ -696,8 +773,7 @@ pub fn export_orgs(
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
-    eprintln!("Exported {} records to orgs.parquet.", all_records.len());
-    Ok(())
+    Ok(all_records.len())
 }
 
 // ==========================================
@@ -790,7 +866,7 @@ pub fn export_roles(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
-) -> Result<()> {
+) -> Result<usize> {
     let mut rows = Vec::new();
     for r in records {
         for role_record in &r.roles {
@@ -839,8 +915,7 @@ pub fn export_roles(
         writer.write(&batch).context("writing roles batch")?;
     }
     writer.close().context("finalising roles writer")?;
-    eprintln!("Exported {} records to roles.parquet.", rows.len());
-    Ok(())
+    Ok(rows.len())
 }
 
 // ==========================================
@@ -933,7 +1008,7 @@ pub fn export_relationships(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
-) -> Result<()> {
+) -> Result<usize> {
     let mut rows = Vec::new();
     for r in records {
         for rel in &r.relationships {
@@ -983,8 +1058,7 @@ pub fn export_relationships(
             .context("writing relationships batch")?;
     }
     writer.close().context("finalising relationships writer")?;
-    eprintln!("Exported {} records to relationships.parquet.", rows.len());
-    Ok(())
+    Ok(rows.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1149,7 +1223,7 @@ pub fn export_successions(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
-) -> Result<()> {
+) -> Result<usize> {
     let edges = build_succession_edges(records);
     let release_date_str = provenance
         .and_then(|p| p.trud_release_date.as_deref())
@@ -1169,12 +1243,38 @@ pub fn export_successions(
         writer.write(&batch).context("writing successions batch")?;
     }
     writer.close().context("finalising successions writer")?;
-    eprintln!("Exported {} records to successions.parquet.", edges.len());
-    Ok(())
+    Ok(edges.len())
 }
 
 #[cfg(test)]
 mod tests {
+    /// D1: the fast date parser gives the answer chrono gives, for every day of the years the
+    /// source can hold and for the malformed strings it can't.
+    #[test]
+    fn fast_date_parse_agrees_with_chrono() {
+        let start = chrono::NaiveDate::from_ymd_opt(0, 1, 1).unwrap();
+        let mut day = start;
+        while day.format("%Y").to_string().parse::<i32>().unwrap() <= 2200 {
+            let text = day.format("%Y-%m-%d").to_string();
+            assert_eq!(parse_date_to_days(&text), chrono_date_to_days(&text), "{text}");
+            day = day.succ_opt().unwrap();
+        }
+        for year in [2400, 2999, 4000, 9999] {
+            for text in [format!("{year}-02-28"), format!("{year}-02-29"), format!("{year}-12-31")] {
+                assert_eq!(parse_date_to_days(&text), chrono_date_to_days(&text), "{text}");
+            }
+        }
+        for text in [
+            "", "2026", "2026-02-30", "2026-02-29", "2026-13-01", "2026-00-10", "2026-01-00", "2026-01-32",
+            "2026-8-3", "2026-08-3x", "2026-08-28T", " 2026-08-28", "2026-08-28 ", "20260828", "+2026-08-28",
+            "-0001-01-01", "2026/08/28", "2026-08-28T00:00:00", "١٢٣٤-05-06", "abcd-ef-gh", "0000-00-00",
+        ] {
+            assert_eq!(parse_date_to_days(text), chrono_date_to_days(text), "{text:?}");
+        }
+        assert_eq!(parse_date_to_days("1970-01-01"), Some(0));
+        assert_eq!(parse_date_to_days("2026-02-30"), None);
+    }
+
     use super::*;
     use crate::ods_xml::Location;
 

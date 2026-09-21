@@ -41,7 +41,7 @@ pub fn run(args: MakeArgs) -> Result<()> {
 }
 
 pub fn run_make_parquet(args: crate::commands::parquet::Args) -> Result<PathBuf> {
-    let output_dir = crate::commands::parquet::run(args)?;
+    let output_dir = crate::commands::parquet::run_before_process_exit(args)?;
     eprintln!("✓ Dataset target projections generated successfully.");
     Ok(output_dir)
 }

@@ -457,21 +457,34 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
             );
         };
 
-        let mut xmls = Vec::new();
-        for inner in [&full_inner, &archive_inner] {
-            let mut inner_file = archive.by_name(inner)?;
-            let inner_zip_path = dest.join(Path::new(inner).file_name().unwrap());
-            let mut out = File::create(&inner_zip_path)?;
-            std::io::copy(&mut inner_file, &mut out)?;
-            drop(out);
+        // The two inner zips read different entries of the release zip and write different names
+        // into `dest`, so each is copied out and unpacked on a thread of its own, each with its
+        // own handle on the release zip. The XML files come back full first.
+        let results: Vec<Result<PathBuf>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = [&full_inner, &archive_inner]
+                .into_iter()
+                .map(|inner| {
+                    scope.spawn(move || -> Result<PathBuf> {
+                        let mut outer = zip::ZipArchive::new(File::open(zip_path)?)?;
+                        let mut inner_file = outer.by_name(inner)?;
+                        let inner_zip_path = dest.join(Path::new(inner).file_name().unwrap());
+                        let mut out = File::create(&inner_zip_path)?;
+                        std::io::copy(&mut inner_file, &mut out)?;
+                        drop(out);
 
-            // Extract without re-entering the cache: the cache is keyed on the
-            // outer release archive, not on intermediate inner zips.
-            xmls.push(
-                extract_single_xml(&inner_zip_path, dest)
-                    .with_context(|| format!("extracting {inner} from {}", zip_path.display()))?,
-            );
-        }
+                        // Extract without re-entering the cache: the cache is keyed on the
+                        // outer release archive, not on intermediate inner zips.
+                        extract_single_xml(&inner_zip_path, dest)
+                            .with_context(|| format!("extracting {inner} from {}", zip_path.display()))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("an extraction thread panicked"))))
+                .collect()
+        });
+        let xmls = results.into_iter().collect::<Result<Vec<PathBuf>>>()?;
         return Ok(xmls);
     }
 
@@ -579,25 +592,17 @@ pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
     )
 }
 
+/// Turns the parsed organisations into records, keyed and ordered by ODS code.
+///
+/// The names of a relationship's target, a successor's target and a parent organisation are
+/// left as the parser found them (none). Nothing reads them: no Parquet column carries one, and
+/// `diff`, `find`, `info` and the audit read their own models. Resolving them cost a copy of
+/// every organisation's code and name, then one more per relationship and successor target,
+/// about 1.2 million `String` clones for a release.
 pub fn convert_parsed_orgs(parsed: HashMap<String, ParsedOrg>) -> std::collections::BTreeMap<String, OdsRecord> {
-    let name_map: HashMap<String, String> =
-        parsed.iter().map(|(k, v)| (k.clone(), v.name.clone())).collect();
-
     let mut records: std::collections::BTreeMap<String, OdsRecord> = std::collections::BTreeMap::new();
 
     for (code, mut org) in parsed {
-        if let Some(ref mut parent) = org.parent_organisation {
-            if let Some(name) = name_map.get(&parent.ods_code) {
-                parent.name = name.clone();
-            }
-        }
-        for rel in &mut org.relationships {
-            rel.target.name = name_map.get(&rel.target.ods_code).cloned();
-        }
-        for succ in &mut org.successors {
-            succ.target.name = name_map.get(&succ.target.ods_code).cloned();
-        }
-
         let record_class = match org.org_record_class.as_deref() {
             Some("RC1") => "org".to_string(),
             Some("RC2") => "site".to_string(),
@@ -916,12 +921,34 @@ pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
     // Which file each surviving record came from, for the contradiction message.
     let mut source: HashMap<String, usize> = HashMap::new();
 
-    for (idx, path) in xml_paths.iter().enumerate() {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        let file = parse_file(path).with_context(|| format!("parsing {name}"))?;
+    let names: Vec<String> = xml_paths
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+        })
+        .collect();
+    // One file, one thread, one pass: the files are parsed side by side and merged afterwards
+    // in path order, full file first. The stub rule, the duplicate rule and `concept_map` depend
+    // on that order and on nothing else, so the merge below is what the sequential loop did.
+    let mut parsed_files: Vec<Result<ParsedFile>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = xml_paths
+            .iter()
+            .zip(&names)
+            .map(|(path, name)| scope.spawn(move || parse_file(path).with_context(|| format!("parsing {name}"))))
+            .collect();
+        handles
+            .into_iter()
+            .zip(&names)
+            .map(|(h, name)| {
+                h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("parsing {name}: the parser thread panicked")))
+            })
+            .collect()
+    });
+
+    for (idx, name) in names.iter().enumerate() {
+        let file = std::mem::replace(&mut parsed_files[idx], Err(anyhow::anyhow!("already merged")))?;
 
         if idx == 0 {
             release.provenance = file.provenance;
@@ -960,7 +987,7 @@ pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
                             "{} has a complete record in both files: kept {}, dropped {} ({})",
                             org.ods_code,
                             file_label(&first),
-                            file_label(&name),
+                            file_label(name),
                             describe_period(&org.dates)
                         )),
                         (false, false) => {
@@ -1764,11 +1791,16 @@ mod tests {
         )
     }
 
+    /// Fixtures are stored, not deflated: debug-build compression was most of these tests' time.
+    fn stored() -> zip::write::SimpleFileOptions {
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
+    }
+
     fn inner_zip(xml_name: &str, xml: &str) -> Vec<u8> {
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut cursor);
-            zip.start_file(xml_name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file(xml_name, stored()).unwrap();
             zip.write_all(xml.as_bytes()).unwrap();
             zip.finish().unwrap();
         }
@@ -1779,7 +1811,7 @@ mod tests {
     fn release_zip(dir: &Path, full: &[String], archive: Option<&[String]>) -> PathBuf {
         let path = dir.join("release.zip");
         let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
-        let options = zip::write::SimpleFileOptions::default();
+        let options = stored();
         zip.start_file("fullfile.zip", options).unwrap();
         zip.write_all(&inner_zip("HSCOrgRefData_Full_20260827.xml", &manifest_xml(full))).unwrap();
         if let Some(archive) = archive {
@@ -1913,6 +1945,35 @@ mod tests {
         let err = format!("{:#}", parse_release_at(&zip).unwrap_err());
 
         assert!(err.contains("archive.zip"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_parse_merges_in_file_order() -> Result<()> {
+        // The full file is the bigger one, so the archive is the first to finish parsing; the
+        // merge must still treat the full file's record as the first.
+        let mut full: Vec<String> = (0..300).map(|i| org_xml(&format!("L{i}"), "LIVE", false)).collect();
+        full.push(dated_org_xml("F1", "PHARMACY", Some("2025-04-23"), None));
+        full.push(org_xml("Z9", "CLOSED (STUB)", true));
+        let dir = TempDir::new()?;
+        let zip = release_zip(
+            dir.path(),
+            &full,
+            Some(&[
+                dated_org_xml("F1", "LAUNDRY", Some("1991-04-01"), Some("1993-03-31")),
+                org_xml("Z9", "CLOSED", false),
+            ]),
+        );
+
+        let release = parse_release_at(&zip)?;
+
+        assert_eq!(release.orgs["F1"].name, "PHARMACY");
+        assert_eq!(release.orgs["Z9"].name, "CLOSED");
+        assert_eq!(release.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), [
+            "HSCOrgRefData_Full_20260827.xml",
+            "HSCOrgRefData_Archive_20260827.xml"
+        ]);
+        assert_eq!((release.records_read(), release.stubs_superseded, release.duplicates_dropped.len()), (304, 1, 1));
         Ok(())
     }
 }
