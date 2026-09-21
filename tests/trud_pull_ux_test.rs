@@ -92,6 +92,13 @@ fn test_trud_pull_local_archive_claims_honest_no_trud_checksum() {
         stderr_str
     );
 
+    // Gutter line advising to set TRUD_API_KEY
+    assert!(
+        stderr_str.contains("Set TRUD_API_KEY to check it against TRUD"),
+        "stderr must contain gutter line to set TRUD_API_KEY, got:\n{}",
+        stderr_str
+    );
+
     // Must NOT claim verification against TRUD on a local file hash
     assert!(
         !stderr_str.contains("✓ SHA-256 OK (8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933)"),

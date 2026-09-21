@@ -107,6 +107,13 @@ impl std::fmt::Display for SecurityError {
 
 impl std::error::Error for SecurityError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRelease<'a> {
+    pub release: &'a Release,
+    pub dataset: &'a Dataset,
+    pub skipped: Vec<(&'a Release, &'a Dataset)>,
+}
+
 impl OdsReleaseIndex {
     /// Loads and validates the release index from a workspace directory.
     pub fn load_from_workspace(workspace_root: &std::path::Path) -> Result<Option<Self>> {
@@ -421,61 +428,82 @@ impl OdsReleaseIndex {
     }
 
     /// Resolves the release and dataset to install:
-    /// - requested date, or the newest release with a dataset
+    /// - requested date, or the newest release with a non-withdrawn dataset
     /// - within it, the highest dataset_version
     /// - a date with no datasets resolves the way a date absent from the index does today.
-    pub fn resolve(&self, requested_date: Option<&str>) -> Result<(&Release, &Dataset)> {
-        let release = match requested_date {
+    pub fn resolve(&self, requested_date: Option<&str>) -> Result<ResolvedRelease<'_>> {
+        match requested_date {
             Some(date) => {
-                let rel = self
+                let release = self
                     .releases
                     .iter()
                     .find(|r| r.trud_release_date == date)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Release date '{}' is not known to the release index", date)
                     })?;
-                if rel.datasets.is_empty() {
-                    bail!("Release date '{}' is not known to the release index", date);
-                }
-                rel
+                let (dataset, _) = select_dataset(release).ok_or_else(|| {
+                    anyhow::anyhow!("Release date '{}' is not known to the release index", date)
+                })?;
+                Ok(ResolvedRelease {
+                    release,
+                    dataset,
+                    skipped: Vec::new(),
+                })
             }
-            None => self
-                .releases
-                .iter()
-                .find(|r| !r.datasets.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("Release index contains no releases"))?,
-        };
+            None => {
+                let mut skipped = Vec::new();
+                let mut had_any_datasets = false;
 
-        let mut non_withdrawn: Vec<&Dataset> =
-            release.datasets.iter().filter(|d| !d.is_withdrawn()).collect();
+                for release in &self.releases {
+                    let Some((dataset, is_withdrawn)) = select_dataset(release) else {
+                        continue;
+                    };
+                    had_any_datasets = true;
 
-        if non_withdrawn.is_empty() {
-            let mut withdrawn_list: Vec<&Dataset> = release.datasets.iter().collect();
-            withdrawn_list.sort_by(|a, b| {
-                let sem_a = parse_semver(&a.dataset_version).unwrap_or((0, 0, 0));
-                let sem_b = parse_semver(&b.dataset_version).unwrap_or((0, 0, 0));
-                sem_b.cmp(&sem_a)
-            });
-            let top_withdrawn = withdrawn_list[0];
-            let reason = top_withdrawn
-                .withdrawn
-                .as_deref()
-                .unwrap_or("withdrawn by maintainer");
-            bail!(
-                "{} has no valid release\n  {} was withdrawn: {}",
-                release.trud_release_date,
-                top_withdrawn.dataset_version,
-                reason
-            );
+                    if is_withdrawn {
+                        skipped.push((release, dataset));
+                    } else {
+                        return Ok(ResolvedRelease {
+                            release,
+                            dataset,
+                            skipped,
+                        });
+                    }
+                }
+
+                if had_any_datasets {
+                    bail!("Every release in the index is withdrawn\n  See them: ods pull --list");
+                } else {
+                    bail!("Release index contains no releases");
+                }
+            }
         }
+    }
+}
 
-        non_withdrawn.sort_by(|a, b| {
-            let sem_a = parse_semver(&a.dataset_version).unwrap_or((0, 0, 0));
-            let sem_b = parse_semver(&b.dataset_version).unwrap_or((0, 0, 0));
-            sem_b.cmp(&sem_a)
-        });
+/// Selects the preferred dataset for a release:
+/// - the highest semver non-withdrawn dataset if any exist, returning `Some((dataset, false))`
+/// - otherwise the highest semver withdrawn dataset, returning `Some((dataset, true))`
+/// - `None` if the release has no datasets
+pub fn select_dataset(release: &Release) -> Option<(&Dataset, bool)> {
+    if release.datasets.is_empty() {
+        return None;
+    }
 
-        Ok((release, non_withdrawn[0]))
+    if let Some(ds) = release
+        .datasets
+        .iter()
+        .filter(|d| !d.is_withdrawn())
+        .max_by_key(|d| parse_semver(&d.dataset_version).unwrap_or((0, 0, 0)))
+    {
+        Some((ds, false))
+    } else {
+        let ds = release
+            .datasets
+            .iter()
+            .max_by_key(|d| parse_semver(&d.dataset_version).unwrap_or((0, 0, 0)))
+            .expect("datasets is non-empty");
+        Some((ds, true))
     }
 }
 
@@ -820,27 +848,28 @@ mod tests {
             },
         );
 
-        let (rel, ds) = idx.resolve(None)?;
-        assert_eq!(rel.trud_release_date, "2026-08-28");
-        assert_eq!(ds.dataset_version, "0.2.0");
+        let res = idx.resolve(None)?;
+        assert_eq!(res.release.trud_release_date, "2026-08-28");
+        assert_eq!(res.dataset.dataset_version, "0.2.0");
+        assert!(res.skipped.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_resolve_requested_date() -> Result<()> {
         let idx = valid_test_index();
-        let (rel, ds) = idx.resolve(Some("2026-07-31"))?;
-        assert_eq!(rel.trud_release_date, "2026-07-31");
-        assert_eq!(ds.dataset_version, "0.1.0");
+        let res = idx.resolve(Some("2026-07-31"))?;
+        assert_eq!(res.release.trud_release_date, "2026-07-31");
+        assert_eq!(res.dataset.dataset_version, "0.1.0");
         Ok(())
     }
 
     #[test]
     fn test_resolve_highest_version_within_date() -> Result<()> {
         let idx = valid_test_index();
-        let (rel, ds) = idx.resolve(Some("2026-08-28"))?;
-        assert_eq!(rel.trud_release_date, "2026-08-28");
-        assert_eq!(ds.dataset_version, "0.2.0");
+        let res = idx.resolve(Some("2026-08-28"))?;
+        assert_eq!(res.release.trud_release_date, "2026-08-28");
+        assert_eq!(res.dataset.dataset_version, "0.2.0");
         Ok(())
     }
 
@@ -867,15 +896,47 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_refuses_when_all_versions_for_date_withdrawn() {
+    fn test_resolve_delivers_withdrawn_when_all_versions_for_date_withdrawn() -> Result<()> {
         let mut idx = valid_test_index();
         idx.releases[1].datasets[0].withdrawn =
             Some("critical corruption in roles".to_string());
 
-        let res = idx.resolve(Some("2026-07-31"));
+        let res = idx.resolve(Some("2026-07-31"))?;
+        assert_eq!(res.release.trud_release_date, "2026-07-31");
+        assert_eq!(res.dataset.dataset_version, "0.1.0");
+        assert!(res.dataset.is_withdrawn());
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_none_skips_withdrawn_newest_date() -> Result<()> {
+        let mut idx = valid_test_index();
+        // idx has 2026-08-28 (newest) and 2026-07-31
+        idx.releases[0].datasets[0].withdrawn = Some("withdrawn newest".to_string());
+        idx.releases[0].datasets[1].withdrawn = Some("withdrawn newest v2".to_string());
+
+        let res = idx.resolve(None)?;
+        assert_eq!(res.release.trud_release_date, "2026-07-31");
+        assert_eq!(res.dataset.dataset_version, "0.1.0");
+        assert_eq!(res.skipped.len(), 1);
+        assert_eq!(res.skipped[0].0.trud_release_date, "2026-08-28");
+        assert_eq!(res.skipped[0].1.dataset_version, "0.2.0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_none_fails_when_every_release_is_withdrawn() {
+        let mut idx = valid_test_index();
+        for r in &mut idx.releases {
+            for d in &mut r.datasets {
+                d.withdrawn = Some("withdrawn".to_string());
+            }
+        }
+
+        let res = idx.resolve(None);
         assert!(res.is_err());
         let err = res.unwrap_err().to_string();
-        assert!(err.contains("2026-07-31 has no valid release"));
-        assert!(err.contains("0.1.0 was withdrawn: critical corruption in roles"));
+        assert!(err.contains("Every release in the index is withdrawn"));
+        assert!(err.contains("See them: ods pull --list"));
     }
 }

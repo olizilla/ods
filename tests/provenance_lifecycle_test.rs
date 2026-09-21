@@ -174,7 +174,7 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
 }
 
 #[test]
-fn test_cite_declines_unverified_release() -> Result<()> {
+fn test_cite_unverified_release_delivers_citation_and_warns() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
@@ -194,9 +194,10 @@ fn test_cite_declines_unverified_release() -> Result<()> {
     };
     let mut buf = Vec::new();
     let result = ods::commands::cite::run_with_writer(args, &mut buf);
-    assert!(result.is_err(), "ods cite must decline to generate citation for unverified release");
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("unverified release") || err_msg.contains("Refusing to cite"), "error must mention unverified release, got: {}", err_msg);
+    assert!(result.is_ok(), "ods cite must succeed and deliver citation for unverified release");
+    let out = String::from_utf8(buf)?;
+    assert!(out.contains("How to Cite"));
+    assert!(out.contains("Evans, O."));
 
     Ok(())
 }

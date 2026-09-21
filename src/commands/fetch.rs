@@ -70,6 +70,10 @@ pub struct Args {
     /// Print verbose output (URL fetched and raw API response text before deserialization)
     #[arg(long, short = 'v')]
     pub verbose: bool,
+
+    /// Custom release index URL or file path
+    #[arg(long, hide = true)]
+    pub index: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -258,8 +262,15 @@ pub fn run(args: Args) -> Result<()> {
     let ws = Workspace::open_or_create(args.workspace.as_deref())?;
     let workspace_root = ws.root().to_path_buf();
 
+    let trud_fetcher = args.api_key.as_ref().filter(|k| !k.trim().is_empty()).map(|k| UreqTrudFetcher::new(k, args.verbose));
+    let oci_fetcher = crate::commands::pull::HttpOciFetcher;
+
     if let Some(ref local_path) = args.local_archive {
-        return run_local_archive(&args, &workspace_root, local_path, &progress);
+        return run_local_archive_with_fetchers(&args, &workspace_root, local_path, &progress, trud_fetcher.as_ref(), Some(&oci_fetcher));
+    }
+
+    if let Some(ref verify_path) = args.verify_only {
+        return run_verify_only_with_fetchers(&args, &workspace_root, verify_path, &progress, trud_fetcher.as_ref(), Some(&oci_fetcher));
     }
 
     let api_key = match args.api_key {
@@ -281,6 +292,15 @@ pub fn run_with_fetcher<F: TrudFetcher>(
     fetcher: &F,
     progress: &Progress,
 ) -> Result<()> {
+    let oci_fetcher = crate::commands::pull::HttpOciFetcher;
+    if let Some(ref local_path) = args.local_archive {
+        return run_local_archive_with_fetchers(&args, workspace_root, local_path, progress, Some(fetcher), Some(&oci_fetcher));
+    }
+
+    if let Some(ref verify_path) = args.verify_only {
+        return run_verify_only_with_fetchers(&args, workspace_root, verify_path, progress, Some(fetcher), Some(&oci_fetcher));
+    }
+
     progress.step("Querying NHS TRUD…");
     let releases = match fetcher.fetch_releases() {
         Ok(r) => r,
@@ -312,30 +332,6 @@ fn pull_single_release<F: TrudFetcher>(
     target_release: TrudReleaseItem,
     progress: &Progress,
 ) -> Result<()> {
-    if let Some(ref verify_path) = args.verify_only {
-        progress.step(&format!("verifying archive SHA-256 for {}…", target_release.release_date));
-        let local_sha256 = compute_file_sha256(verify_path)?;
-        if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-            progress.settle(&format!(
-                "✓ {}  {}  SHA-256 verified by TRUD API",
-                target_release.release_date,
-                format_size(target_release.archive_file_size)
-            ));
-            progress.finish("Done!");
-            return Ok(());
-        } else {
-            let bad_path = mark_bad_sha_file(verify_path);
-            progress.error(
-                "SHA-256 Checksum Failed!",
-                &[
-                    &format!("Local SHA-256: {}", local_sha256),
-                    &format!("TRUD SHA-256:  {}", target_release.archive_file_sha256),
-                    &format!("Renamed bad local file to {}", bad_path.display()),
-                ],
-            );
-            anyhow::bail!(crate::commands::pull::AlreadyReported);
-        }
-    }
 
     let (dest_dir, trud_dir, is_workspace) = match &args.output {
         Some(out) => {
@@ -1157,8 +1153,8 @@ pub fn parse_trud_filename(filename: &str) -> Result<(String, Option<String>)> {
     )
 }
 
-fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, progress: &Progress) -> Result<()> {
-    let zip_file = if local_path.is_dir() {
+fn resolve_zip_file(local_path: &Path) -> Result<PathBuf> {
+    if local_path.is_dir() {
         let mut zip = None;
         for entry in walkdir::WalkDir::new(local_path) {
             let entry = entry?;
@@ -1171,18 +1167,202 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
                 }
             }
         }
-        zip.context(format!("No .zip file found in local archive dir {}", local_path.display()))?
+        zip.context(format!("No .zip file found in local archive dir {}", local_path.display()))
     } else {
-        local_path.to_path_buf()
+        Ok(local_path.to_path_buf())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveVerificationOutcome {
+    VerifiedPublished {
+        expected_sha256: String,
+        file_size: u64,
+    },
+    VerifiedTrud {
+        expected_sha256: String,
+        file_size: u64,
+    },
+    Unverified,
+    TrudApiError(String),
+    Mismatch {
+        source_name: &'static str,
+        expected_sha256: String,
+        actual_sha256: String,
+    },
+}
+
+impl ArchiveVerificationOutcome {
+    pub fn verification_source(&self) -> Option<crate::provenance::TrudVerificationSource> {
+        match self {
+            Self::VerifiedPublished { .. } => Some(crate::provenance::TrudVerificationSource::PublishedRelease),
+            Self::VerifiedTrud { .. } => Some(crate::provenance::TrudVerificationSource::TrudApi),
+            Self::Unverified | Self::TrudApiError(_) => Some(crate::provenance::TrudVerificationSource::Unverified),
+            Self::Mismatch { .. } => None,
+        }
+    }
+}
+
+pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>(
+    release_date: &str,
+    local_sha256: &str,
+    workspace_root: &Path,
+    index_override: Option<&str>,
+    allow_network: bool,
+    trud_fetcher: Option<&F>,
+    oci_fetcher: Option<&OF>,
+) -> Result<ArchiveVerificationOutcome> {
+    // 1. Release index lookup
+    let index_res = if allow_network {
+        if let Some(override_path) = index_override {
+            let default_oci = crate::commands::pull::HttpOciFetcher;
+            let oci: &dyn crate::commands::pull::OciBlobFetcher = match oci_fetcher {
+                Some(f) => f as &dyn crate::commands::pull::OciBlobFetcher,
+                None => &default_oci,
+            };
+            crate::commands::pull::resolve_index_with_baked(
+                workspace_root,
+                oci,
+                None,
+                Some(override_path),
+            )
+            .map(|(idx, _)| Some(idx))
+        } else {
+            // First check baked + workspace copy offline
+            let offline_idx = crate::commands::cite::resolve_cite_index(Some(workspace_root))?;
+            if offline_idx.releases.iter().any(|r| r.trud_release_date == release_date) {
+                Ok(Some(offline_idx))
+            } else {
+                // Fetch published index
+                let default_oci = crate::commands::pull::HttpOciFetcher;
+                let oci: &dyn crate::commands::pull::OciBlobFetcher = match oci_fetcher {
+                    Some(f) => f as &dyn crate::commands::pull::OciBlobFetcher,
+                    None => &default_oci,
+                };
+                match crate::commands::pull::resolve_index_with_baked(
+                    workspace_root,
+                    oci,
+                    None,
+                    None,
+                ) {
+                    Ok((idx, _)) => Ok(Some(idx)),
+                    Err(_) => Ok(Some(offline_idx)),
+                }
+            }
+        }
+    } else {
+        // Offline only: baked index merged with workspace copy
+        crate::commands::cite::resolve_cite_index(Some(workspace_root)).map(Some)
     };
 
+    if let Ok(Some(index)) = index_res {
+        if let Some(rel) = index.releases.iter().find(|r| r.trud_release_date == release_date) {
+            if local_sha256.eq_ignore_ascii_case(&rel.trud_release_sha256) {
+                return Ok(ArchiveVerificationOutcome::VerifiedPublished {
+                    expected_sha256: rel.trud_release_sha256.clone(),
+                    file_size: rel.trud_release_filesize_bytes,
+                });
+            } else {
+                return Ok(ArchiveVerificationOutcome::Mismatch {
+                    source_name: "Index",
+                    expected_sha256: rel.trud_release_sha256.clone(),
+                    actual_sha256: local_sha256.to_string(),
+                });
+            }
+        }
+    } else if let Err(e) = index_res {
+        return Err(e);
+    }
+
+    // 2. TRUD API lookup
+    if allow_network {
+        if let Some(fetcher) = trud_fetcher {
+            match fetcher.fetch_releases() {
+                Ok(releases) => {
+                    if let Some(trud_rel) = releases.into_iter().find(|r| r.release_date == release_date) {
+                        if local_sha256.eq_ignore_ascii_case(&trud_rel.archive_file_sha256) {
+                            return Ok(ArchiveVerificationOutcome::VerifiedTrud {
+                                expected_sha256: trud_rel.archive_file_sha256,
+                                file_size: trud_rel.archive_file_size,
+                            });
+                        } else {
+                            return Ok(ArchiveVerificationOutcome::Mismatch {
+                                source_name: "TRUD",
+                                expected_sha256: trud_rel.archive_file_sha256,
+                                actual_sha256: local_sha256.to_string(),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Ok(ArchiveVerificationOutcome::TrudApiError(e.to_string()));
+                }
+            }
+        }
+    }
+
+    // 3. Neither
+    Ok(ArchiveVerificationOutcome::Unverified)
+}
+
+fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, progress: &Progress) -> Result<()> {
+    let oci_fetcher = crate::commands::pull::HttpOciFetcher;
+    let trud_fetcher = args.api_key.as_ref().filter(|k| !k.trim().is_empty()).map(|k| UreqTrudFetcher::new(k, args.verbose));
+    run_local_archive_with_fetchers(args, workspace_root, local_path, progress, trud_fetcher.as_ref(), Some(&oci_fetcher))
+}
+
+pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>(
+    args: &Args,
+    workspace_root: &Path,
+    local_path: &Path,
+    progress: &Progress,
+    trud_fetcher: Option<&F>,
+    oci_fetcher: Option<&OF>,
+) -> Result<()> {
+    let zip_file = resolve_zip_file(local_path)?;
     let file_name = zip_file.file_name()
         .and_then(|s| s.to_str())
         .context("Invalid archive filename UTF-8")?
         .to_string();
     let file_size = std::fs::metadata(&zip_file)?.len();
 
-    let (release_date, trud_name) = parse_trud_filename(&file_name)?;
+    let (release_date, trud_name) = parse_trud_filename(&file_name).unwrap_or_else(|_| (String::new(), None));
+    if release_date.is_empty() {
+        anyhow::bail!(
+            "Unrecognized TRUD ZIP filename format '{}'. Expected format: hscorgrefdataxml_data_<VERSION>_<YYYYMMDD...>.zip",
+            file_name
+        );
+    }
+
+    progress.step(&format!("{}   reading publication metadata…", release_date));
+    let local_sha256 = compute_file_sha256(&zip_file)?;
+
+    let outcome = verify_archive(
+        &release_date,
+        &local_sha256,
+        workspace_root,
+        args.index.as_deref(),
+        true,
+        trud_fetcher,
+        oci_fetcher,
+    )?;
+
+    if let ArchiveVerificationOutcome::Mismatch { source_name, expected_sha256, actual_sha256 } = outcome {
+        progress.error(
+            "SHA-256 Checksum Failed!",
+            &[
+                &format!("Local SHA-256: {}", actual_sha256),
+                &format!("{} SHA-256: {}", source_name, expected_sha256),
+            ],
+        );
+        return Err(crate::commands::pull::AlreadyReported.into());
+    }
+
+    if let ArchiveVerificationOutcome::TrudApiError(ref err) = outcome {
+        progress.settle(&format!("! TRUD API check failed: {}", err));
+    }
+
+    let verified_source = outcome.verification_source().unwrap_or(crate::provenance::TrudVerificationSource::Unverified);
 
     let (dest_dir, trud_dir, is_workspace) = match &args.output {
         Some(out) => {
@@ -1204,9 +1384,6 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         std::fs::copy(&zip_file, &dest_path)?;
     }
 
-    progress.step(&format!("{}   reading publication metadata…", release_date));
-    let local_sha256 = compute_file_sha256(&dest_path)?;
-
     let release_item = TrudReleaseItem {
         id: TRUD_ODS_ITEM_ID.to_string(),
         name: trud_name,
@@ -1222,7 +1399,7 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         &dest_dir,
         &release_item,
         &local_sha256,
-        crate::provenance::TrudVerificationSource::Unverified,
+        verified_source,
         progress,
     )?;
     let mut pin_moved = false;
@@ -1230,11 +1407,34 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
         pin_moved = update_active_release_link_if_changed(workspace_root, &release_date)?;
     }
 
-    progress.settle(&format!(
-        "* {}  {}  local archive, no TRUD checksum to compare",
-        release_date,
-        format_size(file_size)
-    ));
+    match outcome {
+        ArchiveVerificationOutcome::VerifiedPublished { .. } => {
+            progress.settle(&format!(
+                "✓ {}  {}  local archive, SHA-256 verified by ods release index",
+                release_date,
+                format_size(file_size)
+            ));
+        }
+        ArchiveVerificationOutcome::VerifiedTrud { .. } => {
+            progress.settle(&format!(
+                "✓ {}  {}  local archive, SHA-256 verified by TRUD API",
+                release_date,
+                format_size(file_size)
+            ));
+        }
+        ArchiveVerificationOutcome::Unverified | ArchiveVerificationOutcome::TrudApiError(_) => {
+            progress.settle(&format!(
+                "* {}  {}  local archive, no TRUD checksum to compare",
+                release_date,
+                format_size(file_size)
+            ));
+            if args.api_key.as_deref().map(|k| k.trim().is_empty()).unwrap_or(true) {
+                progress.settle_detail("Set TRUD_API_KEY to check it against TRUD");
+            }
+        }
+        _ => {}
+    }
+
     progress.settle_detail("attestations: none — no API response to fetch them from");
     if progress.caps().verbose {
         progress.settle_detail(&format!("SHA-256: {}", local_sha256));
@@ -1248,7 +1448,7 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
             trud_release_date: Some(release_date),
             trud_release_filesize_bytes: Some(file_size),
             trud_release_sha256: Some(local_sha256),
-            trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
+            trud_release_sha256_verified: Some(verified_source),
             status: "local".to_string(),
             path: Some(dest_dir.display().to_string()),
             error: None,
@@ -1257,6 +1457,97 @@ fn run_local_archive(args: &Args, workspace_root: &Path, local_path: &Path, prog
 
     progress.finish("Done!");
     Ok(())
+}
+
+pub fn run_verify_only_with_fetchers<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>(
+    args: &Args,
+    workspace_root: &Path,
+    verify_path: &Path,
+    progress: &Progress,
+    trud_fetcher: Option<&F>,
+    oci_fetcher: Option<&OF>,
+) -> Result<()> {
+    let zip_file = resolve_zip_file(verify_path)?;
+    let file_name = zip_file.file_name()
+        .and_then(|s| s.to_str())
+        .context("Invalid archive filename UTF-8")?
+        .to_string();
+    let file_size = std::fs::metadata(&zip_file)?.len();
+
+    let (release_date, _) = parse_trud_filename(&file_name).unwrap_or_else(|_| (String::new(), None));
+    if release_date.is_empty() {
+        anyhow::bail!(
+            "Unrecognized TRUD ZIP filename format '{}'. Expected format: hscorgrefdataxml_data_<VERSION>_<YYYYMMDD...>.zip",
+            file_name
+        );
+    }
+
+    progress.step(&format!("verifying archive SHA-256 for {}…", release_date));
+    let local_sha256 = compute_file_sha256(&zip_file)?;
+
+    let outcome = verify_archive(
+        &release_date,
+        &local_sha256,
+        workspace_root,
+        args.index.as_deref(),
+        true,
+        trud_fetcher,
+        oci_fetcher,
+    )?;
+
+    match outcome {
+        ArchiveVerificationOutcome::VerifiedPublished { .. } => {
+            progress.settle(&format!(
+                "✓ {}  {}  SHA-256 verified by ods release index",
+                release_date,
+                format_size(file_size)
+            ));
+            progress.finish("");
+            Ok(())
+        }
+        ArchiveVerificationOutcome::VerifiedTrud { .. } => {
+            progress.settle(&format!(
+                "✓ {}  {}  SHA-256 verified by TRUD API",
+                release_date,
+                format_size(file_size)
+            ));
+            progress.finish("");
+            Ok(())
+        }
+        ArchiveVerificationOutcome::TrudApiError(ref err) => {
+            progress.settle(&format!("! TRUD API check failed: {}", err));
+            progress.error(
+                &format!("{}  no published SHA-256 to compare against", release_date),
+                &[&format!(
+                    "The ods release index has no entry for {}. TRUD API check failed: {}",
+                    release_date, err
+                )],
+            );
+            anyhow::bail!(crate::commands::pull::AlreadyReported);
+        }
+        ArchiveVerificationOutcome::Unverified => {
+            progress.error(
+                &format!("{}  no published SHA-256 to compare against", release_date),
+                &[&format!(
+                    "The ods release index has no entry for {}. Set TRUD_API_KEY to check it against TRUD.",
+                    release_date
+                )],
+            );
+            anyhow::bail!(crate::commands::pull::AlreadyReported);
+        }
+        ArchiveVerificationOutcome::Mismatch { source_name, expected_sha256, actual_sha256 } => {
+            let bad_path = mark_bad_sha_file(&zip_file);
+            progress.error(
+                "SHA-256 Checksum Failed!",
+                &[
+                    &format!("Local SHA-256: {}", actual_sha256),
+                    &format!("{} SHA-256: {}", source_name, expected_sha256),
+                    &format!("Renamed bad local file to {}", bad_path.display()),
+                ],
+            );
+            anyhow::bail!(crate::commands::pull::AlreadyReported);
+        }
+    }
 }
 
 fn write_provenance_json_with_verification(

@@ -25,12 +25,20 @@ pub enum TrudCommand {
     /// Verify local release archive SHA-256 against TRUD REST API
     Verify {
         /// Local archive file or directory to verify
-        #[arg(long, short)]
-        path: Option<PathBuf>,
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
 
         /// TRUD API Key
         #[arg(long, env = "TRUD_API_KEY")]
         api_key: Option<String>,
+
+        /// Custom release index URL or file path
+        #[arg(long, hide = true)]
+        index: Option<String>,
+
+        /// Workspace path (defaults to ./ods_data)
+        #[arg(long, short = 'w')]
+        workspace: Option<PathBuf>,
     },
 }
 
@@ -40,10 +48,12 @@ pub fn run(args: TrudArgs) -> Result<()> {
         TrudCommand::Pull(fetch_args) => crate::commands::fetch::run(fetch_args),
         TrudCommand::Diff(diff_args) => crate::commands::diff::run(diff_args),
         TrudCommand::Audit(audit_args) => crate::commands::audit::run(audit_args),
-        TrudCommand::Verify { path, api_key } => {
+        TrudCommand::Verify { path, api_key, index, workspace } => {
             let fetch_args = crate::commands::fetch::Args {
                 api_key,
-                verify_only: path,
+                verify_only: Some(path),
+                index,
+                workspace,
                 ..Default::default()
             };
             crate::commands::fetch::run(fetch_args)

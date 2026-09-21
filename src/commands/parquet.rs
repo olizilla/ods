@@ -132,13 +132,53 @@ pub fn run(args: Args) -> Result<PathBuf> {
                     input_path.display()
                 );
             }
-            eprintln!(
-                "! No provenance info found for {}. Source is unverified.",
-                input_path.display()
-            );
-            crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
-                &archive_info.archive_path,
-            )
+            let local_sha256 = crate::provenance::compute_file_sha256(&archive_info.archive_path)?;
+            let ws_root = crate::workspace::find_workspace_root_from(&output_path, None).ok().flatten()
+                .or_else(|| crate::workspace::find_workspace_root_from(&input_path, None).ok().flatten())
+                .or_else(|| std::env::current_dir().ok().and_then(|cwd| crate::workspace::find_workspace_root_from(&cwd, None).ok().flatten()))
+                .unwrap_or_else(|| PathBuf::from(crate::workspace::DEFAULT_WORKSPACE_DIR));
+
+            let outcome = crate::commands::fetch::verify_archive::<crate::commands::fetch::UreqTrudFetcher, crate::commands::pull::HttpOciFetcher>(
+                &archive_info.release_date,
+                &local_sha256,
+                &ws_root,
+                None,
+                false,
+                None,
+                None,
+            )?;
+
+            match outcome {
+                crate::commands::fetch::ArchiveVerificationOutcome::VerifiedPublished { .. } => {
+                    eprintln!(
+                        "✓ {}  SHA-256 verified by ods release index",
+                        input_path.display()
+                    );
+                    let mut prov = crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
+                        &archive_info.archive_path,
+                    );
+                    if let Some(ref mut p) = prov {
+                        p.trud_release_sha256_verified = Some(crate::provenance::TrudVerificationSource::PublishedRelease);
+                    }
+                    prov
+                }
+                crate::commands::fetch::ArchiveVerificationOutcome::Mismatch { source_name, expected_sha256, actual_sha256 } => {
+                    eprintln!(
+                        "✖ SHA-256 Checksum Failed!\n  Local SHA-256: {}\n  {} SHA-256: {}",
+                        actual_sha256, source_name, expected_sha256
+                    );
+                    return Err(crate::commands::pull::AlreadyReported.into());
+                }
+                _ => {
+                    eprintln!(
+                        "! No provenance info found for {}. Source is unverified.",
+                        input_path.display()
+                    );
+                    crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
+                        &archive_info.archive_path,
+                    )
+                }
+            }
         }
     };
 

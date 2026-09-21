@@ -14,6 +14,10 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    run_with_writer(args, std::io::stderr())
+}
+
+pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Result<()> {
     let ws = Workspace::open_or_create(args.workspace.as_deref())?;
     let workspace_root = ws.root().to_path_buf();
 
@@ -34,34 +38,6 @@ pub fn run(args: Args) -> Result<()> {
         crate::index::OdsReleaseIndex::baked().unwrap_or_default()
     };
 
-    let outcome = crate::workspace::verify_release_dir(&release_dir, Some(&index));
-    match outcome {
-        crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
-            eprintln!("✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version);
-        }
-        crate::workspace::VerificationOutcome::VerifiedUnpublished { digest, .. } => {
-            eprintln!("* reconstructed manifest {} verified (unpublished local release)", digest);
-        }
-        crate::workspace::VerificationOutcome::Mismatch { date, version, expected_digest, reconstructed_digest } => {
-            bail!(
-                "✖ reconstructed manifest {} does not match the index for {} ({}): {}\n  A file in this directory does not match the published release.",
-                reconstructed_digest,
-                date,
-                version,
-                expected_digest
-            );
-        }
-        crate::workspace::VerificationOutcome::Corrupted(err) => {
-            bail!(
-                "✖ Release {} in {} is invalid: {}\n  Run 'ods pull --force {}' to repair it.",
-                args.release_date,
-                workspace_root.display(),
-                err,
-                args.release_date
-            );
-        }
-    }
-
     let already_active = if let Ok((active_date, _)) = ws.active_release() {
         active_date == args.release_date
     } else {
@@ -71,11 +47,42 @@ pub fn run(args: Args) -> Result<()> {
     ws.set_active(&args.release_date)?;
 
     if already_active {
-        eprintln!("* Release {} already active", args.release_date);
+        writeln!(err_writer, "* Release {} already active", args.release_date)?;
     } else {
-        eprintln!("✓ Active release set to {}", args.release_date);
+        writeln!(err_writer, "✓ Active release set to {}", args.release_date)?;
     }
-    eprintln!("  current → releases/{}", args.release_date);
+    writeln!(err_writer, "  current → releases/{}", args.release_date)?;
+
+    let outcome = crate::workspace::verify_release_dir(&release_dir, Some(&index));
+    match outcome {
+        crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
+            writeln!(err_writer, "✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version)?;
+        }
+        crate::workspace::VerificationOutcome::VerifiedUnpublished { digest, .. } => {
+            writeln!(err_writer, "* reconstructed manifest {} verified (unpublished local release)", digest)?;
+        }
+        crate::workspace::VerificationOutcome::Mismatch { date, version, expected_digest, reconstructed_digest } => {
+            writeln!(
+                err_writer,
+                "! releases/{} does not match the published {} ({})\n  expected manifest {}\n  got      {}\n  Repair it: ods pull --force {}",
+                args.release_date,
+                date,
+                version,
+                expected_digest,
+                reconstructed_digest,
+                args.release_date
+            )?;
+        }
+        crate::workspace::VerificationOutcome::Corrupted(err) => {
+            writeln!(
+                err_writer,
+                "! releases/{} can't be checked: {}\n  Repair it: ods pull --force {}",
+                args.release_date,
+                err,
+                args.release_date
+            )?;
+        }
+    }
 
     Ok(())
 }

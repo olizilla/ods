@@ -221,14 +221,14 @@ fn test_resolve_prefers_highest_non_withdrawn_semver() -> Result<()> {
     )]);
     index.releases[0].datasets[0].withdrawn = Some("roles table truncated".to_string());
 
-    let (rel, ds) = index.resolve(Some("2026-07-31"))?;
-    assert_eq!(rel.trud_release_date, "2026-07-31");
-    assert_eq!(ds.dataset_version, "1.0.1");
+    let res = index.resolve(Some("2026-07-31"))?;
+    assert_eq!(res.release.trud_release_date, "2026-07-31");
+    assert_eq!(res.dataset.dataset_version, "1.0.1");
     Ok(())
 }
 
 #[test]
-fn test_resolve_refuses_when_all_versions_for_date_withdrawn() {
+fn test_resolve_delivers_withdrawn_when_all_versions_for_date_withdrawn() -> Result<()> {
     let mut index = make_v1_index(&[(
         "2026-07-31",
         "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
@@ -238,11 +238,15 @@ fn test_resolve_refuses_when_all_versions_for_date_withdrawn() {
     index.releases[0].datasets[0].withdrawn =
         Some("roles table truncated at 65535 rows by a bad build".to_string());
 
-    let result = index.resolve(Some("2026-07-31"));
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("2026-07-31 has no valid release"));
-    assert!(err.contains("1.0.0 was withdrawn: roles table truncated at 65535 rows by a bad build"));
+    let res = index.resolve(Some("2026-07-31"))?;
+    assert_eq!(res.release.trud_release_date, "2026-07-31");
+    assert_eq!(res.dataset.dataset_version, "1.0.0");
+    assert!(res.dataset.is_withdrawn());
+    assert_eq!(
+        res.dataset.withdrawn.as_deref(),
+        Some("roles table truncated at 65535 rows by a bad build")
+    );
+    Ok(())
 }
 
 #[test]
@@ -268,7 +272,7 @@ fn test_merge_propagates_withdrawal_to_baked_release() -> Result<()> {
 }
 
 #[test]
-fn test_resolve_none_refuses_when_newest_date_is_withdrawn() {
+fn test_resolve_none_skips_withdrawn_newest_date() -> Result<()> {
     let mut index = make_v1_index(&[
         (
             "2026-07-31",
@@ -285,11 +289,32 @@ fn test_resolve_none_refuses_when_newest_date_is_withdrawn() {
     ]);
     index.releases[0].datasets[0].withdrawn = Some("critical corruption in roles".to_string());
 
+    let res = index.resolve(None)?;
+    assert_eq!(res.release.trud_release_date, "2026-05-29");
+    assert_eq!(res.dataset.dataset_version, "1.0.0");
+    assert_eq!(res.skipped.len(), 1);
+    assert_eq!(res.skipped[0].0.trud_release_date, "2026-07-31");
+    assert_eq!(res.skipped[0].1.dataset_version, "1.0.0");
+    Ok(())
+}
+
+#[test]
+fn test_resolve_none_fails_when_every_release_is_withdrawn() {
+    let mut index = make_v1_index(&[
+        (
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("1.0.0", "sha256:2222000000000000000000000000000000000000000000000000000000000000")],
+        ),
+    ]);
+    index.releases[0].datasets[0].withdrawn = Some("critical corruption in roles".to_string());
+
     let result = index.resolve(None);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("2026-07-31 has no valid release"));
-    assert!(err.contains("critical corruption in roles"));
+    assert!(err.contains("Every release in the index is withdrawn"));
+    assert!(err.contains("See them: ods pull --list"));
 }
 
 #[test]
@@ -332,3 +357,65 @@ fn test_workspace_release_index_save_and_load() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_resolve_none_fails_when_all_releases_have_empty_datasets() {
+    let mut index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:2222000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    index.releases[0].datasets.clear();
+
+    let result = index.resolve(None);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert_eq!(err, "Release index contains no releases");
+}
+
+#[test]
+fn test_resolve_none_fails_when_releases_is_empty() {
+    let index = make_v1_index(&[]);
+    let result = index.resolve(None);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert_eq!(err, "Release index contains no releases");
+}
+
+#[test]
+fn test_select_dataset_helper() {
+    let mut index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[
+            ("1.0.0", "sha256:1111000000000000000000000000000000000000000000000000000000000000"),
+            ("1.0.1", "sha256:2222000000000000000000000000000000000000000000000000000000000000"),
+            ("1.0.2", "sha256:3333000000000000000000000000000000000000000000000000000000000000"),
+        ],
+    )]);
+
+    // With all active: returns highest active (1.0.2, false)
+    let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
+    assert_eq!(ds.dataset_version, "1.0.2");
+    assert!(!is_withdrawn);
+
+    // With 1.0.2 withdrawn: returns highest active (1.0.1, false)
+    index.releases[0].datasets[2].withdrawn = Some("bug in 1.0.2".to_string());
+    let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
+    assert_eq!(ds.dataset_version, "1.0.1");
+    assert!(!is_withdrawn);
+
+    // With all withdrawn: returns highest withdrawn (1.0.2, true)
+    index.releases[0].datasets[0].withdrawn = Some("bug in 1.0.0".to_string());
+    index.releases[0].datasets[1].withdrawn = Some("bug in 1.0.1".to_string());
+    let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
+    assert_eq!(ds.dataset_version, "1.0.2");
+    assert!(is_withdrawn);
+
+    // With empty datasets: returns None
+    index.releases[0].datasets.clear();
+    assert!(ods::index::select_dataset(&index.releases[0]).is_none());
+}
+

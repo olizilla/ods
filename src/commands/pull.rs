@@ -280,11 +280,21 @@ pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
         return pull_all_releases_cmd(workspace_root, &index, &args, fetcher, &progress);
     }
 
-    let (target_release, target_dataset) = index.resolve(args.release_date.as_deref())?;
-    pull_single_release(workspace_root, &index, target_release, target_dataset, &args, fetcher, &progress)
+    let resolved = index.resolve(args.release_date.as_deref())?;
+    for (skipped_rel, skipped_ds) in &resolved.skipped {
+        let reason = skipped_ds.withdrawn.as_deref().unwrap_or("withdrawn by maintainer");
+        eprintln!(
+            "! {} ({}) was withdrawn: {}\n  Pulling {} instead",
+            skipped_rel.trud_release_date,
+            skipped_ds.dataset_version,
+            reason,
+            resolved.release.trud_release_date,
+        );
+    }
+    pull_single_release(workspace_root, &index, resolved.release, resolved.dataset, &args, fetcher, &progress)
 }
 
-pub fn resolve_index_with_baked<F: OciBlobFetcher>(
+pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
     workspace_root: &Path,
     fetcher: &F,
     baked_override: Option<OdsReleaseIndex>,
@@ -528,6 +538,15 @@ fn pull_single_release<F: OciBlobFetcher>(
                         date, version
                     );
                     eprintln!("  current → releases/{}", release.trud_release_date);
+                    if let Some(ref reason) = dataset.withdrawn {
+                        eprintln!(
+                            "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
+                            release.trud_release_date,
+                            dataset.dataset_version,
+                            reason
+                        );
+                        return Err(AlreadyReported.into());
+                    }
                     return Ok(());
                 } else {
                     eprintln!(
@@ -716,6 +735,16 @@ fn pull_single_release<F: OciBlobFetcher>(
             mirror.host()
         );
         eprintln!("  current → releases/{}", release.trud_release_date);
+
+        if let Some(ref reason) = dataset.withdrawn {
+            eprintln!(
+                "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
+                release.trud_release_date,
+                dataset.dataset_version,
+                reason
+            );
+            return Err(AlreadyReported.into());
+        }
 
         return Ok(());
     }

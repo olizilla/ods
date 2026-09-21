@@ -29,14 +29,16 @@ fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, Path
     fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.tool_version = Some("0.4.3".to_string());
-    prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
-    prov.tool_git_dirty = Some(false);
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-08-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some(zip_sha256.clone()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        tool_version: Some("0.4.3".to_string()),
+        tool_git_sha: Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string()),
+        tool_git_dirty: Some(false),
+        ..Default::default()
+    };
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -159,7 +161,7 @@ fn test_cite_all_formats_output_dataset_version_and_manifest_digest() -> Result<
 }
 
 #[test]
-fn test_cite_refuses_when_release_is_withdrawn() {
+fn test_cite_withdrawn_release_delivers_citation_and_warns() -> Result<()> {
     let (tmp, rel_dir) = setup_test_release_for_cite(Some(
         "roles table truncated at 65535 rows by a bad build",
     ));
@@ -176,41 +178,53 @@ fn test_cite_refuses_when_release_is_withdrawn() {
         tmp.path(),
     );
 
-    assert!(res.is_err());
-    let err = res.unwrap_err().to_string();
-    assert!(err.contains("Refusing to cite 2026-08-31 v1.0.1"));
-    assert!(err.contains("roles table truncated at 65535 rows by a bad build"));
-    assert!(err.contains("Update to a valid release: ods pull 2026-08-31"));
+    assert!(res.is_err(), "withdrawn release citation must return error exit 1");
+    let err = res.unwrap_err();
+    assert!(
+        err.chain().any(|c| c.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some()),
+        "must exit via AlreadyReported"
+    );
+
+    let out = String::from_utf8(buf)?;
+    assert!(out.contains("* Source: releases/2026-08-31 (1.0.1)"));
+    assert!(out.contains("How to Cite"));
+
+    Ok(())
 }
 
 #[test]
-fn test_pull_refuses_when_release_is_withdrawn() {
-    let json = r#"{
-      "$schema": "https://ods.fyi/schema/releases.v1.json",
-      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
-      "mirrors": [],
-      "releases": [
-        {
-          "trud_release_date": "2026-07-31",
-          "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "trud_release_filesize_bytes": 37983173,
-          "datasets": [
-            {
-              "dataset_version": "1.0.0",
-              "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
-              "withdrawn": "roles table truncated at 65535 rows by a bad build"
-            }
-          ]
-        }
-      ]
-    }"#;
-    let index: ods::index::OdsReleaseIndex = serde_json::from_str(json).unwrap();
+fn test_cite_withdrawn_release_bibtex_acceptance() -> Result<()> {
+    let (tmp, rel_dir) = setup_test_release_for_cite(Some(
+        "roles table truncated at 65535 rows by a bad build",
+    ));
+    let fetcher = MockCiteFetcher { remote_index: None };
 
-    let res = index.resolve(Some("2026-07-31"));
-    assert!(res.is_err());
-    let err = res.unwrap_err().to_string();
-    assert!(err.contains("2026-07-31 has no valid release"));
-    assert!(err.contains("1.0.0 was withdrawn: roles table truncated at 65535 rows by a bad build"));
+    let mut buf = Vec::new();
+    let res = ods::commands::cite::run_with_writer_and_fetcher(
+        CiteArgs {
+            format: "bibtex".to_string(),
+            input: Some(rel_dir),
+        },
+        &mut buf,
+        &fetcher,
+        tmp.path(),
+    );
+
+    assert!(res.is_err(), "withdrawn release bibtex citation must return error exit 1");
+    let err = res.unwrap_err();
+    assert!(
+        err.chain().any(|c| c.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some()),
+        "must exit via AlreadyReported"
+    );
+
+    let out = String::from_utf8(buf)?;
+    let line_count = out.lines().count();
+    assert_eq!(line_count, 29);
+    assert!(out.contains("@misc{ods-data/2026-08-31_1.0.1,"));
+    assert!(out.contains("@misc{ods/v0.4.3,"));
+    assert!(out.contains("@misc{nhs-ods-xml/2026-08-31,"));
+
+    Ok(())
 }
 
 #[test]
@@ -340,15 +354,16 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
 
     fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content")?;
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}")?;
-
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.tool_version = Some("0.4.3".to_string());
-    prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
-    prov.tool_git_dirty = Some(false);
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-08-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some(zip_sha256.clone()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        tool_version: Some("0.4.3".to_string()),
+        tool_git_sha: Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string()),
+        tool_git_dirty: Some(false),
+        ..Default::default()
+    };
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
@@ -376,10 +391,16 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
         &mut buf,
     );
 
-    assert!(res.is_err(), "cite must refuse withdrawn release");
-    let err = res.unwrap_err().to_string();
-    assert!(err.contains("This release was withdrawn: critical schema defect discovered in release"));
-    assert!(err.contains("Update to a valid release: ods pull 2026-08-31"));
+    assert!(res.is_err(), "cite must return error (exit 1) for withdrawn release");
+    let err = res.unwrap_err();
+    assert!(
+        err.chain().any(|c| c.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some()),
+        "must exit via AlreadyReported"
+    );
+
+    let out = String::from_utf8(buf)?;
+    assert!(out.contains("* Source: releases/2026-08-31 (1.0.1)"));
+    assert!(out.contains("How to Cite"));
 
     Ok(())
 }
@@ -391,10 +412,12 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
     let rel_dir = ws.join("releases").join("2026-08-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-08-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-08-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        ..Default::default()
+    };
     fs::write(
         rel_dir.join(PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),

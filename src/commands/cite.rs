@@ -89,17 +89,13 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).warn_reading();
 
-    // Decline citation if source archive is unverified
+    // Check whether source archive is unverified
     let verification_status = prov.as_ref().and_then(|p| p.trud_release_sha256_verified);
-    match verification_status {
+    let is_unverified = !matches!(
+        verification_status,
         Some(crate::provenance::TrudVerificationSource::TrudApi)
-        | Some(crate::provenance::TrudVerificationSource::PublishedRelease) => {}
-        _ => {
-            anyhow::bail!(
-                "✖ Cannot generate citation for unverified release\n  The source TRUD archive has not been verified against an upstream TRUD API checksum."
-            );
-        }
-    }
+            | Some(crate::provenance::TrudVerificationSource::PublishedRelease)
+    );
 
     let prov_unwrapped = prov.as_ref().cloned().unwrap_or_default();
     let dataset_version = crate::datapackage::read_dataset_version_from_dir(&input_dir)
@@ -144,6 +140,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     // 4. Check for withdrawal in index
     let mut dataset_doi: Option<String> = None;
+    let mut withdrawal_reason: Option<String> = None;
     let d_ref = &trud_date;
     let dataset = index
         .releases
@@ -153,10 +150,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     if let Some(entry) = dataset {
         if let Some(ref reason) = entry.withdrawn {
-            anyhow::bail!(
-                "✖ Refusing to cite {} v{}\n  This release was withdrawn: {}\n  Update to a valid release: ods pull {}",
-                d_ref, dataset_version, reason, d_ref
-            );
+            withdrawal_reason = Some(reason.clone());
         }
         dataset_doi = entry.dataset_doi.clone();
     }
@@ -429,6 +423,21 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let is_human = args.format == "text";
     crate::workspace::check_and_emit_staleness_nudge(&input_dir, is_human);
+
+    if is_unverified {
+        eprintln!(
+            "! {} ({}) is unverified: its source archive was not checked against a published SHA-256",
+            trud_date, dataset_version
+        );
+    }
+
+    if let Some(ref reason) = withdrawal_reason {
+        eprintln!(
+            "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
+            trud_date, dataset_version, reason
+        );
+        return Err(crate::commands::pull::AlreadyReported.into());
+    }
 
     Ok(())
 }
