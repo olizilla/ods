@@ -42,7 +42,8 @@ Query the hosted Parquet files directly with `duckdb` without installing `ods`:
 duckdb -c "
   SELECT ods_code, name, postcode, role_names
     FROM 'https://ods.fyi/orgs.parquet'
-   WHERE list_contains(role_names, 'GP Practice')
+   WHERE status = 'active'
+   AND list_contains(role_names, 'GP Practice')
    AND postcode LIKE 'SW9%';"
 ```
 
@@ -92,8 +93,7 @@ ods_data/
 └── releases/
     └── 2026-07-31/                    # Release directory
         ├── _provenance.json           # Source TRUD metadata & SHA-256 derived hashes
-        ├── orgs.parquet               # Active orgs & sites (Primary analytical table)
-        ├── orgs_all.parquet           # All orgs (active + inactive)
+        ├── orgs.parquet               # Every org & site, active first: filter on status (Primary analytical table)
         ├── relationships.parquet      # Target relationship links (ICB, Trust, PCN)
         ├── roles.parquet              # Primary & secondary roles (Holdings table)
         ├── successions.parquet        # Entity successor chains

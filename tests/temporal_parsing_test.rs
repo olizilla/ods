@@ -24,8 +24,8 @@ const FIXTURE_XML: &str = concat!(
 );
 
 fn parse_fixture() -> Vec<ods_xml::OdsRecord> {
-    let (_prov, _cmap, parsed, _) = ods_xml::parse_single_pass(Path::new(FIXTURE_XML)).expect("parse_single_pass should succeed");
-    let resolved = ods_xml::convert_parsed_orgs(parsed);
+    let release = ods_xml::parse_release_at(Path::new(FIXTURE_XML)).expect("parse_release_at should succeed");
+    let resolved = ods_xml::convert_parsed_orgs(release.orgs);
     resolved.into_values().collect()
 }
 

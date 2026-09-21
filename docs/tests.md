@@ -6,9 +6,9 @@ them: each test enforces one, and a failing test names the one that broke.
 ## The data
 
 - **D1. Same zip, same bytes.** `ods make` builds byte-identical Parquet files from the same TRUD zip at the same dataset version, on any machine, operating system, CPU architecture, Rust toolchain or working directory.
-- **D2. The schema is the contract.** The Parquet files match `data/datapackage.json` and [parquet.md](./parquet.md): the same tables, columns, column order and types.
+- **D2. The schema is the contract.** The Parquet files match `data/datapackage.json` and [parquet.md](./parquet.md): the same tables, columns, column order and types. `orgs` rows are sorted by `status`, then `ods_code`, so active rows come first.
 - **D3. Facts land where the XML puts them.** Each date, status and code is read from the element it belongs to. A role's status stays on the role, and legal and operational dates stay distinct.
-- **D4. `orgs_all` is the whole release, `orgs` its active part.** `orgs_all` holds every record in the release XML, matching the manifest's `RecordCount`, and `orgs` holds the active ones.
+- **D4. `orgs` is every organisation in the release.** `ods make` reads both XML files of a TRUD release, `fullfile.zip` and `archive.zip`, into one table, keeping the complete record wherever the other file holds only a `refOnly` stub. The records read match the manifests' `RecordCount` totals. A code with two stubs fails the build; a code with two complete records resolves to one, the full file's over the archive's and then the later operational start, and fails only when the source doesn't say which starts later. The record dropped is named on stderr.
 
 ## Releases
 
@@ -26,7 +26,7 @@ them: each test enforces one, and a failing test names the one that broke.
 - **B1. The source archive is checked.** An archive downloaded by `ods trud pull` is checked against TRUD's SHA-256. An archive supplied from disk is checked against the ods release index, then against the TRUD API when `TRUD_API_KEY` is set. A mismatch fails, and an archive neither source knows is recorded as unverified.
 - **B2. The API key stays secret.** `TRUD_API_KEY` appears in no output and in no file `ods` writes.
 - **B3. Provenance is carried, not invented.** `ods make` carries the archive's provenance into the release. An archive without a TRUD checksum builds with a warning, a directory without provenance fails, and a value nobody supplied reads `unknown`.
-- **B4. Audit catches disagreement.** `ods trud audit` fails when a release's Parquet files, provenance or file list disagree with its source XML.
+- **B4. Audit catches disagreement.** `ods trud audit` fails when a release's Parquet files, provenance or file list disagree with either of its source XML files, and names an organisation the XML holds that `orgs` lacks.
 - **B5. Same files, same manifest.** `ods make oci` packs the same manifest digest from the same files in any directory, and refuses a layout whose digests disagree.
 - **B6. Releases come from a clean tree.** `ods make release` refuses a dirty working tree, a tool commit that differs from the build's, a duplicate index row, and unverified provenance.
 - **B7. `ods make` leaves the active release alone.** Building a release does not change which release is active.
@@ -38,7 +38,8 @@ them: each test enforces one, and a failing test names the one that broke.
 - **Q3. Values add rows, flags remove them.** Values given to `--in`, repeated or comma-separated, combine as a union. Different flags combine as an intersection, so adding `--gp` or `--role` never adds rows.
 - **Q4. `--sql` returns what `find` returned.** Run in DuckDB, the query returns the same set of rows as `ods find`. The order matches wherever we can make it match, and the tests check it, but the order is not guaranteed.
 - **Q5. `info` shows the whole record.** `ods info <code>` accepts a code in any letter case, shows its relationships and succession chain, and fails on an unknown code.
-- **Q6. Holders are active holders.** `ods role` counts the active organisations that actively hold each role.
+- **Q6. Holders are active holders.** `ods role` counts the active organisations that actively hold each role, and every organisation with `--all`.
+- **Q7. Active unless you say `--all`.** `ods find` and `ods role` cover active organisations only; `--all` adds the inactive ones from the same table.
 
 ## Output
 

@@ -119,7 +119,15 @@ pub struct SourceStructuralInvariants {
 }
 
 pub struct RawXmlInvariants {
+    /// Organisations in the release after superseded stubs are set aside.
     pub total_orgs: usize,
+    /// Every `<Organisation>` element across the release's XML files.
+    pub records_read: usize,
+    pub xml_files: usize,
+    /// Stubs set aside because the other file holds their complete record.
+    pub stubs_superseded: usize,
+    /// Complete records set aside because another record for the same code won.
+    pub duplicates_dropped: usize,
     pub active_orgs: usize,
     pub roles_count: usize,
     pub rels_count: usize,
@@ -282,7 +290,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     }
 
     // 1. Locate XML source file
-    let xml_path = crate::ods_xml::find_xml_file(&input_path)?;
+    let xml_paths = crate::ods_xml::find_xml_file(&input_path)?;
 
     // 2. Discover workspace root and active release directory
     let ws = match ws {
@@ -334,8 +342,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         .error_building()?
         .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
         .unwrap_or_else(|| {
-            crate::ods_xml::parse_single_pass(&xml_path)
-                .map(|(p, _, _, _)| p)
+            crate::ods_xml::parse_release(&xml_paths)
+                .map(|r| r.provenance)
                 .unwrap_or_default()
         });
 
@@ -535,7 +543,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // SECTION 2: Source Structural Invariants & Record Parity
     // ------------------------------------------------------------------------
     let sample_limit = if args.full { usize::MAX } else { args.sample };
-    let raw_xml_invariants = scan_raw_xml_invariants(&xml_path, sample_limit)?;
+    let raw_xml_invariants = scan_raw_xml_invariants(&xml_paths, sample_limit)?;
 
     let source_invariants_passed =
         check_source_invariants(&raw_xml_invariants.invariants, &mut discrepancies);
@@ -609,14 +617,13 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         println!("  3. Completeness & Record Parity Checks:");
     }
 
-    let orgs_all_parquet = parquet_dir.join("orgs_all.parquet");
     let orgs_parquet = parquet_dir.join("orgs.parquet");
     let roles_parquet = parquet_dir.join("roles.parquet");
     let rels_parquet = parquet_dir.join("relationships.parquet");
     let succs_parquet = parquet_dir.join("successions.parquet");
 
-    let total_orgs_res = count_records_in_parquet(&orgs_all_parquet);
-    let active_orgs_res = count_records_in_parquet(&orgs_parquet);
+    let total_orgs_res = count_records_in_parquet(&orgs_parquet);
+    let active_orgs_res = count_active_orgs_in_parquet(&orgs_parquet);
     let roles_res = count_records_in_parquet(&roles_parquet);
     let rels_res = count_records_in_parquet(&rels_parquet);
     let succs_res = count_records_in_parquet(&succs_parquet);
@@ -626,9 +633,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         let actual_str = total_orgs_res
             .as_ref()
             .map(|c| c.to_string())
-            .unwrap_or_else(|e| format!("Error reading orgs_all.parquet: {:#}", e));
+            .unwrap_or_else(|e| format!("Error reading orgs.parquet: {:#}", e));
         discrepancies.push(format!(
-            "Entity Parity Error: XML orgs count ({}) != orgs_all.parquet ({})",
+            "Entity Parity Error: XML orgs count ({}) != orgs.parquet ({})",
             raw_xml_invariants.total_orgs, actual_str
         ));
     }
@@ -676,16 +683,26 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             .map(|c| c.to_string())
             .unwrap_or_else(|e| format!("Error reading orgs.parquet: {:#}", e));
         discrepancies.push(format!(
-            "Active Orgs Parity Error: XML active orgs ({}) != orgs.parquet ({})",
+            "Active Orgs Parity Error: XML active orgs ({}) != active rows of orgs.parquet ({})",
             raw_xml_invariants.active_orgs, actual_str
         ));
     }
 
     if !args.json && !quiet_sub_output {
         if entities_match {
+            let fmt = crate::commands::role::format_number_with_commas;
+            let dropped = match raw_xml_invariants.duplicates_dropped {
+                0 => String::new(),
+                n => format!(", {} duplicate records dropped", fmt(n)),
+            };
             println!(
-                "     ✓ Entities: {:<27} # XML orgs count matches orgs_all.parquet",
-                raw_xml_invariants.total_orgs
+                "     ✓ Entities: {:<27} # XML orgs ({} records in {} {}, {} stubs superseded{}) match orgs.parquet",
+                raw_xml_invariants.total_orgs,
+                fmt(raw_xml_invariants.records_read),
+                raw_xml_invariants.xml_files,
+                if raw_xml_invariants.xml_files == 1 { "file" } else { "files" },
+                fmt(raw_xml_invariants.stubs_superseded),
+                dropped
             );
         } else {
             let actual_str = total_orgs_res
@@ -769,15 +786,14 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // SECTION 4: Schema & Referential Integrity Constraints
     // ------------------------------------------------------------------------
     let (duplicate_codes, orphan_roles, orphan_rels, orphan_succs) = audit_referential_integrity(
-        &orgs_all_parquet,
+        &orgs_parquet,
         &roles_parquet,
         &rels_parquet,
         &succs_parquet,
         &mut discrepancies,
     )?;
 
-    let (inactive_in_orgs, role_list_mismatches) =
-        audit_table_invariants(&orgs_parquet, &orgs_all_parquet, &mut discrepancies)?;
+    let role_list_mismatches = audit_table_invariants(&orgs_parquet, &mut discrepancies)?;
 
     // Unaccounted files check: any file in release directory not in manifest layers
     let mut layer_titles: HashSet<String> = HashSet::new();
@@ -848,12 +864,12 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             println!("     ✖ Orphan Successors: {}", orphan_succs);
         }
 
-        if inactive_in_orgs == 0 && role_list_mismatches == 0 {
-            println!("     ✓ Table Invariants: 100% active in orgs.parquet, 100% role_codes/role_names aligned");
+        if role_list_mismatches == 0 {
+            println!("     ✓ Table Invariants: 100% role_codes/role_names aligned");
         } else {
             println!(
-                "     ✖ Table Invariants: {} inactive in orgs.parquet, {} role mismatches",
-                inactive_in_orgs, role_list_mismatches
+                "     ✖ Table Invariants: {} role mismatches",
+                role_list_mismatches
             );
         }
 
@@ -874,7 +890,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // SECTION 5: Field & Derived Column Parity
     // ------------------------------------------------------------------------
     let (sample_parity_passed, derived_parity_passed) = audit_sample_and_derived_parity(
-        &orgs_all_parquet,
+        &orgs_parquet,
         &raw_xml_invariants.sample_orgs,
         &raw_xml_invariants.succession_edges,
         &parquet_dir,
@@ -1013,14 +1029,199 @@ fn check_source_invariants(
     discrepancies.len() == initial_len
 }
 
-fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXmlInvariants> {
-    let file = File::open(xml_path)?;
-    let buf_reader = BufReader::with_capacity(256 * 1024, file);
-    let mut reader = Reader::from_reader(buf_reader);
-    reader.trim_text(true);
+/// What the audit does with one `<Organisation>` element of the release XML.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Skip {
+    /// Counted: the organisation the build writes for this code.
+    Keep,
+    /// A `refOnly` stub whose complete record is in the other file.
+    SupersededStub,
+    /// A complete record beaten by another for the same code.
+    DroppedDuplicate,
+}
+
+/// Decides which organisations of a release the build keeps, from the XML alone.
+///
+/// One flag per organisation in each file, in document order. This is the audit's
+/// own reading of the merge rule, written apart from the build's, so the two can
+/// disagree: a stub with a complete record elsewhere is set aside; of two complete
+/// records for a code, the earlier file's wins, and within one file the later
+/// operational start does. Two stubs for a code, or two complete records in one file
+/// with no way to tell which starts later, fail the audit.
+fn organisation_flags(xml_paths: &[PathBuf]) -> Result<Vec<Vec<Skip>>> {
+    struct Occurrence {
+        file: usize,
+        ordinal: usize,
+        code: String,
+        stub: bool,
+        op_start: Option<String>,
+    }
+    let mut occurrences: Vec<Occurrence> = Vec::new();
+    let mut counts = vec![0usize; xml_paths.len()];
+
+    for (file_idx, path) in xml_paths.iter().enumerate() {
+        let mut reader = Reader::from_reader(BufReader::with_capacity(256 * 1024, File::open(path)?));
+        reader.trim_text(true);
+        let mut buf = Vec::new();
+        let mut depth: u32 = 0;
+        // Depth inside a Role, Rel, Succ or Target, whose dates aren't the organisation's own.
+        let mut nested: u32 = 0;
+        let mut in_org_date = false;
+        let mut date_is_operational = false;
+        let mut stub = false;
+        let mut code = String::new();
+        let mut op_start: Option<String> = None;
+        let mut ordinal = 0usize;
+        loop {
+            let event = reader.read_event_into(&mut buf)?;
+            let is_start = matches!(event, Event::Start(_));
+            match event {
+                Event::Start(ref e) | Event::Empty(ref e) => match e.local_name().as_ref() {
+                    b"Organisation" if is_start => {
+                        depth += 1;
+                        if depth == 1 {
+                            code.clear();
+                            op_start = None;
+                            nested = 0;
+                            in_org_date = false;
+                            stub = e
+                                .attributes()
+                                .flatten()
+                                .any(|a| a.key.as_ref() == b"refOnly" && a.value.as_ref().eq_ignore_ascii_case(b"true"));
+                        }
+                    }
+                    b"Role" | b"Relationship" | b"Rel" | b"Successor" | b"Succ" | b"Target" if is_start && depth == 1 => {
+                        nested += 1;
+                    }
+                    b"Date" if is_start && depth == 1 && nested == 0 => {
+                        in_org_date = true;
+                        date_is_operational = e.attributes().flatten().any(|a| {
+                            a.key.as_ref().eq_ignore_ascii_case(b"type")
+                                && a.value.as_ref().eq_ignore_ascii_case(b"operational")
+                        });
+                    }
+                    b"Type" if in_org_date => {
+                        date_is_operational = e.attributes().flatten().any(|a| {
+                            a.key.as_ref().eq_ignore_ascii_case(b"value")
+                                && a.value.as_ref().eq_ignore_ascii_case(b"operational")
+                        });
+                    }
+                    b"Start" if in_org_date && date_is_operational => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref().eq_ignore_ascii_case(b"value") {
+                                if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                    op_start = Some(val.into_owned());
+                                }
+                            }
+                        }
+                    }
+                    b"OrgId" if depth == 1 && nested == 0 => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"extension" {
+                                if let Ok(val) = attr.decode_and_unescape_value(&reader) {
+                                    code = val.into_owned();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Event::End(ref e) => match e.local_name().as_ref() {
+                    b"Role" | b"Relationship" | b"Rel" | b"Successor" | b"Succ" | b"Target" if depth == 1 => {
+                        nested = nested.saturating_sub(1);
+                    }
+                    b"Date" => in_org_date = false,
+                    b"Organisation" => {
+                        if depth == 1 {
+                            occurrences.push(Occurrence {
+                                file: file_idx,
+                                ordinal,
+                                code: code.clone(),
+                                stub,
+                                op_start: op_start.clone(),
+                            });
+                            ordinal += 1;
+                        }
+                        depth = depth.saturating_sub(1);
+                    }
+                    _ => {}
+                },
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        counts[file_idx] = ordinal;
+    }
+
+    let name = |i: usize| {
+        xml_paths[i].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    };
+    let mut flags: Vec<Vec<Skip>> = counts.iter().map(|n| vec![Skip::Keep; *n]).collect();
+
+    let mut by_code: HashMap<&str, Vec<&Occurrence>> = HashMap::new();
+    for o in &occurrences {
+        by_code.entry(o.code.as_str()).or_default().push(o);
+    }
+    for (code, group) in by_code {
+        if group.len() == 1 {
+            continue;
+        }
+        let stubs: Vec<&&Occurrence> = group.iter().filter(|o| o.stub).collect();
+        let completes: Vec<&&Occurrence> = group.iter().filter(|o| !o.stub).collect();
+        if stubs.len() > 1 {
+            anyhow::bail!(
+                "✖ {} appears twice as a stub in the release XML: in {} and in {}",
+                code,
+                name(stubs[0].file),
+                name(stubs[1].file)
+            );
+        }
+        if completes.is_empty() {
+            continue;
+        }
+        for s in &stubs {
+            flags[s.file][s.ordinal] = Skip::SupersededStub;
+        }
+        // Occurrences are in file order, so the first complete record is the full file's.
+        let mut winner = completes[0];
+        for c in &completes[1..] {
+            let loser = if c.file != winner.file {
+                c
+            } else {
+                match (&winner.op_start, &c.op_start) {
+                    (Some(a), Some(b)) if a != b => {
+                        if b > a {
+                            let old = winner;
+                            winner = c;
+                            old
+                        } else {
+                            c
+                        }
+                    }
+                    _ => anyhow::bail!(
+                        "✖ {} appears twice as a complete record in the release XML: in {} and in {}, and neither says which starts later",
+                        code,
+                        name(winner.file),
+                        name(c.file)
+                    ),
+                }
+            };
+            flags[loser.file][loser.ordinal] = Skip::DroppedDuplicate;
+        }
+    }
+    Ok(flags)
+}
+
+fn scan_raw_xml_invariants(xml_paths: &[PathBuf], max_samples: usize) -> Result<RawXmlInvariants> {
+    let skip_flags = organisation_flags(xml_paths)?;
 
     let mut inv = RawXmlInvariants {
         total_orgs: 0,
+        records_read: 0,
+        xml_files: xml_paths.len(),
+        stubs_superseded: 0,
+        duplicates_dropped: 0,
         active_orgs: 0,
         roles_count: 0,
         rels_count: 0,
@@ -1041,6 +1242,12 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
     let mut rel_primary_role_targets: Vec<(String, String)> = Vec::new();
     let mut rel_target_codes: Vec<String> = Vec::new();
     let mut succ_target_codes: Vec<String> = Vec::new();
+
+    for (file_idx, xml_path) in xml_paths.iter().enumerate() {
+    let file = File::open(xml_path)?;
+    let mut reader = Reader::from_reader(BufReader::with_capacity(256 * 1024, file));
+    reader.trim_text(true);
+    let mut org_seen = 0;
 
     let mut buf = Vec::new();
     let mut org_depth = 0;
@@ -1067,7 +1274,9 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
     let mut current_target_primary_role = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf)? {
+        let event = reader.read_event_into(&mut buf)?;
+        let is_empty_event = matches!(event, Event::Empty(_));
+        match event {
             Event::Start(ref e) | Event::Empty(ref e) => {
                 let name = e.local_name();
                 match name.as_ref() {
@@ -1081,6 +1290,34 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
                         }
                     }
                     b"Organisation" => {
+                        if org_depth == 0 && !in_target {
+                            inv.records_read += 1;
+                            if !is_empty_event {
+                                let ordinal = org_seen;
+                                org_seen += 1;
+                                let skip = skip_flags[file_idx].get(ordinal).copied().unwrap_or(Skip::Keep);
+                                if skip != Skip::Keep {
+                                    // The build doesn't keep this record: read past it, so none of
+                                    // its roles, relationships or dates are counted.
+                                    if skip == Skip::SupersededStub {
+                                        inv.stubs_superseded += 1;
+                                    } else {
+                                        inv.duplicates_dropped += 1;
+                                    }
+                                    let mut skip_buf = Vec::new();
+                                    loop {
+                                        match reader.read_event_into(&mut skip_buf)? {
+                                            Event::End(ref end) if end.local_name().as_ref() == b"Organisation" => break,
+                                            Event::Eof => break,
+                                            _ => {}
+                                        }
+                                        skip_buf.clear();
+                                    }
+                                    buf.clear();
+                                    continue;
+                                }
+                            }
+                        }
                         org_depth += 1;
                         if org_depth == 1 && !in_target {
                             current_record = XmlSampleOrgRecord::default();
@@ -1484,6 +1721,7 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
         }
         buf.clear();
     }
+    }
 
     inv.succs_distinct_count = unique_succ_ids.len();
 
@@ -1517,8 +1755,8 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
     }
 
     // Now populate full succession graph edges from XML parse if available or from fast pass
-    if let Ok((_, _, parsed_orgs, _)) = crate::ods_xml::parse_single_pass(xml_path) {
-        for org in parsed_orgs.values() {
+    if let Ok(release) = crate::ods_xml::parse_release(xml_paths) {
+        for org in release.orgs.values() {
             for succ in &org.successors {
                 let is_pred = succ.succ_type.eq_ignore_ascii_case("predecessor");
                 if is_pred {
@@ -1536,21 +1774,21 @@ fn scan_raw_xml_invariants(xml_path: &Path, max_samples: usize) -> Result<RawXml
 }
 
 fn audit_referential_integrity(
-    orgs_all_parquet: &Path,
+    orgs_parquet: &Path,
     roles_parquet: &Path,
     rels_parquet: &Path,
     succs_parquet: &Path,
     discrepancies: &mut Vec<String>,
 ) -> Result<(usize, usize, usize, usize)> {
-    if !orgs_all_parquet.exists() {
+    if !orgs_parquet.exists() {
         return Ok((0, 0, 0, 0));
     }
 
-    // 1. Check Primary Key Uniqueness on orgs_all.parquet
+    // 1. Check Primary Key Uniqueness on orgs.parquet
     let mut valid_codes = HashSet::new();
     let mut duplicate_codes = 0;
 
-    let file_res = File::open(orgs_all_parquet).and_then(|f| {
+    let file_res = File::open(orgs_parquet).and_then(|f| {
         ParquetRecordBatchReaderBuilder::try_new(f)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     });
@@ -1574,14 +1812,14 @@ fn audit_referential_integrity(
             }
             Err(e) => {
                 discrepancies.push(format!(
-                    "Referential Integrity Error: Failed to read orgs_all.parquet: {:#}",
+                    "Referential Integrity Error: Failed to read orgs.parquet: {:#}",
                     e
                 ));
             }
         },
         Err(e) => {
             discrepancies.push(format!(
-                "Referential Integrity Error: Failed to open orgs_all.parquet: {:#}",
+                "Referential Integrity Error: Failed to open orgs.parquet: {:#}",
                 e
             ));
         }
@@ -1589,14 +1827,14 @@ fn audit_referential_integrity(
 
     if duplicate_codes > 0 {
         discrepancies.push(format!(
-            "PK Uniqueness Error: Found {} duplicate ods_code entries in orgs_all.parquet",
+            "PK Uniqueness Error: Found {} duplicate ods_code entries in orgs.parquet",
             duplicate_codes
         ));
     }
 
     let mut orphan_roles = 0;
     let mut uncurated_roles = 0;
-    // 2. Foreign Key Check: roles.parquet ods_code -> orgs_all.parquet & role_name check
+    // 2. Foreign Key Check: roles.parquet ods_code -> orgs.parquet & role_name check
     if roles_parquet.exists() {
         if let Ok(rfile) = File::open(roles_parquet) {
             if let Ok(rbuilder) = ParquetRecordBatchReaderBuilder::try_new(rfile) {
@@ -1666,7 +1904,7 @@ fn audit_referential_integrity(
     }
 
     let mut orphan_rels = 0;
-    // 2. Foreign Key Check: relationships.parquet target_code / source_code -> orgs_all.parquet
+    // 2. Foreign Key Check: relationships.parquet target_code / source_code -> orgs.parquet
     if rels_parquet.exists() {
         if let Ok(rfile) = File::open(rels_parquet) {
             if let Ok(rbuilder) = ParquetRecordBatchReaderBuilder::try_new(rfile) {
@@ -1718,7 +1956,7 @@ fn audit_referential_integrity(
     }
 
     let mut orphan_succs = 0;
-    // 3. Foreign Key Check: successions.parquet predecessor_code / successor_code -> orgs_all.parquet
+    // 3. Foreign Key Check: successions.parquet predecessor_code / successor_code -> orgs.parquet
     if succs_parquet.exists() {
         if let Ok(sfile) = File::open(succs_parquet) {
             if let Ok(sbuilder) = ParquetRecordBatchReaderBuilder::try_new(sfile) {
@@ -1840,14 +2078,14 @@ fn compute_full_closures(
 }
 
 fn audit_sample_and_derived_parity(
-    orgs_all_parquet: &Path,
+    orgs_parquet: &Path,
     sample_orgs: &HashMap<String, XmlSampleOrgRecord>,
     succession_edges: &[(String, String)],
     _parquet_dir: &Path,
     _trud_release_date: &str,
     discrepancies: &mut Vec<String>,
 ) -> Result<(bool, bool)> {
-    if !orgs_all_parquet.exists() || sample_orgs.is_empty() {
+    if !orgs_parquet.exists() || sample_orgs.is_empty() {
         return Ok((true, true));
     }
 
@@ -1856,12 +2094,13 @@ fn audit_sample_and_derived_parity(
     // 1. Compute 100% full graph closures
     let (succ_closures, pred_closures) = compute_full_closures(succession_edges);
 
-    let file = File::open(orgs_all_parquet)?;
+    let file = File::open(orgs_parquet)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
 
     let mut verbatim_failures = 0;
     let mut derived_failures = 0;
+    let mut sampled_rows_found: HashSet<String> = HashSet::new();
 
     for batch in reader {
         let batch = batch?;
@@ -1950,6 +2189,7 @@ fn audit_sample_and_derived_parity(
         for i in 0..num_rows {
             let code = ods_code_arr.value(i);
             if let Some(xml_sample) = sample_orgs.get(code) {
+                sampled_rows_found.insert(code.to_string());
                 // 1. Verbatim Source Field Parity
                 let p_name = name_arr.value(i);
                 if !p_name.eq_ignore_ascii_case(&xml_sample.name) {
@@ -2168,6 +2408,16 @@ fn audit_sample_and_derived_parity(
         }
     }
 
+    // An organisation the XML holds and the table doesn't is a failure too.
+    let mut missing: Vec<&String> = sample_orgs.keys().filter(|c| !sampled_rows_found.contains(*c)).collect();
+    missing.sort();
+    for code in missing {
+        verbatim_failures += 1;
+        discrepancies.push(format!(
+            "Missing Row ({code}): in the XML but not in orgs.parquet"
+        ));
+    }
+
     let verbatim_ok = verbatim_failures == 0;
     let derived_ok = derived_failures == 0;
 
@@ -2179,10 +2429,8 @@ fn audit_sample_and_derived_parity(
 
 fn audit_table_invariants(
     orgs_parquet: &Path,
-    orgs_all_parquet: &Path,
     discrepancies: &mut Vec<String>,
-) -> Result<(usize, usize)> {
-    let mut inactive_in_orgs = 0;
+) -> Result<usize> {
     let mut role_list_mismatches = 0;
 
     if orgs_parquet.exists() {
@@ -2192,66 +2440,6 @@ fn audit_table_invariants(
         for batch in oreader {
             let batch = batch?;
             let schema = batch.schema();
-            let status_idx = schema.index_of("status")?;
-            let role_codes_idx = schema.index_of("role_codes")?;
-            let role_names_idx = schema.index_of("role_names")?;
-
-            let status_arr = batch
-                .column(status_idx)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let role_codes_arr = batch
-                .column(role_codes_idx)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
-            let role_names_arr = batch
-                .column(role_names_idx)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
-
-            for i in 0..batch.num_rows() {
-                let st = status_arr.value(i);
-                if !st.eq_ignore_ascii_case("active") {
-                    inactive_in_orgs += 1;
-                }
-
-                let rc_val = role_codes_arr.value(i);
-                let rn_val = role_names_arr.value(i);
-                let rc_str = rc_val.as_any().downcast_ref::<StringArray>().unwrap();
-                let rn_str = rn_val.as_any().downcast_ref::<StringArray>().unwrap();
-
-                if rc_str.len() != rn_str.len() {
-                    role_list_mismatches += 1;
-                } else {
-                    for j in 0..rc_str.len() {
-                        let c = rc_str.value(j);
-                        let n = rn_str.value(j);
-                        match roles::role_names().role_name(c) {
-                            Ok(expected) => {
-                                if n != expected {
-                                    role_list_mismatches += 1;
-                                }
-                            }
-                            Err(_) => {
-                                role_list_mismatches += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if orgs_all_parquet.exists() {
-        let ofile = File::open(orgs_all_parquet)?;
-        let obuilder = ParquetRecordBatchReaderBuilder::try_new(ofile)?;
-        let oreader = obuilder.build()?;
-        for batch in oreader {
-            let batch = batch?;
-            let schema = batch.schema();
             let role_codes_idx = schema.index_of("role_codes")?;
             let role_names_idx = schema.index_of("role_names")?;
 
@@ -2292,13 +2480,6 @@ fn audit_table_invariants(
                 }
             }
         }
-    }
-
-    if inactive_in_orgs > 0 {
-        discrepancies.push(format!(
-            "Table Invariant Violation: Found {} inactive records in orgs.parquet (must be 100% active)",
-            inactive_in_orgs
-        ));
     }
 
     if role_list_mismatches > 0 {
@@ -2308,5 +2489,22 @@ fn audit_table_invariants(
         ));
     }
 
-    Ok((inactive_in_orgs, role_list_mismatches))
+    Ok(role_list_mismatches)
+}
+
+/// Counts the rows of `orgs.parquet` whose `status` is `active`.
+fn count_active_orgs_in_parquet(path: &Path) -> Result<usize> {
+    let file = File::open(path).with_context(|| format!("Opening parquet file {}", path.display()))?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+    let mut active = 0;
+    for batch in reader {
+        let batch = batch?;
+        let status = batch
+            .column(batch.schema().index_of("status")?)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("status StringArray")?;
+        active += (0..status.len()).filter(|&i| status.value(i).eq_ignore_ascii_case("active")).count();
+    }
+    Ok(active)
 }

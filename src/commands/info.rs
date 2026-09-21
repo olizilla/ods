@@ -83,7 +83,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
     use_color: bool,
 ) -> Result<()> {
     let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
-    if !parquet_dir.join("orgs.parquet").exists() && !parquet_dir.join("orgs_all.parquet").exists() {
+    if !parquet_dir.join("orgs.parquet").exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
             anyhow::bail!(
                 "✖ Parquet file 'orgs.parquet' not found in '{}'",
@@ -119,7 +119,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
 
     let target_code = args.ods_code.trim();
 
-    let (rec, is_from_orgs_all) = crate::commands::find::find_org_in_parquet(parquet_dir, target_code)?
+    let rec = crate::commands::find::find_org_in_parquet(parquet_dir, target_code)?
         .ok_or_else(|| anyhow::anyhow!("✖ Organisation '{}' not found", target_code))?;
 
     let successions_graph = crate::commands::find::load_succession_graph(parquet_dir);
@@ -172,12 +172,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
                 (band, color_enabled, TableStyle::Table)
             };
 
-            let source_filename = if is_from_orgs_all {
-                "orgs_all.parquet"
-            } else {
-                "orgs.parquet"
-            };
-            let source_header = crate::workspace::format_source_header(parquet_dir, source_filename, color_enabled);
+            let source_header = crate::workspace::format_source_header(parquet_dir, "orgs.parquet", color_enabled);
 
             let options = RenderOptions {
                 band,

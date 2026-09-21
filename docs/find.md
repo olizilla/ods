@@ -2,7 +2,7 @@
 
 Search NHS organisations and sites across names, codes, locations, and roles.
 
-`ods find` searches the local Parquet dataset (`orgs.parquet` or `orgs_all.parquet`) and renders tabular results or exports to TSV, CSV, and JSON. JSON and CSV rows use the `orgs.parquet` column names today, but that shape [is not versioned yet](./cli.md#json-output-is-not-yet-stable).
+`ods find` searches the local Parquet dataset (`orgs.parquet`) and renders tabular results or exports to TSV, CSV, and JSON. JSON and CSV rows use the `orgs.parquet` column names today, but that shape [is not versioned yet](./cli.md#json-output-is-not-yet-stable).
 
 ## Usage
 
@@ -20,7 +20,7 @@ ods find [QUERY] [OPTIONS]
 | `-r, --role <ROLES>` | Filter by role codes (e.g. `RO76`) or curated names (repeatable and comma-separated) |
 | `--gp` | Shortcut for GP practices (`RO76,RO227,RO315`) |
 | `--dentist` | Shortcut for dental practices (`RO110,RO65`) |
-| `-a, --all` | Search all organisations (including inactive/closed history in `orgs_all.parquet`) |
+| `-a, --all` | Include inactive and closed organisations, which `find` leaves out by default (adds a Status column) |
 | `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
 | `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, `json`, or `tsv` |
@@ -53,7 +53,7 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 - **`--in liverpool`** returns records whose post town is LIVERPOOL. Bootle and Prescot have L postcodes but post towns of their own, so ask for them by name (`--in liverpool,bootle,prescot`) or by district (`--in L20`).
 - **`--in london`** returns records whose post town is LONDON. Outer boroughs have post towns of their own, such as HARROW and CROYDON.
 - **County is recorded unevenly.** Records with post town HARROW give MIDDLESEX, GREATER LONDON or no county at all, so `--in "greater london"` finds only the records that say so.
-- **Malformed postcodes stay as recorded.** 22 inactive records have postcodes such as `HR1 3` or `WA16 OED` (a letter O for a zero). A whole-postcode search doesn't find them; `--in HR1` and `--in WA16` do.
+- **Malformed postcodes stay as recorded.** 250 inactive records have postcodes that aren't in the standard full shape, such as `HR1 3` or `WA16 OED` (a letter O for a zero), all of them closed by 2017-03-31. A whole-postcode search doesn't find them; `--in HR1` and `--in WA16` do.
 
 ### Role Filtering (`--role <roles>`)
 `--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
@@ -64,7 +64,7 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
   Or use codes: ods find --role RO76,RO227,RO315
 ```
 
-Discover role codes and holder counts using `ods role [QUERY]`.
+Discover role codes and holder counts using `ods role [QUERY]`. Holders are active organisations; `ods role --all` counts inactive ones too.
 
 ### Role Shortcuts (`--gp`, `--dentist`)
 Convenience flags expand directly into `--role` with OR semantics:

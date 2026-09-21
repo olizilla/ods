@@ -51,7 +51,6 @@ fn test_synthetic_parquet_hash_stability() {
 
     let parquet_files = vec![
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
@@ -101,7 +100,6 @@ fn test_real_trud_parquet_hash_stability() {
 
     let all_files = vec![
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
@@ -140,7 +138,7 @@ fn test_real_trud_parquet_hash_stability() {
     .expect("context 2 make should succeed");
 
     // Parquet and datapackage must match across contexts
-    for file_name in &all_files[..6] {
+    for file_name in all_files.iter().filter(|f| **f != "_provenance.json") {
         let f1 = tmp1.path().join(file_name);
         let f2 = tmp_isolated.path().join(file_name);
         let hash1 = compute_file_sha256(&f1).unwrap();
@@ -221,7 +219,6 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     // 1. The five Parquet files must be byte-identical
     let parquet_files = vec![
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",

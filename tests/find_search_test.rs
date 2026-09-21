@@ -404,14 +404,14 @@ fn test_find_role_flag_codes_and_names() {
 }
 
 #[test]
-fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
+fn test_low_signal_roles_whole_set_containment_on_orgs() {
     let (_tmp, parquet_dir) = setup_find_test_workspace();
 
     use arrow::array::{Array, ListArray, StringArray};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::fs::File;
 
-    let file = File::open(parquet_dir.join("orgs_all.parquet")).unwrap();
+    let file = File::open(parquet_dir.join("orgs.parquet")).unwrap();
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
     let reader = builder.build().unwrap();
 
@@ -477,11 +477,11 @@ fn test_low_signal_roles_whole_set_containment_on_orgs_all() {
 
     assert_eq!(
         active_all_low_signal_count, 0,
-        "No active organisation in orgs.parquet/orgs_all.parquet may have its entire role set in low_signal"
+        "No active organisation in orgs.parquet may have its entire role set in low_signal"
     );
     assert_eq!(
         all_low_signal_multi_role_count, 0,
-        "No multi-role organisation in orgs_all.parquet may have its entire role set in low_signal"
+        "No multi-role organisation in orgs.parquet may have its entire role set in low_signal"
     );
 }
 

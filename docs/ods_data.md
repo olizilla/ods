@@ -14,8 +14,7 @@ ods_data/
 └── releases/
     └── 2026-07-31/                     # Immutable release directory (named by release date)
         ├── _provenance.json            # Source TRUD metadata & build provenance
-        ├── orgs.parquet                # Active organisations & sites table (Primary surface)
-        ├── orgs_all.parquet            # Complete historical orgs table (active + inactive)
+        ├── orgs.parquet                # Every organisation & site, active and inactive: filter on status (Primary surface)
         ├── relationships.parquet       # Target relationship links (ICB, Trust, Region, PCN)
         ├── roles.parquet              # Primary & secondary role mappings
         ├── successions.parquet        # Entity successor chains & reorganisations

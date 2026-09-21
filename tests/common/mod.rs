@@ -3,7 +3,7 @@ use ods::ods_xml::{
     OdsSuccessor,
 };
 use ods::commands::parquet::{
-    build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
+    build_succession_edges, compute_transitive_closures, export_orgs,
     export_relationships, export_roles, export_successions,
 };
 use ods::provenance::OdsProvenance;
@@ -1081,14 +1081,6 @@ pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
     export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_orgs_all(
-        &dir,
-        &records,
-        &succ_closures,
-        &pred_closures,
-        Some(&prov),
-    )
-    .expect("export orgs_all");
     export_roles(&dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&dir, &records, Some(&prov)).expect("export successions");
@@ -1135,7 +1127,15 @@ pub fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
     zip_path
 }
 
+/// An archive product with no organisations, for fixtures that are not about the archive.
+#[allow(dead_code)]
+pub const EMPTY_ARCHIVE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" /><RecordCount value="0" /></Manifest><Organisations></Organisations></OrgRefData>"#;
+
 /// Creates a nested mock TRUD zip (outer zip containing inner zips/files) at `outer_path`.
+///
+/// A TRUD release always holds `archive.zip` beside `fullfile.zip`, and `ods` requires both.
+/// When `entries` has a `fullfile.zip` and no archive, an empty `archive.zip` is added, so a
+/// fixture that isn't about the archive states only the full file.
 #[allow(dead_code)]
 pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     let file = std::fs::File::create(outer_path).unwrap();
@@ -1144,6 +1144,13 @@ pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     for (name, data) in entries {
         outer_zip.start_file(*name, options).unwrap();
         std::io::Write::write_all(&mut outer_zip, data).unwrap();
+    }
+    let has_full = entries.iter().any(|(n, _)| n.to_lowercase().contains("fullfile"));
+    let has_archive = entries.iter().any(|(n, _)| n.to_lowercase().contains("archive"));
+    if has_full && !has_archive {
+        outer_zip.start_file("archive.zip", options).unwrap();
+        let archive = create_inner_zip("HSCOrgRefData_Archive_mock.xml", EMPTY_ARCHIVE_XML.as_bytes());
+        std::io::Write::write_all(&mut outer_zip, &archive).unwrap();
     }
     outer_zip.finish().unwrap();
 }

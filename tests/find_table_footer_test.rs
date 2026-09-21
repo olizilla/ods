@@ -129,14 +129,14 @@ fn test_find_table_header_search_and_source_lines() {
     let stdout_in_county = String::from_utf8_lossy(&out_in_county.stdout);
     assert!(!stdout_in_county.contains("* Search:"), "* Search: line must be deleted");
 
-    // 4. ods find sedbergh --all (names orgs_all.parquet in Source)
+    // 4. ods find sedbergh --all (still names orgs.parquet in Source)
     let out_all = ods_binary()
         .current_dir(&ws_root)
         .args(["find", "sedbergh", "--all"])
         .output()
         .expect("run find --all");
     let stdout_all = String::from_utf8_lossy(&out_all.stdout);
-    assert!(stdout_all.contains("* Source: releases/2026-07-31/orgs_all.parquet"));
+    assert!(stdout_all.contains("* Source: releases/2026-07-31/orgs.parquet"));
 
     // 5. ods find sedbergh --format json (prints neither header line)
     let out_json = ods_binary()

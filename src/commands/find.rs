@@ -30,7 +30,7 @@ combine with OR:
   ods find --in durham --in cumbria    in Durham OR in Cumbria
 
 --gp and --dentist add role codes to --role rather than filtering separately.
---all reads orgs_all.parquet, which is why it adds a Status column.
+--all includes inactive organisations, which is why it adds a Status column.
 
 --in matches a whole town, county or country, ignoring case and punctuation, or a
 postcode district, sub-district or whole postcode: LA1 is not LA10. A district
@@ -69,7 +69,7 @@ pub struct Args {
     #[arg(long, help_heading = "Role Shortcuts")]
     pub dentist: bool,
 
-    /// Query the complete historical database (orgs_all.parquet) including inactive/closed entities
+    /// Include inactive and closed organisations, not only active ones
     #[arg(long, short)]
     pub all: bool,
 
@@ -150,7 +150,7 @@ pub fn squash_for_matching(s: &str) -> String {
         .collect()
 }
 
-/// Canonical in-memory representation of an organisation row from `orgs.parquet` / `orgs_all.parquet`.
+/// Canonical in-memory representation of an organisation row from `orgs.parquet`.
 ///
 /// The field declaration order defines the serialized JSON key order for flattened output
 /// records (`ods find --format json` and `ods info --format json`).
@@ -160,6 +160,7 @@ pub fn squash_for_matching(s: &str) -> String {
 pub struct OrgRow {
     pub ods_code: String,
     pub name: String,
+    pub status: String,
     pub record_class: String,
     pub role_codes: Vec<String>,
     pub role_names: Vec<String>,
@@ -174,7 +175,6 @@ pub struct OrgRow {
     pub website: Option<String>,
     pub predecessor_codes: Vec<String>,
     pub successor_codes: Vec<String>,
-    pub status: String,
     pub legal_start: Option<String>,
     pub legal_end: Option<String>,
     pub operational_start: Option<String>,
@@ -576,11 +576,7 @@ pub fn load_succession_graph(parquet_dir: &Path) -> SuccessionGraph {
 
 pub fn load_org_metadata(parquet_dir: &Path) -> HashMap<String, (String, String)> {
     let mut map = HashMap::new();
-    let path = if parquet_dir.join("orgs_all.parquet").exists() {
-        parquet_dir.join("orgs_all.parquet")
-    } else {
-        parquet_dir.join("orgs.parquet")
-    };
+    let path = parquet_dir.join("orgs.parquet");
     let Ok(file) = File::open(&path) else { return map };
     let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else { return map };
     let Ok(reader) = builder.build() else { return map };
@@ -738,23 +734,11 @@ pub fn find_org_by_code(path: &Path, target_code: &str) -> Result<Option<OrgRow>
     Ok(None)
 }
 
-/// Find an organisation across active (orgs.parquet) and historical (orgs_all.parquet).
-/// Returns Some((OrgRow, is_from_orgs_all)).
-pub fn find_org_in_parquet(
-    parquet_dir: &Path,
-    target_code: &str,
-) -> Result<Option<(OrgRow, bool)>> {
+/// Find an organisation, active or not, in `orgs.parquet`.
+pub fn find_org_in_parquet(parquet_dir: &Path, target_code: &str) -> Result<Option<OrgRow>> {
     let orgs_path = parquet_dir.join("orgs.parquet");
     if orgs_path.exists() {
-        if let Some(org) = find_org_by_code(&orgs_path, target_code)? {
-            return Ok(Some((org, false)));
-        }
-    }
-    let orgs_all_path = parquet_dir.join("orgs_all.parquet");
-    if orgs_all_path.exists() {
-        if let Some(org) = find_org_by_code(&orgs_all_path, target_code)? {
-            return Ok(Some((org, true)));
-        }
+        return find_org_by_code(&orgs_path, target_code);
     }
     Ok(None)
 }
@@ -1001,6 +985,10 @@ pub fn build_sql_query(
 
     let mut clauses: Vec<String> = Vec::new();
 
+    if !args.all {
+        clauses.push("status = 'active'".to_string());
+    }
+
     if let Some(ref q) = args.query {
         let squashed: String = q
             .chars()
@@ -1109,7 +1097,7 @@ pub fn run_with_writer_color(
     color: bool,
 ) -> Result<()> {
     let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
-    let file_name = if args.all { "orgs_all.parquet" } else { "orgs.parquet" };
+    let file_name = "orgs.parquet";
 
     // Expand alias flags (--gp, --dentist) into role filters with OR semantics
     let mut effective_roles = args.role.clone();
@@ -1282,8 +1270,15 @@ pub fn run_with_writer_color(
             .as_any().downcast_ref::<StringArray>().context("primary_role_code StringArray")?;
 
         let indices = OrgColumnIndices::try_from_schema(&schema)?;
+        let status_arr = batch.column(indices.status)
+            .as_any().downcast_ref::<StringArray>().context("status StringArray")?;
 
         for i in 0..num_rows {
+            // Inactive rows are out unless --all, before anything counts them, so
+            // the location hints describe only what was searched.
+            if !args.all && status_arr.value(i) != "active" {
+                continue;
+            }
             let mut norm_town = String::new();
             let mut norm_county = String::new();
             let mut norm_country = String::new();
@@ -1891,7 +1886,6 @@ mod tests {
         prov.trud_release_date = Some("2026-07-31".to_string());
 
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-        crate::commands::parquet::export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
         crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
         crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
         crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
@@ -2005,7 +1999,7 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
         let expected_header = csv_headers_from_output_record().join(",");
         assert!(s.starts_with(&expected_header));
-        assert!(s.contains("A101,Alpha Health Centre,org"));
+        assert!(s.contains("A101,Alpha Health Centre,active,org"));
 
         // Test 6: JSON output
         let mut out = Vec::new();

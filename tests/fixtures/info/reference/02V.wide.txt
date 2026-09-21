@@ -1,5 +1,5 @@
 ❯ ods info 02V
-* Source: releases/2026-08-28/orgs_all.parquet
+* Source: releases/2026-08-28/orgs.parquet
 * Status: inactive, Class: org, Last Change: 2018-04-01
 ┌──────────────┬─────────────────────────────────────────────────────────────────────────────────┐
 │ ODS Code     ┆ 02V                                                                             │

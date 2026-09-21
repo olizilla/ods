@@ -1,14 +1,14 @@
 # Parquet schemas
 
-> _658MB of NHS XML, as five tables you can query from a laptop._
+> _834MB of NHS XML, as four tables you can query from a laptop._
 
-`ods make` compiles the NHS Organisation Data Service release into five Parquet
+`ods make` compiles the NHS Organisation Data Service release into four Parquet
 files. Point `duckdb` at them and go — no database, no server, no API key.
 
 ```console
 $ duckdb -c "SELECT ods_code, name, role_names
              FROM 'ods_data/current/orgs.parquet'
-             WHERE town = 'SEDBERGH'"
+             WHERE status = 'active' AND town = 'SEDBERGH'"
 ┌───────────┬──────────────────────────────────────────┬────────────────────────────────────────┐
 │ ods_code  │                   name                   │               role_names               │
 │  varchar  │                 varchar                  │               varchar[]                │
@@ -20,6 +20,9 @@ $ duckdb -c "SELECT ods_code, name, role_names
 │ EE112233  │ SEDBERGH PRIMARY SCHOOL                  │ [School, Community School]             │
 ...
 ```
+
+Every query needs that `status = 'active'` unless it means to include closed
+organisations: `orgs.parquet` holds all of them, and `status` is the filter.
 
 The source is one large XML document which is awkward to query. These tables are that document, rearranged.
 NHS England documents the model behind it in the [ODS data model reference][ods-model].
@@ -40,19 +43,26 @@ schools and care homes outnumber GP Practice rows. Other suprises in the data ar
 
 | File | Rows | What's in it |
 | :--- | ---: | :--- |
-| `orgs.parquet` | 216,886 | Every org and site active at the release date. **Start here.**  |
-| `orgs_all.parquet` | 305,541 | Same columns, plus every closed or retired entity this release still carries |
-| `roles.parquet` | 442,251 | Row for each role an org holds |
-| `relationships.parquet` | 662,558 | Row per relationship between two orgs |
-| `successions.parquet` | 11,568 | Row per transition, split, or merger of duties between orgs |
+| `orgs.parquet` | 370,917 | Every organisation and site ODS publishes: 217,059 `active` and 153,858 `inactive`. **Start here, and filter on `status`.** |
+| `roles.parquet` | 529,348 | Row for each role an org holds |
+| `relationships.parquet` | 769,527 | Row per relationship between two orgs |
+| `successions.parquet` | 24,373 | Row per transition, split, or merger of duties between orgs |
 
-`orgs` is a subset of `orgs_all` that only includes active entities, to make it easier to ask
-questions about what the NHS is today.
+Every table holds everything ODS publishes, closed organisations included, and carries
+a status column so you choose what to ask: `orgs.status`, `roles.role_status` and
+`relationships.rel_status`. `orgs` is sorted with active rows first, so
+`WHERE status = 'active'` reads only the leading row groups, even over HTTP.
 
-`orgs_all` is every record in that release's XML — it matches the manifest's `RecordCount` exactly.
+The tables cover every organisation in both files of a TRUD release: `fullfile.zip`,
+NHS England's live product, and `archive.zip`, which holds what it has moved out once
+an organisation closed before the published cut-off (currently 31 March 2017).
+[docs/nhs.md](./nhs.md#the-archive-product) explains the split, and `ods make` merges it away.
+That is why `orgs` matches the manifests' `RecordCount` totals (392,906) less the
+21,989 stubs that repeat a record the other file holds in full.
+
 That's not the same as every organisation ODS has ever known: closed entities seem to be kept indefinitely,
-but some get deleted without notice. 165 codes in the May 2026 release are simply absent from July.
-So the most complete history is the union of all releases, [not the newest file](./queries.md#the-archive-is-the-only-complete-list).
+but some get deleted without notice. 186 codes in the May 2026 release are simply absent from August.
+So the most complete history is the union of all releases, [not the newest file](./queries.md#deletions-happen-so-keep-your-snapshots).
 
 This is where the parquet and duckdb (or pandas, polars, pyarrows etc) get interesting, as it lets us [query over all releases](./queries.md#across-releases) at once.
 
@@ -60,29 +70,35 @@ This is where the parquet and duckdb (or pandas, polars, pyarrows etc) get inter
 -- find total and active entities per dataset release
 SELECT trud_release_date, count(*) AS n_rows,
        count(*) FILTER (WHERE status = 'active') AS n_active
-FROM read_parquet('ods_data/releases/*/orgs_all.parquet')
+FROM read_parquet('ods_data/releases/*/orgs.parquet')
 GROUP BY 1 ORDER BY 1;
 
 ┌───────────────────┬────────┬──────────┐
 │ trud_release_date │ n_rows │ n_active │
 │       date        │ int64  │  int64   │
 ├───────────────────┼────────┼──────────┤
-│ 2026-06-26        │ 304662 │   216417 │
-│ 2026-07-31        │ 305541 │   216886 │
+│ 2026-05-29        │ 368495 │   216564 │
+│ 2026-06-26        │ 369400 │   216417 │
+│ 2026-07-31        │ 370257 │   216886 │
+│ 2026-08-28        │ 370917 │   217059 │
 └───────────────────┴────────┴──────────┘
 ```
 
 
-## `orgs.parquet` and `orgs_all.parquet`
+## `orgs.parquet`
 
-Identical schemas. One row per organisation or site.
+One row per organisation or site, active or not, sorted by `status` (`active` first) then `ods_code`.
+`ods_code` is unique. Where the source published two complete records for one code, `ods`
+keeps the full file's over the archive's, and within one file the one whose operational
+period starts later; [nhs.md](./nhs.md#a-code-published-twice) names the two cases.
 
 | Column | Type | Null | Description |
 | :--- | :--- | :--- | :--- |
 | `ods_code` | `VARCHAR` | no | The ODS code. Join on this. |
 | `name` | `VARCHAR` | no | Verbatim from ODS, which publishes in upper case |
+| `status` | `VARCHAR` | no | `active` or `inactive`. Filter on it: `WHERE status = 'active'` is what's open today |
 | `record_class` | `VARCHAR` | no | `org` or `site` |
-| `role_codes` | `VARCHAR[]` | no | Every role held, sorted and deduplicated |
+| `role_codes` | `VARCHAR[]` | no | Sorted and deduplicated. An active organisation lists its active roles; an inactive one lists every role it held |
 | `role_names` | `VARCHAR[]` | no | Curated names, aligned position-for-position with `role_codes` |
 | `primary_role_code` | `VARCHAR` | no | The role ODS designates primary |
 | `address` | `VARCHAR` | yes | Address lines 1–3, joined with `, ` |
@@ -95,11 +111,10 @@ Identical schemas. One row per organisation or site.
 | `website` | `VARCHAR` | yes | Lower-cased; the source is upper case |
 | `predecessor_codes` | `VARCHAR[]` | no | Every ancestor, not just the previous one |
 | `successor_codes` | `VARCHAR[]` | no | Every descendant. The exact inverse of `predecessor_codes` |
-| `status` | `VARCHAR` | no | `active` or `inactive`. Always `active` in `orgs.parquet` |
-| `legal_start` | `DATE` | yes | Statutory dates. Populated on 14% of rows |
+| `legal_start` | `DATE` | yes | Statutory dates. Populated on 19% of rows |
 | `legal_end` | `DATE` | yes | |
 | `operational_start` | `DATE` | yes | Populated on every row |
-| `operational_end` | `DATE` | yes | Set on inactive rows, and on 603 active ones with a closure already scheduled |
+| `operational_end` | `DATE` | yes | Set on inactive rows, and on 623 active ones with a closure already scheduled |
 | `last_changed` | `DATE` | yes | ODS's own last-modified date |
 | `trud_release_date` | `DATE` | no | The release this row came from |
 
@@ -128,10 +143,13 @@ One row per role held. An organisation holding three roles has three rows.
 | `trud_release_date` | `DATE` | no | |
 
 The full vocabulary is `SELECT DISTINCT role_code, role_name FROM 'roles.parquet'`
-— 205 of them in the current release. `ods role` lists them with holder counts.
+— 209 of them in the current release. `ods role` lists them with holder counts.
 
 Reach for this table when you want a role's _history_. For _what an organisation
-is now_, `orgs.role_codes` already has it, deduplicated, without a join.
+is now_, `orgs.role_codes` already has it, deduplicated, without a join: for an active
+organisation it holds only the roles that are still active, so `Y07792`, which also holds
+an ended `RO72`, lists `[RO177, RO321]`, while an inactive organisation such as `G7811339`
+keeps every role it held (`[RO59, RO88]`, the second of them ended too).
 
 ## `relationships.parquet`
 
@@ -156,15 +174,15 @@ The types in the current release:
 
 | Code | Name | Rows | Means |
 | :--- | :--- | ---: | :--- |
-| `RE2` | `IS A SUB-DIVISION OF` | 225 | A department or programme of the target |
-| `RE3` | `IS DIRECTED BY` | 5,788 | Directed through policy, legal authority or contract |
-| `RE4` | `IS COMMISSIONED BY` | 148,947 | The target commissions services from the source |
-| `RE5` | `IS LOCATED IN THE GEOGRAPHY OF` | 292,107 | Physically inside the target's boundary — **being retired**, see below |
-| `RE6` | `IS OPERATED BY` | 202,504 | The target runs and manages the source |
-| `RE8` | `IS PARTNER TO` | 8,345 | The source is part of the target partnership or network |
+| `RE2` | `IS A SUB-DIVISION OF` | 237 | A department or programme of the target |
+| `RE3` | `IS DIRECTED BY` | 6,849 | Directed through policy, legal authority or contract |
+| `RE4` | `IS COMMISSIONED BY` | 161,670 | The target commissions services from the source |
+| `RE5` | `IS LOCATED IN THE GEOGRAPHY OF` | 333,979 | Physically inside the target's boundary — **being retired**, see below |
+| `RE6` | `IS OPERATED BY` | 253,800 | The target runs and manages the source |
+| `RE8` | `IS PARTNER TO` | 8,346 | The source is part of the target partnership or network |
 | `RE9` | `IS NOMINATED PAYEE FOR` | 1,698 | Payee for the target Primary Care Network |
 | `RE10` | `IS COVID NOMINATED PAYEE FOR` | 913 | All closed; kept for history |
-| `RE11` | `IS CONSTITUENT OF` | 2,031 | Cost centre to Sub-ICB reporting entity. London ICBs only |
+| `RE11` | `IS CONSTITUENT OF` | 2,035 | Cost centre to Sub-ICB reporting entity. London ICBs only |
 
 `rel_name` is ODS's wording, carried through unchanged, and the meanings above are
 theirs too — from the [ODS data model's relationships reference][ods-relationships].
@@ -188,37 +206,37 @@ the whole chain — not just the next step — so you never have to walk it your
 
 Every supporting table carries ODS codes that point back to `orgs`.
 
-| Table | Join to `orgs_all` on | One row per |
+| Table | Join to `orgs` on | One row per |
 | :--- | :--- | :--- |
 | `roles.parquet` | `ods_code` | role an organisation holds or has held |
 | `relationships.parquet` | `source_code` for an organisation's own relationships, `target_code` for those pointing at it | relationship |
 | `successions.parquet` | `predecessor_code` for what an organisation became, `successor_code` for what it replaced | succession |
 
-**Join to `orgs_all` unless you mean active organisations only.** Supporting tables
-keep rows for closed organisations. All 443,216 `roles` rows find their organisation
-in `orgs_all`; 314,195 find it in `orgs`.
+**Add `WHERE o.status = 'active'` only when you mean active organisations.** Supporting
+tables keep rows for closed organisations, and `orgs` holds those too. All 529,348 `roles`
+rows find their organisation in `orgs`; 314,195 find an active one.
 
 `roles` names its key the same way `orgs` does, so `USING` reads well:
 
 ```sql
 SELECT count(*)
 FROM 'ods_data/current/roles.parquet' r
-JOIN 'ods_data/current/orgs_all.parquet' o USING (ods_code);
--- 443216
+JOIN 'ods_data/current/orgs.parquet' o USING (ods_code);
+-- 529348
 ```
 
 **Relationships and successions have a direction, and the column name says which side
 you are on.** A relationship belongs to the organisation making the statement,
 `source_code`, and points at `target_code`. Joining on `source_code` alone finds an
 organisation's own relationships and none that point at it: the ICB `01K` states 5
-relationships and is the target of 654, and 38,783 organisations only ever appear as a
+relationships and is the target of 674, and 44,877 organisations only ever appear as a
 target. Join each side under its own alias:
 
 ```sql
 SELECT s.name AS organisation, rel.rel_name, t.name AS target
 FROM 'ods_data/current/relationships.parquet' rel
-JOIN 'ods_data/current/orgs_all.parquet' s ON rel.source_code = s.ods_code
-JOIN 'ods_data/current/orgs_all.parquet' t ON rel.target_code = t.ods_code
+JOIN 'ods_data/current/orgs.parquet' s ON rel.source_code = s.ods_code
+JOIN 'ods_data/current/orgs.parquet' t ON rel.target_code = t.ods_code
 WHERE rel.source_code = 'A82608' AND rel.rel_status = 'active'
 ORDER BY rel.rel_code;
 -- SEDBERGH MEDICAL PRACTICE · IS COMMISSIONED BY · NHS LANCASHIRE AND SOUTH CUMBRIA ICB - 01K
@@ -237,16 +255,20 @@ drops rows.
 
 ```sql
 SELECT count(*)
-FROM 'ods_data/current/roles.parquet' NATURAL JOIN 'ods_data/current/orgs_all.parquet';
--- 39506, not 443216
+FROM 'ods_data/current/roles.parquet' NATURAL JOIN 'ods_data/current/orgs.parquet';
+-- 78680, not 529348
 ```
 
 Use `USING (ods_code)` or an explicit `ON`.
 
 ## How the schema works
 
-Five rules, and they explain nearly every decision here.
+Six rules, and they explain nearly every decision here.
 
+- **Every table holds everything, and a status column says what's open.** `orgs.status`,
+  `roles.role_status` and `relationships.rel_status` are the filter; no table is an
+  active-only subset of another, and `ods find` and `ods role` apply it for you unless
+  you pass `--all`.
 - **Codes are ODS's, names are ours.** `role_code` is assigned by ODS and never
   changes. `role_name` is our rendering of it, because the source is upper case
   and sometimes abbreviated (`REG'D UNDER PART 2 CARE STDS ACT 2000`) or
@@ -264,12 +286,12 @@ Five rules, and they explain nearly every decision here.
 
 ## Point-in-time queries
 
-`orgs.parquet` is active as of the release date. For an earlier date, filter
-`orgs_all.parquet`:
+`orgs.parquet` holds every organisation as of the release date, with its status then.
+For an earlier date, filter on the operational dates:
 
 ```sql
 SELECT ods_code, name
-FROM 'orgs_all.parquet'
+FROM 'orgs.parquet'
 WHERE operational_start <= DATE '2019-03-31'
   AND (operational_end IS NULL OR operational_end > DATE '2019-03-31');
 ```
@@ -287,7 +309,7 @@ reparenting are all recoverable [across an archive](./queries.md#across-releases
 
 `datapackage.json` describes each release in [Frictionless Table Schema][frictionless]
 format. `roles`, `relationships` and `successions` validate with the Frictionless
-framework. `orgs` and `orgs_all` use native Parquet list columns, which Table
+framework. `orgs` uses native Parquet list columns, which Table
 Schema's flat-cell model doesn't cover — read those with DuckDB, Polars or Arrow,
 which handle them natively.
 

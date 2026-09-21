@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use ods::commands::find::{self, Args, OutputFormat};
 use ods::commands::parquet::{
-    build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
+    build_succession_edges, compute_transitive_closures, export_orgs,
     export_relationships, export_roles, export_successions,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole};
@@ -102,7 +102,6 @@ fn setup_name_matching_workspace() -> (TempDir, PathBuf) {
     };
 
     export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs_all");
     export_roles(&parquet_dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&parquet_dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&parquet_dir, &records, Some(&prov)).expect("export successions");
@@ -191,7 +190,7 @@ fn test_find_sql_flag_duckdb_equivalence_on_synthetic_data() {
         },
         &parquet_dir,
     );
-    assert!(sql.contains("WHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'"));
+    assert!(sql.contains("AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'"));
     assert!(sql.contains("ORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;"));
 
     if require_duckdb() {
@@ -235,10 +234,9 @@ fn test_squash_agrees_with_duckdb_sql_on_all_release_names_on_release_data() {
     let count = run_duckdb_csv_codes(&sql);
     assert_eq!(count[0], "0", "SQL expression must match uppercase alphanumeric cleaning");
 
-    let all_path = release_dir.join("orgs_all.parquet");
-    let sql_all = format!("SELECT count(*) FROM '{}';", all_path.display());
+    let sql_all = format!("SELECT count(*) FROM '{}';", parquet_path.display());
     let total_all = run_duckdb_csv_codes(&sql_all);
-    assert_eq!(total_all[0], "306201", "orgs_all.parquet has 306,201 rows");
+    assert_eq!(total_all[0], "370917", "orgs.parquet holds every organisation of both XML files");
 }
 
 
@@ -479,7 +477,7 @@ fn test_st_marys_sql_output_format_on_release_data() {
         &release_dir,
     );
 
-    let expected_suffix = "WHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
+    let expected_suffix = "WHERE status = 'active'\n  AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
     assert!(
         sql.contains(expected_suffix),
         "SQL output must contain expected clause and order by, got:\n{}",

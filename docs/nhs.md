@@ -189,3 +189,34 @@ The 33,022 active entities without an NHS England Region link represent non-comm
 2. **Corporate Headquarters** (8,262 orgs): Corporate headquarters of pharmacy companies (4,872 HQs) and optical chains (3,390 HQs).
 3. **IT Infrastructure & National Agencies** (517 sites): Application Service Providers, Spine nodes, and Special Health Authorities.
 4. **Devolved Administrations** (305 orgs): Northern Ireland GP practices managed under HSC NI.
+
+## The archive product
+
+A TRUD release holds two XML files, in two zips: `fullfile.zip` is what NHS England keeps in its live product, and `archive.zip` is what it has moved out. NHS England
+[documents the rule](https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Archived-or-Deleted-Records_592550682.html)
+this way: "Everything with an operational close date that falls before the most recently defined cut-off is published in the archive product, instead of live data", currently "on or before 31 March 2017".
+
+- **The cut-off moves.** In April 2023 it went from 2012-03-31 to 2017-03-31, taking about 34,000 organisations from the full file to the archive in one release. A series built from the full file alone shows them vanishing in a month when they closed years earlier. The cut-off will move again.
+- **`refOnly` stubs.** A record that live data still references stays in the full file as a skeleton, `<Organisation refOnly="true">`, with its relationships and other content omitted. The archive does the same for live organisations that archived ones reference. In the 2026-08-28 release the full file holds 10,249 stubs and the archive 11,740, and every stub has its complete record in the other file.
+- **The two files in one zip.** On 2026-08-28 the full file holds 306,201 organisations (660 MB of XML) and the archive 86,705 (174 MB), each declaring its own `<RecordCount>` and matching it exactly. Together that is 392,906 records, 21,989 of them stubs, so 370,917 organisations.
+- **Deletion is separate, and rare.** Being archived doesn't mean being deleted, and archiving isn't how organisations leave the register: between the May and August 2026 releases 165 codes disappeared from the full file and none appeared in the archive.
+
+`ods` reads both files and merges them: where a code is in both, the complete record wins and the stub is dropped, and a code with two stubs fails the build. So the dataset doesn't inherit the split, and `orgs.parquet` needs no column saying which file a row came from. [parquet.md](./parquet.md) describes the result.
+
+### A code published twice
+
+Very rarely a code is a complete record twice, not a record and a stub. Three of the 96 TRUD releases from 2018-06-29 to 2026-08-28 show it, in two different ways:
+
+- **One organisation, re-recorded for a role change.** `T1201`, NHS LOGISTICS AUTHORITY, is in the archive of the 2023-03-31 and 2023-04-28 releases twice, with the same name, address and telephone: 2000-04-01 to 2003-03-31 holding `RO169`, then 2003-04-01 to 2004-09-30 holding `RO189`. A succession links `T1201` to itself.
+- **A code reused for a different organisation.** `FEF03` in the 2025-05-30 release is BARKING, HAVERING & BRENTWOOD DISTRICT LAUNDRY COMMON SERVICE AGENCY in the archive (closed 1993-03-31) and MCGILLS DONCASTER, a pharmacy opened 2025-04-23, in the full file. Nothing in either file references `FEF03`.
+
+NHS England has since resolved both the same way. In the 2026-08-28 release `T1201` appears once, for the later period, and `FEF03` once, as MCGILLS DONCASTER: the laundry record has gone from the archive.
+
+`ods` applies the same rule when it builds an earlier release. The full file's record wins over the archive's, and within one file the record whose operational period starts later wins. The dropped record is named on stderr at build time:
+
+```text
+! FEF03 has a complete record in both files: kept the full file's, dropped the archive's (1991-04-01 to 1993-03-31)
+! T1201 has two complete records in HSCOrgRefData_Archive_20230328.xml: kept 2003-04-01 to 2004-09-30, dropped 2000-04-01 to 2003-03-31
+```
+
+Two complete records in one file with no operational start on either, or with the same start, fail the build: the source hasn't said which is later, and `ods` doesn't guess. Two stubs for one code fail too.

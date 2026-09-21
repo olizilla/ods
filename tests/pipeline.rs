@@ -60,7 +60,6 @@ fn make_parquet_produces_tables_with_correct_records() {
     .expect("parquet::run should succeed");
 
     assert!(parquet_dir.join("orgs.parquet").exists(), "orgs.parquet not created");
-    assert!(parquet_dir.join("orgs_all.parquet").exists(), "orgs_all.parquet not created");
     assert!(parquet_dir.join("roles.parquet").exists(), "roles.parquet not created");
     assert!(parquet_dir.join("relationships.parquet").exists(), "relationships.parquet not created");
     assert!(parquet_dir.join("successions.parquet").exists(), "successions.parquet not created");

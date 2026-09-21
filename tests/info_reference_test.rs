@@ -3,8 +3,7 @@ use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, Ta
 use std::fs;
 
 fn source_header_for(record: &InfoRecord, color: bool) -> Vec<String> {
-    let is_closed = record.operational_end.is_some() || record.status.eq_ignore_ascii_case("inactive");
-    let file = if is_closed { "orgs_all.parquet" } else { "orgs.parquet" };
+    let file = "orgs.parquet";
     let release_date = if record.trud_release_date.is_empty() {
         "current"
     } else {

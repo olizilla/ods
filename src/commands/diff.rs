@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use crate::ods_xml::{convert_parsed_orgs, find_xml_file, parse_single_pass, OdsRecord};
+use crate::ods_xml::{convert_parsed_orgs, parse_release_at, OdsRecord};
 use crate::provenance::OdsProvenance;
 
 #[derive(Parser, Debug)]
@@ -143,13 +143,7 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
 
     // Directory lookup: try finding Parquet, NDJSON or XML inside directory
     if path.is_dir() {
-        let orgs_parquet = if path.join("orgs.parquet").exists() {
-            Some(path.join("orgs.parquet"))
-        } else if path.join("orgs_all.parquet").exists() {
-            Some(path.join("orgs_all.parquet"))
-        } else {
-            None
-        };
+        let orgs_parquet = path.join("orgs.parquet").exists().then(|| path.join("orgs.parquet"));
         if let Some(pfile) = orgs_parquet {
             return load_parquet(&pfile);
         }
@@ -259,10 +253,9 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
 }
 
 fn load_xml(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
-    let xml_path = find_xml_file(path)?;
-    let (prov, _, parsed, _) = parse_single_pass(&xml_path)?;
-    let map: HashMap<String, OdsRecord> = convert_parsed_orgs(parsed).into_iter().collect();
-    Ok((Some(prov), map))
+    let release = parse_release_at(path)?;
+    let map: HashMap<String, OdsRecord> = convert_parsed_orgs(release.orgs).into_iter().collect();
+    Ok((Some(release.provenance), map))
 }
 
 fn load_zip(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {

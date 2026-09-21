@@ -11,11 +11,12 @@ The NHS ODS data is published monthly on TRUD as a single root `.zip` archive (e
 Inside this ZIP container are two core XML archives:
 
 1. **`fullfile.zip`** (`HSCOrgRefData_Full_*.xml`):
-   - Contains all currently known organisations, active and inactive top-level entities, primary/secondary role assignments, and current active/retired relationships.
-   - Ingested as the baseline entity source for `orgs_all.parquet` and `orgs.parquet`.
+   - NHS England's live product: the active organisations and those that closed after the archive cut-off, with their role assignments and relationships.
+   - Read by `ods make` together with `archive.zip`, and merged into `orgs.parquet`.
 
 2. **`archive.zip`** (`HSCOrgRefData_Archive_*.xml`):
-   - Contains legacy historical organisations and closed organisation successor histories dating back decades.
+   - Everything with an operational close date on or before the published cut-off (currently 31 March 2017): organisations closed decades ago, with their roles, relationships and successions.
+   - Read by `ods make` alongside `fullfile.zip`. See [nhs.md](./nhs.md#the-archive-product).
    - Ingested by `ods parquet` to populate `successors.parquet` with complete historical successor chains (89,445 records total).
 
 ---
@@ -141,9 +142,8 @@ During the development of `ods`, we identified several non-obvious structural qu
 | Feature / Artifact | `fullfile.zip` (`HSCOrgRefData_Full_*.xml`) | `archive.zip` (`HSCOrgRefData_Archive_*.xml`) |
 | :--- | :--- | :--- |
 | **Primary Scope** | Current & active/retired top-level entities | Closed legacy entities & historical successor maps |
-| **Top-Level Orgs** | ~294,706 entities | Historical closed entities |
-| **Target Node Expansion** | Adds ~9,050 target org references | Legacy target references |
-| **Primary Parquet Output** | `orgs_all.parquet`, `orgs.parquet`, `roles.parquet`, `relationships.parquet` | `successors.parquet` |
+| **Organisations** (2026-08-28) | 306,201, of which 10,249 are `refOnly` stubs | 86,705, of which 11,740 are `refOnly` stubs |
+| **Parquet Output** | Both files merge into `orgs.parquet`, `roles.parquet`, `relationships.parquet` and `successions.parquet` | (same tables) |
 
 ---
 
@@ -154,7 +154,7 @@ During the development of `ods`, we identified several non-obvious structural qu
 - **Impact**: Querying on primary role code alone misses ICBs. Use `list_contains(role_codes, 'RO318')` or `list_contains(role_names, 'Integrated Care Board')` on `orgs.parquet`.
 
 ### Regional Assignment Gaps & Unmapped Entities
-- **The Challenge**: Out of ~294,000 total entities in `orgs_all.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy.
+- **The Challenge**: Out of ~371,000 total entities in `orgs.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy.
 - **Impact**: `RE5 IS LOCATED IN THE GEOGRAPHY OF` is marked legacy by NHS ODS and only links a subset of entities.
 
 ### Reporting Sub-ICB Locations vs Statutory ICB Boards

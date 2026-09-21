@@ -120,6 +120,9 @@ pub struct ParsedOrg {
     pub roles: Vec<OdsRole>,
     pub relationships: Vec<OdsRelationship>,
     pub successors: Vec<OdsSuccessor>,
+    /// `refOnly="true"` on `<Organisation>`: a skeleton NHS leaves in one file
+    /// so a reference resolves, with its complete record in the other file.
+    pub ref_only: bool,
 }
 
 /// Fully-resolved organisation record.
@@ -269,7 +272,9 @@ pub fn cleanup_scratch() {
 ///
 /// TRUD filenames already encode version, date and sequence and never change
 /// for a given release; length is included so a truncated or replaced download
-/// misses the cache rather than silently reusing a stale unpack.
+/// misses the cache rather than silently reusing a stale unpack. The trailing
+/// `v2` separates entries that hold both XML files from older ones that held
+/// only the full file, which would otherwise read as a complete unpack.
 fn cache_key(zip_path: &Path) -> Result<String> {
     let stem = zip_path
         .file_stem()
@@ -278,28 +283,48 @@ fn cache_key(zip_path: &Path) -> Result<String> {
     let len = std::fs::metadata(zip_path)
         .with_context(|| format!("reading metadata for {}", zip_path.display()))?
         .len();
-    Ok(format!("{stem}_{len}"))
+    Ok(format!("{stem}_{len}_v2"))
 }
 
-/// Returns a non-empty `.xml` in `dir`, if one is already cached there.
-fn cached_xml(dir: &Path) -> Option<PathBuf> {
+/// True when an XML file name says it is the archive product.
+fn is_archive_xml(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains("archive"))
+}
+
+/// Orders extracted XML files full first, archive second.
+fn full_first(mut xmls: Vec<PathBuf>) -> Vec<PathBuf> {
+    xmls.sort_by_key(|p| is_archive_xml(p));
+    xmls
+}
+
+/// Returns the non-empty `.xml` files in `dir`, full first, if any are cached there.
+fn cached_xmls(dir: &Path) -> Option<Vec<PathBuf>> {
+    let mut xmls = Vec::new();
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "xml")
             && entry.metadata().ok().is_some_and(|m| m.len() > 0)
         {
-            return Some(path);
+            xmls.push(path);
         }
     }
-    None
+    if xmls.is_empty() {
+        None
+    } else {
+        Some(full_first(xmls))
+    }
 }
 
-/// Extracts the release XML, reusing a previous unpack when one exists.
+/// Extracts the release's XML files, full first, reusing a previous unpack when one exists.
 ///
-/// Unpacking is ~660 MB and previously ran on every invocation, leaving the
+/// A TRUD release holds `fullfile.zip` and `archive.zip`, and both are extracted.
+/// A zip holding XML directly is one file supplied as it is.
+///
+/// Unpacking is ~830 MB and previously ran on every invocation, leaving the
 /// result behind in the temp directory each time. Now it happens once per
 /// release and is shared.
-pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
+pub fn extract_xml_from_zip(zip_path: &Path) -> Result<Vec<PathBuf>> {
     sweep_stale_extractions();
 
     // Default path: extract to process scratch, cleaned up when the command
@@ -321,8 +346,8 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
     let key = cache_key(zip_path)?;
     let cache_dir = root.join(&key);
 
-    if let Some(xml) = cached_xml(&cache_dir) {
-        return Ok(xml);
+    if let Some(xmls) = cached_xmls(&cache_dir) {
+        return Ok(xmls);
     }
 
     std::fs::create_dir_all(&root)
@@ -345,30 +370,50 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<PathBuf> {
         }
     };
 
-    // Keep only the XML; the intermediate inner zip is another ~30 MB.
+    // Keep only the XML; the intermediate inner zips are another ~38 MB.
     if let Ok(entries) = std::fs::read_dir(&staging) {
         for entry in entries.flatten() {
-            if entry.path() != extracted {
+            if !extracted.contains(&entry.path()) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
 
+    let published: Vec<PathBuf> = extracted
+        .iter()
+        .map(|p| cache_dir.join(p.file_name().unwrap()))
+        .collect();
+
     match std::fs::rename(&staging, &cache_dir) {
-        Ok(()) => Ok(cache_dir.join(extracted.file_name().unwrap())),
+        Ok(()) => Ok(published),
         Err(_) => {
             // Another process published this release first: prefer theirs and
             // discard our copy.
-            if let Some(xml) = cached_xml(&cache_dir) {
+            if let Some(xmls) = cached_xmls(&cache_dir) {
                 let _ = std::fs::remove_dir_all(&staging);
-                return Ok(xml);
+                return Ok(xmls);
             }
             Ok(extracted)
         }
     }
 }
 
-fn extract_into(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
+/// Copies the one XML in `zip_path` into `dest`.
+fn extract_single_xml(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let xml_name = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+        .find(|n| n.to_lowercase().ends_with(".xml"))
+        .with_context(|| format!("No XML file found inside {}", zip_path.display()))?;
+    let mut xml_file = archive.by_name(&xml_name)?;
+    let out_path = dest.join(Path::new(&xml_name).file_name().unwrap());
+    let mut out = File::create(&out_path)?;
+    std::io::copy(&mut xml_file, &mut out)?;
+    Ok(out_path)
+}
+
+fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
     let file = File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
@@ -385,32 +430,52 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
         }
     }
 
+    // A TRUD release: `fullfile.zip` and `archive.zip`, both required. The
+    // archive holds every organisation closed before NHS's cut-off, so a build
+    // without it would look complete and be missing tens of thousands of them.
     if !inner_zip_names.is_empty() {
-        let selected_inner = inner_zip_names
+        let full_inner = inner_zip_names
             .iter()
             .find(|n| n.to_lowercase().contains("full"))
-            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")));
+            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")))
+            .cloned();
+        let archive_inner = inner_zip_names
+            .iter()
+            .find(|n| n.to_lowercase().contains("archive"))
+            .cloned();
 
-        let selected_inner = match selected_inner {
-            Some(name) => name.clone(),
-            None => {
-                anyhow::bail!(
-                    "No full dataset ZIP found inside archive {}. Package contains only historical 'archive.zip'.",
-                    zip_path.display()
-                );
-            }
+        let Some(full_inner) = full_inner else {
+            anyhow::bail!(
+                "No full dataset ZIP found inside archive {}. Package contains only historical 'archive.zip'.",
+                zip_path.display()
+            );
+        };
+        let Some(archive_inner) = archive_inner else {
+            anyhow::bail!(
+                "No archive ZIP found inside {}. A TRUD release holds both fullfile.zip and archive.zip, and without archive.zip the organisations closed before NHS's cut-off would be missing.",
+                zip_path.display()
+            );
         };
 
-        let mut inner_file = archive.by_name(&selected_inner)?;
-        let inner_zip_path = dest.join(Path::new(&selected_inner).file_name().unwrap());
-        let mut out = File::create(&inner_zip_path)?;
-        std::io::copy(&mut inner_file, &mut out)?;
+        let mut xmls = Vec::new();
+        for inner in [&full_inner, &archive_inner] {
+            let mut inner_file = archive.by_name(inner)?;
+            let inner_zip_path = dest.join(Path::new(inner).file_name().unwrap());
+            let mut out = File::create(&inner_zip_path)?;
+            std::io::copy(&mut inner_file, &mut out)?;
+            drop(out);
 
-        // Recurse without re-entering the cache: the cache is keyed on the
-        // outer release archive, not on intermediate inner zips.
-        return extract_into(&inner_zip_path, dest);
+            // Extract without re-entering the cache: the cache is keyed on the
+            // outer release archive, not on intermediate inner zips.
+            xmls.push(
+                extract_single_xml(&inner_zip_path, dest)
+                    .with_context(|| format!("extracting {inner} from {}", zip_path.display()))?,
+            );
+        }
+        return Ok(xmls);
     }
 
+    // A zip holding XML directly is one file supplied as it is.
     if !direct_xml_names.is_empty() {
         let selected_xml = direct_xml_names
             .iter()
@@ -433,24 +498,25 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
         let mut out = File::create(&extracted_xml_path)?;
         std::io::copy(&mut xml_file, &mut out)?;
 
-        return Ok(extracted_xml_path);
+        return Ok(vec![extracted_xml_path]);
     }
 
     anyhow::bail!("No XML or ZIP files found inside archive {}", zip_path.display())
 }
 
-pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
+/// Finds the release's XML files, full first: a bare XML, a TRUD zip, or a directory holding one.
+pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
     if input_path.is_file() {
         if input_path.extension().is_some_and(|ext| ext == "zip") {
             return extract_xml_from_zip(input_path);
         }
         if input_path.extension().is_some_and(|ext| ext == "xml") {
-            return Ok(input_path.to_path_buf());
+            return Ok(vec![input_path.to_path_buf()]);
         }
         if let Some(parent) = input_path.parent() {
             return find_xml_file(parent);
         }
-        return Ok(input_path.to_path_buf());
+        return Ok(vec![input_path.to_path_buf()]);
     }
 
     let mut candidates = Vec::new();
@@ -490,11 +556,11 @@ pub fn find_xml_file(input_path: &Path) -> Result<PathBuf> {
     for path in &candidates {
         if path.extension().is_some_and(|ext| ext == "zip") {
             match extract_xml_from_zip(path) {
-                Ok(xml) => return Ok(xml),
+                Ok(xmls) => return Ok(xmls),
                 Err(e) => failures.push(format!("  {}: {e:#}", path.display())),
             }
         } else if path.extension().is_some_and(|ext| ext == "xml") {
-            return Ok(path.clone());
+            return Ok(vec![path.clone()]);
         }
     }
 
@@ -761,16 +827,193 @@ pub fn extract_manifest_header(path: &Path) -> Result<ManifestHeader> {
     anyhow::bail!("No XML or ZIP files found in {}", path.display())
 }
 
-pub fn parse_single_pass(
-    xml_path: &Path,
-) -> Result<(crate::provenance::OdsProvenance, HashMap<String, String>, HashMap<String, ParsedOrg>, Option<usize>)> {
+/// One XML file as parsed: its organisations in document order, before any merge.
+struct ParsedFile {
+    provenance: crate::provenance::OdsProvenance,
+    concept_map: HashMap<String, String>,
+    orgs: Vec<ParsedOrg>,
+    declared: Option<usize>,
+}
+
+/// How many organisations one XML file declared and how many it held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileCount {
+    pub name: String,
+    pub declared: Option<usize>,
+    pub read: usize,
+}
+
+/// A whole release: every organisation from every XML file, merged.
+#[derive(Debug)]
+pub struct ParsedRelease {
+    pub provenance: crate::provenance::OdsProvenance,
+    pub concept_map: HashMap<String, String>,
+    pub orgs: HashMap<String, ParsedOrg>,
+    pub files: Vec<FileCount>,
+    /// Stubs dropped because the other file holds the complete record.
+    pub stubs_superseded: usize,
+    /// Stubs kept because no file holds a complete record.
+    pub stubs_remaining: usize,
+    /// One line for each complete record dropped in favour of another for the same code.
+    pub duplicates_dropped: Vec<String>,
+}
+
+/// The start and end of an organisation's operational period, as `extract_dates` reads them.
+fn operational_period(dates: &[OdsDate]) -> (Option<&str>, Option<&str>) {
+    let (mut start, mut end) = (None, None);
+    for d in dates.iter().filter(|d| d.date_type.eq_ignore_ascii_case("Operational")) {
+        start = d.start.as_deref();
+        end = d.end.as_deref();
+    }
+    (start, end)
+}
+
+fn describe_period(dates: &[OdsDate]) -> String {
+    match operational_period(dates) {
+        (Some(s), Some(e)) => format!("{s} to {e}"),
+        (Some(s), None) => format!("from {s}"),
+        _ => "no operational dates".to_string(),
+    }
+}
+
+/// "the archive's" or "the full file's", from the file name.
+fn file_label(name: &str) -> &'static str {
+    if name.to_lowercase().contains("archive") {
+        "the archive's"
+    } else {
+        "the full file's"
+    }
+}
+
+impl ParsedRelease {
+    /// Organisations read across all files, before merging.
+    pub fn records_read(&self) -> usize {
+        self.files.iter().map(|f| f.read).sum()
+    }
+
+    /// The sum of every file's `<RecordCount>`, when all of them declared one.
+    pub fn records_declared(&self) -> Option<usize> {
+        self.files.iter().map(|f| f.declared).sum()
+    }
+}
+
+/// Parses every XML file of a release and merges them into one set of organisations.
+///
+/// Where a code appears in two files, the complete record wins over a `refOnly`
+/// stub. Two complete records, or two stubs, for one code contradict each
+/// other, and so does a repeat within a file: that fails, naming the code and
+/// both files.
+pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
+    let mut release = ParsedRelease {
+        provenance: crate::provenance::OdsProvenance::default(),
+        concept_map: HashMap::new(),
+        orgs: HashMap::new(),
+        files: Vec::new(),
+        stubs_superseded: 0,
+        stubs_remaining: 0,
+        duplicates_dropped: Vec::new(),
+    };
+    // Which file each surviving record came from, for the contradiction message.
+    let mut source: HashMap<String, usize> = HashMap::new();
+
+    for (idx, path) in xml_paths.iter().enumerate() {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let file = parse_file(path).with_context(|| format!("parsing {name}"))?;
+
+        if idx == 0 {
+            release.provenance = file.provenance;
+        }
+        for (k, v) in file.concept_map {
+            release.concept_map.entry(k).or_insert(v);
+        }
+        release.files.push(FileCount { name: name.clone(), declared: file.declared, read: file.orgs.len() });
+
+        for org in file.orgs {
+            match release.orgs.entry(org.ods_code.clone()) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    source.insert(org.ods_code.clone(), idx);
+                    v.insert(org);
+                }
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    let first_idx = source[&org.ods_code];
+                    let first = release.files[first_idx].name.clone();
+                    match (o.get().ref_only, org.ref_only) {
+                        (true, false) => {
+                            source.insert(org.ods_code.clone(), idx);
+                            o.insert(org);
+                            release.stubs_superseded += 1;
+                        }
+                        (false, true) => release.stubs_superseded += 1,
+                        (true, true) => anyhow::bail!(
+                            "✖ {} appears twice as a stub in the release XML: in {} and in {}",
+                            org.ods_code,
+                            first,
+                            name
+                        ),
+                        // Two complete records for one code. The files are read full first, so
+                        // across files the earlier one wins; within one file the record whose
+                        // operational period starts later does.
+                        (false, false) if first_idx != idx => release.duplicates_dropped.push(format!(
+                            "{} has a complete record in both files: kept {}, dropped {} ({})",
+                            org.ods_code,
+                            file_label(&first),
+                            file_label(&name),
+                            describe_period(&org.dates)
+                        )),
+                        (false, false) => {
+                            let kept_start = operational_period(&o.get().dates).0;
+                            let new_start = operational_period(&org.dates).0;
+                            let (Some(kept_start), Some(new_start)) = (kept_start, new_start) else {
+                                anyhow::bail!(
+                                    "✖ {} appears twice as a complete record in the release XML: in {} and in {}, and neither says which starts later",
+                                    org.ods_code, first, name
+                                );
+                            };
+                            if kept_start == new_start {
+                                anyhow::bail!(
+                                    "✖ {} appears twice as a complete record in the release XML: in {} and in {}, both starting {}",
+                                    org.ods_code, first, name, kept_start
+                                );
+                            }
+                            let (kept, dropped) = if new_start > kept_start {
+                                (org.dates.clone(), o.insert(org).dates)
+                            } else {
+                                (o.get().dates.clone(), org.dates)
+                            };
+                            release.duplicates_dropped.push(format!(
+                                "{} has two complete records in {}: kept {}, dropped {}",
+                                o.key(),
+                                name,
+                                describe_period(&kept),
+                                describe_period(&dropped)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    release.stubs_remaining = release.orgs.values().filter(|o| o.ref_only).count();
+    Ok(release)
+}
+
+/// Finds a release's XML files at `input` and parses them as one release.
+pub fn parse_release_at(input: &Path) -> Result<ParsedRelease> {
+    parse_release(&find_xml_file(input)?)
+}
+
+fn parse_file(xml_path: &Path) -> Result<ParsedFile> {
     let file = File::open(xml_path)?;
     let buf_reader = BufReader::with_capacity(128 * 1024, file);
     let mut reader = Reader::from_reader(buf_reader);
     reader.trim_text(true);
 
     let mut concept_map = HashMap::new();
-    let mut parsed: HashMap<String, ParsedOrg> = HashMap::new();
+    let mut parsed: Vec<ParsedOrg> = Vec::new();
     let mut parser_state = ParserState::new();
     let mut buf = Vec::new();
 
@@ -844,7 +1087,7 @@ pub fn parse_single_pass(
         ..Default::default()
     };
 
-    Ok((provenance, concept_map, parsed, manifest_record_count))
+    Ok(ParsedFile { provenance, concept_map, orgs: parsed, declared: manifest_record_count })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -862,6 +1105,7 @@ enum TextTarget {
 
 #[derive(Default)]
 struct OrgState {
+    ref_only: bool,
     code: Option<String>,
     name: Option<String>,
     status: Option<String>,
@@ -934,6 +1178,8 @@ impl ParserState {
                     let key = attr.key.as_ref();
                     if key == b"orgRecordClass" {
                         self.org.record_class = Some(attr.decode_and_unescape_value(reader)?.into_owned());
+                    } else if key == b"refOnly" {
+                        self.org.ref_only = attr.decode_and_unescape_value(reader)?.eq_ignore_ascii_case("true");
                     }
                 }
             }
@@ -1228,7 +1474,7 @@ impl ParserState {
         }
 
         if is_empty {
-            self.handle_end(name_ref, &mut HashMap::new())?;
+            self.handle_end(name_ref, &mut Vec::new())?;
         }
         Ok(())
     }
@@ -1277,7 +1523,7 @@ impl ParserState {
         Ok(())
     }
 
-    fn handle_end(&mut self, name_ref: &[u8], parsed: &mut HashMap<String, ParsedOrg>) -> Result<()> {
+    fn handle_end(&mut self, name_ref: &[u8], parsed: &mut Vec<ParsedOrg>) -> Result<()> {
         match name_ref {
             b"Organisation" => {
                 if let (Some(code), Some(name), Some(status)) = (
@@ -1320,7 +1566,7 @@ impl ParserState {
                     });
 
                     let parsed_org = ParsedOrg {
-                        ods_code: code.clone(),
+                        ods_code: code,
                         name,
                         status,
                         role: primary_role_display,
@@ -1336,9 +1582,10 @@ impl ParserState {
                         roles: std::mem::take(&mut self.org.roles),
                         relationships: std::mem::take(&mut self.org.relationships),
                         successors: std::mem::take(&mut self.org.successors),
+                        ref_only: self.org.ref_only,
                     };
 
-                    parsed.insert(code, parsed_org);
+                    parsed.push(parsed_org);
                 }
                 self.in_organisation = false;
             }
@@ -1424,10 +1671,11 @@ mod tests {
         zip.write_all(xml_content.as_bytes())?;
         zip.finish()?;
 
-        let extracted_xml = find_xml_file(&zip_path)?;
-        assert!(extracted_xml.exists(), "extracted XML file must exist");
+        let extracted = find_xml_file(&zip_path)?;
+        assert_eq!(extracted.len(), 1, "a zip holding one XML directly is one file");
+        assert!(extracted[0].exists(), "extracted XML file must exist");
         assert!(
-            extracted_xml.file_name().unwrap().to_str().unwrap().contains("HSCOrgRefData"),
+            extracted[0].file_name().unwrap().to_str().unwrap().contains("HSCOrgRefData"),
             "extracted file must be the expected TRUD XML file"
         );
 
@@ -1498,6 +1746,173 @@ mod tests {
             err_msg
         );
 
+        Ok(())
+    }
+
+    fn org_xml(code: &str, name: &str, ref_only: bool) -> String {
+        let attr = if ref_only { r#" refOnly="true""# } else { "" };
+        format!(
+            r#"<Organisation orgRecordClass="RC1"{attr}><Name>{name}</Name><OrgId extension="{code}" /><Status value="Active" /></Organisation>"#
+        )
+    }
+
+    fn manifest_xml(orgs: &[String]) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" /><RecordCount value="{}" /></Manifest><Organisations>{}</Organisations></OrgRefData>"#,
+            orgs.len(),
+            orgs.concat()
+        )
+    }
+
+    fn inner_zip(xml_name: &str, xml: &str) -> Vec<u8> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut cursor);
+            zip.start_file(xml_name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        cursor.into_inner()
+    }
+
+    /// Writes a TRUD-shaped zip: `fullfile.zip` and, when given, `archive.zip`.
+    fn release_zip(dir: &Path, full: &[String], archive: Option<&[String]>) -> PathBuf {
+        let path = dir.join("release.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("fullfile.zip", options).unwrap();
+        zip.write_all(&inner_zip("HSCOrgRefData_Full_20260827.xml", &manifest_xml(full))).unwrap();
+        if let Some(archive) = archive {
+            zip.start_file("archive.zip", options).unwrap();
+            zip.write_all(&inner_zip("HSCOrgRefData_Archive_20260827.xml", &manifest_xml(archive))).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn complete_record_in_archive_replaces_stub_in_full_file() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(
+            dir.path(),
+            &[org_xml("A1", "LIVE", false), org_xml("Z9", "CLOSED (STUB)", true)],
+            Some(&[org_xml("Z9", "CLOSED", false)]),
+        );
+
+        let release = parse_release_at(&zip)?;
+
+        assert_eq!(release.orgs.len(), 2);
+        assert_eq!(release.orgs["Z9"].name, "CLOSED");
+        assert!(!release.orgs["Z9"].ref_only);
+        assert_eq!((release.records_read(), release.records_declared()), (3, Some(3)));
+        assert_eq!((release.stubs_superseded, release.stubs_remaining), (1, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn complete_record_in_full_file_replaces_stub_in_archive() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(
+            dir.path(),
+            &[org_xml("A1", "LIVE", false)],
+            Some(&[org_xml("Z9", "CLOSED", false), org_xml("A1", "LIVE (STUB)", true)]),
+        );
+
+        let release = parse_release_at(&zip)?;
+
+        assert_eq!(release.orgs.len(), 2);
+        assert_eq!(release.orgs["A1"].name, "LIVE");
+        assert_eq!(release.stubs_superseded, 1);
+        Ok(())
+    }
+
+    fn dated_org_xml(code: &str, name: &str, start: Option<&str>, end: Option<&str>) -> String {
+        let date = start.map_or(String::new(), |s| {
+            let end = end.map_or(String::new(), |e| format!(r#"<End value="{e}" />"#));
+            format!(r#"<Date><Type value="Operational" /><Start value="{s}" />{end}</Date>"#)
+        });
+        format!(
+            r#"<Organisation orgRecordClass="RC1"><Name>{name}</Name>{date}<OrgId extension="{code}" /><Status value="Inactive" /></Organisation>"#
+        )
+    }
+
+    #[test]
+    fn full_file_record_wins_over_archive_record_for_a_reused_code() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(
+            dir.path(),
+            &[dated_org_xml("F1", "PHARMACY", Some("2025-04-23"), None)],
+            Some(&[dated_org_xml("F1", "LAUNDRY", Some("1991-04-01"), Some("1993-03-31"))]),
+        );
+
+        let release = parse_release_at(&zip)?;
+
+        assert_eq!(release.orgs.len(), 1);
+        assert_eq!(release.orgs["F1"].name, "PHARMACY");
+        assert_eq!(
+            release.duplicates_dropped,
+            ["F1 has a complete record in both files: kept the full file's, dropped the archive's (1991-04-01 to 1993-03-31)"]
+        );
+        assert_eq!((release.records_read(), release.records_declared()), (2, Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn later_operational_start_wins_within_one_file() -> Result<()> {
+        let earlier = dated_org_xml("T1", "LOGISTICS", Some("2000-04-01"), Some("2003-03-31"));
+        let later = dated_org_xml("T1", "LOGISTICS", Some("2003-04-01"), Some("2004-09-30"));
+        // Whichever order the source lists them in, the later period is the one kept.
+        for archive in [[earlier.clone(), later.clone()], [later, earlier]] {
+            let dir = TempDir::new()?;
+            let zip = release_zip(dir.path(), &[org_xml("A1", "LIVE", false)], Some(&archive));
+
+            let release = parse_release_at(&zip)?;
+
+            assert_eq!(operational_period(&release.orgs["T1"].dates).0, Some("2003-04-01"));
+            assert_eq!(
+                release.duplicates_dropped,
+                ["T1 has two complete records in HSCOrgRefData_Archive_20260827.xml: kept 2003-04-01 to 2004-09-30, dropped 2000-04-01 to 2003-03-31"]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn two_complete_records_without_an_operational_start_fail_naming_both_files() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(
+            dir.path(),
+            &[org_xml("A1", "LIVE", false)],
+            Some(&[dated_org_xml("T1", "ONE", None, None), dated_org_xml("T1", "TWO", None, None)]),
+        );
+
+        let err = parse_release_at(&zip).unwrap_err().to_string();
+
+        assert!(err.contains("T1") && err.contains("complete record") && err.contains("neither says which starts later"), "{err}");
+        assert!(err.matches("HSCOrgRefData_Archive_20260827.xml").count() == 2, "names the file twice: {err}");
+        Ok(())
+    }
+
+    #[test]
+    fn two_stubs_for_one_code_fail_naming_both_files() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(dir.path(), &[org_xml("A1", "ONE", true)], Some(&[org_xml("A1", "TWO", true)]));
+
+        let err = parse_release_at(&zip).unwrap_err().to_string();
+
+        assert!(err.contains("A1") && err.contains("stub"), "{err}");
+        assert!(err.contains("HSCOrgRefData_Full_20260827.xml") && err.contains("HSCOrgRefData_Archive_20260827.xml"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn release_zip_without_archive_zip_fails_naming_it() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = release_zip(dir.path(), &[org_xml("A1", "ONE", false)], None);
+
+        let err = format!("{:#}", parse_release_at(&zip).unwrap_err());
+
+        assert!(err.contains("archive.zip"), "{err}");
         Ok(())
     }
 }

@@ -117,7 +117,7 @@ Output:
 
 ## How It Works
 
-`ods info` searches `orgs_all.parquet` to locate both active and inactive/closed organisations. When found, it traverses `successions.parquet` to construct forward and reverse succession paths with hop depths and effective dates.
+`ods info` searches `orgs.parquet`, which holds active and inactive/closed organisations alike. `--all` on `ods info` adds an organisation's inactive roles and relationships to the card; the organisation is found either way. When found, it traverses `successions.parquet` to construct forward and reverse succession paths with hop depths and effective dates.
 
 - **Markdown mode**: Emits human-readable ANSI colored output when connected to a terminal, or clean plain markdown when piped.
 - **JSON mode**: Emits structured JSON suitable for scripts, pipelines, and agents.

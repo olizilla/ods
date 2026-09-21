@@ -48,7 +48,7 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/03fd0e06dab08f7708fda1ceeb8f9216d8420c75a5c68eec491efa0707815cc1': {
+    'v2/ods-data/blobs/sha256/253975bf8dae638fc314a17cf0719157c3243417a4bf5d3a94f981479bcc3aab': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -56,7 +56,7 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/32c4f1885812758e321d2b1a980681bf960ac9061a8daad50bf3dcdb6f6c291d': {
+    'v2/ods-data/blobs/sha256/a49c48916f770919b0a926510dd9ad09425362b1c23efbbb8da2ce582fe6ab5c': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },

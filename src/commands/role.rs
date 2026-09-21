@@ -34,6 +34,10 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
+    /// Count inactive organisations as holders too
+    #[arg(long)]
+    pub all: bool,
+
     /// Disable ANSI colored output
     #[arg(long)]
     pub plain: bool,
@@ -46,6 +50,7 @@ impl Default for Args {
             codes: false,
             format: OutputFormat::Table,
             input: None,
+            all: false,
             plain: false,
         }
     }
@@ -98,7 +103,7 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
         );
     }
 
-    let holder_counts = count_role_holders(&path)?;
+    let holder_counts = count_role_holders(&path, args.all)?;
     let vocab = crate::roles::role_names();
 
     let mut entries: Vec<RoleEntry> = Vec::with_capacity(vocab.names.len());
@@ -235,7 +240,7 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
     Ok(())
 }
 
-fn count_role_holders(path: &Path) -> Result<HashMap<String, usize>> {
+fn count_role_holders(path: &Path, include_inactive: bool) -> Result<HashMap<String, usize>> {
     let file = File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
@@ -251,8 +256,17 @@ fn count_role_holders(path: &Path) -> Result<HashMap<String, usize>> {
             .as_any()
             .downcast_ref::<ListArray>()
             .context("role_codes ListArray")?;
+        let status_idx = schema.index_of("status").context("status column")?;
+        let status_arr = batch
+            .column(status_idx)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("status StringArray")?;
 
         for i in 0..batch.num_rows() {
+            if !include_inactive && status_arr.value(i) != "active" {
+                continue;
+            }
             if role_codes_arr.is_valid(i) {
                 let value_arr = role_codes_arr.value(i);
                 if let Some(str_arr) = value_arr.as_any().downcast_ref::<StringArray>() {
@@ -270,7 +284,7 @@ fn count_role_holders(path: &Path) -> Result<HashMap<String, usize>> {
     Ok(counts)
 }
 
-fn format_number_with_commas(n: usize) -> String {
+pub fn format_number_with_commas(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::new();
     let bytes = s.as_bytes();

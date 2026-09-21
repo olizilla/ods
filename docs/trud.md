@@ -157,7 +157,7 @@ Verify that derived workspace artefacts are a faithful, complete, and unmodified
 
 - **File & Provenance Integrity**: Verifies SHA-256 checksums, `_provenance.json` artifact map, and `datapackage.json` hashes.
 - **Source Invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
-- **Record Parity**: Checks 100% count equality across `orgs_all.parquet`, `orgs.parquet` (active count), `org_roles.parquet`, `relationships.parquet`, and `successions.parquet`.
+- **Record Parity**: Checks 100% count equality between the release's XML files and `orgs.parquet` (every organisation, and the active count), `roles.parquet`, `relationships.parquet`, and `successions.parquet`. It reads both XML files as `ods make` does, sets aside each stub that repeats a complete record from the other file, and names the record count it compared.
 - **Field & Derived Column Parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, role names & codes, normalized addresses).
 - **Workspace Batch Audit (`--all`)**: Audits all release directories in the workspace, skipping unmade releases without failure.
 

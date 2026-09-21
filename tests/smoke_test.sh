@@ -19,7 +19,6 @@ cargo run -- make parquet --input "$TMP_FIXTURE_DIR/hscorgrefdataxml_data_7.0.0_
 # 3. Assert all output artifacts exist and are non-empty
 echo "* Verifying generated target projections..."
 test -s "ods_data/current/orgs.parquet"
-test -s "ods_data/current/orgs_all.parquet"
 test -s "ods_data/current/roles.parquet"
 test -s "ods_data/current/relationships.parquet"
 test -s "ods_data/current/successions.parquet"

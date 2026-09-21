@@ -15,7 +15,7 @@ mod common;
 use common::setup_find_test_workspace;
 use ods::commands::find::{self, csv_headers_from_json, Args, OrgRow, OutputFormat};
 use ods::commands::parquet::{
-    build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
+    build_succession_edges, compute_transitive_closures, export_orgs,
     export_relationships, export_roles, export_successions, orgs_schema,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole, OdsSuccessor};
@@ -385,14 +385,6 @@ fn setup_two_hop_chain_workspace() -> (TempDir, PathBuf) {
     prov.trud_release_date = Some("2026-07-31".to_string());
 
     export_orgs(
-        &parquet_dir,
-        &records,
-        &succ_closures,
-        &pred_closures,
-        Some(&prov),
-    )
-    .unwrap();
-    export_orgs_all(
         &parquet_dir,
         &records,
         &succ_closures,

@@ -4,7 +4,7 @@ use ods::ods_xml::{
     OdsSuccessor,
 };
 use ods::commands::parquet::{
-    export_orgs, export_orgs_all, export_relationships, export_roles, export_successions,
+    export_orgs, export_relationships, export_roles, export_successions,
 };
 use ods::provenance::OdsProvenance;
 use std::path::PathBuf;
@@ -473,8 +473,6 @@ fn setup_test_workspace() -> (TempDir, PathBuf) {
     let (succ_closures, pred_closures) =
         ods::commands::parquet::compute_transitive_closures(&records, &edges);
     export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_orgs_all(&dir, &records, &succ_closures, &pred_closures, Some(&prov))
-        .expect("export orgs_all");
     export_roles(&dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&dir, &records, Some(&prov)).expect("export successions");

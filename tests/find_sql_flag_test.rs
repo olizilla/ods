@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use ods::commands::find::{self, Args, OutputFormat, SortBy};
 use ods::commands::parquet::{
-    build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
+    build_succession_edges, compute_transitive_closures, export_orgs,
     export_relationships, export_roles, export_successions,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole};
@@ -192,8 +192,6 @@ fn setup_sql_workspace() -> (TempDir, PathBuf) {
 
     export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov))
         .expect("export orgs");
-    export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov))
-        .expect("export orgs_all");
     export_roles(&parquet_dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&parquet_dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&parquet_dir, &records, Some(&prov)).expect("export successions");
@@ -389,7 +387,7 @@ fn test_find_sql_output_hygiene_and_isolation() {
     let sql_bare = run_find_sql(Args::default(), &parquet_dir);
     assert!(sql_bare.contains("SELECT *\nFROM"));
     assert!(sql_bare.contains("ORDER BY ods_code;"));
-    assert!(!sql_bare.contains("WHERE"));
+    assert!(sql_bare.contains("WHERE status = 'active'\nORDER BY ods_code;"));
     assert!(!sql_bare.contains("No search filters given"));
 
     // ods find --sql reads no Parquet file (works on empty/non-existent parquet dir)
@@ -421,7 +419,7 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_code.contains("WHERE ods_code IN ('A82608')\nORDER BY ods_code;"));
+    assert!(sql_code.contains("WHERE status = 'active'\n  AND ods_code IN ('A82608')\nORDER BY ods_code;"));
 
     // --code A82608,8GJ58
     let sql_multi_code = run_find_sql(
@@ -431,7 +429,7 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_multi_code.contains("WHERE ods_code IN ('A82608', '8GJ58')"));
+    assert!(sql_multi_code.contains("AND ods_code IN ('A82608', '8GJ58')"));
 
     // --dentist
     let sql_dentist = run_find_sql(
@@ -441,7 +439,7 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_dentist.contains("WHERE list_has_any(role_codes, ['RO110', 'RO65'])"));
+    assert!(sql_dentist.contains("AND list_has_any(role_codes, ['RO110', 'RO65'])"));
 
     // sedbergh --gp
     let sql_sedbergh_gp = run_find_sql(
@@ -452,7 +450,7 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_sedbergh_gp.contains("WHERE regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%SEDBERGH%'"));
+    assert!(sql_sedbergh_gp.contains("AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%SEDBERGH%'"));
     assert!(sql_sedbergh_gp.contains("AND list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])"));
 
     // --gp --all
@@ -464,7 +462,8 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_gp_all.contains("orgs_all.parquet"));
+    assert!(sql_gp_all.contains("orgs.parquet"));
+    assert!(!sql_gp_all.contains("status = 'active'"), "--all drops the status filter");
     assert!(sql_gp_all.contains("WHERE list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])"));
 
     // Postcode clause shapes:
@@ -569,7 +568,7 @@ fn test_sql_flag_macro_emission_rules_and_block_format() {
     assert!(!sql_durham.contains("norm_postcode"));
 
     let expected_durham_block = "\
-WHERE (   norm(town)    = 'DURHAM'\n \
+AND (   norm(town)    = 'DURHAM'\n \
        OR norm(county)  = 'DURHAM'\n \
        OR norm(country) = 'DURHAM')";
     assert!(
@@ -681,7 +680,7 @@ fn test_sql_flag_release_filter_counts_match_on_release_data() {
         (Args { code: vec!["A82608".to_string()], ..Default::default() }, 1),
         (Args { dentist: true, ..Default::default() }, 9796),
         (Args { query: Some("sedbergh".to_string()), gp: true, ..Default::default() }, 1),
-        (Args { gp: true, all: true, ..Default::default() }, 9784),
+        (Args { gp: true, all: true, ..Default::default() }, 10524),
     ];
 
     for (args, expected_rows) in cases {

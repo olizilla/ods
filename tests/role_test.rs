@@ -213,7 +213,7 @@ fn test_role_formats_table_markdown_csv_json() {
 
 
 
-fn count_role_codes_in_parquet(path: &std::path::Path) -> std::collections::HashMap<String, usize> {
+fn count_role_codes_in_parquet(path: &std::path::Path, active_only: bool) -> std::collections::HashMap<String, usize> {
     use arrow::array::{Array, ListArray, StringArray};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::fs::File;
@@ -232,8 +232,16 @@ fn count_role_codes_in_parquet(path: &std::path::Path) -> std::collections::Hash
             .as_any()
             .downcast_ref::<ListArray>()
             .expect("ListArray");
+        let status_arr = batch
+            .column(schema.index_of("status").expect("status col"))
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("status StringArray");
 
         for i in 0..batch.num_rows() {
+            if active_only && status_arr.value(i) != "active" {
+                continue;
+            }
             if list_arr.is_valid(i) {
                 let val_arr = list_arr.value(i);
                 if let Some(str_arr) = val_arr.as_any().downcast_ref::<StringArray>() {
@@ -249,59 +257,63 @@ fn count_role_codes_in_parquet(path: &std::path::Path) -> std::collections::Hash
     counts
 }
 
-#[test]
-fn test_role_holders_counts_active_orgs_holding_role_actively() {
-    let (_tmp, parquet_dir) = setup_find_test_workspace();
-
-    // 1. Direct query of orgs.parquet vs orgs_all.parquet in test workspace
-    let orgs_counts = count_role_codes_in_parquet(&parquet_dir.join("orgs.parquet"));
-    let orgs_all_counts = count_role_codes_in_parquet(&parquet_dir.join("orgs_all.parquet"));
-
+fn role_holders_csv(parquet_dir: &std::path::Path, all: bool) -> std::collections::HashMap<String, usize> {
     let mut out = Vec::new();
     role::run_with_writer(
         Args {
             format: OutputFormat::Csv,
-            input: Some(parquet_dir.clone()),
+            input: Some(parquet_dir.to_path_buf()),
+            all,
             ..Default::default()
         },
         &mut out,
-        &parquet_dir,
+        parquet_dir,
     )
     .expect("ods role --format csv should succeed");
 
     let s = String::from_utf8(out).unwrap();
     let lines: Vec<&str> = s.lines().collect();
     assert_eq!(lines[0], "role_code,role_name,holders");
+    lines[1..]
+        .iter()
+        .map(|line| {
+            let parts: Vec<&str> = line.split(',').collect();
+            (parts[0].to_string(), parts[2].parse().unwrap())
+        })
+        .collect()
+}
 
-    let mut csv_map = std::collections::HashMap::new();
-    for line in &lines[1..] {
-        let parts: Vec<&str> = line.split(',').collect();
-        let code = parts[0];
-        let holders: usize = parts[2].parse().unwrap();
-        let expected_orgs = orgs_counts.get(code).copied().unwrap_or(0);
+#[test]
+fn role_counts_active_organisations_and_all_adds_the_rest() {
+    let (_tmp, parquet_dir) = setup_find_test_workspace();
+    let orgs = parquet_dir.join("orgs.parquet");
+
+    let active_counts = count_role_codes_in_parquet(&orgs, true);
+    let all_counts = count_role_codes_in_parquet(&orgs, false);
+
+    // In the synthetic fixture RO76 has 14 active holders and 17 holders in all.
+    assert_eq!(active_counts.get("RO76"), Some(&14));
+    assert_eq!(all_counts.get("RO76"), Some(&17));
+
+    let default_csv = role_holders_csv(&parquet_dir, false);
+    for (code, holders) in &default_csv {
         assert_eq!(
-            holders, expected_orgs,
-            "role {} holders must equal count from orgs.parquet",
-            code
+            *holders,
+            active_counts.get(code.as_str()).copied().unwrap_or(0),
+            "role {code} holders must count active organisations only"
         );
-        csv_map.insert(code.to_string(), holders);
     }
+    assert_eq!(default_csv.get("RO76"), Some(&14));
 
-    // In the test fixture, RO76 has active holders in orgs.parquet and inactive holders in orgs_all.parquet.
-    // Explicitly pin the synthetic fixture values (14 active vs 17 all) so this verification runs on CI.
-    let ro76_active = orgs_counts.get("RO76").copied().unwrap_or(0);
-    let ro76_all = orgs_all_counts.get("RO76").copied().unwrap_or(0);
-    assert_eq!(ro76_active, 14, "synthetic fixture has 14 active RO76 holders in orgs.parquet");
-    assert_eq!(ro76_all, 17, "synthetic fixture has 17 total RO76 records in orgs_all.parquet");
-    assert_ne!(
-        ro76_active, ro76_all,
-        "RO76 fixture must have different counts between active and all orgs"
-    );
-    assert_eq!(
-        csv_map.get("RO76"),
-        Some(&14),
-        "ods role must report 14 active RO76 holders (from orgs.parquet), not 17 (from orgs_all.parquet)"
-    );
+    let all_csv = role_holders_csv(&parquet_dir, true);
+    for (code, holders) in &all_csv {
+        assert_eq!(
+            *holders,
+            all_counts.get(code.as_str()).copied().unwrap_or(0),
+            "role {code} holders with --all must count every organisation"
+        );
+    }
+    assert_eq!(all_csv.get("RO76"), Some(&17));
 }
 
 fn get_release_dir() -> Option<std::path::PathBuf> {

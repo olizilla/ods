@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -76,8 +76,8 @@ fn extract_backtick_columns(cell: &str) -> Vec<String> {
     cols
 }
 
-fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, BTreeSet<String>> {
-    let mut result: HashMap<String, BTreeSet<String>> = HashMap::new();
+fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, Vec<String>> {
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
     let mut current_table: Option<String> = None;
 
     for line in content.lines() {
@@ -85,7 +85,6 @@ fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, BTreeSet<Stri
         if trimmed.starts_with("## `orgs.parquet`") {
             current_table = Some("orgs".to_string());
             result.entry("orgs".to_string()).or_default();
-            result.entry("orgs_all".to_string()).or_default();
             continue;
         } else if trimmed.starts_with("## `roles.parquet`") {
             current_table = Some("roles".to_string());
@@ -111,12 +110,7 @@ fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, BTreeSet<Stri
                 if cells.len() >= 3 {
                     let first_cell = cells[1];
                     for col in extract_backtick_columns(first_cell) {
-                        if table == "orgs" {
-                            result.get_mut("orgs").unwrap().insert(col.clone());
-                            result.get_mut("orgs_all").unwrap().insert(col);
-                        } else {
-                            result.get_mut(table).unwrap().insert(col);
-                        }
+                        result.get_mut(table).unwrap().push(col);
                     }
                 }
             }
@@ -126,14 +120,14 @@ fn parse_docs_parquet_md_columns(content: &str) -> HashMap<String, BTreeSet<Stri
     result
 }
 
-fn get_code_columns_map() -> HashMap<String, BTreeSet<String>> {
+fn get_code_columns_map() -> HashMap<String, Vec<String>> {
     let pkg = ods::datapackage::generate_datapackage();
     let mut map = HashMap::new();
     for res in pkg["resources"].as_array().unwrap() {
         let name = res["name"].as_str().unwrap().to_string();
-        let mut cols = BTreeSet::new();
+        let mut cols = Vec::new();
         for f in res["schema"]["fields"].as_array().unwrap() {
-            cols.insert(f["name"].as_str().unwrap().to_string());
+            cols.push(f["name"].as_str().unwrap().to_string());
         }
         map.insert(name, cols);
     }
@@ -141,8 +135,8 @@ fn get_code_columns_map() -> HashMap<String, BTreeSet<String>> {
 }
 
 fn cross_check_columns(
-    docs_map: &HashMap<String, BTreeSet<String>>,
-    code_map: &HashMap<String, BTreeSet<String>>,
+    docs_map: &HashMap<String, Vec<String>>,
+    code_map: &HashMap<String, Vec<String>>,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
 
@@ -167,6 +161,16 @@ fn cross_check_columns(
             if !code_cols.contains(col) {
                 errors.push(format!("Column '{}.{}' is documented in docs/parquet.md but does not exist in code schema", table, col));
             }
+        }
+
+        // 3. Same columns, different order
+        if errors.is_empty() && docs_cols != code_cols {
+            errors.push(format!(
+                "Table '{}' documents its columns in a different order from the file:\n  docs: {}\n  file: {}",
+                table,
+                docs_cols.join(", "),
+                code_cols.join(", ")
+            ));
         }
     }
 

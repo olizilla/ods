@@ -48,11 +48,11 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
     // Parquet Encoding Rationale:
     // 1. ZSTD at level 3 is explicitly pinned for deterministic cross-build compression and byte stability.
     // 2. Max row group size is set to 64,000. This aligns with our 50,000 BATCH_SIZE and splits large
-    //    tables (orgs: 216k, orgs_all: 305k, rels: 662k) into multiple row groups to enable HTTP range-request
+    //    tables (orgs: 371k, rels: 770k) into multiple row groups to enable HTTP range-request
     //    pruning in DuckDB.
-    // 3. Rows are pre-sorted by `ods_code` before export, giving non-overlapping min/max ranges per row group.
-    //    Because min/max stats provide 100% selective pruning for `ods_code` lookups, bloom filters are omitted
-    //    to avoid inflating file size without adding pruning benefit.
+    // 3. Orgs rows are pre-sorted by `status` then `ods_code` before export: active rows share the leading row
+    //    groups, and `ods_code` ranges do not overlap within a status. Min/max stats then prune a `status` filter
+    //    and an `ods_code` lookup alike, so bloom filters are omitted to avoid inflating file size.
     WriterProperties::builder()
         .set_key_value_metadata(Some(meta_kv))
         .set_compression(parquet::basic::Compression::ZSTD(
@@ -144,20 +144,11 @@ pub fn run(args: Args) -> Result<PathBuf> {
 
     eprintln!("Generating dataset target projections (Parquet)...");
 
-    let xml_path = crate::ods_xml::find_xml_file(&archive_info.archive_path)?;
-    let (mut prov, _concept_map, parsed, manifest_record_count) =
-        crate::ods_xml::parse_single_pass(&xml_path)?;
-
-    let actual_parsed_count = parsed.len();
-    if let Some(declared_count) = manifest_record_count {
-        if declared_count != actual_parsed_count {
-            anyhow::bail!(
-                "✖ Manifest record count mismatch: declared {} != parsed {}",
-                declared_count,
-                actual_parsed_count
-            );
-        }
-    }
+    let release = crate::ods_xml::parse_release_at(&archive_info.archive_path)?;
+    check_record_counts(&release)?;
+    report_records_read(&release);
+    let mut prov = release.provenance;
+    let parsed = release.orgs;
 
     if let Some(parent) = parent_prov {
         if let Some(ref parent_date) = parent.trud_release_date {
@@ -200,7 +191,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
 
-    // 1. Export orgs.parquet (Active only)
+    // 1. Export orgs.parquet (every organisation, active first)
     export_orgs(
         &output_path,
         &records,
@@ -209,22 +200,13 @@ pub fn run(args: Args) -> Result<PathBuf> {
         provenance.as_ref(),
     )?;
 
-    // 2. Export orgs_all.parquet (All records)
-    export_orgs_all(
-        &output_path,
-        &records,
-        &successor_closures,
-        &predecessor_closures,
-        provenance.as_ref(),
-    )?;
-
-    // 3. Export roles.parquet (one per organisation per role holding)
+    // 2. Export roles.parquet (one per organisation per role holding)
     export_roles(&output_path, &records, provenance.as_ref())?;
 
-    // 4. Export relationships.parquet
+    // 3. Export relationships.parquet
     export_relationships(&output_path, &records, provenance.as_ref())?;
 
-    // 5. Export successions.parquet
+    // 4. Export successions.parquet
     export_successions(&output_path, &records, provenance.as_ref())?;
 
     // 6. Write initial _provenance.json to output directory if present
@@ -253,17 +235,64 @@ pub fn run(args: Args) -> Result<PathBuf> {
     Ok(output_path)
 }
 
+/// Fails when the organisations read differ from what the XML manifests declare.
+///
+/// The comparison is sums over every file, before stubs are merged away: each
+/// manifest counts the stubs in its own file.
+fn check_record_counts(release: &crate::ods_xml::ParsedRelease) -> Result<()> {
+    let Some(declared) = release.records_declared() else {
+        return Ok(());
+    };
+    let read = release.records_read();
+    if declared == read {
+        return Ok(());
+    }
+    let fmt = crate::commands::role::format_number_with_commas;
+    let mut msg = format!(
+        "✖ Manifest record count mismatch: declared {} != read {}",
+        fmt(declared),
+        fmt(read)
+    );
+    for f in &release.files {
+        msg.push_str(&format!(
+            "\n  {}: declared {}, read {}",
+            f.name,
+            f.declared.map_or_else(|| "none".to_string(), fmt),
+            fmt(f.read)
+        ));
+    }
+    anyhow::bail!(msg)
+}
+
+fn report_records_read(release: &crate::ods_xml::ParsedRelease) {
+    let fmt = crate::commands::role::format_number_with_commas;
+    for line in &release.duplicates_dropped {
+        eprintln!("! {line}");
+    }
+    eprintln!(
+        "* {} records read from {} · {} stubs superseded by their complete record · {} organisations",
+        fmt(release.records_read()),
+        if release.files.len() == 1 { "1 file".to_string() } else { format!("{} files", release.files.len()) },
+        fmt(release.stubs_superseded),
+        fmt(release.orgs.len())
+    );
+    if release.stubs_remaining > 0 {
+        eprintln!(
+            "! {} organisations exist only as stubs: no file holds their complete record",
+            fmt(release.stubs_remaining)
+        );
+    }
+}
+
 pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
     let known_files: HashSet<&str> = [
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
         "datapackage.json",
         crate::provenance::PROVENANCE_FILENAME,
         "provenance.json",
-        "NOTES.md",
     ]
     .into_iter()
     .collect();
@@ -369,6 +398,7 @@ pub fn orgs_schema() -> Schema {
     Schema::new(vec![
         Field::new("ods_code", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
+        Field::new("status", DataType::Utf8, false),
         Field::new("record_class", DataType::Utf8, false),
         Field::new(
             "role_codes",
@@ -399,7 +429,6 @@ pub fn orgs_schema() -> Schema {
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
-        Field::new("status", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("legal_end", DataType::Date32, true),
         Field::new("operational_start", DataType::Date32, true),
@@ -561,6 +590,7 @@ fn build_orgs_batch(
         vec![
             Arc::new(ods_code.finish()) as ArrayRef,
             Arc::new(name.finish()) as ArrayRef,
+            Arc::new(status.finish()) as ArrayRef,
             Arc::new(record_class.finish()) as ArrayRef,
             Arc::new(roles_list.finish()) as ArrayRef,
             Arc::new(role_names_list.finish()) as ArrayRef,
@@ -575,7 +605,6 @@ fn build_orgs_batch(
             Arc::new(website.finish()) as ArrayRef,
             Arc::new(predecessor_codes_list.finish()) as ArrayRef,
             Arc::new(successor_codes_list.finish()) as ArrayRef,
-            Arc::new(status.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(legal_end.finish()) as ArrayRef,
             Arc::new(operational_start.finish()) as ArrayRef,
@@ -589,6 +618,10 @@ fn build_orgs_batch(
     Ok(batch)
 }
 
+/// Writes every organisation, sorted by `status` then `ods_code`.
+///
+/// `active` sorts before `inactive`, so a `WHERE status = 'active'` query over
+/// HTTP reads only the row groups that hold active rows.
 pub fn export_orgs(
     output_dir: &Path,
     records: &[OdsRecord],
@@ -596,9 +629,8 @@ pub fn export_orgs(
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<()> {
-    let mut active_records: Vec<&OdsRecord> =
-        records.iter().filter(|r| r.status == "active").collect();
-    active_records.sort_by_key(|r| &r.ods_code);
+    let mut all_records: Vec<&OdsRecord> = records.iter().collect();
+    all_records.sort_by(|a, b| (&a.status, &a.ods_code).cmp(&(&b.status, &b.ods_code)));
 
     let release_date_str = provenance
         .and_then(|p| p.trud_release_date.as_deref())
@@ -613,7 +645,7 @@ pub fn export_orgs(
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
         .context("creating orgs ArrowWriter")?;
 
-    for chunk in active_records.chunks(BATCH_SIZE) {
+    for chunk in all_records.chunks(BATCH_SIZE) {
         let batch = build_orgs_batch(
             &schema,
             chunk,
@@ -624,48 +656,7 @@ pub fn export_orgs(
         writer.write(&batch).context("writing orgs batch")?;
     }
     writer.close().context("finalising orgs writer")?;
-    eprintln!("Exported {} records to orgs.parquet.", active_records.len());
-    Ok(())
-}
-
-pub fn export_orgs_all(
-    output_dir: &Path,
-    records: &[OdsRecord],
-    successor_closures: &HashMap<String, Vec<String>>,
-    predecessor_closures: &HashMap<String, Vec<String>>,
-    provenance: Option<&crate::provenance::OdsProvenance>,
-) -> Result<()> {
-    let mut all_records: Vec<&OdsRecord> = records.iter().collect();
-    all_records.sort_by_key(|r| &r.ods_code);
-
-    let release_date_str = provenance
-        .and_then(|p| p.trud_release_date.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
-
-    let schema = embed_metadata(&orgs_schema(), provenance);
-    let output_file =
-        File::create(output_dir.join("orgs_all.parquet")).context("creating orgs_all.parquet")?;
-    let props = writer_properties(provenance);
-    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))
-        .context("creating orgs_all ArrowWriter")?;
-
-    for chunk in all_records.chunks(BATCH_SIZE) {
-        let batch = build_orgs_batch(
-            &schema,
-            chunk,
-            successor_closures,
-            predecessor_closures,
-            release_days,
-        )?;
-        writer.write(&batch).context("writing orgs_all batch")?;
-    }
-    writer.close().context("finalising orgs_all writer")?;
-    eprintln!(
-        "Exported {} records to orgs_all.parquet.",
-        all_records.len()
-    );
+    eprintln!("Exported {} records to orgs.parquet.", all_records.len());
     Ok(())
 }
 

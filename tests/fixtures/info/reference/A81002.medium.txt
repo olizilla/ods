@@ -1,5 +1,5 @@
 ❯ ods info A81002
-* Source: releases/2026-08-28/orgs_all.parquet
+* Source: releases/2026-08-28/orgs.parquet
 * Status: inactive, Class: org, Last Change: 2019-04-01
 ┌──────────────┬─────────────────────────────────────────────────────────────┐
 │ ODS Code     ┆ A81002                                                      │

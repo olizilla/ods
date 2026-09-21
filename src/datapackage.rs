@@ -54,7 +54,7 @@ pub fn generate_datapackage() -> Value {
     let roles_fk = vec![json!({
         "fields": ["ods_code"],
         "reference": {
-            "resource": "orgs_all",
+            "resource": "orgs",
             "fields": ["ods_code"]
         }
     })];
@@ -63,14 +63,14 @@ pub fn generate_datapackage() -> Value {
         json!({
             "fields": ["source_code"],
             "reference": {
-                "resource": "orgs_all",
+                "resource": "orgs",
                 "fields": ["ods_code"]
             }
         }),
         json!({
             "fields": ["target_code"],
             "reference": {
-                "resource": "orgs_all",
+                "resource": "orgs",
                 "fields": ["ods_code"]
             }
         }),
@@ -80,14 +80,14 @@ pub fn generate_datapackage() -> Value {
         json!({
             "fields": ["predecessor_code"],
             "reference": {
-                "resource": "orgs_all",
+                "resource": "orgs",
                 "fields": ["ods_code"]
             }
         }),
         json!({
             "fields": ["successor_code"],
             "reference": {
-                "resource": "orgs_all",
+                "resource": "orgs",
                 "fields": ["ods_code"]
             }
         }),
@@ -98,14 +98,6 @@ pub fn generate_datapackage() -> Value {
             "name": "orgs",
             "type": "table",
             "path": "orgs.parquet",
-            "format": "parquet",
-            "mediatype": "application/vnd.apache.parquet",
-            "schema": schema_to_table_schema(&orgs_schema, "ods_code", vec![])
-        }),
-        json!({
-            "name": "orgs_all",
-            "type": "table",
-            "path": "orgs_all.parquet",
             "format": "parquet",
             "mediatype": "application/vnd.apache.parquet",
             "schema": schema_to_table_schema(&orgs_schema, "ods_code", vec![])

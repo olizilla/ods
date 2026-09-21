@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use ods::commands::find::{self, Args, OutputFormat, SortBy};
 use ods::commands::parquet::{
-    build_succession_edges, compute_transitive_closures, export_orgs, export_orgs_all,
+    build_succession_edges, compute_transitive_closures, export_orgs,
     export_relationships, export_roles, export_successions,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole};
@@ -96,7 +96,6 @@ fn setup_exact_in_workspace() -> (TempDir, PathBuf) {
     };
 
     export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-    export_orgs_all(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
     export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
     export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
     export_successions(&parquet_dir, &records, Some(&prov)).unwrap();

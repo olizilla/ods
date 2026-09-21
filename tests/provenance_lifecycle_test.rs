@@ -361,7 +361,6 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
     // Create dummy files for resources
     let files = [
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
@@ -439,7 +438,7 @@ fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -
         let handle1 = thread::spawn(move || -> Result<()> {
             b1.wait();
             let extracted = ods::ods_xml::extract_xml_from_zip(&p1)?;
-            let content = fs::read_to_string(&extracted)?;
+            let content = fs::read_to_string(&extracted[0])?;
             assert!(content.contains("1111"), "thread 1 must contain its own sequence number 1111");
             assert!(!content.contains("2222"), "thread 1 must NOT contain thread 2 sequence number 2222");
             Ok(())
@@ -448,7 +447,7 @@ fn test_concurrent_extractions_with_identical_inner_filenames_do_not_collide() -
         let handle2 = thread::spawn(move || -> Result<()> {
             b2.wait();
             let extracted = ods::ods_xml::extract_xml_from_zip(&p2)?;
-            let content = fs::read_to_string(&extracted)?;
+            let content = fs::read_to_string(&extracted[0])?;
             assert!(content.contains("2222"), "thread 2 must contain its own sequence number 2222");
             assert!(!content.contains("1111"), "thread 2 must NOT contain thread 1 sequence number 1111");
             Ok(())

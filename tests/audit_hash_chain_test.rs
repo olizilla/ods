@@ -1,3 +1,4 @@
+mod common;
 use anyhow::Result;
 use arrow::array::RecordBatchReader;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -88,14 +89,7 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
     let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
     let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
 
-    {
-        let outer_file = File::create(&outer_zip_path).unwrap();
-        let mut outer_zip = zip::ZipWriter::new(outer_file);
-        let options = zip::write::SimpleFileOptions::default();
-        outer_zip.start_file("fullfile.zip", options).unwrap();
-        outer_zip.write_all(&inner_zip_bytes).unwrap();
-        outer_zip.finish().unwrap();
-    }
+    common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
@@ -403,13 +397,6 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
         &empty_closures,
         prov.as_ref(),
     )?;
-    ods::commands::parquet::export_orgs_all(
-        &active_dir,
-        &[record],
-        &empty_closures,
-        &empty_closures,
-        prov.as_ref(),
-    )?;
     ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
@@ -474,14 +461,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
     let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
 
-    {
-        let outer_file = File::create(&outer_zip_path).unwrap();
-        let mut outer_zip = zip::ZipWriter::new(outer_file);
-        let options = zip::write::SimpleFileOptions::default();
-        outer_zip.start_file("fullfile.zip", options).unwrap();
-        outer_zip.write_all(&inner_zip_bytes).unwrap();
-        outer_zip.finish().unwrap();
-    }
+    common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
     let mut prov = ods::provenance::OdsProvenance::default();
@@ -642,14 +622,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     let inner_zip_bytes = create_inner_zip("HSCOrgRefData_Full_20260731.xml", xml_content);
     let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
 
-    {
-        let outer_file = File::create(&outer_zip_path).unwrap();
-        let mut outer_zip = zip::ZipWriter::new(outer_file);
-        let options = zip::write::SimpleFileOptions::default();
-        outer_zip.start_file("fullfile.zip", options).unwrap();
-        outer_zip.write_all(&inner_zip_bytes).unwrap();
-        outer_zip.finish().unwrap();
-    }
+    common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
     let mut prov = ods::provenance::OdsProvenance::default();

@@ -61,7 +61,6 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 ) -> Result<()> {
     let files = vec![
         "orgs.parquet",
-        "orgs_all.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
