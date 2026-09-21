@@ -909,6 +909,20 @@ impl ParsedRelease {
 /// other, and so does a repeat within a file: that fails, naming the code and
 /// both files.
 pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
+    parse_release_reporting(xml_paths, &|_, _| {})
+}
+
+/// How many records a parser thread reads between reports to its progress callback. A repaint
+/// is never the bottleneck: the callback fires a few hundred times a run, not per record.
+pub const PROGRESS_EVERY: usize = 4096;
+
+/// `parse_release`, calling `on_progress(records, bytes)` from each parser thread as it reads:
+/// the records and the XML bytes since that thread's previous call, at least `PROGRESS_EVERY`
+/// records apart, and once more when its file ends.
+pub fn parse_release_reporting(
+    xml_paths: &[PathBuf],
+    on_progress: &(dyn Fn(usize, u64) + Sync),
+) -> Result<ParsedRelease> {
     let mut release = ParsedRelease {
         provenance: crate::provenance::OdsProvenance::default(),
         concept_map: HashMap::new(),
@@ -936,7 +950,7 @@ pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
         let handles: Vec<_> = xml_paths
             .iter()
             .zip(&names)
-            .map(|(path, name)| scope.spawn(move || parse_file(path).with_context(|| format!("parsing {name}"))))
+            .map(|(path, name)| scope.spawn(move || parse_file(path, on_progress).with_context(|| format!("parsing {name}"))))
             .collect();
         handles
             .into_iter()
@@ -1029,11 +1043,17 @@ pub fn parse_release(xml_paths: &[PathBuf]) -> Result<ParsedRelease> {
 }
 
 /// Finds a release's XML files at `input` and parses them as one release.
+/// The record count an XML file's `<ManifestHeader>` declares, read without parsing the file.
+pub fn declared_record_count(xml_path: &Path) -> Result<Option<usize>> {
+    let file = File::open(xml_path).with_context(|| format!("opening {}", xml_path.display()))?;
+    Ok(parse_manifest_header(Reader::from_reader(BufReader::new(file)))?.record_count)
+}
+
 pub fn parse_release_at(input: &Path) -> Result<ParsedRelease> {
     parse_release(&find_xml_file(input)?)
 }
 
-fn parse_file(xml_path: &Path) -> Result<ParsedFile> {
+fn parse_file(xml_path: &Path, on_progress: &(dyn Fn(usize, u64) + Sync)) -> Result<ParsedFile> {
     let file = File::open(xml_path)?;
     let buf_reader = BufReader::with_capacity(128 * 1024, file);
     let mut reader = Reader::from_reader(buf_reader);
@@ -1046,6 +1066,7 @@ fn parse_file(xml_path: &Path) -> Result<ParsedFile> {
 
     let mut xml_version = None;
     let mut manifest_record_count = None;
+    let (mut reported_records, mut reported_bytes) = (0usize, 0u64);
 
     let mut primary_role_scope: Vec<String> = Vec::new();
 
@@ -1096,6 +1117,12 @@ fn parse_file(xml_path: &Path) -> Result<ParsedFile> {
             Event::End(ref e) => {
                 let name = e.local_name();
                 parser_state.handle_end(name.as_ref(), &mut parsed)?;
+                if parsed.len() >= reported_records + PROGRESS_EVERY {
+                    let position = reader.buffer_position() as u64;
+                    on_progress(parsed.len() - reported_records, position - reported_bytes);
+                    reported_records = parsed.len();
+                    reported_bytes = position;
+                }
             }
             Event::Text(ref e) => {
                 if parser_state.current_text_target != TextTarget::None {
@@ -1113,6 +1140,8 @@ fn parse_file(xml_path: &Path) -> Result<ParsedFile> {
         trud_schema_version: xml_version,
         ..Default::default()
     };
+
+    on_progress(parsed.len() - reported_records, reader.buffer_position() as u64 - reported_bytes);
 
     Ok(ParsedFile { provenance, concept_map, orgs: parsed, declared: manifest_record_count })
 }

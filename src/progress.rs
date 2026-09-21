@@ -219,6 +219,160 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
     lines
 }
 
+/// The four tables `ods make` writes, in the order the block lists them: smallest first.
+pub const MAKE_TABLES: [&str; 4] = ["successions", "roles", "relationships", "orgs"];
+
+/// One table's row once its file has closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MakeTableDone {
+    pub rows: usize,
+    pub bytes: u64,
+}
+
+/// What the `ods make` block shows at one instant.
+#[derive(Debug, Clone)]
+pub struct MakeBlockParams {
+    /// The records the XML manifests declare, or `None` for a bare XML that declares none.
+    pub records_total: Option<usize>,
+    pub records_done: usize,
+    /// Bytes of XML on disk, and (when nothing declares a record count) how many are read.
+    pub xml_bytes: u64,
+    pub xml_bytes_done: u64,
+    /// Rows written so far and rows to write, across the four tables. The total is never shown.
+    pub rows_done: usize,
+    pub rows_total: usize,
+    /// Bytes landing on disk per second while writing; `None` before anything is written.
+    pub rate: Option<f64>,
+    /// Bytes of the four files, shown once they are all closed.
+    pub bytes_written: u64,
+    /// Bytes on disk across the four files right now. The largest file is at least a quarter of
+    /// this, so it lets the sizes settle on their unit before the largest file has closed.
+    pub bytes_landed: u64,
+    pub writing_done: bool,
+    /// In `MAKE_TABLES` order.
+    pub tables: [Option<MakeTableDone>; 4],
+    /// Stubs the merge set aside, shown under `--verbose`.
+    pub stubs: Option<usize>,
+    pub color: bool,
+}
+
+fn bar_cells(filled: usize, color: bool) -> String {
+    let filled = filled.min(20);
+    let empty = 20 - filled;
+    if !color {
+        return format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+    }
+    let mut b = String::new();
+    if filled > 0 {
+        b.push_str(crate::ansi::ANSI_CYAN);
+        b.push_str(&"█".repeat(filled));
+        b.push_str(crate::ansi::ANSI_RESET);
+    }
+    if empty > 0 {
+        b.push_str(crate::ansi::ANSI_MUTED);
+        b.push_str(&"░".repeat(empty));
+        b.push_str(crate::ansi::ANSI_RESET);
+    }
+    b
+}
+
+fn filled_cells(done: u64, total: u64) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    (((done.min(total)) as f64 / total as f64) * 20.0).floor() as usize
+}
+
+fn dim(text: &str, color: bool) -> String {
+    if color {
+        format!("{}{}{}", crate::ansi::ANSI_MUTED, text, crate::ansi::ANSI_RESET)
+    } else {
+        text.to_string()
+    }
+}
+
+/// A byte count in one fixed unit, one decimal: `15.7MB`, `0.3MB`, `316.4KB`.
+fn format_size_in(bytes: u64, unit: SizeUnit) -> String {
+    match unit {
+        SizeUnit::Bytes => format!("{bytes}B"),
+        SizeUnit::Kilo => format!("{:.1}KB", bytes as f64 / 1024.0),
+        SizeUnit::Mega => format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0)),
+        SizeUnit::Giga => format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SizeUnit {
+    Bytes,
+    Kilo,
+    Mega,
+    Giga,
+}
+
+/// The unit that suits the largest value of a column, so the column can be read down.
+fn unit_for(largest: u64) -> SizeUnit {
+    if largest >= 1024 * 1024 * 1024 {
+        SizeUnit::Giga
+    } else if largest >= 1024 * 1024 {
+        SizeUnit::Mega
+    } else if largest >= 1024 {
+        SizeUnit::Kilo
+    } else {
+        SizeUnit::Bytes
+    }
+}
+
+/// Renders the `ods make` report: a bar for reading the XML, a bar for writing, and a row per
+/// table that fills in as its file closes. `render_release_block` is `ods trud pull`'s.
+pub fn render_make_block(params: &MakeBlockParams) -> Vec<String> {
+    let mut lines = Vec::with_capacity(7);
+    let color = params.color;
+
+    // Reading: the bar runs on records when the manifests declared some, on bytes otherwise.
+    let (read_filled, records_text) = match params.records_total {
+        Some(total) => (filled_cells(params.records_done as u64, total as u64), format!("{total} records")),
+        None => (filled_cells(params.xml_bytes_done, params.xml_bytes), String::new()),
+    };
+    let stats = format!("  {:<15}  {:>6}", records_text, format_size(params.xml_bytes));
+    lines.push(format!("  {:<14}{}{}", "reading xml", bar_cells(read_filled, color), dim(stats.trim_end(), color)));
+
+    // Writing: the label is fixed; the tail is a rate while bytes land, the total once they have.
+    let write_filled = if params.writing_done { 20 } else { filled_cells(params.rows_done as u64, params.rows_total as u64) };
+    let tail = if params.writing_done {
+        format_size(params.bytes_written)
+    } else {
+        params.rate.map(format_rate).unwrap_or_default()
+    };
+    let stats = format!("  {:<15}  {:>6}", "4 parquet files", tail);
+    lines.push(format!("  {:<14}{}{}", "writing", bar_cells(write_filled, color), dim(stats.trim_end(), color)));
+
+    // Tables: `-` until there is something to say; then a count and a size, one unit for the column.
+    let done: Vec<MakeTableDone> = params.tables.iter().flatten().copied().collect();
+    let largest = done.iter().map(|t| t.bytes).max().unwrap_or(0).max(params.bytes_landed / 4);
+    let unit = unit_for(largest);
+    let count_width = done.iter().map(|t| t.rows.to_string().len()).max().unwrap_or(0);
+    let size_width = done.iter().map(|t| format_size_in(t.bytes, unit).len()).max().unwrap_or(0);
+    for (name, table) in MAKE_TABLES.iter().zip(params.tables.iter()) {
+        let value = match table {
+            None => dim("-", color),
+            Some(t) => format!(
+                "{:>cw$} rows · {:>sw$}",
+                t.rows,
+                format_size_in(t.bytes, unit),
+                cw = count_width,
+                sw = size_width
+            ),
+        };
+        lines.push(format!("  {:<14}{}", name, value));
+    }
+
+    if let Some(stubs) = params.stubs {
+        lines.push(format!("  {:<14}{stubs} superseded", "stubs"));
+    }
+
+    lines
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProgressCaps {
     pub is_tty: bool,
@@ -702,6 +856,173 @@ impl Drop for Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_params() -> MakeBlockParams {
+        MakeBlockParams {
+            records_total: Some(392_906),
+            records_done: 392_906,
+            xml_bytes: 833_941_723,
+            xml_bytes_done: 833_941_723,
+            rows_done: 0,
+            rows_total: 1_694_165,
+            rate: None,
+            bytes_written: 0,
+            bytes_landed: 0,
+            writing_done: false,
+            tables: [None; 4],
+            stubs: None,
+            color: false,
+        }
+    }
+
+    fn table(rows: usize, bytes: u64) -> Option<MakeTableDone> {
+        Some(MakeTableDone { rows, bytes })
+    }
+
+    #[test]
+    fn make_block_reading_shows_both_totals_from_the_start_and_only_the_bar_moves() {
+        let mut p = make_params();
+        p.records_done = 360_000;
+
+        assert_eq!(
+            render_make_block(&p),
+            [
+                "  reading xml   ██████████████████░░  392906 records    795MB",
+                "  writing       ░░░░░░░░░░░░░░░░░░░░  4 parquet files",
+                "  successions   -",
+                "  roles         -",
+                "  relationships -",
+                "  orgs          -",
+            ]
+        );
+    }
+
+    #[test]
+    fn make_block_writing_shows_a_rate_and_fills_rows_in_whatever_order_they_finish() {
+        let mut p = make_params();
+        p.rows_done = 677_666;
+        p.rate = Some(3.1 * 1024.0 * 1024.0);
+        p.tables = [None, table(529_348, 5_092_610), None, table(370_917, 16_435_840)];
+
+        assert_eq!(
+            render_make_block(&p),
+            [
+                "  reading xml   ████████████████████  392906 records    795MB",
+                "  writing       ████████░░░░░░░░░░░░  4 parquet files  3.1MB/s",
+                "  successions   -",
+                "  roles         529348 rows ·  4.9MB",
+                "  relationships -",
+                "  orgs          370917 rows · 15.7MB",
+            ]
+        );
+    }
+
+    #[test]
+    fn make_block_done_settles_the_rate_into_the_total_size() {
+        let mut p = make_params();
+        p.rows_done = p.rows_total;
+        p.writing_done = true;
+        p.bytes_written = 29_690_329;
+        p.tables = [
+            table(24_373, 324_045),
+            table(529_348, 5_092_610),
+            table(769_527, 7_837_834),
+            table(370_917, 16_435_840),
+        ];
+
+        assert_eq!(
+            render_make_block(&p),
+            [
+                "  reading xml   ████████████████████  392906 records    795MB",
+                "  writing       ████████████████████  4 parquet files    28MB",
+                "  successions    24373 rows ·  0.3MB",
+                "  roles         529348 rows ·  4.9MB",
+                "  relationships 769527 rows ·  7.5MB",
+                "  orgs          370917 rows · 15.7MB",
+            ]
+        );
+    }
+
+    #[test]
+    fn make_block_gap_between_the_phases_reads_full_then_empty_with_no_rate() {
+        // Reading is done, nothing is written yet: the wait stays visible as it is.
+        let p = make_params();
+
+        let lines = render_make_block(&p);
+
+        assert_eq!(lines[0], "  reading xml   ████████████████████  392906 records    795MB");
+        assert_eq!(lines[1], "  writing       ░░░░░░░░░░░░░░░░░░░░  4 parquet files");
+    }
+
+    #[test]
+    fn make_block_column_uses_kilobytes_when_the_largest_file_is_under_a_megabyte() {
+        let mut p = make_params();
+        p.tables = [table(3, 2_150), table(12, 3_890), table(9, 3_211), table(4, 5_632)];
+
+        assert_eq!(
+            &render_make_block(&p)[2..],
+            [
+                "  successions    3 rows · 2.1KB",
+                "  roles         12 rows · 3.8KB",
+                "  relationships  9 rows · 3.1KB",
+                "  orgs           4 rows · 5.5KB",
+            ]
+        );
+    }
+
+    #[test]
+    fn make_block_column_uses_megabytes_when_the_largest_file_is_over_one_and_shows_a_small_one_beside_it() {
+        let mut p = make_params();
+        p.tables = [table(3, 317_000), None, None, table(9, 1_100_000)];
+
+        let lines = render_make_block(&p);
+
+        assert_eq!(lines[2], "  successions   3 rows · 0.3MB");
+        assert_eq!(lines[5], "  orgs          9 rows · 1.0MB");
+    }
+
+    #[test]
+    fn make_block_unit_follows_the_bytes_already_landed_before_the_largest_file_closes() {
+        // Only the small table has closed, but 8MB is already on disk across the four files, so
+        // the largest is at least 2MB: the small one reads 0.3MB and won't flip from KB later.
+        let mut p = make_params();
+        p.tables = [table(24_373, 324_045), None, None, None];
+        p.bytes_landed = 8 * 1024 * 1024;
+
+        assert_eq!(render_make_block(&p)[2], "  successions   24373 rows · 0.3MB");
+    }
+
+    #[test]
+    fn make_block_reading_runs_on_bytes_when_no_record_count_is_declared() {
+        let mut p = make_params();
+        p.records_total = None;
+        p.records_done = 0;
+        p.xml_bytes = 12 * 1024 * 1024;
+        p.xml_bytes_done = 6 * 1024 * 1024;
+
+        assert_eq!(render_make_block(&p)[0], "  reading xml   ██████████░░░░░░░░░░                     12MB");
+    }
+
+    #[test]
+    fn make_block_verbose_adds_a_stubs_row() {
+        let mut p = make_params();
+        p.stubs = Some(21_989);
+
+        assert_eq!(render_make_block(&p).last().unwrap(), "  stubs         21989 superseded");
+    }
+
+    #[test]
+    fn make_block_colours_the_bar_cyan_and_dims_the_rest() {
+        let mut p = make_params();
+        p.color = true;
+
+        let lines = render_make_block(&p);
+
+        assert!(lines[0].contains(&format!("{}{}", crate::ansi::ANSI_CYAN, "█".repeat(20))));
+        assert!(lines[1].contains(&format!("{}{}", crate::ansi::ANSI_MUTED, "░".repeat(20))));
+        assert!(lines[2].ends_with(&format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)));
+    }
+
     use std::thread;
 
     #[test]

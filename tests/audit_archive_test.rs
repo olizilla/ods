@@ -94,8 +94,7 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
     ods::workspace::Workspace::open_or_create(Some(&workspace)).unwrap().set_active("2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(release_dir.clone()),
-        output: Some(release_dir.clone()),
-    })
+        output: Some(release_dir.clone()), ..Default::default() })
     .unwrap();
     ods::provenance::update_provenance(&release_dir).unwrap();
 

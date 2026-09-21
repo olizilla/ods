@@ -39,14 +39,12 @@ fn test_synthetic_parquet_hash_stability() {
 
     parquet::run(parquet::Args {
         input: Some(zip_path.clone()),
-        output: Some(tmp1.path().to_path_buf()),
-    })
+        output: Some(tmp1.path().to_path_buf()), ..Default::default() })
     .expect("run 1 should succeed");
 
     parquet::run(parquet::Args {
         input: Some(zip_path),
-        output: Some(tmp2.path().to_path_buf()),
-    })
+        output: Some(tmp2.path().to_path_buf()), ..Default::default() })
     .expect("run 2 should succeed");
 
     let parquet_files = vec![
@@ -88,14 +86,12 @@ fn test_real_trud_parquet_hash_stability() {
 
     parquet::run(parquet::Args {
         input: Some(zip_path.clone()),
-        output: Some(tmp1.path().to_path_buf()),
-    })
+        output: Some(tmp1.path().to_path_buf()), ..Default::default() })
     .expect("run 1 on real TRUD zip should succeed");
 
     parquet::run(parquet::Args {
         input: Some(zip_path.clone()),
-        output: Some(tmp2.path().to_path_buf()),
-    })
+        output: Some(tmp2.path().to_path_buf()), ..Default::default() })
     .expect("run 2 on real TRUD zip should succeed");
 
     let all_files = vec![
@@ -133,8 +129,7 @@ fn test_real_trud_parquet_hash_stability() {
     let tmp_isolated = TempDir::new().unwrap();
     parquet::run(parquet::Args {
         input: Some(isolated_zip),
-        output: Some(tmp_isolated.path().to_path_buf()),
-    })
+        output: Some(tmp_isolated.path().to_path_buf()), ..Default::default() })
     .expect("context 2 make should succeed");
 
     // Parquet and datapackage must match across contexts
@@ -196,14 +191,12 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     // Run parquet generation on both releases
     parquet::run(parquet::Args {
         input: Some(zip1),
-        output: Some(tmp1.path().to_path_buf()),
-    })
+        output: Some(tmp1.path().to_path_buf()), ..Default::default() })
     .expect("run 1 should succeed");
 
     parquet::run(parquet::Args {
         input: Some(zip2),
-        output: Some(tmp2.path().to_path_buf()),
-    })
+        output: Some(tmp2.path().to_path_buf()), ..Default::default() })
     .expect("run 2 should succeed");
 
     // Relabel dataset_version in tmp2's datapackage.json: 0.1.0 -> 1.0.0

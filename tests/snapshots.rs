@@ -656,3 +656,34 @@ fn snapshot_trud_pull() {
     check_snapshot("trud-pull.txt", &actual_cases, &case_names);
 }
 
+
+#[test]
+fn snapshot_make() {
+    let tmp = tempfile::TempDir::new().expect("create tempdir");
+    let zip = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
+    common::create_mock_trud_zip(tmp.path(), zip);
+
+    // Piped, so the report prints once, settled, and the warnings follow it.
+    let cases = [
+        TestCase {
+            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out",
+            columns: Some(100),
+            args: vec!["make", "--input", zip, "--output", "out"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --verbose",
+            columns: Some(100),
+            args: vec!["make", "--input", zip, "--output", "out", "--verbose"],
+            use_input: false,
+        },
+    ];
+
+    let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
+    let actual_cases: Vec<String> = cases
+        .iter()
+        .map(|c| run_case_full(c, None, Some(tmp.path()), &[]))
+        .collect();
+
+    check_snapshot("make.txt", &actual_cases, &case_names);
+}

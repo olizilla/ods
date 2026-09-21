@@ -11,10 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::ods_xml::OdsRecord;
+use crate::progress::{render_make_block, MakeBlockParams, MakeTableDone, Progress, ProgressCaps};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::Instant;
 
 const BATCH_SIZE: usize = 50_000;
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 pub struct Args {
     /// TRUD XML file or ZIP archive input path [default: the active release]
     #[arg(long, short)]
@@ -23,6 +27,18 @@ pub struct Args {
     /// Output Parquet directory path [default: the active release]
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Show errors and the settled report only
+    #[arg(long, short = 'q', conflicts_with = "verbose")]
+    pub quiet: bool,
+
+    /// Disable interactive live progress animations
+    #[arg(long)]
+    pub no_progress: bool,
+
+    /// Show how many stubs the merge set aside
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
 }
 
 fn embed_metadata(
@@ -74,6 +90,9 @@ pub fn run_before_process_exit(args: Args) -> Result<PathBuf> {
 }
 
 fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
+    let (quiet, no_progress, verbose) = (args.quiet, args.no_progress, args.verbose);
+    // Warnings wait for the report: a `!` line above a repainting block would be painted over.
+    let mut held_warnings: Vec<String> = Vec::new();
     let (input_path, inferred_date) = match args.input {
         Some(p) => (p, None),
         None => {
@@ -110,11 +129,28 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         }
     };
 
-    if let Some(ref date) = inferred_date {
-        crate::workspace::report_inferred_release_write(date, &output_path);
-    }
-
     let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
+
+    // The first line names what is being read, as `ods info` names its source. The old
+    // "<date> (current) → <dir>" line is kept only for the case that warns: building a release
+    // other than the one you are standing in.
+    let stderr_color = std::io::IsTerminal::is_terminal(&std::io::stderr()) && std::env::var("NO_COLOR").is_err();
+    // `--quiet` prints the report and the warnings and nothing else, so the `*` and `✓` lines
+    // that say what was read and verified are skipped.
+    if !quiet {
+        eprintln!(
+            "{}",
+            crate::workspace::format_source_line(
+                &crate::provenance::format_provenance_display_path(&archive_info.archive_path),
+                stderr_color
+            )
+        );
+    }
+    if let Some(ref date) = inferred_date {
+        if crate::workspace::detect_cwd_release().is_some_and(|cwd| &cwd != date) {
+            crate::workspace::report_inferred_release_write(date, &output_path);
+        }
+    }
 
     let disk_prov = match crate::provenance::OdsProvenance::load_from_dir_with_path(&input_path).error_building_with_path()? {
         Some(p) => Some(p),
@@ -132,8 +168,12 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                     );
                 }
             }
-            let display_path = crate::provenance::format_provenance_display_path(&prov_path);
-            eprintln!("* Provenance: {}", display_path);
+            // The release directory's own `_provenance.json` is the expected one and goes
+            // unmentioned; a provenance carried in from somewhere else is named.
+            if !quiet && !same_file(&prov_path, &output_path.join(crate::provenance::PROVENANCE_FILENAME)) {
+                let display_path = crate::provenance::format_provenance_display_path(&prov_path);
+                eprintln!("* Provenance: {}", display_path);
+            }
             Some(prov)
         }
         None => {
@@ -161,10 +201,12 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
             match outcome {
                 crate::commands::fetch::ArchiveVerificationOutcome::VerifiedPublished { .. } => {
-                    eprintln!(
-                        "✓ {}  SHA-256 verified by ods release index",
-                        input_path.display()
-                    );
+                    if !quiet {
+                        eprintln!(
+                            "✓ {}  SHA-256 verified by ods release index",
+                            input_path.display()
+                        );
+                    }
                     let mut prov = crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
                         &archive_info.archive_path,
                     );
@@ -181,10 +223,10 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                     return Err(crate::commands::pull::AlreadyReported.into());
                 }
                 _ => {
-                    eprintln!(
+                    held_warnings.push(format!(
                         "! No provenance info found for {}. Source is unverified.",
                         input_path.display()
-                    );
+                    ));
                     crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
                         &archive_info.archive_path,
                     )
@@ -193,17 +235,52 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         }
     };
 
-    eprintln!("Generating dataset target projections (Parquet)...");
+    let progress = Progress::stderr(ProgressCaps::detect(quiet, verbose, no_progress));
+    progress.step("unpacking the release…");
+    let xml_paths = crate::ods_xml::find_xml_file(&archive_info.archive_path)?;
 
-    let release = crate::ods_xml::parse_release_at(&archive_info.archive_path)?;
-    check_record_counts(&release)?;
-    report_records_read(&release);
+    // Both totals are known before the work starts: the manifests declare their records and the
+    // files' sizes are on disk. They are stated once and never move; the bars carry the change.
+    let mut declared: Option<usize> = Some(0);
+    let mut xml_bytes = 0u64;
+    for path in &xml_paths {
+        declared = match (declared, crate::ods_xml::declared_record_count(path)?) {
+            (Some(total), Some(n)) => Some(total + n),
+            _ => None,
+        };
+        xml_bytes += std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    }
+    let state = MakeState::new(declared, xml_bytes, verbose);
+    state.paint(&progress);
+
+    // Everything from here on repaints the block, so a failure clears it before the error prints.
+    macro_rules! or_clear {
+        ($e:expr) => {
+            match $e {
+                Ok(v) => v,
+                Err(err) => {
+                    progress.clear_live();
+                    return Err(err.into());
+                }
+            }
+        };
+    }
+
+    let release = or_clear!(crate::ods_xml::parse_release_reporting(&xml_paths, &|records, bytes| {
+        state.reading(records, bytes);
+        state.paint(&progress);
+    }));
+    or_clear!(check_record_counts(&release));
+    state.parsed(release.stubs_superseded);
+    let duplicates_dropped = release.duplicates_dropped.clone();
+    let stubs_remaining = release.stubs_remaining;
     let mut prov = release.provenance;
     let parsed = release.orgs;
 
     if let Some(parent) = parent_prov {
         if let Some(ref parent_date) = parent.trud_release_date {
             if parent_date != &archive_info.release_date {
+                progress.clear_live();
                 anyhow::bail!(
                     "✖ Release date mismatch: _provenance.json specifies '{}' but archive filename specifies '{}'",
                     parent_date,
@@ -236,45 +313,76 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     let (provenance, records): (Option<crate::provenance::OdsProvenance>, Vec<OdsRecord>) =
         (Some(prov), resolved.into_values().collect());
 
-    std::fs::create_dir_all(&output_path)
-        .with_context(|| format!("creating output directory: {}", output_path.display()))?;
+    or_clear!(std::fs::create_dir_all(&output_path)
+        .with_context(|| format!("creating output directory: {}", output_path.display())));
 
+    // The wait here, converting and closing the succession graph, is left visible on purpose:
+    // the reading bar is full and the writing bar empty, with no rate, because nothing is
+    // being written.
     let edges = build_succession_edges(&records);
     let (successor_closures, predecessor_closures) = compute_transitive_closures(&records, &edges);
+
+    let rows_total = records.len()
+        + records.iter().map(|r| r.roles.len()).sum::<usize>()
+        + records.iter().map(|r| r.relationships.len()).sum::<usize>()
+        + edges.len();
+    state.writing(rows_total, &output_path);
 
     // The four tables share nothing mutable, so each is built and written by one thread of
     // its own. Parallelism goes across files, never inside one: a file's bytes don't depend
     // on how many cores the machine has.
     let prov = provenance.as_ref();
-    let (orgs, roles, relationships, successions) = std::thread::scope(|scope| {
+    let on_rows = |n: usize| {
+        state.rows_written(n);
+        state.paint(&progress);
+    };
+    let done = |table: usize, file: &str, exported: Exported| -> Result<Exported> {
+        let bytes = std::fs::metadata(output_path.join(file)).with_context(|| format!("reading the size of {file}"))?.len();
+        state.table_done(table, exported.rows, bytes);
+        state.paint(&progress);
+        Ok(exported)
+    };
+    let (successions, roles, relationships, orgs) = std::thread::scope(|scope| {
         let orgs = scope.spawn(|| {
-            export_orgs(&output_path, &records, &successor_closures, &predecessor_closures, prov)
-                .context("writing orgs.parquet")
+            let exported = write_orgs(&output_path, &records, &successor_closures, &predecessor_closures, prov, &on_rows)
+                .context("writing orgs.parquet")?;
+            done(3, "orgs.parquet", exported)
         });
-        let roles = scope.spawn(|| export_roles(&output_path, &records, prov).context("writing roles.parquet"));
-        let relationships = scope
-            .spawn(|| export_relationships(&output_path, &records, prov).context("writing relationships.parquet"));
-        let successions =
-            scope.spawn(|| export_successions(&output_path, &records, prov).context("writing successions.parquet"));
-        let join = |h: std::thread::ScopedJoinHandle<'_, Result<usize>>, table: &str| {
+        let roles = scope.spawn(|| {
+            let exported = write_roles(&output_path, &records, prov, &on_rows).context("writing roles.parquet")?;
+            done(1, "roles.parquet", exported)
+        });
+        let relationships = scope.spawn(|| {
+            let exported =
+                write_relationships(&output_path, &records, prov, &on_rows).context("writing relationships.parquet")?;
+            done(2, "relationships.parquet", exported)
+        });
+        let successions = scope.spawn(|| {
+            let exported =
+                write_successions(&output_path, &records, prov, &on_rows).context("writing successions.parquet")?;
+            done(0, "successions.parquet", exported)
+        });
+        // The block's rate is bytes landing on disk, so repaint from here while the writers run.
+        let handles = [&successions, &roles, &relationships, &orgs];
+        while !handles.iter().all(|h| h.is_finished()) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            state.paint(&progress);
+        }
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<Exported>>, table: &str| {
             h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("writing {table}.parquet: the writer thread panicked")))
         };
         (
-            join(orgs, "orgs"),
+            join(successions, "successions"),
             join(roles, "roles"),
             join(relationships, "relationships"),
-            join(successions, "successions"),
+            join(orgs, "orgs"),
         )
     });
-    // Reported in the order the tables are listed everywhere else, whichever finished first.
-    for (table, rows) in [
-        ("orgs", orgs?),
-        ("roles", roles?),
-        ("relationships", relationships?),
-        ("successions", successions?),
-    ] {
-        eprintln!("Exported {rows} records to {table}.parquet.");
-    }
+    let exported = [or_clear!(successions), or_clear!(roles), or_clear!(relationships), or_clear!(orgs)];
+
+    // Settled: the rate becomes the total size, and the block prints as it stands (once, when
+    // stderr isn't a terminal or the command is quiet).
+    progress.finish_block(&state.settled(&progress));
 
     // 6. Write initial _provenance.json to output directory if present
     if let Some(ref p) = provenance {
@@ -297,7 +405,27 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     std::fs::write(output_path.join("datapackage.json"), pkg_json)
         .context("writing datapackage.json")?;
 
-    warn_unexpected_files(&output_path);
+    if !quiet {
+        warn_unexpected_files(&output_path);
+    }
+
+    // Warnings come after the block, and only for data the source gave us that isn't in the
+    // tables. Stubs the merge set aside lose nothing and aren't warned about.
+    for line in &duplicates_dropped {
+        eprintln!("! {line}");
+    }
+    if stubs_remaining > 0 {
+        eprintln!(
+            "! {} organisations exist only as stubs: no file holds their complete record",
+            crate::commands::role::format_number_with_commas(stubs_remaining)
+        );
+    }
+    if let Some(line) = unread_dates_warning(&exported) {
+        eprintln!("{line}");
+    }
+    for line in &held_warnings {
+        eprintln!("{line}");
+    }
 
     if abandon_memory {
         // Every writer is closed and every file is flushed. What is left is plain data: no
@@ -310,6 +438,120 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     }
 
     Ok(output_path)
+}
+
+/// What the `ods make` block shows, updated from the parser and writer threads.
+struct MakeState {
+    records_total: Option<usize>,
+    xml_bytes: u64,
+    verbose: bool,
+    records_done: AtomicUsize,
+    bytes_done: AtomicU64,
+    rows_total: AtomicUsize,
+    rows_done: AtomicUsize,
+    writing: Mutex<Option<(Instant, PathBuf)>>,
+    tables: Mutex<[Option<MakeTableDone>; 4]>,
+    stubs: Mutex<Option<usize>>,
+}
+
+const TABLE_FILES: [&str; 4] = ["successions.parquet", "roles.parquet", "relationships.parquet", "orgs.parquet"];
+
+impl MakeState {
+    fn new(records_total: Option<usize>, xml_bytes: u64, verbose: bool) -> Self {
+        Self {
+            records_total,
+            xml_bytes,
+            verbose,
+            records_done: AtomicUsize::new(0),
+            bytes_done: AtomicU64::new(0),
+            rows_total: AtomicUsize::new(0),
+            rows_done: AtomicUsize::new(0),
+            writing: Mutex::new(None),
+            tables: Mutex::new([None; 4]),
+            stubs: Mutex::new(None),
+        }
+    }
+
+    fn reading(&self, records: usize, bytes: u64) {
+        self.records_done.fetch_add(records, Ordering::Relaxed);
+        self.bytes_done.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Reading is over: the bar is full, and the stubs the merge set aside are known.
+    fn parsed(&self, stubs_superseded: usize) {
+        self.records_done.store(self.records_total.unwrap_or_else(|| self.records_done.load(Ordering::Relaxed)), Ordering::Relaxed);
+        self.bytes_done.store(self.xml_bytes, Ordering::Relaxed);
+        *self.stubs.lock().unwrap() = Some(stubs_superseded);
+    }
+
+    fn writing(&self, rows_total: usize, output_dir: &Path) {
+        self.rows_total.store(rows_total, Ordering::Relaxed);
+        *self.writing.lock().unwrap() = Some((Instant::now(), output_dir.to_path_buf()));
+    }
+
+    fn rows_written(&self, rows: usize) {
+        self.rows_done.fetch_add(rows, Ordering::Relaxed);
+    }
+
+    fn table_done(&self, table: usize, rows: usize, bytes: u64) {
+        self.tables.lock().unwrap()[table] = Some(MakeTableDone { rows, bytes });
+    }
+
+    /// Bytes on disk across the four files, and how fast they are landing.
+    fn landed(&self) -> (u64, Option<f64>) {
+        let Some((started, dir)) = self.writing.lock().unwrap().clone() else {
+            return (0, None);
+        };
+        let bytes: u64 = TABLE_FILES
+            .iter()
+            .filter_map(|f| std::fs::metadata(dir.join(f)).ok())
+            .map(|m| m.len())
+            .sum();
+        let secs = started.elapsed().as_secs_f64();
+        (bytes, (bytes > 0 && secs > 0.0).then(|| bytes as f64 / secs))
+    }
+
+    fn params(&self, color: bool) -> MakeBlockParams {
+        let (landed, rate) = self.landed();
+        MakeBlockParams {
+            records_total: self.records_total,
+            records_done: self.records_done.load(Ordering::Relaxed),
+            xml_bytes: self.xml_bytes,
+            xml_bytes_done: self.bytes_done.load(Ordering::Relaxed),
+            rows_done: self.rows_done.load(Ordering::Relaxed),
+            rows_total: self.rows_total.load(Ordering::Relaxed),
+            rate,
+            bytes_written: 0,
+            bytes_landed: landed,
+            writing_done: false,
+            tables: *self.tables.lock().unwrap(),
+            stubs: if self.verbose { *self.stubs.lock().unwrap() } else { None },
+            color,
+        }
+    }
+
+    /// Repaints the live block (a terminal only; `Progress` rate-limits the drawing).
+    fn paint(&self, progress: &Progress) {
+        let caps = progress.caps();
+        if !caps.is_tty || caps.quiet {
+            return;
+        }
+        progress.update_live_block(render_make_block(&self.params(!caps.no_color)));
+    }
+
+    /// The finished block: every table closed, the rate settled into the total size.
+    fn settled(&self, progress: &Progress) -> Vec<String> {
+        let caps = progress.caps();
+        let mut params = self.params(caps.is_tty && !caps.no_color);
+        params.records_done = params.records_total.unwrap_or(params.records_done);
+        params.xml_bytes_done = params.xml_bytes;
+        params.rows_done = params.rows_total;
+        params.rate = None;
+        params.bytes_landed = 0;
+        params.writing_done = true;
+        params.bytes_written = params.tables.iter().flatten().map(|t| t.bytes).sum();
+        render_make_block(&params)
+    }
 }
 
 /// Fails when the organisations read differ from what the XML manifests declare.
@@ -341,24 +583,23 @@ fn check_record_counts(release: &crate::ods_xml::ParsedRelease) -> Result<()> {
     anyhow::bail!(msg)
 }
 
-fn report_records_read(release: &crate::ods_xml::ParsedRelease) {
-    let fmt = crate::commands::role::format_number_with_commas;
-    for line in &release.duplicates_dropped {
-        eprintln!("! {line}");
+/// Whether two paths name the same file, comparing canonical paths where both exist.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
-    eprintln!(
-        "* {} records read from {} · {} stubs superseded by their complete record · {} organisations",
-        fmt(release.records_read()),
-        if release.files.len() == 1 { "1 file".to_string() } else { format!("{} files", release.files.len()) },
-        fmt(release.stubs_superseded),
-        fmt(release.orgs.len())
-    );
-    if release.stubs_remaining > 0 {
-        eprintln!(
-            "! {} organisations exist only as stubs: no file holds their complete record",
-            fmt(release.stubs_remaining)
-        );
-    }
+}
+
+/// One line for the dates the tables couldn't read, or none when every date parsed.
+///
+/// The tables are taken in their listed order, so "the first" doesn't depend on which writer
+/// thread finished first.
+fn unread_dates_warning(exported: &[Exported; 4]) -> Option<String> {
+    let count: usize = exported.iter().map(|e| e.date_problems.count).sum();
+    let first = exported.iter().find_map(|e| e.date_problems.first.as_ref())?;
+    let noun = if count == 1 { "1 date could not be read and is null".to_string() } else { format!("{count} dates could not be read and are null") };
+    Some(format!("! {noun} (first: {} \"{}\" on {})", first.column, first.value, first.code))
 }
 
 pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
@@ -469,15 +710,55 @@ fn canonical_date_to_days(val: &str) -> Option<i32> {
     Some(era * 146097 + doe - 719468)
 }
 
-fn append_date(builder: &mut Date32Builder, val: Option<&str>) {
-    if let Some(v) = val {
-        if let Some(days) = parse_date_to_days(v) {
-            builder.append_value(days);
-        } else {
-            builder.append_null();
-        }
-    } else {
-        builder.append_null();
+/// The first date a table couldn't read, kept for the warning after the block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadDate {
+    pub column: &'static str,
+    pub value: String,
+    pub code: String,
+}
+
+/// How many dates in one table were null because they didn't parse, and the first of them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DateProblems {
+    pub count: usize,
+    pub first: Option<UnreadDate>,
+}
+
+impl DateProblems {
+    fn note(&mut self, column: &'static str, value: &str, code: &str) {
+        self.count += 1;
+        self.first.get_or_insert_with(|| UnreadDate {
+            column,
+            value: value.to_string(),
+            code: code.to_string(),
+        });
+    }
+}
+
+/// What a table's writer reports when its file has closed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Exported {
+    pub rows: usize,
+    pub date_problems: DateProblems,
+}
+
+fn append_date(
+    builder: &mut Date32Builder,
+    val: Option<&str>,
+    column: &'static str,
+    code: &str,
+    problems: &mut DateProblems,
+) {
+    match val {
+        Some(v) => match parse_date_to_days(v) {
+            Some(days) => builder.append_value(days),
+            None => {
+                problems.note(column, v, code);
+                builder.append_null();
+            }
+        },
+        None => builder.append_null(),
     }
 }
 
@@ -561,6 +842,7 @@ fn build_orgs_batch(
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
     release_days: i32,
+    problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut name = StringBuilder::new();
@@ -694,11 +976,11 @@ fn build_orgs_batch(
         status.append_value(&r.status);
 
         let (l_start, l_end, o_start, o_end) = extract_dates(&r.dates);
-        append_date(&mut legal_start, l_start.as_deref());
-        append_date(&mut legal_end, l_end.as_deref());
-        append_date(&mut operational_start, o_start.as_deref());
-        append_date(&mut operational_end, o_end.as_deref());
-        append_date(&mut last_change_date, r.last_change_date.as_deref());
+        append_date(&mut legal_start, l_start.as_deref(), "legal_start", &r.ods_code, problems);
+        append_date(&mut legal_end, l_end.as_deref(), "legal_end", &r.ods_code, problems);
+        append_date(&mut operational_start, o_start.as_deref(), "operational_start", &r.ods_code, problems);
+        append_date(&mut operational_end, o_end.as_deref(), "operational_end", &r.ods_code, problems);
+        append_date(&mut last_change_date, r.last_change_date.as_deref(), "last_changed", &r.ods_code, problems);
         trud_release_date.append_value(release_days);
     }
 
@@ -746,6 +1028,19 @@ pub fn export_orgs(
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<usize> {
+    write_orgs(output_dir, records, successor_closures, predecessor_closures, provenance, &|_| {}).map(|e| e.rows)
+}
+
+/// Writes `orgs.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
+pub fn write_orgs(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    successor_closures: &HashMap<String, Vec<String>>,
+    predecessor_closures: &HashMap<String, Vec<String>>,
+    provenance: Option<&crate::provenance::OdsProvenance>,
+    on_rows: &(dyn Fn(usize) + Sync),
+) -> Result<Exported> {
+    let mut problems = DateProblems::default();
     let mut all_records: Vec<&OdsRecord> = records.iter().collect();
     all_records.sort_by(|a, b| (&a.status, &a.ods_code).cmp(&(&b.status, &b.ods_code)));
 
@@ -769,11 +1064,13 @@ pub fn export_orgs(
             successor_closures,
             predecessor_closures,
             release_days,
+            &mut problems,
         )?;
         writer.write(&batch).context("writing orgs batch")?;
+        on_rows(chunk.len());
     }
     writer.close().context("finalising orgs writer")?;
-    Ok(all_records.len())
+    Ok(Exported { rows: all_records.len(), date_problems: problems })
 }
 
 // ==========================================
@@ -814,6 +1111,7 @@ fn build_roles_batch(
     schema: &Arc<Schema>,
     rows: &[RoleRow],
     release_days: i32,
+    problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
     let mut role_code = StringBuilder::new();
@@ -833,10 +1131,10 @@ fn build_roles_batch(
         role_name.append_value(&r.role_name);
         is_primary.append_value(r.is_primary);
         status.append_value(&r.status);
-        append_date(&mut legal_start, r.legal_start.as_deref());
-        append_date(&mut legal_end, r.legal_end.as_deref());
-        append_date(&mut operational_start, r.operational_start.as_deref());
-        append_date(&mut operational_end, r.operational_end.as_deref());
+        append_date(&mut legal_start, r.legal_start.as_deref(), "legal_start", &r.ods_code, problems);
+        append_date(&mut legal_end, r.legal_end.as_deref(), "legal_end", &r.ods_code, problems);
+        append_date(&mut operational_start, r.operational_start.as_deref(), "operational_start", &r.ods_code, problems);
+        append_date(&mut operational_end, r.operational_end.as_deref(), "operational_end", &r.ods_code, problems);
         role_id.append_value(&r.role_id);
         trud_release_date.append_value(release_days);
     }
@@ -867,6 +1165,17 @@ pub fn export_roles(
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<usize> {
+    write_roles(output_dir, records, provenance, &|_| {}).map(|e| e.rows)
+}
+
+/// Writes `roles.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
+pub fn write_roles(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+    on_rows: &(dyn Fn(usize) + Sync),
+) -> Result<Exported> {
+    let mut problems = DateProblems::default();
     let mut rows = Vec::new();
     for r in records {
         for role_record in &r.roles {
@@ -911,11 +1220,12 @@ pub fn export_roles(
         .context("creating roles ArrowWriter")?;
 
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_roles_batch(&schema, chunk, release_days)?;
+        let batch = build_roles_batch(&schema, chunk, release_days, &mut problems)?;
         writer.write(&batch).context("writing roles batch")?;
+        on_rows(chunk.len());
     }
     writer.close().context("finalising roles writer")?;
-    Ok(rows.len())
+    Ok(Exported { rows: rows.len(), date_problems: problems })
 }
 
 // ==========================================
@@ -956,6 +1266,7 @@ fn build_relationships_batch(
     schema: &Arc<Schema>,
     rows: &[RelationshipRow],
     release_days: i32,
+    problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut source_code = StringBuilder::new();
     let mut target_code = StringBuilder::new();
@@ -975,10 +1286,10 @@ fn build_relationships_batch(
         rel_code.append_value(&r.rel_code);
         rel_name.append_value(&r.rel_name);
         rel_status.append_value(&r.rel_status);
-        append_date(&mut legal_start, r.legal_start.as_deref());
-        append_date(&mut legal_end, r.legal_end.as_deref());
-        append_date(&mut operational_start, r.operational_start.as_deref());
-        append_date(&mut operational_end, r.operational_end.as_deref());
+        append_date(&mut legal_start, r.legal_start.as_deref(), "legal_start", &r.source_code, problems);
+        append_date(&mut legal_end, r.legal_end.as_deref(), "legal_end", &r.source_code, problems);
+        append_date(&mut operational_start, r.operational_start.as_deref(), "operational_start", &r.source_code, problems);
+        append_date(&mut operational_end, r.operational_end.as_deref(), "operational_end", &r.source_code, problems);
         rel_id.append_value(&r.rel_id);
         trud_release_date.append_value(release_days);
     }
@@ -1009,6 +1320,17 @@ pub fn export_relationships(
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<usize> {
+    write_relationships(output_dir, records, provenance, &|_| {}).map(|e| e.rows)
+}
+
+/// Writes `relationships.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
+pub fn write_relationships(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+    on_rows: &(dyn Fn(usize) + Sync),
+) -> Result<Exported> {
+    let mut problems = DateProblems::default();
     let mut rows = Vec::new();
     for r in records {
         for rel in &r.relationships {
@@ -1052,13 +1374,14 @@ pub fn export_relationships(
         .context("creating relationships ArrowWriter")?;
 
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_relationships_batch(&schema, chunk, release_days)?;
+        let batch = build_relationships_batch(&schema, chunk, release_days, &mut problems)?;
         writer
             .write(&batch)
             .context("writing relationships batch")?;
+        on_rows(chunk.len());
     }
     writer.close().context("finalising relationships writer")?;
-    Ok(rows.len())
+    Ok(Exported { rows: rows.len(), date_problems: problems })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1189,6 +1512,7 @@ fn build_successions_batch(
     schema: &Arc<Schema>,
     edges: &[SuccessionEdge],
     release_days: i32,
+    problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut predecessor_code = StringBuilder::new();
     let mut successor_code = StringBuilder::new();
@@ -1199,7 +1523,7 @@ fn build_successions_batch(
     for edge in edges {
         predecessor_code.append_value(&edge.predecessor_code);
         successor_code.append_value(&edge.successor_code);
-        append_date(&mut legal_start, edge.legal_start.as_deref());
+        append_date(&mut legal_start, edge.legal_start.as_deref(), "legal_start", &edge.predecessor_code, problems);
         succession_id.append_value(&edge.succession_id);
         trud_release_date.append_value(release_days);
     }
@@ -1224,6 +1548,17 @@ pub fn export_successions(
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::OdsProvenance>,
 ) -> Result<usize> {
+    write_successions(output_dir, records, provenance, &|_| {}).map(|e| e.rows)
+}
+
+/// Writes `successions.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
+pub fn write_successions(
+    output_dir: &Path,
+    records: &[OdsRecord],
+    provenance: Option<&crate::provenance::OdsProvenance>,
+    on_rows: &(dyn Fn(usize) + Sync),
+) -> Result<Exported> {
+    let mut problems = DateProblems::default();
     let edges = build_succession_edges(records);
     let release_date_str = provenance
         .and_then(|p| p.trud_release_date.as_deref())
@@ -1239,11 +1574,12 @@ pub fn export_successions(
         .context("creating successions ArrowWriter")?;
 
     for chunk in edges.chunks(BATCH_SIZE) {
-        let batch = build_successions_batch(&schema, chunk, release_days)?;
+        let batch = build_successions_batch(&schema, chunk, release_days, &mut problems)?;
         writer.write(&batch).context("writing successions batch")?;
+        on_rows(chunk.len());
     }
     writer.close().context("finalising successions writer")?;
-    Ok(edges.len())
+    Ok(Exported { rows: edges.len(), date_problems: problems })
 }
 
 #[cfg(test)]
@@ -1347,6 +1683,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             release_days,
+            &mut DateProblems::default(),
         )
         .unwrap();
 

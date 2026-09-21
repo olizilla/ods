@@ -23,8 +23,7 @@ fn test_workspace_full_lifecycle() {
     // Export fixture XML directly into workspace release 1
     parquet::run(parquet::Args {
         input: Some(zip1),
-        output: Some(release_1_dir.clone()),
-    })
+        output: Some(release_1_dir.clone()), ..Default::default() })
     .expect("parquet run into release 1 should succeed");
 
     let ws = ods::workspace::Workspace::open_or_create(Some(&workspace_dir)).unwrap();
@@ -43,8 +42,7 @@ fn test_workspace_full_lifecycle() {
 
     parquet::run(parquet::Args {
         input: Some(zip2),
-        output: Some(release_2_dir.clone()),
-    })
+        output: Some(release_2_dir.clone()), ..Default::default() })
     .expect("parquet run into release 2 should succeed");
 
     ws.set_active("2026-06-26").unwrap();
@@ -101,8 +99,7 @@ fn test_parquet_handles_trud_zip_input() {
     // Run `ods parquet` directly with ZIP input
     parquet::run(parquet::Args {
         input: Some(zip_path),
-        output: Some(out_dir.clone()),
-    })
+        output: Some(out_dir.clone()), ..Default::default() })
     .expect("ods parquet should successfully handle TRUD zip archive input");
 
     assert!(out_dir.join("orgs.parquet").exists());

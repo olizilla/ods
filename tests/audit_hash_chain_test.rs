@@ -110,8 +110,7 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
     // Run parquet compilation
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(rel_dir.clone()),
-        output: Some(rel_dir.clone()),
-    })
+        output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
 
     ods::provenance::update_provenance(&rel_dir).unwrap();
@@ -477,8 +476,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     ods::workspace::Workspace::open_or_create(Some(&workspace_root)).unwrap().set_active("2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(rel_dir.clone()),
-        output: Some(rel_dir.clone()),
-    })
+        output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
     ods::provenance::update_provenance(&rel_dir).unwrap();
 
@@ -638,8 +636,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     ods::workspace::Workspace::open_or_create(Some(&workspace_root)).unwrap().set_active("2026-07-31").unwrap();
     ods::commands::parquet::run(ods::commands::parquet::Args {
         input: Some(rel_dir.clone()),
-        output: Some(rel_dir.clone()),
-    })
+        output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
     ods::provenance::update_provenance(&rel_dir).unwrap();
 

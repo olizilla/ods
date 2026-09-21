@@ -14,6 +14,18 @@ pub struct MakeArgs {
     /// Output release directory path [default: active release in workspace]
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Show errors and the settled report only
+    #[arg(long, short = 'q', conflicts_with = "verbose")]
+    pub quiet: bool,
+
+    /// Disable interactive live progress animations
+    #[arg(long)]
+    pub no_progress: bool,
+
+    /// Show how many stubs the merge set aside
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -36,12 +48,13 @@ pub fn run(args: MakeArgs) -> Result<()> {
         None => run_make_parquet(crate::commands::parquet::Args {
             input: args.input,
             output: args.output,
+            quiet: args.quiet,
+            no_progress: args.no_progress,
+            verbose: args.verbose,
         }).map(|_| ()),
     }
 }
 
 pub fn run_make_parquet(args: crate::commands::parquet::Args) -> Result<PathBuf> {
-    let output_dir = crate::commands::parquet::run_before_process_exit(args)?;
-    eprintln!("✓ Dataset target projections generated successfully.");
-    Ok(output_dir)
+    crate::commands::parquet::run_before_process_exit(args)
 }

@@ -34,6 +34,9 @@ Commands:
 Options:
   -i, --input <INPUT>    TRUD XML file or ZIP archive input path [default: active release in workspace]
   -o, --output <OUTPUT>  Output release directory path [default: active release in workspace]
+  -q, --quiet            Show errors and the settled report only
+      --no-progress      Disable interactive live progress animations
+  -v, --verbose          Show how many stubs the merge set aside
   -h, --help             Print help
 
 $ ods trud --help

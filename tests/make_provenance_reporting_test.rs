@@ -1,12 +1,13 @@
 //! Acceptance tests for `.agents/briefs/make-names-its-provenance.md`.
 //!
 //! Verifies:
-//! - Task 1: Report an unverified source at the start when building from an archive file
-//!   without `_provenance.json` above it. Directory input keeps existing hard error.
+//! - Task 1: Report an unverified source when building from an archive file without
+//!   `_provenance.json` above it: a `!` line after the report block (`make-output.md` holds
+//!   warnings until the block has settled). Directory input keeps existing hard error.
 //!   `ods make release` refuses unverified output.
-//! - Task 2: Name the `_provenance.json` file used on stdout (`* Provenance: <path>`)
-//!   before `Generating dataset target projections (Parquet)...`.
-//!   Streams are segregated (stdout gets `* Provenance:`, stderr gets `Generating...`).
+//! - Task 2: Name the archive read (`* Source: <path>`) first, as `ods info` names its source,
+//!   and the `_provenance.json` used (`* Provenance: <path>`) only when it isn't the release
+//!   directory's own. Everything `ods make` prints goes to stderr; stdout stays empty.
 
 mod common;
 
@@ -56,13 +57,13 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
         stderr
     );
 
-    // 2. Generating notice appears after the warning on stderr
+    // 2. The warning waits until the report block has settled
     let warn_pos = stderr.find(&expected_warning).unwrap();
-    let gen_pos = stderr.find("Generating dataset target projections (Parquet)...")
-        .expect("Generating notice must appear in stderr");
+    let last_row_pos = stderr.find("  orgs          ").expect("the block's last row must appear in stderr");
     assert!(
-        gen_pos > warn_pos,
-        "Generating notice must appear after warning on stderr"
+        warn_pos > last_row_pos,
+        "the unverified warning must come after the block, got:\n{}",
+        stderr
     );
 
     // 3. stdout has no warning or provenance line
@@ -134,7 +135,7 @@ fn test_directory_input_without_provenance_fails_with_hard_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_make_reports_provenance_file_on_stderr() {
+fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenance() {
     let tmp = TempDir::new().unwrap();
     let ws_root = tmp.path().join("workspace");
     fs::create_dir_all(&ws_root).unwrap();
@@ -172,25 +173,24 @@ fn test_make_reports_provenance_file_on_stderr() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "ods make must succeed, stderr:\n{}", stderr);
 
-    // 1. Stderr has * Provenance: releases/2026-08-28/_provenance.json
-    assert!(
-        stderr.contains("* Provenance: releases/2026-08-28/_provenance.json"),
-        "stderr must name provenance file relative to workspace, got:\n{}",
+    // 1. The first line names the source, relative to the workspace, as `ods info` names its own
+    assert_eq!(
+        stderr.lines().next(),
+        Some("* Source: releases/2026-08-28/trud/hscorgrefdataxml_data_8.0.0_20260828000001.zip"),
+        "the first line names the archive read, got:\n{}",
         stderr
     );
+    assert!(!stderr.contains("→"), "no '<date> (current) → <dir>' line, got:\n{}", stderr);
 
-    // 2. The named file exists on disk
+    // 2. The release directory's own _provenance.json is the expected one, so it goes unnamed
     assert!(
         ws_root.join("releases/2026-08-28/_provenance.json").exists(),
-        "named provenance file must exist on disk"
+        "the release's own provenance exists on disk"
     );
+    assert!(!stderr.contains("* Provenance:"), "the release's own provenance isn't named, got:\n{}", stderr);
 
-    // 3. Stderr has Generating notice
-    assert!(
-        stderr.contains("Generating dataset target projections (Parquet)..."),
-        "stderr must contain Generating notice, got:\n{}",
-        stderr
-    );
+    // 3. The report block follows the source line
+    assert!(stderr.contains("  reading xml   "), "stderr must contain the report block, got:\n{}", stderr);
 
     // 4. Stdout is empty
     assert!(
@@ -239,7 +239,12 @@ fn test_make_after_trud_pull_prints_no_warning() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stderr.contains("* Provenance:"));
+    // A provenance file from outside the release being built is named, after the source.
+    assert!(stderr.contains("* Provenance:"), "a provenance from elsewhere is named:\n{stderr}");
+    assert!(
+        stderr.find("* Source:").unwrap() < stderr.find("* Provenance:").unwrap(),
+        "the source comes first:\n{stderr}"
+    );
     assert!(stdout.trim().is_empty());
     assert!(!stderr.contains("! No provenance info found"));
 }

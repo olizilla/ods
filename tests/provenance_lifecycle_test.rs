@@ -90,8 +90,7 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
 
     let args = ods::commands::parquet::Args {
         input: Some(input_dir.clone()),
-        output: Some(temp_dir.path().join("output")),
-    };
+        output: Some(temp_dir.path().join("output")), ..Default::default() };
 
     let result = ods::commands::parquet::run(args);
     assert!(result.is_err(), "ods make/parquet must fail when _provenance.json is invalid");

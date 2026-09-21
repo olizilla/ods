@@ -34,8 +34,7 @@ fn make_parquet_rejects_bare_xml() {
     let tmp = TempDir::new().unwrap();
     let res = parquet::run(parquet::Args {
         input: Some(Path::new(common::FIXTURE_MOCK_XML).to_path_buf()),
-        output: Some(tmp.path().join("out")),
-    });
+        output: Some(tmp.path().join("out")), ..Default::default() });
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
     assert!(err.contains("Not a TRUD release archive"));
@@ -55,8 +54,7 @@ fn make_parquet_produces_tables_with_correct_records() {
 
     parquet::run(parquet::Args {
         input: Some(zip_path),
-        output: Some(parquet_dir.clone()),
-    })
+        output: Some(parquet_dir.clone()), ..Default::default() })
     .expect("parquet::run should succeed");
 
     assert!(parquet_dir.join("orgs.parquet").exists(), "orgs.parquet not created");
