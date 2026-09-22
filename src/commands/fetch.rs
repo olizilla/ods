@@ -259,8 +259,18 @@ impl TrudFetcher for UreqTrudFetcher {
 
 pub fn run(args: Args) -> Result<()> {
     let progress = Progress::stderr(ProgressCaps::detect(args.quiet, args.verbose, args.no_progress));
-    let ws = Workspace::open_or_create(args.workspace.as_deref())?;
-    let workspace_root = ws.root().to_path_buf();
+
+    // `-o` means only there: the archive lands under it and nothing else is created
+    // or resolved. Without `-o`, a workspace is opened (or made) as before.
+    let workspace_root: PathBuf = if args.output.is_some() {
+        Workspace::open(args.workspace.as_deref())
+            .map(|ws| ws.root().to_path_buf())
+            .unwrap_or_else(|_| {
+                args.workspace.clone().unwrap_or_else(|| PathBuf::from(crate::workspace::DEFAULT_WORKSPACE_DIR))
+            })
+    } else {
+        Workspace::open_or_create(args.workspace.as_deref())?.root().to_path_buf()
+    };
 
     let trud_fetcher = args.api_key.as_ref().filter(|k| !k.trim().is_empty()).map(|k| UreqTrudFetcher::new(k, args.verbose));
     let oci_fetcher = crate::commands::pull::HttpOciFetcher;
@@ -1203,12 +1213,14 @@ impl ArchiveVerificationOutcome {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>(
     release_date: &str,
     local_sha256: &str,
     workspace_root: &Path,
     index_override: Option<&str>,
     allow_network: bool,
+    persist_index: bool,
     trud_fetcher: Option<&F>,
     oci_fetcher: Option<&OF>,
 ) -> Result<ArchiveVerificationOutcome> {
@@ -1225,6 +1237,7 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
                 oci,
                 None,
                 Some(override_path),
+                persist_index,
             )
             .map(|(idx, _)| Some(idx))
         } else {
@@ -1244,6 +1257,7 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
                     oci,
                     None,
                     None,
+                    persist_index,
                 ) {
                     Ok((idx, _)) => Ok(Some(idx)),
                     Err(_) => Ok(Some(offline_idx)),
@@ -1343,6 +1357,7 @@ pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull
         workspace_root,
         args.index.as_deref(),
         true,
+        args.output.is_none(),
         trud_fetcher,
         oci_fetcher,
     )?;
@@ -1485,11 +1500,14 @@ pub fn run_verify_only_with_fetchers<F: TrudFetcher, OF: crate::commands::pull::
     progress.step(&format!("verifying archive SHA-256 for {}…", release_date));
     let local_sha256 = compute_file_sha256(&zip_file)?;
 
+    // `--verify-only` never installs, so it always had its own workspace to check
+    // against; out of this brief's scope, so its caching behaviour is unchanged.
     let outcome = verify_archive(
         &release_date,
         &local_sha256,
         workspace_root,
         args.index.as_deref(),
+        true,
         true,
         trud_fetcher,
         oci_fetcher,

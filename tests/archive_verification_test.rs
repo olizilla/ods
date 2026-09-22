@@ -348,6 +348,7 @@ fn test_trud_verify_with_no_key_succeeds_when_in_index() {
     fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .env_remove("TRUD_API_KEY")
         .arg("trud")
         .arg("verify")
@@ -382,6 +383,7 @@ fn test_trud_verify_with_no_key_fails_when_absent_from_index() {
     fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .env_remove("TRUD_API_KEY")
         .arg("trud")
         .arg("verify")

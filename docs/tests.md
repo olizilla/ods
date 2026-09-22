@@ -55,6 +55,8 @@ them: each test enforces one, and a failing test names the one that broke.
 - **W1. An explicit release directory wins.** A command given a release directory reads that release, whichever release is active.
 - **W2. A workspace is marked by `_releases.json`.** A directory is a workspace when it holds a `_releases.json` that validates as the [ods release index](./release-index.md), named by its `$schema`. That file holds the last blessed index: the one built into `ods`, or the bytes `ods pull` last fetched from ods.fyi or GitHub, saved exactly as served. An index passed with `--index` is used for that run only.
 - **W3. The workspace is found by walking up.** Without an explicit path, `ods` checks the current directory and each parent, for a marked directory or a marked `ods_data` inside it. It stops at the first directory containing `.git`, at `$HOME`, or at the filesystem root.
+- **W4. Commands that write create or repair a workspace** — `ods pull` or `ods trud pull` without a `-o` flag.
+
 
 ## ods.fyi
 

@@ -195,6 +195,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                 &ws_root,
                 None,
                 false,
+                false,
                 None,
                 None,
             )?;

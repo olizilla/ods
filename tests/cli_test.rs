@@ -53,18 +53,24 @@ fn test_cli_version_output_formatting() {
 
 #[test]
 fn test_cli_pull_list_output_formatting() {
+    let tmp = TempDir::new().unwrap();
+    let idx_file = tmp.path().join("releases.json");
+    fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("pull")
         .arg("--list")
+        .arg("--index")
+        .arg(&idx_file)
         .output()
         .expect("Failed to execute pull --list");
 
-    // This exercises the real binary, so whether the release index is reachable
-    // depends on the network and on whether any release has been published yet.
-    // That is not what this test is about: it checks output formatting, and the
-    // formatting must hold either way. An unreachable index is a deliberate
-    // non-zero exit (see `AlreadyReported`), so accept 0 or 1 and reject
-    // anything else, which would mean a crash or signal.
+    // With a fixed `--index`, this doesn't reach the network, so its result is
+    // deterministic. It checks output formatting either way, so both branches stay:
+    // an unreachable index would otherwise be a deliberate non-zero exit (see
+    // `AlreadyReported`), so accept 0 or 1 and reject anything else, which would
+    // mean a crash or signal.
     let code = output.status.code();
     assert!(
         matches!(code, Some(0) | Some(1)),
@@ -872,6 +878,7 @@ fn test_error_without_cross_sigil_is_prefixed_with_cross_and_has_no_error_prefix
     let idx_file = tmp.path().join("releases.json");
     std::fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     let output = ods_binary()
+        .current_dir(tmp.path())
         .args(["pull", "--index", idx_file.to_str().unwrap(), "1999-01-01"])
         .output()
         .expect("run ods pull 1999-01-01");

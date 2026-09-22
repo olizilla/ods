@@ -4,7 +4,7 @@ use serde::Serialize;
 use sha2::Digest;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::index::{Dataset, MirrorEntry, OdsReleaseIndex, Release};
 use crate::oci::*;
@@ -240,9 +240,13 @@ pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Resul
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let ws = Workspace::open_or_create(None)?;
     let fetcher = HttpOciFetcher;
-    run_with_fetcher(args, ws.root(), &fetcher)
+    // Find a workspace without creating one: `--list` only reads, and
+    // `run_with_fetcher_and_baked_and_writer` earns a workspace itself when installing.
+    let workspace_root = Workspace::open(None)
+        .map(|ws| ws.root().to_path_buf())
+        .unwrap_or_else(|_| PathBuf::from(crate::workspace::DEFAULT_WORKSPACE_DIR));
+    run_with_fetcher(args, &workspace_root, &fetcher)
 }
 
 pub fn run_with_fetcher<F: OciBlobFetcher>(
@@ -283,7 +287,12 @@ pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
     let caps = ProgressCaps::detect(args.quiet, args.verbose, args.no_progress);
     let progress = Progress::stderr(caps);
 
-    let _ws = Workspace::open_or_create(Some(workspace_root))?;
+    // `--list` only reads: earn a workspace when installing a release, not to answer
+    // a question about what's available. When one already exists, behave as today.
+    let workspace_exists = Workspace::open(Some(workspace_root)).is_ok();
+    if !args.list {
+        Workspace::open_or_create(Some(workspace_root))?;
+    }
 
     // Step 1: Resolve index
     let (index, _) = resolve_index_with_baked(
@@ -291,6 +300,7 @@ pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
         fetcher,
         baked_override,
         args.index.as_deref(),
+        !args.list || workspace_exists,
     )?;
 
     let mut ctx = PullContext {
@@ -334,6 +344,7 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
     fetcher: &F,
     baked_override: Option<OdsReleaseIndex>,
     index_override: Option<&str>,
+    create: bool,
 ) -> Result<(OdsReleaseIndex, Option<String>)> {
     let baked = baked_override.unwrap_or_else(|| OdsReleaseIndex::baked().unwrap_or_default());
 
@@ -389,7 +400,9 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
                 if fetched.validate().is_ok() {
                     match baked.merge(&fetched) {
                         Ok(merged) => {
-                            let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
+                            if create {
+                                let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
+                            }
                             return Ok((merged, Some("just now".to_string())));
                         }
                         Err(e) => {
@@ -424,7 +437,9 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
     }
 
     // 3. Fall back to baked index
-    let _ = crate::workspace::ensure_workspace_marker(workspace_root);
+    if create {
+        let _ = crate::workspace::ensure_workspace_marker(workspace_root);
+    }
     Ok((baked, None))
 }
 

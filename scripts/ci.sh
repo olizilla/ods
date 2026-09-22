@@ -105,11 +105,28 @@ skip() { add_row "$1" skipped "" "$2"; }
 compile() { cargo test --no-fail-fast --no-run; }
 
 rust_tests() {
+  # cargo runs test binaries with the package root as their working directory
+  # regardless of where `cargo test` itself is invoked from (verified: running from
+  # a fresh directory with --manifest-path still leaves stray writes in the repo
+  # root, not there), so a temporary invocation directory can't catch a test that
+  # writes without saying where. Watch the repo root itself instead: any file or
+  # directory `git status` didn't see before the run and does after — tracked or
+  # (like ods_data/) gitignored — is left behind by a test.
+  local before after stray status
+  before=$(git status --porcelain --ignored=matching --untracked-files=all)
   if [ "$release_data" = 1 ]; then
     cargo test --no-fail-fast -- --include-ignored
   else
     cargo test --no-fail-fast
   fi
+  status=$?
+  after=$(git status --porcelain --ignored=matching --untracked-files=all)
+  stray=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort))
+  if [ -n "$stray" ]; then
+    echo "left behind in the repo root: $(echo "$stray" | tr '\n' ' ')"
+    status=1
+  fi
+  return $status
 }
 
 smoke() {
@@ -179,6 +196,8 @@ else
     END { printf "%d passed, %d failed, %d ignored, %.1f s inside tests", p, f, i, s }')
   has duckdb || detail="$detail; duckdb not installed, so its checks skip"
   [ "$release_data" = 1 ] && detail="$detail; with ignored tests"
+  stray_detail=$(grep -h '^left behind in the repo root' "$LOG")
+  [ -n "$stray_detail" ] && detail="$detail; $stray_detail"
   record "$detail"
 
   if has zip; then

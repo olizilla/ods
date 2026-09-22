@@ -42,6 +42,7 @@ fn test_trud_pull_stdout_is_empty_on_default_run() {
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("trud")
         .arg("pull")
         .arg("--local-archive")
@@ -72,6 +73,7 @@ fn test_trud_pull_local_archive_claims_honest_no_trud_checksum() {
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("trud")
         .arg("pull")
         .arg("--local-archive")
@@ -114,6 +116,7 @@ fn test_trud_verify_only_fails_on_tampered_archive() {
     fs::write(&bad_zip, b"CORRUPTED BYTES").unwrap();
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("trud")
         .arg("pull")
         .arg("2026-07-31")
@@ -523,6 +526,7 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
+        .current_dir(tmp.path())
         .arg("trud")
         .arg("pull")
         .arg("--local-archive")

@@ -384,6 +384,7 @@ fn test_contradicting_digest_fails_with_security_error_naming_both_digests() {
         &fetcher,
         Some(baked_index.clone()),
         Some(tampered_file.to_str().unwrap()),
+        true,
     )
     .unwrap_err();
 
@@ -463,6 +464,9 @@ fn test_pull_index_flag_does_not_mutate_cached_workspace_index() -> Result<()> {
 #[test]
 fn test_ods_release_index_url_prints_stderr_notice_and_saves_exact_bytes() -> Result<()> {
     let tmp = TempDir::new()?;
+    // `--list` only caches into a workspace that already exists
+    // (`write_where_told_test::pull_list_in_empty_directory_writes_nothing`); give it one.
+    ods::workspace::Workspace::open_or_create(Some(&tmp.path().join("ods_data")))?;
     let index = sample_release_index();
     let index_bytes = serde_json::to_vec_pretty(&index)?;
 
