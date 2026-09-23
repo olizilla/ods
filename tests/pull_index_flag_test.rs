@@ -195,7 +195,7 @@ fn test_empty_releases_index_prints_message_and_exits_zero() {
     let empty_file = tmp.path().join("empty.json");
     fs::write(
         &empty_file,
-        b"{\"$schema\":\"https://ods.fyi/schema/releases.v1.json\",\"trud_signing_key_fingerprint\":\"71ED5964BAE53E83556320A42BE59DADEE84BEB0\",\"mirrors\":[],\"releases\":[]}",
+        b"{\"$schema\":\"https://ods.fyi/schema/releases.v1.json\",\"trud_signing_key_fingerprints\":[\"71ED5964BAE53E83556320A42BE59DADEE84BEB0\"],\"mirrors\":[],\"releases\":[]}",
     )
     .unwrap();
 

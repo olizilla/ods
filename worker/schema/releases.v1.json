@@ -2,11 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ods.fyi/schema/releases.v1.json",
   "title": "ODS Release Index",
-  "description": "The release index lists TRUD's releases and the datasets built from each. Schema rules that JSON Schema cannot express — that release dates are unique and ordered newest first, that dataset versions within a release are unique SemVer strings ordered oldest first, and that merge operations refuse contradicted digests, hashes, sizes, or a changed signing key fingerprint — are enforced by ods itself as the authority.",
+  "description": "The release index lists TRUD's releases and the datasets built from each. Schema rules that JSON Schema cannot express — that release dates are unique and ordered newest first, that dataset versions within a release are unique SemVer strings ordered oldest first, and that merge operations refuse contradicted digests, hashes, or sizes — are enforced by ods itself as the authority.",
   "type": "object",
   "required": [
     "$schema",
-    "trud_signing_key_fingerprint",
+    "trud_signing_key_fingerprints",
     "mirrors",
     "releases"
   ],
@@ -17,11 +17,16 @@
       "const": "https://ods.fyi/schema/releases.v1.json",
       "description": "URI of the JSON Schema describing this release index format."
     },
-    "trud_signing_key_fingerprint": {
-      "type": "string",
-      "pattern": "^[0-9A-F]{40}$",
-      "description": "Upper-case 40-character hexadecimal SHA-1 fingerprint of NHS England's TRUD PGP signing key used to verify release archives. Pinned from NHS England's distribution signing key; immutable anchor that never changes once recorded. Merge refuses any index with a changed fingerprint.",
-      "$comment": "NHS England signs source archives with RSA key 71ED5964BAE53E83556320A42BE59DADEE84BEB0. Pinned in the index so archives can still be verified if TRUD goes offline."
+    "trud_signing_key_fingerprints": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-F]{40}$"
+      },
+      "description": "Upper-case 40-character hexadecimal SHA-1 fingerprints of NHS England TRUD PGP signing keys used to verify release archives, ordered oldest first. A signature from any key in the set is accepted.",
+      "$comment": "NHS England publishes key files with dates and no expiry dates; the set lists keys known to have been used to sign TRUD releases. Per-release attestations record the specific key that signed each archive."
     },
     "mirrors": {
       "type": "array",

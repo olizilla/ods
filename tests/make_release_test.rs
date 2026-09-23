@@ -984,17 +984,17 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
 
-    // Assert it validates and writes a valid, non-empty fingerprint
+    // Assert it validates and writes valid, non-empty fingerprints
     index.validate()?;
     assert!(
-        !index.trud_signing_key_fingerprint.is_empty(),
-        "Fingerprint must not be empty"
+        !index.trud_signing_key_fingerprints.is_empty(),
+        "Fingerprints must not be empty"
     );
     let baked = ods::index::OdsReleaseIndex::baked()?;
     assert_eq!(
-        index.trud_signing_key_fingerprint,
-        baked.trud_signing_key_fingerprint,
-        "Fingerprint must match baked release index"
+        index.trud_signing_key_fingerprints,
+        baked.trud_signing_key_fingerprints,
+        "Fingerprints must match baked release index"
     );
 
     Ok(())

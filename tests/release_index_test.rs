@@ -9,8 +9,8 @@ fn test_baked_index_parses_and_validates() -> Result<()> {
     let index = OdsReleaseIndex::baked()?;
     assert_eq!(index.schema, ods::index::RELEASES_SCHEMA_V1_URL);
     assert_eq!(
-        index.trud_signing_key_fingerprint,
-        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+        index.trud_signing_key_fingerprints,
+        vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0"]
     );
     assert_eq!(index.mirrors.len(), 2);
     Ok(())
@@ -27,6 +27,7 @@ fn test_baked_index_matches_its_schema() -> Result<()> {
     let baked_str = include_str!("../data/releases.json");
     let baked_json: serde_json::Value = serde_json::from_str(baked_str)?;
     let errors: Vec<_> = validator.iter_errors(&baked_json).collect();
+    println!("data/releases.json validated against worker/schema/releases.v1.json: {} errors", errors.len());
     assert!(errors.is_empty(), "data/releases.json schema errors: {:?}", errors);
 
     // 2. Validate index built by Task 7's test builder
@@ -102,7 +103,9 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
 fn test_index_rejects_duplicate_version_in_release() {
     let json = r#"{
       "$schema": "https://ods.fyi/schema/releases.v1.json",
-      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+      "trud_signing_key_fingerprints": [
+        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+      ],
       "mirrors": [],
       "releases": [
         {
@@ -134,7 +137,9 @@ fn test_index_rejects_duplicate_version_in_release() {
 fn test_index_rejects_uppercase_manifest_digest() {
     let json = r#"{
       "$schema": "https://ods.fyi/schema/releases.v1.json",
-      "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+      "trud_signing_key_fingerprints": [
+        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+      ],
       "mirrors": [],
       "releases": [
         {
@@ -353,8 +358,8 @@ fn test_workspace_release_index_save_and_load() -> Result<()> {
     let loaded = ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
     assert_eq!(loaded.schema, baked.schema);
     assert_eq!(
-        loaded.trud_signing_key_fingerprint,
-        baked.trud_signing_key_fingerprint
+        loaded.trud_signing_key_fingerprints,
+        baked.trud_signing_key_fingerprints
     );
     Ok(())
 }
@@ -678,3 +683,156 @@ fn test_invalid_remote_fetch_warns_and_falls_back_to_cache() -> Result<()> {
     assert_eq!(index.releases[0].datasets[0].manifest_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000001");
     Ok(())
 }
+
+#[test]
+fn test_index_with_multiple_fingerprints_roundtrips_in_order() -> Result<()> {
+    let json = r#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [
+    "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+    "0123456789ABCDEF0123456789ABCDEF01234567"
+  ],
+  "mirrors": [],
+  "releases": []
+}"#;
+
+    let index: OdsReleaseIndex = serde_json::from_str(json)?;
+    index.validate()?;
+    assert_eq!(
+        index.trud_signing_key_fingerprints,
+        vec![
+            "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+        ]
+    );
+
+    let roundtrip = serde_json::to_string_pretty(&index)?;
+    assert_eq!(roundtrip, json);
+    Ok(())
+}
+
+#[test]
+fn test_index_rejects_empty_fingerprints() {
+    let json = r#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [],
+  "mirrors": [],
+  "releases": []
+}"#;
+
+    let index: OdsReleaseIndex = serde_json::from_str(json).unwrap();
+    let err = index.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("Invalid trud_signing_key_fingerprints: expected at least one entry"),
+        "Unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_index_rejects_duplicate_fingerprint() {
+    let json = r#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [
+    "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+    "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+  ],
+  "mirrors": [],
+  "releases": []
+}"#;
+
+    let index: OdsReleaseIndex = serde_json::from_str(json).unwrap();
+    let err = index.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("Duplicate trud_signing_key_fingerprints in index: '71ED5964BAE53E83556320A42BE59DADEE84BEB0'"),
+        "Unexpected error: {}",
+        err
+    );
+}
+
+#[test]
+fn test_index_rejects_invalid_fingerprint_length_or_charset() {
+    // 39-character entry
+    let json_39 = r#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [
+    "71ED5964BAE53E83556320A42BE59DADEE84BEB"
+  ],
+  "mirrors": [],
+  "releases": []
+}"#;
+
+    let index_39: OdsReleaseIndex = serde_json::from_str(json_39).unwrap();
+    let err_39 = index_39.validate().unwrap_err().to_string();
+    assert!(
+        err_39.contains("Invalid trud_signing_key_fingerprints: expected 40 upper-case hex characters, got '71ED5964BAE53E83556320A42BE59DADEE84BEB'"),
+        "Unexpected error: {}",
+        err_39
+    );
+
+    // lowercase entry
+    let json_lower = r#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [
+    "71ed5964bae53e83556320a42be59dadee84beb0"
+  ],
+  "mirrors": [],
+  "releases": []
+}"#;
+
+    let index_lower: OdsReleaseIndex = serde_json::from_str(json_lower).unwrap();
+    let err_lower = index_lower.validate().unwrap_err().to_string();
+    assert!(
+        err_lower.contains("Invalid trud_signing_key_fingerprints: expected 40 upper-case hex characters, got '71ed5964bae53e83556320a42be59dadee84beb0'"),
+        "Unexpected error: {}",
+        err_lower
+    );
+}
+
+#[test]
+fn test_schema_rejects_old_singular_fingerprint() -> Result<()> {
+    let schema_str = include_str!("../worker/schema/releases.v1.json");
+    let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
+    let validator = jsonschema::validator_for(&schema_json)
+        .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
+
+    let old_prop = format!("trud_signing_key_{}", "fingerprint");
+    let mut old_json = serde_json::json!({
+        "$schema": "https://ods.fyi/schema/releases.v1.json",
+        "mirrors": [],
+        "releases": []
+    });
+    old_json[old_prop] = serde_json::json!("71ED5964BAE53E83556320A42BE59DADEE84BEB0");
+
+    let errors: Vec<_> = validator.iter_errors(&old_json).collect();
+    println!("Schema validation rejected old singular property with {} errors:", errors.len());
+    for err in &errors {
+        println!("  - {}", err);
+    }
+    assert!(
+        !errors.is_empty(),
+        "Schema must reject index with old singular property"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_merge_fingerprints_takes_candidate_when_non_empty() -> Result<()> {
+    let base = OdsReleaseIndex::baked()?;
+    let mut candidate = OdsReleaseIndex::baked()?;
+    candidate.trud_signing_key_fingerprints = vec![
+        "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+        "0123456789ABCDEF0123456789ABCDEF01234567".to_string(),
+    ];
+
+    let merged = base.merge(&candidate)?;
+    assert_eq!(
+        merged.trud_signing_key_fingerprints,
+        vec![
+            "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+        ]
+    );
+    Ok(())
+}
+

@@ -96,7 +96,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
         path.join(repoDataDir, 'releases.json'),
         JSON.stringify({
           $schema: 'https://ods.fyi/schema/releases.v1.json',
-          trud_signing_key_fingerprint: '71ED5964BAE53E83556320A42BE59DADEE84BEB0',
+          trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
           mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
           releases: [],
         })
@@ -229,7 +229,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
     // Frontier release newer than baked index
     const frontierIndex = {
       $schema: 'https://ods.fyi/schema/releases.v1.json',
-      trud_signing_key_fingerprint: '71ED5964BAE53E83556320A42BE59DADEE84BEB0',
+      trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
       mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
       releases: [
         {

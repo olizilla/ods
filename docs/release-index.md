@@ -9,7 +9,9 @@ It's baked into every `ods` binary at compile time (`data/releases.json`), serve
 ```json
 {
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprint": "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+  "trud_signing_key_fingerprints": [
+    "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+  ],
   "mirrors": [
     { "url": "https://ods.fyi/v2/ods-data" },
     { "url": "https://ghcr.io/v2/olizilla/ods-data" }
@@ -34,7 +36,7 @@ Every field and its constraints are defined in [releases.v1.json](https://ods.fy
 - **Append-only releases.** A release date is never removed from the index. Once recorded, its hash and size can never change.
 - **Datasets are blessed; releases are recorded.** Trust rules — manifest digests, citations, withdrawal — apply to datasets. A release row records what TRUD published. A release may have no datasets yet, and every reader treats an empty list as normal.
 - **Mirrors are places to look.** They are an ordered list for the whole index. Content digests name the bytes wherever they're stored, so a miss on the first mirror falls through to the next.
-- **The selected index decides.** Commands select a single index by precedence: `--index`, then fetched from ods.fyi or GitHub, then the workspace cache (`_releases.json`), then the index built into `ods`. The signing-key fingerprint is the selected index's, with no separate compiled copy in `ods` to compare it against.
+- **The selected index decides.** Commands select a single index by precedence: `--index`, then fetched from ods.fyi or GitHub, then the workspace cache (`_releases.json`), then the index built into `ods`. The signing-key fingerprints are the selected index's, with no separate compiled copy in `ods` to compare them against. The set names every key NHS England has signed with (ordered oldest first), and a signature from any key in the set is accepted; a key rotation is recorded by adding the new fingerprint to the set.
 - **Append-only enforced at publish time.** Contradiction checking moves to `ods make release`, where candidate release indexes may append rows and metadata but may never contradict existing TRUD hashes, sizes, or manifest digests. Clients trust the selected index; a local release directory's own manifest digest remains what catches a changed dataset locally.
 
 ## Naming

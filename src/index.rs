@@ -11,7 +11,7 @@ pub const RELEASES_JSON_FILENAME: &str = "_releases.json";
 pub struct OdsReleaseIndex {
     #[serde(rename = "$schema")]
     pub schema: String,
-    pub trud_signing_key_fingerprint: String,
+    pub trud_signing_key_fingerprints: Vec<String>,
     pub mirrors: Vec<MirrorEntry>,
     pub releases: Vec<Release>,
 }
@@ -20,7 +20,7 @@ impl Default for OdsReleaseIndex {
     fn default() -> Self {
         Self {
             schema: RELEASES_SCHEMA_V1_URL.to_string(),
-            trud_signing_key_fingerprint: String::new(),
+            trud_signing_key_fingerprints: Vec::new(),
             mirrors: vec![
                 MirrorEntry {
                     url: "https://ods.fyi/v2/ods-data".to_string(),
@@ -154,7 +154,7 @@ impl OdsReleaseIndex {
 
     /// Validates the release index against structural invariants:
     /// - $schema is exactly https://ods.fyi/schema/releases.v1.json
-    /// - trud_signing_key_fingerprint is 40 upper-case hex characters
+    /// - trud_signing_key_fingerprints has at least one entry, each 40 upper-case hex characters, no duplicates
     /// - each trud_release_date is YYYY-MM-DD, unique, and list runs newest first
     /// - each trud_release_sha256 is 64 upper-case hex characters, filesize > 0
     /// - each dataset_version parses with parse_semver and is unique, datasets run oldest version first
@@ -168,16 +168,24 @@ impl OdsReleaseIndex {
             );
         }
 
-        if self.trud_signing_key_fingerprint.len() != 40
-            || !self
-                .trud_signing_key_fingerprint
-                .chars()
-                .all(|c| matches!(c, '0'..='9' | 'A'..='F'))
-        {
-            bail!(
-                "Invalid trud_signing_key_fingerprint: expected 40 upper-case hex characters, got '{}'",
-                self.trud_signing_key_fingerprint
-            );
+        if self.trud_signing_key_fingerprints.is_empty() {
+            bail!("Invalid trud_signing_key_fingerprints: expected at least one entry, got empty list");
+        }
+
+        let mut seen_fingerprints = HashSet::new();
+        for fp in &self.trud_signing_key_fingerprints {
+            if fp.len() != 40 || !fp.chars().all(|c| matches!(c, '0'..='9' | 'A'..='F')) {
+                bail!(
+                    "Invalid trud_signing_key_fingerprints: expected 40 upper-case hex characters, got '{}'",
+                    fp
+                );
+            }
+            if !seen_fingerprints.insert(fp) {
+                bail!(
+                    "Duplicate trud_signing_key_fingerprints in index: '{}'",
+                    fp
+                );
+            }
         }
 
         let mut seen_dates = HashSet::new();
@@ -410,15 +418,15 @@ impl OdsReleaseIndex {
             self.mirrors.clone()
         };
 
-        let fingerprint = if !fetched.trud_signing_key_fingerprint.is_empty() {
-            fetched.trud_signing_key_fingerprint.clone()
+        let fingerprints = if !fetched.trud_signing_key_fingerprints.is_empty() {
+            fetched.trud_signing_key_fingerprints.clone()
         } else {
-            self.trud_signing_key_fingerprint.clone()
+            self.trud_signing_key_fingerprints.clone()
         };
 
         Ok(OdsReleaseIndex {
             schema: self.schema.clone(),
-            trud_signing_key_fingerprint: fingerprint,
+            trud_signing_key_fingerprints: fingerprints,
             mirrors,
             releases: merged_releases,
         })
@@ -511,7 +519,9 @@ mod tests {
     fn valid_test_index() -> OdsReleaseIndex {
         OdsReleaseIndex {
             schema: RELEASES_SCHEMA_V1_URL.to_string(),
-            trud_signing_key_fingerprint: "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+            trud_signing_key_fingerprints: vec![
+                "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()
+            ],
             mirrors: vec![MirrorEntry {
                 url: "https://ods.fyi/v2/ods-data".to_string(),
             }],
@@ -581,25 +591,40 @@ mod tests {
                 expected_field: "$schema",
             },
             TestCase {
+                name: "fingerprints empty",
+                mutate: |idx| idx.trud_signing_key_fingerprints = vec![],
+                expected_field: "trud_signing_key_fingerprints",
+            },
+            TestCase {
                 name: "fingerprint too short",
-                mutate: |idx| idx.trud_signing_key_fingerprint = "71ED5964".to_string(),
-                expected_field: "trud_signing_key_fingerprint",
+                mutate: |idx| idx.trud_signing_key_fingerprints = vec!["71ED5964".to_string()],
+                expected_field: "trud_signing_key_fingerprints",
             },
             TestCase {
                 name: "fingerprint lowercase",
                 mutate: |idx| {
-                    idx.trud_signing_key_fingerprint =
-                        "71ed5964bae53e83556320a42be59dadee84beb0".to_string()
+                    idx.trud_signing_key_fingerprints =
+                        vec!["71ed5964bae53e83556320a42be59dadee84beb0".to_string()]
                 },
-                expected_field: "trud_signing_key_fingerprint",
+                expected_field: "trud_signing_key_fingerprints",
             },
             TestCase {
                 name: "fingerprint non-hex",
                 mutate: |idx| {
-                    idx.trud_signing_key_fingerprint =
-                        "71ED5964BAE53E83556320A42BE59DADEE84BEZZ".to_string()
+                    idx.trud_signing_key_fingerprints =
+                        vec!["71ED5964BAE53E83556320A42BE59DADEE84BEZZ".to_string()]
                 },
-                expected_field: "trud_signing_key_fingerprint",
+                expected_field: "trud_signing_key_fingerprints",
+            },
+            TestCase {
+                name: "fingerprint duplicate",
+                mutate: |idx| {
+                    idx.trud_signing_key_fingerprints = vec![
+                        "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+                        "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+                    ]
+                },
+                expected_field: "Duplicate trud_signing_key_fingerprints",
             },
             TestCase {
                 name: "invalid date format",
@@ -761,13 +786,13 @@ mod tests {
     fn test_merge_accepts_changed_signing_key_fingerprint() -> Result<()> {
         let baked = valid_test_index();
         let mut fetched = valid_test_index();
-        fetched.trud_signing_key_fingerprint =
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+        fetched.trud_signing_key_fingerprints =
+            vec!["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()];
 
         let merged = baked.merge(&fetched)?;
         assert_eq!(
-            merged.trud_signing_key_fingerprint,
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            merged.trud_signing_key_fingerprints,
+            vec!["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()]
         );
         Ok(())
     }

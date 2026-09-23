@@ -1185,7 +1185,9 @@ pub fn make_v1_index(
 
     ods::index::OdsReleaseIndex {
         schema: ods::index::RELEASES_SCHEMA_V1_URL.to_string(),
-        trud_signing_key_fingerprint: "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+        trud_signing_key_fingerprints: vec![
+            "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+        ],
         mirrors: vec![
             ods::index::MirrorEntry {
                 url: "https://ods.fyi/v2/ods-data".to_string(),
