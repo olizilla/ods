@@ -351,6 +351,7 @@ pub fn run(args: Args) -> Result<()> {
     let new_dataset = Dataset {
         dataset_version: version.clone(),
         manifest_digest: manifest_digest.clone(),
+        dataset_filesize_bytes: total_bytes,
         dataset_doi: args.doi.clone(),
         withdrawn: None,
     };
@@ -588,27 +589,30 @@ pub fn perform_all_release_checks(
     }
 
     // Step 3 (Check 14): Append-only check via previous.merge(&candidate)
-    let candidate_manifest_digest = match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, expected_version) {
-        Ok((m, _)) => match m.digest() {
-            Ok(d) => d,
+    let (candidate_manifest_digest, candidate_filesize_bytes) =
+        match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, expected_version) {
+            Ok((m, _)) => match m.digest() {
+                Ok(d) => (d, m.layers.iter().map(|l| l.size).sum::<u64>()),
+                Err(e) => {
+                    failures.push(format!("Cannot compute candidate manifest digest: {}", e));
+                    return Ok(failures);
+                }
+            },
             Err(e) => {
-                failures.push(format!("Cannot compute candidate manifest digest: {}", e));
+                failures.push(format!("Cannot build candidate manifest: {}", e));
                 return Ok(failures);
             }
-        },
-        Err(e) => {
-            failures.push(format!("Cannot build candidate manifest: {}", e));
-            return Ok(failures);
-        }
-    };
+        };
 
     if let Some(rel_row) = candidate_index.releases.iter_mut().find(|r| r.trud_release_date == date) {
         if let Some(existing_ds) = rel_row.datasets.iter_mut().find(|d| d.dataset_version == expected_version) {
             existing_ds.manifest_digest = candidate_manifest_digest;
+            existing_ds.dataset_filesize_bytes = candidate_filesize_bytes;
         } else {
             rel_row.datasets.push(Dataset {
                 dataset_version: expected_version.to_string(),
                 manifest_digest: candidate_manifest_digest,
+                dataset_filesize_bytes: candidate_filesize_bytes,
                 dataset_doi: None,
                 withdrawn: None,
             });

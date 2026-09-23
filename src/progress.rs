@@ -73,6 +73,10 @@ pub fn format_elapsed(duration: Duration) -> String {
 
 #[derive(Debug, Clone)]
 pub enum ReleaseBlockState {
+    /// Work before the bar can move: nothing downloaded yet, nothing to show but the wait.
+    Preparing {
+        what: String,
+    },
     Downloading {
         bytes_done: u64,
         rate: Option<f64>,
@@ -97,18 +101,34 @@ pub struct ReleaseBlockParams<'a> {
     pub archive_size: u64,
     pub file_count: usize,
     pub state: &'a ReleaseBlockState,
+    /// The registry coordinate (`ods-data/2026-08-28_0.1.0`). `ods trud pull` passes `None`.
+    pub dataset: Option<&'a str>,
     pub verified: &'a str,
     pub linked: Option<ReleaseBlockLink<'a>>,
+    /// The mirror(s) that served the bytes (`ods.fyi`, `2 mirrors`) — settled frame only,
+    /// rendered before `in <duration>`. `None` for a cached release, or when the caller
+    /// doesn't track it (`ods trud pull`).
+    pub from: Option<&'a str>,
     pub hash: Option<&'a str>,
+    /// The hash row's own label: `ods trud pull` says `sha256`, `ods pull` says `manifest`.
+    pub hash_label: &'a str,
     pub color: bool,
 }
 
 /// Renders a release report as a multi-line block (2 to 4 lines).
 /// Given release block parameters, returns the block's lines.
 pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
-    let mut lines = Vec::with_capacity(4);
+    let mut lines = Vec::with_capacity(6);
 
-    let (filled, empty, size_bytes, tail) = match params.state {
+    // Rows before the bar can move (preparing, downloading) show `-` for what isn't
+    // known yet, dimmed.
+    let pending = matches!(
+        params.state,
+        ReleaseBlockState::Preparing { .. } | ReleaseBlockState::Downloading { .. }
+    );
+
+    let (filled, empty, size_bytes, files_and_tail) = match params.state {
+        ReleaseBlockState::Preparing { what } => (0, 20, 0, what.clone()),
         ReleaseBlockState::Downloading { bytes_done, rate, eta } => {
             let done = (*bytes_done).min(params.archive_size);
             let filled = if params.archive_size > 0 {
@@ -117,7 +137,12 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
                 0
             }.min(20);
             let empty = 20 - filled;
-            let mut parts = Vec::new();
+            let files_str = if params.file_count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{} files", params.file_count)
+            };
+            let mut parts = vec![files_str];
             if let Some(r) = rate {
                 parts.push(format_rate(*r));
             }
@@ -127,10 +152,25 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
             (filled, empty, *bytes_done, parts.join("  "))
         }
         ReleaseBlockState::Done { elapsed } => {
-            (20, 0, params.archive_size, format!("in {}", format_elapsed(*elapsed)))
+            let files_str = if params.file_count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{} files", params.file_count)
+            };
+            let mut parts = vec![files_str];
+            if let Some(from) = params.from {
+                parts.push(format!("from {}", from));
+            }
+            parts.push(format!("in {}", format_elapsed(*elapsed)));
+            (20, 0, params.archive_size, parts.join("  "))
         }
         ReleaseBlockState::Cached => {
-            (20, 0, params.archive_size, "cached".to_string())
+            let files_str = if params.file_count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{} files", params.file_count)
+            };
+            (20, 0, params.archive_size, format!("{}  cached", files_str))
         }
     };
 
@@ -151,14 +191,9 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
         format!("{}{}", "█".repeat(filled), "░".repeat(empty))
     };
 
-    let files_str = if params.file_count == 1 {
-        "1 file".to_string()
-    } else {
-        format!("{} files", params.file_count)
-    };
     let size_str = format_size(size_bytes);
 
-    let stats_text = format!("  {:>4}   {}  {}", size_str, files_str, tail);
+    let stats_text = format!("  {:>4}   {}", size_str, files_and_tail);
     let stats = if params.color {
         format!("{}{}{}", crate::ansi::ANSI_MUTED, stats_text, crate::ansi::ANSI_RESET)
     } else {
@@ -167,53 +202,49 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
 
     lines.push(format!("  {:<14}{}{}", params.date, bar, stats));
 
-    // Row 2: verified
-    let verified_val = match params.state {
-        ReleaseBlockState::Downloading { .. } => {
-            if params.color {
-                format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
-            } else {
-                "-".to_string()
-            }
+    // Row 2: dataset (if present) — known from the first frame, not gated on state.
+    if let Some(dataset) = params.dataset {
+        lines.push(format!("  {:<14}{}", "dataset", dataset));
+    }
+
+    // Row 3: verified
+    let pending_dash = || {
+        if params.color {
+            format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
+        } else {
+            "-".to_string()
         }
-        _ => params.verified.to_string(),
     };
+    let verified_val = if pending { pending_dash() } else { params.verified.to_string() };
     lines.push(format!("  {:<14}{}", "verified", verified_val));
 
-    // Row 3: linked (if present)
+    // Row 4: linked (if present)
     if let Some(link) = params.linked {
-        let linked_val = match params.state {
-            ReleaseBlockState::Downloading { .. } => {
+        let linked_val = if pending {
+            pending_dash()
+        } else {
+            let arrow = if params.color {
+                format!("{}→{}", crate::ansi::ANSI_CYAN, crate::ansi::ANSI_RESET)
+            } else {
+                "→".to_string()
+            };
+            let unchanged_str = if link.unchanged {
                 if params.color {
-                    format!("{}-{}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
+                    format!("{} (unchanged){}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
                 } else {
-                    "-".to_string()
+                    " (unchanged)".to_string()
                 }
-            }
-            _ => {
-                let arrow = if params.color {
-                    format!("{}→{}", crate::ansi::ANSI_CYAN, crate::ansi::ANSI_RESET)
-                } else {
-                    "→".to_string()
-                };
-                let unchanged_str = if link.unchanged {
-                    if params.color {
-                        format!("{} (unchanged){}", crate::ansi::ANSI_MUTED, crate::ansi::ANSI_RESET)
-                    } else {
-                        " (unchanged)".to_string()
-                    }
-                } else {
-                    String::new()
-                };
-                format!("current {} {}{}", arrow, link.target, unchanged_str)
-            }
+            } else {
+                String::new()
+            };
+            format!("current {} {}{}", arrow, link.target, unchanged_str)
         };
         lines.push(format!("  {:<14}{}", "linked", linked_val));
     }
 
-    // Row 4: sha256 (if verbose / hash present)
+    // Row 5: hash, labelled by the caller (if verbose / hash present)
     if let Some(h) = params.hash {
-        lines.push(format!("  {:<14}{}", "sha256", h));
+        lines.push(format!("  {:<14}{}", params.hash_label, h));
     }
 
     lines
@@ -1282,14 +1313,17 @@ mod tests {
             archive_size: u64,
             file_count: usize,
             state: ReleaseBlockState,
+            dataset: Option<&'static str>,
             verified: &'static str,
             linked: Option<ReleaseBlockLink<'static>>,
+            from: Option<&'static str>,
             hash: Option<&'static str>,
+            hash_label: &'static str,
             expected: Vec<&'static str>,
         }
 
         let cases = vec![
-            // 1. Downloading block
+            // 1. Downloading block (ods trud pull: no dataset row, no from)
             Case {
                 date: "2026-07-31",
                 archive_size: 34_500_000,
@@ -1299,12 +1333,15 @@ mod tests {
                     rate: Some(13.6 * 1024.0 * 1024.0),
                     eta: Some(Duration::from_secs(1)),
                 },
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: Some(ReleaseBlockLink {
                     target: "releases/2026-07-31",
                     unchanged: false,
                 }),
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    █████████████░░░░░░░  22MB   5 files  13.6MB/s  eta 1s",
                     "  verified      -",
@@ -1319,12 +1356,15 @@ mod tests {
                 state: ReleaseBlockState::Done {
                     elapsed: Duration::from_millis(3100),
                 },
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: Some(ReleaseBlockLink {
                     target: "releases/2026-07-31",
                     unchanged: false,
                 }),
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
                     "  verified      sha256 from TRUD API",
@@ -1337,12 +1377,15 @@ mod tests {
                 archive_size: 37_983_173,
                 file_count: 5,
                 state: ReleaseBlockState::Cached,
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: Some(ReleaseBlockLink {
                     target: "releases/2026-07-31",
                     unchanged: true,
                 }),
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    ████████████████████  36MB   5 files  cached",
                     "  verified      sha256 from TRUD API",
@@ -1357,12 +1400,15 @@ mod tests {
                 state: ReleaseBlockState::Done {
                     elapsed: Duration::from_millis(3100),
                 },
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: Some(ReleaseBlockLink {
                     target: "releases/2026-07-31",
                     unchanged: false,
                 }),
+                from: None,
                 hash: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933"),
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
                     "  verified      sha256 from TRUD API",
@@ -1378,9 +1424,12 @@ mod tests {
                 state: ReleaseBlockState::Done {
                     elapsed: Duration::from_millis(3100),
                 },
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: None,
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    ████████████████████  36MB   5 files  in 3.1s",
                     "  verified      sha256 from TRUD API",
@@ -1394,16 +1443,141 @@ mod tests {
                 state: ReleaseBlockState::Done {
                     elapsed: Duration::from_millis(3100),
                 },
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: Some(ReleaseBlockLink {
                     target: "releases/2026-07-31",
                     unchanged: false,
                 }),
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 expected: vec![
                     "  2026-07-31    ████████████████████  36MB   1 file  in 3.1s",
                     "  verified      sha256 from TRUD API",
                     "  linked        current → releases/2026-07-31",
+                ],
+            },
+            // 7. ods pull: preparing frame — nothing downloaded yet, dataset known,
+            //    verified/linked pending
+            Case {
+                date: "2026-08-28",
+                archive_size: 0,
+                file_count: 6,
+                state: ReleaseBlockState::Preparing {
+                    what: "fetching manifest from ods.fyi…".to_string(),
+                },
+                dataset: Some("ods-data/2026-08-28_0.1.0"),
+                verified: "sha256 from releases.json",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-08-28",
+                    unchanged: false,
+                }),
+                from: None,
+                hash: None,
+                hash_label: "manifest",
+                expected: vec![
+                    "  2026-08-28    ░░░░░░░░░░░░░░░░░░░░    0B   fetching manifest from ods.fyi…",
+                    "  dataset       ods-data/2026-08-28_0.1.0",
+                    "  verified      -",
+                    "  linked        -",
+                ],
+            },
+            // 8. ods pull: downloading frame — dataset row present, verified/linked still
+            //    pending
+            Case {
+                date: "2026-08-28",
+                archive_size: 28_000_000,
+                file_count: 6,
+                state: ReleaseBlockState::Downloading {
+                    bytes_done: 9_000_000,
+                    rate: Some(4.2 * 1024.0 * 1024.0),
+                    eta: Some(Duration::from_secs(4)),
+                },
+                dataset: Some("ods-data/2026-08-28_0.1.0"),
+                verified: "sha256 from releases.json",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-08-28",
+                    unchanged: false,
+                }),
+                from: None,
+                hash: None,
+                hash_label: "manifest",
+                expected: vec![
+                    "  2026-08-28    ██████░░░░░░░░░░░░░░   9MB   6 files  4.2MB/s  eta 4s",
+                    "  dataset       ods-data/2026-08-28_0.1.0",
+                    "  verified      -",
+                    "  linked        -",
+                ],
+            },
+            // 9. ods pull: settled, one mirror
+            Case {
+                date: "2026-08-28",
+                archive_size: 28_000_000,
+                file_count: 6,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(4100),
+                },
+                dataset: Some("ods-data/2026-08-28_0.1.0"),
+                verified: "sha256 from releases.json",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-08-28",
+                    unchanged: false,
+                }),
+                from: Some("ods.fyi"),
+                hash: None,
+                hash_label: "manifest",
+                expected: vec![
+                    "  2026-08-28    ████████████████████  27MB   6 files  from ods.fyi  in 4.1s",
+                    "  dataset       ods-data/2026-08-28_0.1.0",
+                    "  verified      sha256 from releases.json",
+                    "  linked        current → releases/2026-08-28",
+                ],
+            },
+            // 10. ods pull: settled, two mirrors
+            Case {
+                date: "2026-08-28",
+                archive_size: 28_000_000,
+                file_count: 6,
+                state: ReleaseBlockState::Done {
+                    elapsed: Duration::from_millis(6300),
+                },
+                dataset: Some("ods-data/2026-08-28_0.1.0"),
+                verified: "sha256 from releases.json",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-08-28",
+                    unchanged: false,
+                }),
+                from: Some("2 mirrors"),
+                hash: None,
+                hash_label: "manifest",
+                expected: vec![
+                    "  2026-08-28    ████████████████████  27MB   6 files  from 2 mirrors  in 6.3s",
+                    "  dataset       ods-data/2026-08-28_0.1.0",
+                    "  verified      sha256 from releases.json",
+                    "  linked        current → releases/2026-08-28",
+                ],
+            },
+            // 11. ods pull: cached — no `from` (nothing was fetched)
+            Case {
+                date: "2026-08-28",
+                archive_size: 28_000_000,
+                file_count: 6,
+                state: ReleaseBlockState::Cached,
+                dataset: Some("ods-data/2026-08-28_0.1.0"),
+                verified: "sha256 from releases.json",
+                linked: Some(ReleaseBlockLink {
+                    target: "releases/2026-08-28",
+                    unchanged: true,
+                }),
+                from: None,
+                hash: None,
+                hash_label: "manifest",
+                expected: vec![
+                    "  2026-08-28    ████████████████████  27MB   6 files  cached",
+                    "  dataset       ods-data/2026-08-28_0.1.0",
+                    "  verified      sha256 from releases.json",
+                    "  linked        current → releases/2026-08-28 (unchanged)",
                 ],
             },
         ];
@@ -1414,9 +1588,12 @@ mod tests {
                 archive_size: c.archive_size,
                 file_count: c.file_count,
                 state: &c.state,
+                dataset: c.dataset,
                 verified: c.verified,
                 linked: c.linked,
+                from: c.from,
                 hash: c.hash,
+                hash_label: c.hash_label,
                 color: false,
             });
             assert_eq!(actual, c.expected, "Case {} failed", i + 1);
@@ -1435,12 +1612,15 @@ mod tests {
                 rate: Some(13.6 * 1024.0 * 1024.0),
                 eta: Some(Duration::from_secs(1)),
             },
+            dataset: None,
             verified: "sha256 from TRUD API",
             linked: Some(ReleaseBlockLink {
                 target: "releases/2026-07-31",
                 unchanged: false,
             }),
+            from: None,
             hash: None,
+            hash_label: "sha256",
             color: true,
         });
 
@@ -1461,12 +1641,15 @@ mod tests {
             archive_size: 37_983_173,
             file_count: 5,
             state: &ReleaseBlockState::Cached,
+            dataset: None,
             verified: "sha256 from TRUD API",
             linked: Some(ReleaseBlockLink {
                 target: "releases/2026-07-31",
                 unchanged: true,
             }),
+            from: None,
             hash: None,
+            hash_label: "sha256",
             color: true,
         });
 

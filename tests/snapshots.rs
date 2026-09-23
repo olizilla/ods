@@ -1,6 +1,6 @@
 mod common;
 
-use common::setup_find_test_workspace;
+use common::{make_v1_index, setup_find_test_workspace};
 use sha2::Digest;
 use std::fs;
 use std::io::{Read, Write};
@@ -656,6 +656,156 @@ fn snapshot_trud_pull() {
     check_snapshot("trud-pull.txt", &actual_cases, &case_names);
 }
 
+/// Manifest digest, manifest bytes, `(title, digest, bytes)` per layer, and the layer sizes'
+/// sum — what `build_padded_oci_release` returns.
+type PaddedOciRelease = (String, Vec<u8>, Vec<(String, String, Vec<u8>)>, u64);
+
+/// Builds a real release directory — six files, one padded to `target_total` so the bar has
+/// something to move over — and its OCI manifest, the way `ods make release` would.
+fn build_padded_oci_release(
+    dir: &Path,
+    date: &str,
+    version: &str,
+    target_total: usize,
+) -> PaddedOciRelease {
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some(date.to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        ..Default::default()
+    };
+    let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
+    let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
+    let dp_bytes = serde_json::to_vec_pretty(&dp).unwrap();
+    let roles_bytes = format!("roles parquet for {}", date).into_bytes();
+    let relationships_bytes = format!("relationships parquet for {}", date).into_bytes();
+    let successions_bytes = format!("successions parquet for {}", date).into_bytes();
+
+    let fixed_total = prov_bytes.len() + dp_bytes.len() + roles_bytes.len() + relationships_bytes.len() + successions_bytes.len();
+    let mut orgs_bytes = format!("orgs parquet for {}\n", date).into_bytes();
+    orgs_bytes.resize(target_total.saturating_sub(fixed_total).max(orgs_bytes.len()), b'.');
+
+    fs::write(dir.join("orgs.parquet"), &orgs_bytes).unwrap();
+    fs::write(dir.join("roles.parquet"), &roles_bytes).unwrap();
+    fs::write(dir.join("relationships.parquet"), &relationships_bytes).unwrap();
+    fs::write(dir.join("successions.parquet"), &successions_bytes).unwrap();
+    fs::write(dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
+    fs::write(dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
+
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(dir, &prov, version).unwrap();
+    let manifest_digest = manifest.digest().unwrap();
+    let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
+
+    let mut files = Vec::new();
+    for layer in &manifest.layers {
+        let title = layer
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get("org.opencontainers.image.title"))
+            .cloned()
+            .unwrap();
+        let bytes = match title.as_str() {
+            ods::provenance::PROVENANCE_FILENAME => prov_bytes.clone(),
+            ods::datapackage::DATAPACKAGE_FILENAME => dp_bytes.clone(),
+            "orgs.parquet" => orgs_bytes.clone(),
+            "relationships.parquet" => relationships_bytes.clone(),
+            "roles.parquet" => roles_bytes.clone(),
+            "successions.parquet" => successions_bytes.clone(),
+            other => panic!("Unexpected layer: {}", other),
+        };
+        files.push((title, layer.digest.clone(), bytes));
+    }
+
+    (manifest_digest, manifest_bytes, files, total_size)
+}
+
+#[test]
+fn snapshot_pull() {
+    let tmp = tempfile::TempDir::new().expect("create tempdir");
+    let fresh_tmp = tempfile::TempDir::new().expect("create tempdir");
+
+    let fix_dir_1 = tmp.path().join("fixture_2026-06-26");
+    fs::create_dir_all(&fix_dir_1).unwrap();
+    let (digest1, manifest_bytes1, files1, total1) = build_padded_oci_release(&fix_dir_1, "2026-06-26", "0.1.0", 2_097_152);
+
+    let fix_dir_2 = tmp.path().join("fixture_2026-07-31");
+    fs::create_dir_all(&fix_dir_2).unwrap();
+    let (digest2, manifest_bytes2, files2, total2) = build_padded_oci_release(&fix_dir_2, "2026-07-31", "0.1.0", 3_145_728);
+
+    let mut routes = std::collections::HashMap::new();
+    routes.insert(format!("/v2/ods-data/manifests/{}", digest1), manifest_bytes1);
+    for (_, d, b) in &files1 {
+        routes.insert(format!("/v2/ods-data/blobs/{}", d), b.clone());
+    }
+    routes.insert(format!("/v2/ods-data/manifests/{}", digest2), manifest_bytes2);
+    for (_, d, b) in &files2 {
+        routes.insert(format!("/v2/ods-data/blobs/{}", d), b.clone());
+    }
+
+    let (api_url, stop_server) = run_mock_trud_server(routes);
+    // `MirrorEntry::host` drops the port, so serving from `localhost` (not `127.0.0.1`) is
+    // what makes `from localhost` in the settled block stable across machines.
+    let port = api_url.rsplit(':').next().unwrap();
+    let mirror_url = format!("http://localhost:{}/v2/ods-data", port);
+
+    let mut index = make_v1_index(&[
+        (
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            total2,
+            &[("0.1.0", &digest2)],
+        ),
+        (
+            "2026-06-26",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            total1,
+            &[("0.1.0", &digest1)],
+        ),
+    ]);
+    index.mirrors = vec![ods::index::MirrorEntry { url: mirror_url }];
+    index.releases[0].datasets[0].dataset_filesize_bytes = total2;
+    index.releases[1].datasets[0].dataset_filesize_bytes = total1;
+
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    fs::write(tmp.path().join("rehearsal.json"), &index_bytes).unwrap();
+    fs::write(fresh_tmp.path().join("rehearsal.json"), &index_bytes).unwrap();
+
+    let cases = [
+        TestCase {
+            cmd_str: "COLUMNS=100 ods pull 2026-06-26 --index rehearsal.json",
+            columns: Some(100),
+            args: vec!["pull", "2026-06-26", "--index", "rehearsal.json"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods pull --index rehearsal.json",
+            columns: Some(100),
+            args: vec!["pull", "--index", "rehearsal.json"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods pull --index rehearsal.json",
+            columns: Some(100),
+            args: vec!["pull", "--index", "rehearsal.json"],
+            use_input: false,
+        },
+    ];
+
+    let mut case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
+    let mut actual_cases: Vec<String> = cases.iter().map(|c| run_case_full(c, None, Some(tmp.path()), &[])).collect();
+
+    let all_case = TestCase {
+        cmd_str: "COLUMNS=100 ods pull --all --index rehearsal.json",
+        columns: Some(100),
+        args: vec!["pull", "--all", "--index", "rehearsal.json"],
+        use_input: false,
+    };
+    actual_cases.push(run_case_full(&all_case, None, Some(fresh_tmp.path()), &[]));
+    case_names.push(all_case.cmd_str);
+
+    let _ = stop_server.send(());
+    check_snapshot("pull.txt", &actual_cases, &case_names);
+}
 
 #[test]
 fn snapshot_make() {

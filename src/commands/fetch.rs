@@ -397,9 +397,12 @@ fn pull_single_release<F: TrudFetcher>(
                 archive_size: target_release.archive_file_size,
                 file_count,
                 state: &ReleaseBlockState::Cached,
+                dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: link,
+                from: None,
                 hash: hash_opt,
+                hash_label: "sha256",
                 color: progress.caps().is_tty && !progress.caps().no_color,
             });
             progress.finish_block(&lines);
@@ -480,9 +483,12 @@ fn pull_single_release<F: TrudFetcher>(
                 archive_size: total_size,
                 file_count: initial_file_count,
                 state: &state,
+                dataset: None,
                 verified: "-",
                 linked: link,
+                from: None,
                 hash: None,
+                hash_label: "sha256",
                 color: p.caps().is_tty && !p.caps().no_color,
             });
             p.update_live_block(lines);
@@ -561,9 +567,12 @@ fn pull_single_release<F: TrudFetcher>(
         archive_size: target_release.archive_file_size,
         file_count: final_file_count,
         state: &state,
+        dataset: None,
         verified: "sha256 from TRUD API",
         linked: link,
+        from: None,
         hash: hash_opt,
+        hash_label: "sha256",
         color: progress.caps().is_tty && !progress.caps().no_color,
     });
     progress.finish_block(&lines);

@@ -82,7 +82,8 @@
               "type": "object",
               "required": [
                 "dataset_version",
-                "manifest_digest"
+                "manifest_digest",
+                "dataset_filesize_bytes"
               ],
               "additionalProperties": false,
               "properties": {
@@ -95,6 +96,11 @@
                   "type": "string",
                   "pattern": "^sha256:[0-9a-f]{64}$",
                   "description": "Content-addressed OCI manifest digest formatted as 'sha256:' followed by 64 lower-case hex characters. Computed from the dataset manifest generated and published by ods make release; immutable digest that never changes once recorded. Merge refuses contradiction."
+                },
+                "dataset_filesize_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Sum of the layer sizes in this dataset's OCI manifest, in bytes — what `ods pull` downloads and installs. Measured from the published manifest at build time; immutable size that never changes once recorded. Merge refuses contradiction."
                 },
                 "dataset_doi": {
                   "type": "string",

@@ -1,0 +1,30 @@
+$ COLUMNS=100 ods pull 2026-06-26 --index rehearsal.json
+--- stderr
+  2026-06-26    ████████████████████   2MB   6 files  from localhost  in <duration>
+  dataset       ods-data/2026-06-26_0.1.0
+  verified      sha256 from rehearsal.json
+  linked        current → releases/2026-06-26
+
+$ COLUMNS=100 ods pull --index rehearsal.json
+--- stderr
+  2026-07-31    ████████████████████   3MB   6 files  from localhost  in <duration>
+  dataset       ods-data/2026-07-31_0.1.0
+  verified      sha256 from rehearsal.json
+  linked        current → releases/2026-07-31
+
+$ COLUMNS=100 ods pull --index rehearsal.json
+--- stderr
+  2026-07-31    ████████████████████   3MB   6 files  cached
+  dataset       ods-data/2026-07-31_0.1.0
+  verified      sha256 from rehearsal.json
+  linked        current → releases/2026-07-31 (unchanged)
+
+$ COLUMNS=100 ods pull --all --index rehearsal.json
+--- stderr
+0 cached · 2 to pull · 5MB
+
+  2026-06-26    ████████████████████   2MB   6 files  from localhost  in <duration>
+  2026-07-31    ████████████████████   3MB   6 files  from localhost  in <duration>
+
+  pulled        2 releases · 0 cached · 5MB  in <duration>
+  linked        current → releases/2026-07-31

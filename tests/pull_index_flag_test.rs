@@ -56,6 +56,117 @@ fn run_mock_http_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
     (format!("http://127.0.0.1:{}/myindex.json", port), tx)
 }
 
+fn extract_http_path(buf: &[u8]) -> Option<String> {
+    let line_end = buf.iter().position(|&b| b == b'\r' || b == b'\n')?;
+    let line_str = std::str::from_utf8(&buf[..line_end]).ok()?;
+    let mut parts = line_str.split_whitespace();
+    let _method = parts.next()?;
+    let full_path = parts.next()?;
+    let path = full_path.split('?').next().unwrap_or(full_path);
+    Some(path.to_string())
+}
+
+/// Binds an ephemeral port and hands back its base URL before anything is served, so a
+/// caller can build routes (an index naming its own mirror, say) that need to know the
+/// port in advance. Pair with `serve_routed_mock_server`.
+fn bind_routed_mock_server() -> (TcpListener, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+    (listener, format!("http://127.0.0.1:{}", port))
+}
+
+/// Serves `routes` on an already-bound listener, routing by exact request path and
+/// answering anything else with a 404 — enough to stand in for an OCI registry's
+/// `/manifests/<digest>` and `/blobs/<digest>` endpoints in a real subprocess pull.
+fn serve_routed_mock_server(listener: TcpListener, routes: BTreeMap<String, Vec<u8>>) -> mpsc::Sender<()> {
+    let routes = std::sync::Arc::new(routes);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_nonblocking(false);
+                let routes = routes.clone();
+                thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n > 0 {
+                        if let Some(path) = extract_http_path(&buf[..n]) {
+                            if let Some(body) = routes.get(&path) {
+                                let header = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(header.as_bytes());
+                                let _ = stream.write_all(body);
+                                let _ = stream.flush();
+                            } else {
+                                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                let _ = stream.write_all(resp.as_bytes());
+                                let _ = stream.flush();
+                            }
+                        }
+                    }
+                });
+            }
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    tx
+}
+
+/// Binds and serves in one call, for a caller with no need to know the port before the
+/// routes are built.
+fn run_routed_mock_server(routes: BTreeMap<String, Vec<u8>>) -> (String, mpsc::Sender<()>) {
+    let (listener, base_url) = bind_routed_mock_server();
+    let tx = serve_routed_mock_server(listener, routes);
+    (base_url, tx)
+}
+
+/// Builds a real, tiny release (three files) on disk and its OCI manifest, returning the
+/// manifest's digest, the total layer size (`dataset_filesize_bytes`), and the routes a
+/// `run_routed_mock_server` needs to serve it at `/v2/ods-data/manifests/<digest>` and
+/// `/v2/ods-data/blobs/<digest>`.
+fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) -> (String, u64, BTreeMap<String, Vec<u8>>) {
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some(release_date.to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        ..Default::default()
+    };
+    let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
+    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
+
+    let orgs_bytes = b"sample orgs parquet bytes for the pull index flag test".to_vec();
+    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
+
+    let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
+    let dp_bytes = serde_json::to_vec_pretty(&dp).unwrap();
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
+    let fixture_dir = tmp.join(format!("fixture_{}", release_date));
+    fs::create_dir_all(&fixture_dir).unwrap();
+    fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
+    fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
+    fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
+
+    let (manifest, manifest_bytes) =
+        ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, version).unwrap();
+    let manifest_digest = manifest.digest().unwrap();
+    let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
+
+    let mut routes = BTreeMap::new();
+    routes.insert(format!("/v2/ods-data/manifests/{}", manifest_digest), manifest_bytes);
+    routes.insert(format!("/v2/ods-data/blobs/{}", prov_sha), prov_bytes);
+    routes.insert(format!("/v2/ods-data/blobs/{}", orgs_sha), orgs_bytes);
+    routes.insert(format!("/v2/ods-data/blobs/{}", dp_sha), dp_bytes);
+
+    (manifest_digest, total_size, routes)
+}
+
 struct MockOciFetcher {
     pub remote_index: Option<OdsReleaseIndex>,
     pub responses: BTreeMap<String, Vec<u8>>,
@@ -241,9 +352,18 @@ fn test_index_flag_env_var_and_flag_precedence() {
         "Quiet fallback to baked index without error"
     );
 
-    // 2. When both ODS_RELEASE_INDEX_URL and --index are set, --index wins.
+    // 2. When both ODS_RELEASE_INDEX_URL and --index are set, --index wins: the pull
+    // completes from the file's own mirror, and the block's `verified` row names the
+    // file, not the (unreachable) env var URL.
+    let (manifest_digest, total_size, routes) = build_pull_fixture(tmp.path(), "2026-07-31", "1.0.1");
+    let (base_url, stop_oci) = run_routed_mock_server(routes);
+
+    let mut index = sample_release_index();
+    index.mirrors = vec![ods::index::MirrorEntry { url: format!("{}/v2/ods-data", base_url) }];
+    index.releases[0].datasets[0].manifest_digest = manifest_digest;
+    index.releases[0].datasets[0].dataset_filesize_bytes = total_size;
+
     let myindex_file = tmp.path().join("myindex.json");
-    let index = sample_release_index();
     fs::write(&myindex_file, serde_json::to_vec_pretty(&index).unwrap()).unwrap();
 
     let output_both = ods_binary()
@@ -252,20 +372,20 @@ fn test_index_flag_env_var_and_flag_precedence() {
         .arg("pull")
         .arg("--index")
         .arg("./myindex.json")
-        .arg("--list")
         .output()
         .expect("execute with both env var and --index");
 
-    assert!(output_both.status.success(), "--index must succeed");
-    let stdout_both = String::from_utf8_lossy(&output_both.stdout);
+    let _ = stop_oci.send(());
+
+    assert!(
+        output_both.status.success(),
+        "--index must succeed, got: {}",
+        String::from_utf8_lossy(&output_both.stderr)
+    );
     let stderr_both = String::from_utf8_lossy(&output_both.stderr);
     assert!(
-        stdout_both.contains("2026-07-31"),
-        "--index must take precedence over ODS_RELEASE_INDEX_URL"
-    );
-    assert!(
-        !stderr_both.contains("* Index:"),
-        "When --index is given, no fetch runs and '* Index:' line must be absent from stderr, got: {}",
+        stderr_both.contains("verified      sha256 from ./myindex.json"),
+        "--index must take precedence over ODS_RELEASE_INDEX_URL, and the block's verified row must name the file, got: {}",
         stderr_both
     );
 }
@@ -436,32 +556,42 @@ fn test_pull_index_flag_does_not_mutate_cached_workspace_index() -> Result<()> {
 }
 
 #[test]
-fn test_ods_release_index_url_prints_stderr_notice_and_saves_exact_bytes() -> Result<()> {
+fn test_ods_release_index_url_is_used_and_saves_exact_bytes_and_names_it_verified() -> Result<()> {
     let tmp = TempDir::new()?;
-    // `--list` only caches into a workspace that already exists
-    // (`write_where_told_test::pull_list_in_empty_directory_writes_nothing`); give it one.
-    ods::workspace::Workspace::open_or_create(Some(&tmp.path().join("ods_data")))?;
-    let index = sample_release_index();
-    let index_bytes = serde_json::to_vec_pretty(&index)?;
 
-    let (url, stop_server) = run_mock_http_server(index_bytes.clone());
+    // The index is served from the same ephemeral server as its own mirror, so the mirror
+    // URL needs the port before the index bytes are built.
+    let (listener, base_url) = bind_routed_mock_server();
+
+    let (manifest_digest, total_size, mut routes) = build_pull_fixture(tmp.path(), "2026-07-31", "1.0.1");
+    let mut index = sample_release_index();
+    index.mirrors = vec![ods::index::MirrorEntry { url: format!("{}/v2/ods-data", base_url) }];
+    index.releases[0].datasets[0].manifest_digest = manifest_digest;
+    index.releases[0].datasets[0].dataset_filesize_bytes = total_size;
+    let index_bytes = serde_json::to_vec_pretty(&index)?;
+    routes.insert("/releases.json".to_string(), index_bytes.clone());
+
+    let index_url = format!("{}/releases.json", base_url);
+    let stop_server = serve_routed_mock_server(listener, routes);
 
     let output = ods_binary()
         .current_dir(tmp.path())
-        .env("ODS_RELEASE_INDEX_URL", &url)
+        .env("ODS_RELEASE_INDEX_URL", &index_url)
         .arg("pull")
-        .arg("--list")
         .output()?;
 
     let _ = stop_server.send(());
 
-    assert!(output.status.success(), "Command must succeed");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let expected_notice = format!("* Index: {} (ODS_RELEASE_INDEX_URL)", url);
     assert!(
-        stderr.contains(&expected_notice),
-        "stderr must contain notice line '{}', got:\n{}",
-        expected_notice,
+        output.status.success(),
+        "Command must succeed, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_verified = format!("verified      sha256 from {}", index_url);
+    assert!(
+        stderr.contains(&expected_verified),
+        "block's verified row must name ODS_RELEASE_INDEX_URL, got:\n{}",
         stderr
     );
 

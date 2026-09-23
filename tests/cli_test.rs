@@ -215,8 +215,8 @@ fn test_cli_pull_local_release_output() {
     assert!(output.status.success(), "stderr was: {}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("verified (cache hit)"),
-        "stderr must contain 'verified (cache hit)', got:\n{}",
+        stderr.contains("2026-05-29") && stderr.contains("cached"),
+        "stderr must report the cache hit as a cached block, got:\n{}",
         stderr
     );
 

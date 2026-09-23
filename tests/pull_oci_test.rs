@@ -672,7 +672,7 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
 
     assert_eq!(out_named.status.code(), Some(1));
     let stderr_named = String::from_utf8_lossy(&out_named.stderr);
-    assert!(stderr_named.contains("✓ 2026-08-28 (1.0.0) verified (cache hit)"));
+    assert!(stderr_named.contains("2026-08-28") && stderr_named.contains("cached"));
     assert!(stderr_named.contains("current → releases/2026-08-28"));
     assert!(stderr_named.contains("✖ 2026-08-28 (1.0.0) was withdrawn: roles table truncated at 65535 rows by a bad build"));
     assert!(stderr_named.contains("Pull a valid release: ods pull"));
@@ -687,7 +687,7 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     let stderr_bare = String::from_utf8_lossy(&out_bare.stderr);
     assert!(stderr_bare.contains("! 2026-08-28 (1.0.0) was withdrawn: roles table truncated at 65535 rows by a bad build"));
     assert!(stderr_bare.contains("Pulling 2026-07-31 instead"));
-    assert!(stderr_bare.contains("✓ 2026-07-31 (1.0.0) verified (cache hit)"));
+    assert!(stderr_bare.contains("2026-07-31") && stderr_bare.contains("cached"));
     assert!(stderr_bare.contains("current → releases/2026-07-31"));
 
     Ok(())
@@ -814,6 +814,7 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
     let res = run_with_fetcher_and_writer(
         Args {
             release_date: Some("2026-07-31".to_string()),
+            verbose: true,
             ..Default::default()
         },
         &workspace,
@@ -833,8 +834,33 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
     assert_eq!(active_date, "2026-07-31", "current must be pinned to 2026-07-31");
 
     let stderr = String::from_utf8(stderr_buf)?;
-    assert!(stderr.contains("✓ 2026-07-31 (1.0.1)"));
+    assert!(
+        stderr.contains("2026-07-31") && stderr.contains("from 2 mirrors"),
+        "block must name both mirrors that served layers, got:\n{}",
+        stderr
+    );
     assert!(stderr.contains("current → releases/2026-07-31"));
+
+    // `--verbose` names which host served each layer once more than one mirror was needed.
+    assert!(
+        stderr.contains("roles.parquet") && stderr.contains("mirror1.example.com"),
+        "verbose output must name the mirror that served roles.parquet, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("successions.parquet") && stderr.contains("mirror2.example.com"),
+        "verbose output must name the mirror that served successions.parquet, got:\n{}",
+        stderr
+    );
+    let roles_idx = stderr.find("roles.parquet").expect("roles.parquet line");
+    let roles_host_idx = stderr[roles_idx..].find("mirror1.example.com").expect("roles.parquet's host");
+    let succ_idx = stderr.find("successions.parquet").expect("successions.parquet line");
+    let succ_host_idx = stderr[succ_idx..].find("mirror2.example.com").expect("successions.parquet's host");
+    assert!(
+        roles_host_idx < 80 && succ_host_idx < 80,
+        "each filename's host must be on the same line, got:\n{}",
+        stderr
+    );
 
     Ok(())
 }
@@ -1424,20 +1450,180 @@ fn test_pull_all_records_arrived_incomplete_in_ledger() -> Result<()> {
     );
 
     assert!(res.is_err());
-    let err_str = format!("{:#}", res.unwrap_err());
+    let err = res.unwrap_err();
     assert!(
-        err_str.contains(r#"[("2026-07-31", "arrived incomplete")]"#),
-        "ledger error must say 'arrived incomplete', got: {}",
-        err_str
-    );
-    assert!(
-        !err_str.contains("already reported"),
-        "ledger error must not contain 'already reported', got: {}",
-        err_str
+        err.chain().any(|c| c.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some()),
+        "a batch with a failure must return AlreadyReported, since the ledger is already printed: {:#}",
+        err
     );
 
     let stderr = String::from_utf8_lossy(&stderr_buf);
     assert!(stderr.contains("arrived incomplete: 1 of 6 files failed verification"));
+    assert!(
+        stderr.contains("pulled        0 releases · 1 failed · 0B"),
+        "ledger must report the failure in the pulled row, got:\n{}",
+        stderr
+    );
+
+    Ok(())
+}
+
+/// `make_standard_6_file_fixture`'s file bytes are fixed strings, so three releases built
+/// from it share the same digest for `successions.parquet` — corrupting one corrupts all
+/// three. This variant folds `date` into every file's bytes so three releases in the same
+/// test never collide on a blob digest.
+fn make_unique_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<StandardFixture> {
+    let fix_dir = tmp.join(format!("uniq_{}_{}", date, version));
+    fs::create_dir_all(&fix_dir)?;
+
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some(date.to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        ..Default::default()
+    };
+    let prov_bytes = serde_json::to_vec_pretty(&prov)?;
+
+    let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
+    let dp_bytes = serde_json::to_vec_pretty(&dp)?;
+
+    let orgs_bytes = format!("sample parquet orgs 123 {}", date).into_bytes();
+    let rel_bytes = format!("sample parquet rel 123 {}", date).into_bytes();
+    let roles_bytes = format!("sample parquet roles 123 {}", date).into_bytes();
+    let succ_bytes = format!("sample parquet succ 123 {}", date).into_bytes();
+
+    fs::write(fix_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    fs::write(fix_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
+    fs::write(fix_dir.join("orgs.parquet"), &orgs_bytes)?;
+    fs::write(fix_dir.join("relationships.parquet"), &rel_bytes)?;
+    fs::write(fix_dir.join("roles.parquet"), &roles_bytes)?;
+    fs::write(fix_dir.join("successions.parquet"), &succ_bytes)?;
+
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fix_dir, &prov, version)?;
+    let manifest_digest = manifest.digest()?;
+
+    let mut files = Vec::new();
+    for layer in &manifest.layers {
+        let title = layer
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get("org.opencontainers.image.title"))
+            .cloned()
+            .unwrap();
+        let bytes = match title.as_str() {
+            ods::provenance::PROVENANCE_FILENAME => prov_bytes.clone(),
+            ods::datapackage::DATAPACKAGE_FILENAME => dp_bytes.clone(),
+            "orgs.parquet" => orgs_bytes.clone(),
+            "relationships.parquet" => rel_bytes.clone(),
+            "roles.parquet" => roles_bytes.clone(),
+            "successions.parquet" => succ_bytes.clone(),
+            other => panic!("Unexpected layer: {}", other),
+        };
+        files.push((title, layer.digest.clone(), bytes));
+    }
+
+    Ok(StandardFixture { manifest_digest, manifest_bytes, files })
+}
+
+#[test]
+fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+
+    let fix1 = make_unique_6_file_fixture(tmp.path(), "2026-06-26", "0.1.0")?;
+    let fix2 = make_unique_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix3 = make_unique_6_file_fixture(tmp.path(), "2026-08-28", "0.1.0")?;
+
+    let remote_index = make_v1_index(&[
+        (
+            "2026-08-28",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("0.1.0", &fix3.manifest_digest)],
+        ),
+        (
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("0.1.0", &fix2.manifest_digest)],
+        ),
+        (
+            "2026-06-26",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37983173,
+            &[("0.1.0", &fix1.manifest_digest)],
+        ),
+    ]);
+
+    let mut responses = BTreeMap::new();
+    for fix in [&fix1, &fix3] {
+        responses.insert(
+            format!("https://ods.fyi/v2/ods-data/manifests/{}", fix.manifest_digest),
+            fix.manifest_bytes.clone(),
+        );
+        for (_, digest, bytes) in &fix.files {
+            responses.insert(format!("https://ods.fyi/v2/ods-data/blobs/{}", digest), bytes.clone());
+        }
+    }
+    // 2026-07-31 (the middle release) arrives incomplete: one layer is corrupted.
+    responses.insert(
+        format!("https://ods.fyi/v2/ods-data/manifests/{}", fix2.manifest_digest),
+        fix2.manifest_bytes.clone(),
+    );
+    for (name, digest, bytes) in &fix2.files {
+        let url = format!("https://ods.fyi/v2/ods-data/blobs/{}", digest);
+        if name == "successions.parquet" {
+            responses.insert(url, b"corrupted bytes".to_vec());
+        } else {
+            responses.insert(url, bytes.clone());
+        }
+    }
+
+    let fetcher = TestOciFetcher {
+        remote_index: Some(remote_index),
+        responses,
+        ..Default::default()
+    };
+
+    let mut stderr_buf = Vec::new();
+    let res = run_with_fetcher_and_writer(
+        Args {
+            all: true,
+            ..Default::default()
+        },
+        &workspace,
+        &fetcher,
+        &mut stderr_buf,
+    );
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(
+        err.chain().any(|c| c.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some()),
+        "must return AlreadyReported: {:#}",
+        err
+    );
+
+    // Every release was attempted: the batch didn't stop at 2026-07-31's failure — the newer
+    // 2026-08-28 was still pulled.
+    assert!(workspace.join("releases").join("2026-06-26").join("orgs.parquet").exists());
+    assert!(workspace.join("releases").join("2026-08-28").join("orgs.parquet").exists());
+
+    // The pin lands on the newest release that verified in full, past the failure.
+    let (active_date, _) = Workspace::open(Some(&workspace))?.active_release()?;
+    assert_eq!(active_date, "2026-08-28", "pin must land on the newest fully-verified release");
+
+    let stderr = String::from_utf8_lossy(&stderr_buf);
+    let pulled_idx = stderr.find("pulled        2 releases").expect("pulled row");
+    let linked_idx = stderr.find("linked        current → releases/2026-08-28").expect("linked row");
+    let incomplete_idx = stderr.find("arrived incomplete: 1 of 6 files failed verification").expect("incomplete block");
+    assert!(pulled_idx < linked_idx, "pulled must print before linked");
+    assert!(linked_idx < incomplete_idx, "the pin must move, and linked print, before the failure block");
+    assert!(
+        stderr.contains("current is still releases/2026-08-28"),
+        "the incomplete block must name the pin as it stands once the batch has moved it, got:\n{}",
+        stderr
+    );
 
     Ok(())
 }

@@ -1170,6 +1170,9 @@ pub fn make_v1_index(
                 .map(|(ver, dig)| ods::index::Dataset {
                     dataset_version: ver.to_string(),
                     manifest_digest: dig.to_string(),
+                    // A fixture size, same for every dataset this builds. A caller that cares
+                    // about the number sets `.dataset_filesize_bytes` on the built index after.
+                    dataset_filesize_bytes: 29_700_000,
                     dataset_doi: None,
                     withdrawn: None,
                 })

@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use crate::index::{Dataset, MirrorEntry, OdsReleaseIndex, Release};
 use crate::oci::*;
-use crate::progress::{Progress, ProgressCaps};
+use crate::progress::{
+    render_release_block, Progress, ProgressCaps, ReleaseBlockLink, ReleaseBlockParams,
+    ReleaseBlockState,
+};
 use crate::workspace::{verify_release_dir, Workspace};
 
 #[derive(Debug)]
@@ -77,6 +80,33 @@ pub enum IndexOrigin {
     BuiltIn,
 }
 
+impl IndexOrigin {
+    /// The two default endpoints `resolve_index` tries when no `--index` and no
+    /// `ODS_RELEASE_INDEX_URL` override it: the published index, referred to by its
+    /// filename rather than a URL, since that's the common case.
+    const DEFAULT_FETCH_URLS: [&'static str; 2] = [
+        "https://ods.fyi/releases.json",
+        "https://raw.githubusercontent.com/olizilla/ods/main/data/releases.json",
+    ];
+
+    /// The `verified` row's value: what index the digests came from. Renders the
+    /// origin rather than inventing wording for it — `sha256 from releases.json` for
+    /// the published index fetched from one of its two default endpoints, and the
+    /// path or URL verbatim for anything else (a `--index` value, a custom
+    /// `ODS_RELEASE_INDEX_URL`, or the workspace's own cache), so a pull checked
+    /// against a local index reads differently from a published one.
+    pub fn verified_row(&self) -> String {
+        let source = match self {
+            Self::Flag(v) => v.clone(),
+            Self::Fetched(url) if Self::DEFAULT_FETCH_URLS.contains(&url.as_str()) => "releases.json".to_string(),
+            Self::Fetched(url) => url.clone(),
+            Self::WorkspaceCache(p) => p.display().to_string(),
+            Self::BuiltIn => "the index built into ods".to_string(),
+        };
+        format!("sha256 from {}", source)
+    }
+}
+
 impl std::fmt::Display for IndexOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -90,6 +120,18 @@ impl std::fmt::Display for IndexOrigin {
 
 pub trait OciBlobFetcher: Send + Sync {
     fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>>;
+    /// Like `fetch_bytes`, reporting each chunk's length to `on_bytes` as it arrives, so a
+    /// caller can drive a bar mid-download. Defaults to the plain fetch, reporting the
+    /// whole thing in one call once it's done.
+    fn fetch_bytes_with_progress(
+        &self,
+        url: &str,
+        on_bytes: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<Vec<u8>> {
+        let bytes = self.fetch_bytes(url)?;
+        on_bytes(bytes.len() as u64);
+        Ok(bytes)
+    }
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
         if let Some((bytes, _)) = self.fetch_release_index_raw()? {
             if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
@@ -106,16 +148,6 @@ pub trait OciBlobFetcher: Send + Sync {
     }
 }
 
-static REPORTED_INDEX_URL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn log_custom_index_url_if_needed() {
-    if let Ok(u) = std::env::var("ODS_RELEASE_INDEX_URL") {
-        if !REPORTED_INDEX_URL.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            eprintln!("* Index: {} (ODS_RELEASE_INDEX_URL)", u);
-        }
-    }
-}
-
 pub struct HttpOciFetcher;
 
 impl OciBlobFetcher for HttpOciFetcher {
@@ -123,18 +155,21 @@ impl OciBlobFetcher for HttpOciFetcher {
         download_bytes_with_auth(url, None)
     }
 
+    fn fetch_bytes_with_progress(
+        &self,
+        url: &str,
+        on_bytes: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<Vec<u8>> {
+        download_bytes_with_auth_and_progress(url, None, on_bytes)
+    }
+
     fn fetch_release_index_raw(&self) -> Result<Option<(Vec<u8>, String)>> {
-        log_custom_index_url_if_needed();
         let custom_url = std::env::var("ODS_RELEASE_INDEX_URL").ok();
-        let default_urls = [
-            "https://ods.fyi/releases.json",
-            "https://raw.githubusercontent.com/olizilla/ods/main/data/releases.json",
-        ];
         let mut index_urls: Vec<&str> = Vec::new();
         if let Some(ref u) = custom_url {
             index_urls.push(u.as_str());
         } else {
-            index_urls.extend_from_slice(&default_urls);
+            index_urls.extend_from_slice(&IndexOrigin::DEFAULT_FETCH_URLS);
         }
         for url in &index_urls {
             if let Ok(bytes) = download_bytes_with_auth(url, None) {
@@ -202,6 +237,18 @@ fn fetch_token(realm: &str, service: Option<&str>, scope: Option<&str>) -> Resul
 }
 
 pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Result<Vec<u8>> {
+    download_bytes_with_auth_and_progress(url, initial_token, &|_| {})
+}
+
+/// Like `download_bytes_with_auth`, reporting each chunk's length to `on_bytes` as it
+/// arrives. A redirect or the 401 token retry restarts the loop before any body is read,
+/// so `on_bytes` only ever sees bytes that count toward this call's own final response —
+/// never double-counted across a retry.
+pub fn download_bytes_with_auth_and_progress(
+    url: &str,
+    initial_token: Option<&str>,
+    on_bytes: &(dyn Fn(u64) + Send + Sync),
+) -> Result<Vec<u8>> {
     let agent = ureq::AgentBuilder::new()
         .redirects(0)
         .build();
@@ -220,7 +267,16 @@ pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Resul
         match req.call() {
             Ok(resp) => {
                 let mut bytes = Vec::new();
-                resp.into_reader().read_to_end(&mut bytes)?;
+                let mut reader = resp.into_reader();
+                let mut buf = [0u8; 64 * 1024];
+                loop {
+                    let n = reader.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&buf[..n]);
+                    on_bytes(n as u64);
+                }
                 return Ok(bytes);
             }
             Err(ureq::Error::Status(401, resp)) => {
@@ -294,7 +350,7 @@ pub fn run_with_fetcher_and_writer<F: OciBlobFetcher, W: Write>(
     }
 
     // Step 1: Resolve index
-    let (index, _) = resolve_index(
+    let (index, origin) = resolve_index(
         workspace_root,
         args.index.as_deref(),
         true,
@@ -307,6 +363,7 @@ pub fn run_with_fetcher_and_writer<F: OciBlobFetcher, W: Write>(
         fetcher,
         progress: &progress,
         writer,
+        origin: &origin,
     };
 
     if args.list {
@@ -512,11 +569,108 @@ fn format_fetch_error(err: &anyhow::Error) -> String {
     err.to_string()
 }
 
+/// Writes a settled release block through `ctx.writer`, the way every other line
+/// `pull_single_release` prints does — rather than through `Progress`'s own writer, which
+/// in production is real stderr regardless, but in an in-process test is not the buffer a
+/// caller passed to `run_with_fetcher_and_writer`. Clears any live TTY animation first.
+fn write_block<W: Write>(writer: &mut W, progress: &Progress, lines: &[String]) -> Result<()> {
+    progress.clear_live();
+    for line in lines {
+        writeln!(writer, "{}", line)?;
+    }
+    Ok(())
+}
+
+/// Moves the `current` pin to `release_date` if it isn't there already, reporting
+/// whether it moved — the same check `ods trud pull` uses to render `(unchanged)`.
+fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
+    let ws = Workspace::open_or_create(Some(workspace_root))?;
+    if let Ok((active_date, _)) = ws.active_release() {
+        if active_date == release_date {
+            return Ok(false);
+        }
+    }
+    ws.set_active(release_date)?;
+    Ok(true)
+}
+
+/// Counts the files a pulled release directory holds, the way `build_manifest_from_dir`
+/// does when it reconstructs the manifest — hidden files and the `oci` staging dir don't
+/// count, so a cache-hit block reports the same file count a fresh pull would.
+fn count_release_files(release_dir: &Path) -> usize {
+    fs::read_dir(release_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        return false;
+                    }
+                    match path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => !name.starts_with('.') && name != "oci",
+                        None => false,
+                    }
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 struct PullContext<'a, F, W> {
     pub args: &'a Args,
     pub fetcher: &'a F,
     pub progress: &'a Progress,
     pub writer: &'a mut W,
+    pub origin: &'a IndexOrigin,
+}
+
+/// Whether `release_dir` already holds `ds`, verified against `index` — the same check
+/// `pull_single_release`'s own cache hit makes, used here to plan `--all` without touching
+/// the network.
+fn release_is_cached(workspace_root: &Path, index: &OdsReleaseIndex, rel: &Release, ds: &Dataset, force: bool) -> bool {
+    if force {
+        return false;
+    }
+    let rel_dir = workspace_root.join("releases").join(&rel.trud_release_date);
+    if !rel_dir.exists() {
+        return false;
+    }
+    matches!(
+        verify_release_dir(&rel_dir, index),
+        crate::workspace::VerificationOutcome::VerifiedPublished { ref digest, .. } if *digest == ds.manifest_digest
+    )
+}
+
+/// An incomplete block's own `current is still …` / `current is not set` line is computed
+/// against the workspace's active release at the moment `pull_single_release` runs — which,
+/// inside `--all`, is before the batch's one pin move. Once the pin has actually moved,
+/// swap that one line for the truth rather than replaying a stale one.
+fn recompute_current_line(text: &str, active_date: Option<&str>) -> String {
+    let fresh = match active_date {
+        Some(d) => format!("  current is still releases/{}", d),
+        None => "  current is not set".to_string(),
+    };
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.starts_with("  current is still releases/") || line == "  current is not set" {
+            out.push_str(&fresh);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+enum BatchFailure {
+    /// Arrived incomplete: `pull_single_release` already rendered its `✖ … arrived
+    /// incomplete` block into a buffer instead of `ctx.writer`, captured here verbatim
+    /// except for its `current is still …` line, patched once the pin is decided.
+    Incomplete { text: String },
+    /// Every mirror failed before a single byte was verified: the error `pull_single_release`
+    /// returned, printed with the same retry line the incomplete block uses.
+    Unreachable { date: String, message: String },
 }
 
 fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
@@ -548,30 +702,114 @@ fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
             })
     });
 
-    let mut succeeded = Vec::new();
-    let mut failed = Vec::new();
+    let cached_flags: Vec<bool> = valid_releases
+        .iter()
+        .map(|(r, ds)| release_is_cached(workspace_root, index, r, ds, ctx.args.force))
+        .collect();
+    let cached_count = cached_flags.iter().filter(|c| **c).count();
+    let to_pull_count = valid_releases.len() - cached_count;
+    let to_pull_bytes: u64 = valid_releases
+        .iter()
+        .zip(&cached_flags)
+        .filter(|(_, cached)| !**cached)
+        .map(|((_, ds), _)| ds.dataset_filesize_bytes)
+        .sum();
+
+    writeln!(
+        ctx.writer,
+        "{} cached · {} to pull · {}",
+        cached_count,
+        to_pull_count,
+        crate::progress::format_size(to_pull_bytes)
+    )?;
+    writeln!(ctx.writer)?;
+
+    let batch_start = std::time::Instant::now();
+    let mut succeeded: Vec<String> = Vec::new();
+    let mut pulled_count = 0usize;
+    let mut pulled_bytes = 0u64;
+    let mut failures: Vec<BatchFailure> = Vec::new();
 
     for (rel, ds) in &valid_releases {
-        match pull_single_release(workspace_root, index, rel, ds, ctx) {
-            Ok(()) => succeeded.push(rel.trud_release_date.clone()),
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut nested_ctx = PullContext {
+            args: ctx.args,
+            fetcher: ctx.fetcher,
+            progress: ctx.progress,
+            writer: &mut buffer,
+            origin: ctx.origin,
+        };
+        let result = pull_single_release(workspace_root, index, rel, ds, &mut nested_ctx);
+        let text = String::from_utf8_lossy(&buffer).into_owned();
+        match result {
+            Ok(()) => {
+                succeeded.push(rel.trud_release_date.clone());
+                if !text.is_empty() {
+                    write!(ctx.writer, "{}", text)?;
+                    pulled_count += 1;
+                    pulled_bytes += ds.dataset_filesize_bytes;
+                }
+            }
             Err(e) => {
-                let err_msg = if e.chain().any(|c| c.downcast_ref::<AlreadyReported>().is_some()) {
-                    "arrived incomplete".to_string()
+                if e.chain().any(|c| c.downcast_ref::<AlreadyReported>().is_some()) {
+                    failures.push(BatchFailure::Incomplete { text });
                 } else {
-                    e.to_string()
-                };
-                failed.push((rel.trud_release_date.clone(), err_msg));
+                    failures.push(BatchFailure::Unreachable {
+                        date: rel.trud_release_date.clone(),
+                        message: e.to_string(),
+                    });
+                }
             }
         }
     }
 
-    if let Some(newest_date) = succeeded.last() {
-        let ws = Workspace::open_or_create(Some(workspace_root))?;
-        ws.set_active(newest_date)?;
+    // The pin moves once, onto the newest release that verified in full — cached or freshly
+    // pulled, since `valid_releases` runs oldest to newest.
+    let pin_target = succeeded.last().cloned();
+    if let Some(ref target) = pin_target {
+        update_active_release_link_if_changed(workspace_root, target)?;
+    }
+    let final_active = pin_target.clone().or_else(|| {
+        Workspace::open(Some(workspace_root))
+            .ok()
+            .and_then(|ws| ws.active_release().ok())
+            .map(|(d, _)| d)
+    });
+
+    let elapsed = batch_start.elapsed();
+    let second_count = if failures.is_empty() {
+        format!("{} cached", cached_count)
+    } else {
+        format!("{} failed", failures.len())
+    };
+    writeln!(ctx.writer)?;
+    writeln!(
+        ctx.writer,
+        "  {:<14}{} releases · {} · {}  in {}",
+        "pulled",
+        pulled_count,
+        second_count,
+        crate::progress::format_size(pulled_bytes),
+        crate::progress::format_elapsed(elapsed)
+    )?;
+    if let Some(ref d) = final_active {
+        writeln!(ctx.writer, "  {:<14}current → releases/{}", "linked", d)?;
     }
 
-    if !failed.is_empty() && succeeded.is_empty() {
-        bail!("Failed to pull all releases: {:?}", failed);
+    for failure in &failures {
+        match failure {
+            BatchFailure::Incomplete { text } => {
+                write!(ctx.writer, "{}", recompute_current_line(text, final_active.as_deref()))?;
+            }
+            BatchFailure::Unreachable { date, message } => {
+                writeln!(ctx.writer, "{}", message)?;
+                writeln!(ctx.writer, "  Retry: ods pull {}", date)?;
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        return Err(AlreadyReported.into());
     }
 
     Ok(())
@@ -584,23 +822,42 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     dataset: &Dataset,
     ctx: &mut PullContext<'_, F, W>,
 ) -> Result<()> {
+    let progress = ctx.progress;
     let rel_dir = workspace_root.join("releases").join(&release.trud_release_date);
+    let link_target = format!("releases/{}", release.trud_release_date);
+    let dataset_coord = format!("ods-data/{}_{}", release.trud_release_date, dataset.dataset_version);
+    let color = progress.caps().is_tty && !progress.caps().no_color;
 
     // Cache hit & self-healing check
     if rel_dir.exists() && !ctx.args.force {
         let outcome = verify_release_dir(&rel_dir, index);
         match outcome {
-            crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
-                if digest == &dataset.manifest_digest {
-                    let ws = Workspace::open_or_create(Some(workspace_root))?;
-                    ws.set_active(&release.trud_release_date)?;
-                    ctx.progress.clear_live();
-                    writeln!(
-                        ctx.writer,
-                        "✓ {} ({}) verified (cache hit)",
-                        date, version
-                    )?;
-                    writeln!(ctx.writer, "  current → releases/{}", release.trud_release_date)?;
+            crate::workspace::VerificationOutcome::VerifiedPublished { digest, .. } => {
+                if digest == dataset.manifest_digest {
+                    // `--all` moves the pin once, after the whole batch, and doesn't list a
+                    // cached release at all (it's already counted in the plan line).
+                    let pin_moved = if ctx.args.all {
+                        false
+                    } else {
+                        update_active_release_link_if_changed(workspace_root, &release.trud_release_date)?
+                    };
+                    if !ctx.args.all {
+                        let hash_opt = if ctx.args.verbose { Some(dataset.manifest_digest.as_str()) } else { None };
+                        let lines = render_release_block(&ReleaseBlockParams {
+                            date: &release.trud_release_date,
+                            archive_size: dataset.dataset_filesize_bytes,
+                            file_count: count_release_files(&rel_dir),
+                            state: &ReleaseBlockState::Cached,
+                            dataset: Some(&dataset_coord),
+                            verified: &ctx.origin.verified_row(),
+                            linked: Some(ReleaseBlockLink { target: &link_target, unchanged: !pin_moved }),
+                            from: None,
+                            hash: hash_opt,
+                            hash_label: "manifest",
+                            color,
+                        });
+                        write_block(ctx.writer, progress, &lines)?;
+                    }
                     if let Some(ref reason) = dataset.withdrawn {
                         writeln!(
                             ctx.writer,
@@ -680,12 +937,22 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     let mut manifest_err = None;
 
     for mirror in mirrors {
-        ctx.progress.step(&format!(
-            "{} ({}) fetching manifest from {}…",
-            release.trud_release_date,
-            dataset.dataset_version,
-            mirror.host()
-        ));
+        let lines = render_release_block(&ReleaseBlockParams {
+            date: &release.trud_release_date,
+            archive_size: dataset.dataset_filesize_bytes,
+            file_count: 0,
+            state: &ReleaseBlockState::Preparing {
+                what: format!("fetching manifest from {}…", mirror.host()),
+            },
+            dataset: Some(&dataset_coord),
+            verified: "",
+            linked: Some(ReleaseBlockLink { target: &link_target, unchanged: false }),
+            from: None,
+            hash: None,
+            hash_label: "manifest",
+            color,
+        });
+        progress.update_live_block(lines);
 
         let manifest_url = mirror.manifest_url(&dataset.manifest_digest);
         let manifest_bytes = match ctx.fetcher.fetch_bytes(&manifest_url) {
@@ -720,8 +987,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         break;
     }
 
-    let (manifest, manifest_mirror) = match (manifest_opt, manifest_mirror) {
-        (Some(m), Some(mm)) => (m, mm),
+    let manifest = match (manifest_opt, manifest_mirror) {
+        (Some(m), Some(_)) => m,
         _ => {
             bail!(
                 "✖ All mirrors failed to pull release {} ({}): {}",
@@ -741,6 +1008,14 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     }
 
     let mut failed_layers = Vec::new();
+    // Summed across every layer, not reset per-layer, so the bar measures the whole
+    // release rather than the one in hand. A redirect or the 401 retry inside
+    // `fetch_bytes_with_progress` restarts before any body is read, so a retried blob
+    // is never double-counted.
+    let bytes_downloaded = std::sync::atomic::AtomicU64::new(0);
+    let mut served_from: Vec<String> = Vec::new();
+    let download_start = std::time::Instant::now();
+    let file_count = manifest.layers.len();
 
     for layer in &manifest.layers {
         let filename = match layer
@@ -765,33 +1040,64 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         let mut first_bad_bytes = None;
 
         for mirror in mirrors {
-            ctx.progress.step(&format!(
-                "{} ({}) downloading {} from {}…",
-                release.trud_release_date,
-                dataset.dataset_version,
-                filename,
-                mirror.host()
-            ));
-
             let blob_url = mirror.blob_url(&layer.digest);
-            match ctx.fetcher.fetch_bytes(&blob_url) {
+            let layer_bytes_before = bytes_downloaded.load(std::sync::atomic::Ordering::Relaxed);
+            let result = ctx.fetcher.fetch_bytes_with_progress(&blob_url, &|n| {
+                let cur = bytes_downloaded.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
+                let elapsed = download_start.elapsed().as_secs_f64();
+                let rate = if elapsed > 0.0 { cur as f64 / elapsed } else { 0.0 };
+                let total = dataset.dataset_filesize_bytes;
+                let eta = if rate > 0.0 && total > cur {
+                    Some(std::time::Duration::from_secs_f64((total - cur) as f64 / rate))
+                } else {
+                    None
+                };
+                let lines = render_release_block(&ReleaseBlockParams {
+                    date: &release.trud_release_date,
+                    archive_size: total,
+                    file_count,
+                    state: &ReleaseBlockState::Downloading {
+                        bytes_done: cur,
+                        rate: Some(rate),
+                        eta,
+                    },
+                    dataset: Some(&dataset_coord),
+                    verified: "",
+                    linked: Some(ReleaseBlockLink { target: &link_target, unchanged: false }),
+                    from: None,
+                    hash: None,
+                    hash_label: "manifest",
+                    color,
+                });
+                progress.update_live_block(lines);
+            });
+            match result {
                 Ok(bytes) => {
                     let computed = format!("sha256:{:x}", sha2::Sha256::digest(&bytes));
                     if computed == layer.digest {
                         if let Err(e) = fs::write(temp_path.join(&filename), &bytes) {
                             mirror_attempts.push((mirror.host().to_string(), format!("write error: {}", e)));
+                            let this_attempt = bytes_downloaded.load(std::sync::atomic::Ordering::Relaxed) - layer_bytes_before;
+                            bytes_downloaded.fetch_sub(this_attempt, std::sync::atomic::Ordering::Relaxed);
                             continue;
                         }
                         layer_verified = true;
+                        served_from.push(mirror.host());
                         break;
                     } else {
                         mirror_attempts.push((mirror.host().to_string(), computed));
                         if first_bad_bytes.is_none() {
                             first_bad_bytes = Some(bytes);
                         }
+                        // Wrong content: don't let a failed mirror's bytes count toward
+                        // the total, so it still equals the manifest's layer sizes.
+                        let this_attempt = bytes_downloaded.load(std::sync::atomic::Ordering::Relaxed) - layer_bytes_before;
+                        bytes_downloaded.fetch_sub(this_attempt, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 Err(e) => {
+                    let this_attempt = bytes_downloaded.load(std::sync::atomic::Ordering::Relaxed) - layer_bytes_before;
+                    bytes_downloaded.fetch_sub(this_attempt, std::sync::atomic::Ordering::Relaxed);
                     mirror_attempts.push((mirror.host().to_string(), format_fetch_error(&e)));
                 }
             }
@@ -809,6 +1115,13 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
 
     // 3. All verified
     if failed_layers.is_empty() {
+        let expected_total: u64 = manifest.layers.iter().map(|l| l.size).sum();
+        debug_assert_eq!(
+            bytes_downloaded.load(std::sync::atomic::Ordering::Relaxed),
+            expected_total,
+            "bytes counted during download must equal the manifest's layer sizes"
+        );
+
         let outcome = verify_release_dir(&temp_path, index);
         if !outcome.is_verified() {
             bail!("✖ Assembled release directory failed verification");
@@ -821,22 +1134,56 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         fs::rename(&temp_path, &rel_dir)?;
         staging_guard.installed = true;
 
-        let ws = Workspace::open_or_create(Some(workspace_root))?;
-        ws.set_active(&release.trud_release_date)?;
+        // `--all` moves the pin once, after the whole batch, and lists only the bar row —
+        // `dataset`, `verified` and `linked` don't change release to release.
+        let pin_moved = if ctx.args.all {
+            false
+        } else {
+            update_active_release_link_if_changed(workspace_root, &release.trud_release_date)?
+        };
 
-        let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
-        let size_mb = (total_size as f64) / (1024.0 * 1024.0);
+        let mut unique_hosts: Vec<String> = Vec::new();
+        for h in &served_from {
+            if !unique_hosts.contains(h) {
+                unique_hosts.push(h.clone());
+            }
+        }
+        let from_label = match unique_hosts.len() {
+            1 => unique_hosts[0].clone(),
+            n => format!("{} mirrors", n),
+        };
+        let hash_opt = if ctx.args.verbose { Some(dataset.manifest_digest.as_str()) } else { None };
+        let lines = render_release_block(&ReleaseBlockParams {
+            date: &release.trud_release_date,
+            archive_size: expected_total,
+            file_count: manifest.layers.len(),
+            state: &ReleaseBlockState::Done { elapsed: download_start.elapsed() },
+            dataset: Some(&dataset_coord),
+            verified: &ctx.origin.verified_row(),
+            linked: Some(ReleaseBlockLink { target: &link_target, unchanged: !pin_moved }),
+            from: Some(&from_label),
+            hash: hash_opt,
+            hash_label: "manifest",
+            color,
+        });
+        let out_lines: &[String] = if ctx.args.all { &lines[..1] } else { &lines };
+        write_block(ctx.writer, progress, out_lines)?;
 
-        ctx.progress.clear_live();
-        writeln!(
-            ctx.writer,
-            "✓ {} ({})  {:.0}MB  from {}",
-            release.trud_release_date,
-            dataset.dataset_version,
-            size_mb,
-            manifest_mirror.host()
-        )?;
-        writeln!(ctx.writer, "  current → releases/{}", release.trud_release_date)?;
+        // `--verbose` names the host that served each layer once more than one mirror was
+        // needed — the tail's `from 2 mirrors` says that happened, but not which layer went
+        // where.
+        if ctx.args.verbose && !ctx.args.all && unique_hosts.len() > 1 {
+            let filenames: Vec<&str> = manifest
+                .layers
+                .iter()
+                .filter_map(|l| l.annotations.as_ref().and_then(|a| a.get(ANNOTATION_TITLE)))
+                .map(|s| s.as_str())
+                .collect();
+            let width = filenames.iter().map(|f| f.len()).max().unwrap_or(0);
+            for (filename, host) in filenames.iter().zip(served_from.iter()) {
+                writeln!(ctx.writer, "  {:<width$}  {}", filename, host, width = width)?;
+            }
+        }
 
         if let Some(ref reason) = dataset.withdrawn {
             writeln!(
@@ -876,7 +1223,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         }
         staging_guard.installed = true;
 
-        ctx.progress.clear_live();
+        progress.clear_live();
         writeln!(
             ctx.writer,
             "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
@@ -935,7 +1282,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     fs::rename(&temp_path, &rel_dir)?;
     staging_guard.installed = true;
 
-    ctx.progress.clear_live();
+    progress.clear_live();
     writeln!(
         ctx.writer,
         "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
@@ -1012,4 +1359,26 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     }
 
     Err(AlreadyReported.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verified_row_names_every_index_origin() {
+        assert_eq!(
+            IndexOrigin::Fetched("https://ods.fyi/releases.json".to_string()).verified_row(),
+            "sha256 from releases.json"
+        );
+        assert_eq!(
+            IndexOrigin::Flag("rehearsal.json".to_string()).verified_row(),
+            "sha256 from rehearsal.json"
+        );
+        assert_eq!(
+            IndexOrigin::Fetched("https://example.org/releases.json".to_string()).verified_row(),
+            "sha256 from https://example.org/releases.json"
+        );
+        assert_eq!(IndexOrigin::BuiltIn.verified_row(), "sha256 from the index built into ods");
+    }
 }

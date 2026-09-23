@@ -67,6 +67,7 @@ pub struct Release {
 pub struct Dataset {
     pub dataset_version: String,
     pub manifest_digest: String,
+    pub dataset_filesize_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dataset_doi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,6 +296,10 @@ impl OdsReleaseIndex {
                         ds.manifest_digest
                     );
                 }
+
+                if ds.dataset_filesize_bytes == 0 {
+                    bail!("Invalid dataset_filesize_bytes: must be greater than zero, got 0");
+                }
             }
         }
 
@@ -352,6 +357,16 @@ impl OdsReleaseIndex {
                                 baked_ds.dataset_version,
                                 baked_ds.manifest_digest,
                                 fetched_ds.manifest_digest
+                            ))
+                            .into());
+                        }
+                        if baked_ds.dataset_filesize_bytes != fetched_ds.dataset_filesize_bytes {
+                            return Err(SecurityError(format!(
+                                "fetched index contradicts baked dataset ({}, {}): baked size {} != fetched size {}",
+                                baked_rel.trud_release_date,
+                                baked_ds.dataset_version,
+                                baked_ds.dataset_filesize_bytes,
+                                fetched_ds.dataset_filesize_bytes
                             ))
                             .into());
                         }
@@ -538,6 +553,7 @@ mod tests {
                             manifest_digest:
                                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                                     .to_string(),
+                            dataset_filesize_bytes: 29_700_000,
                             dataset_doi: None,
                             withdrawn: None,
                         },
@@ -546,6 +562,7 @@ mod tests {
                             manifest_digest:
                                 "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
                                     .to_string(),
+                            dataset_filesize_bytes: 29_800_000,
                             dataset_doi: None,
                             withdrawn: None,
                         },
@@ -562,6 +579,7 @@ mod tests {
                         manifest_digest:
                             "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
                                 .to_string(),
+                        dataset_filesize_bytes: 29_600_000,
                         dataset_doi: None,
                         withdrawn: None,
                     }],
@@ -783,6 +801,17 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_refuses_a_changed_dataset_filesize_bytes() {
+        let baked = valid_test_index();
+        let mut fetched = valid_test_index();
+        fetched.releases[0].datasets[0].dataset_filesize_bytes += 1;
+
+        let res = baked.merge(&fetched);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("contradicts baked dataset"));
+    }
+
+    #[test]
     fn test_merge_accepts_changed_signing_key_fingerprint() -> Result<()> {
         let baked = valid_test_index();
         let mut fetched = valid_test_index();
@@ -807,6 +836,7 @@ mod tests {
             manifest_digest:
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
+            dataset_filesize_bytes: 29_900_000,
             dataset_doi: None,
             withdrawn: None,
         });
@@ -823,6 +853,7 @@ mod tests {
                     manifest_digest:
                         "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                             .to_string(),
+                    dataset_filesize_bytes: 30_000_000,
                     dataset_doi: None,
                     withdrawn: None,
                 }],

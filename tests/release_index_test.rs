@@ -115,11 +115,13 @@ fn test_index_rejects_duplicate_version_in_release() {
           "datasets": [
             {
               "dataset_version": "1.0.0",
-              "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000"
+              "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
+              "dataset_filesize_bytes": 29700000
             },
             {
               "dataset_version": "1.0.0",
-              "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000"
+              "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000",
+              "dataset_filesize_bytes": 29700000
             }
           ]
         }
@@ -149,7 +151,8 @@ fn test_index_rejects_uppercase_manifest_digest() {
           "datasets": [
             {
               "dataset_version": "1.0.0",
-              "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000"
+              "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000",
+              "dataset_filesize_bytes": 29700000
             }
           ]
         }

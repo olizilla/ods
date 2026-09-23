@@ -93,6 +93,7 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
         datasets: vec![ods::index::Dataset {
             dataset_version: ver.to_string(),
             manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
+            dataset_filesize_bytes: 29_700_000,
             dataset_doi: None,
             withdrawn: None,
         }],
@@ -874,6 +875,7 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
         datasets: vec![ods::index::Dataset {
             dataset_version: "0.0.1".to_string(),
             manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            dataset_filesize_bytes: 29_700_000,
             dataset_doi: None,
             withdrawn: None,
         }],
