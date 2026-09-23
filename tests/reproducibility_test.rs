@@ -1,4 +1,5 @@
 use ods::commands::parquet;
+use ods::commands::pull::OciBlobFetcher;
 use ods::provenance::compute_file_sha256;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -158,6 +159,105 @@ fn test_real_trud_parquet_hash_stability() {
         Some(ods::provenance::TrudVerificationSource::Unverified),
         "Context 2 provenance must be unverified"
     );
+
+    // Compare built manifest digest with the digest recorded in data/releases.json
+    let date = prov1.trud_release_date.as_deref().unwrap_or("");
+    let version = ods::datapackage::read_dataset_version_from_dir(tmp1.path())
+        .unwrap_or_else(|| "0.1.0".to_string());
+
+    let releases_json_path = PathBuf::from("data/releases.json");
+    let index = if releases_json_path.exists() {
+        let content = std::fs::read_to_string(&releases_json_path).unwrap();
+        serde_json::from_str::<ods::index::OdsReleaseIndex>(&content).ok()
+    } else {
+        ods::index::OdsReleaseIndex::baked().ok()
+    };
+
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(
+        tmp1.path(),
+        &prov1,
+        &version,
+    )
+    .unwrap();
+    let built_digest = manifest.digest().unwrap();
+    println!("Built manifest digest: {}", built_digest);
+
+    if let Some(ref idx) = index {
+        let published_dataset = idx
+            .releases
+            .iter()
+            .find(|r| r.trud_release_date == date)
+            .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
+
+        if let Some(published) = published_dataset {
+            if built_digest != published.manifest_digest {
+                let mut moved_file = None;
+                let fetcher = ods::commands::pull::HttpOciFetcher;
+                for mirror in &idx.mirrors {
+                    let manifest_url = mirror.manifest_url(&published.manifest_digest);
+                    if let Ok(manifest_bytes) = fetcher.fetch_bytes(&manifest_url) {
+                        if let Ok(pub_manifest) =
+                            serde_json::from_slice::<ods::oci::OciManifest>(&manifest_bytes)
+                        {
+                            for layer in &manifest.layers {
+                                if let Some(title) = layer
+                                    .annotations
+                                    .as_ref()
+                                    .and_then(|a| a.get(ods::oci::ANNOTATION_TITLE))
+                                {
+                                    if let Some(pub_layer) = pub_manifest.layers.iter().find(|l| {
+                                        l.annotations
+                                            .as_ref()
+                                            .and_then(|a| a.get(ods::oci::ANNOTATION_TITLE))
+                                            == Some(title)
+                                    }) {
+                                        if layer.digest != pub_layer.digest {
+                                            moved_file = Some(title.clone());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if moved_file.is_some() {
+                        break;
+                    }
+                }
+                if moved_file.is_none() {
+                    let local_release = PathBuf::from("ods_data/releases").join(date);
+                    if local_release.exists() {
+                        for layer in &manifest.layers {
+                            if let Some(title) = layer
+                                .annotations
+                                .as_ref()
+                                .and_then(|a| a.get(ods::oci::ANNOTATION_TITLE))
+                            {
+                                let local_file = local_release.join(title);
+                                if local_file.exists() {
+                                    let built_file = tmp1.path().join(title);
+                                    if let (Ok(h1), Ok(h2)) = (
+                                        compute_file_sha256(&built_file),
+                                        compute_file_sha256(&local_file),
+                                    ) {
+                                        if h1 != h2 {
+                                            moved_file = Some(title.clone());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let file_name = moved_file.unwrap_or_else(|| "dataset files".to_string());
+                panic!(
+                    "Built manifest digest {} does not match published manifest digest {} for release {} v{}.\nFile '{}' changed. The fix is a dataset_version bump.",
+                    built_digest, published.manifest_digest, date, version, file_name
+                );
+            }
+        }
+    }
 }
 
 #[test]

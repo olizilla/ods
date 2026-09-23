@@ -1273,7 +1273,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     // Create data/releases.json in repo
     std::fs::create_dir_all(tmp.path().join("data")).unwrap();
-    let init_index = ods::index::OdsReleaseIndex::default();
+    let init_index = ods::index::OdsReleaseIndex::baked().unwrap();
     std::fs::write(
         tmp.path().join("data").join("releases.json"),
         init_index.to_json_pretty().unwrap(),

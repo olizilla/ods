@@ -78,14 +78,17 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
 }
 
 #[test]
-fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
+fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let ver = ods::datapackage::dataset_version();
-    let mut index = ods::index::OdsReleaseIndex::default();
+    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let zip_sha = prov.trud_release_sha256.unwrap();
+
+    let mut index = ods::index::OdsReleaseIndex::baked().unwrap();
     index.releases.push(ods::index::Release {
         trud_release_date: "2026-07-31".to_string(),
-        trud_release_sha256: "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+        trud_release_sha256: zip_sha,
         trud_release_filesize_bytes: 37983173,
         datasets: vec![ods::index::Dataset {
             dataset_version: ver.to_string(),
@@ -102,8 +105,8 @@ fn test_make_release_fails_on_duplicate_row_in_index() -> Result<()> {
         Some(&index),
     )?;
 
-    let expected_msg = format!("data/releases.json already has a dataset for 2026-07-31 {}", ver);
-    assert!(failures.iter().any(|f| f.contains(&expected_msg)));
+    assert!(failures.iter().any(|f| f.contains("sha256:0f2a000000000000000000000000000000000000000000000000000000000000")
+        && f.contains("sha256:253975bf8dae638fc314a17cf0719157c3243417a4bf5d3a94f981479bcc3aab")));
     Ok(())
 }
 
@@ -708,7 +711,7 @@ fn test_make_release_date_already_recorded_same_hash_left_byte_for_byte() -> Res
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
     initial_index.releases.push(ods::index::Release {
         trud_release_date: "2026-06-26".to_string(),
         trud_release_sha256: "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233".to_string(),
@@ -769,7 +772,7 @@ fn test_make_release_contradicting_hash_refuses_index_and_output_unchanged() -> 
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
     initial_index.releases.push(ods::index::Release {
         trud_release_date: "2026-06-26".to_string(),
         trud_release_sha256: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
@@ -834,7 +837,7 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
     initial_index.releases.push(ods::index::Release {
         trud_release_date: "2026-07-31".to_string(),
         trud_release_sha256: "9999999999999999999999999999999999999999999999999999999999999999".to_string(),
@@ -863,7 +866,7 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
     let zip_sha = prov.trud_release_sha256.unwrap();
 
-    let mut initial_index = ods::index::OdsReleaseIndex::default();
+    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
     initial_index.releases.push(ods::index::Release {
         trud_release_date: "2026-07-31".to_string(),
         trud_release_sha256: zip_sha,
@@ -898,3 +901,101 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     Ok(())
 }
 
+#[test]
+fn test_make_release_identical_republish_is_noop_leaving_index_byte_identical() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let index_file = tmp.path().join("data").join("releases.json");
+
+    // First publish
+    run(Args {
+        input: Some(rel_dir.clone()),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    let bytes_after_first = fs::read(&index_file)?;
+
+    // Second publish: identical inputs
+    run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    let bytes_after_second = fs::read(&index_file)?;
+
+    // Must be byte-identical
+    assert_eq!(
+        bytes_after_first, bytes_after_second,
+        "Identical re-publish must leave data/releases.json byte-identical"
+    );
+
+    // Verify row wasn't duplicated
+    let index: ods::index::OdsReleaseIndex = serde_json::from_slice(&bytes_after_second)?;
+    assert_eq!(index.releases.len(), 1);
+    assert_eq!(index.releases[0].datasets.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+
+    // Remove data/releases.json entirely from the tool_repo
+    let index_file = tmp.path().join("data").join("releases.json");
+    if index_file.exists() {
+        fs::remove_file(&index_file)?;
+    }
+
+    // Verify release checks pass without data/releases.json
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        ods::datapackage::dataset_version(),
+        Some(tmp.path()),
+        None,
+    )?;
+    assert!(
+        failures.is_empty(),
+        "Release checks must pass when tool repo has no data/releases.json: {:?}",
+        failures
+    );
+
+    // Build the release
+    run(Args {
+        input: Some(rel_dir),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: Some("10.5281/zenodo.12345".to_string()),
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    })?;
+
+    assert!(
+        index_file.exists(),
+        "data/releases.json must be created by make release"
+    );
+    let content = fs::read_to_string(&index_file)?;
+    let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
+
+    // Assert it validates and writes a valid, non-empty fingerprint
+    index.validate()?;
+    assert!(
+        !index.trud_signing_key_fingerprint.is_empty(),
+        "Fingerprint must not be empty"
+    );
+    let baked = ods::index::OdsReleaseIndex::baked()?;
+    assert_eq!(
+        index.trud_signing_key_fingerprint,
+        baked.trud_signing_key_fingerprint,
+        "Fingerprint must match baked release index"
+    );
+
+    Ok(())
+}

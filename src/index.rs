@@ -20,7 +20,7 @@ impl Default for OdsReleaseIndex {
     fn default() -> Self {
         Self {
             schema: RELEASES_SCHEMA_V1_URL.to_string(),
-            trud_signing_key_fingerprint: "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+            trud_signing_key_fingerprint: String::new(),
             mirrors: vec![
                 MirrorEntry {
                     url: "https://ods.fyi/v2/ods-data".to_string(),
@@ -293,25 +293,16 @@ impl OdsReleaseIndex {
         Ok(())
     }
 
-    /// Merges a fetched index into self (the baked index).
+    /// Merges a candidate index into self (the existing index).
     ///
     /// Rules:
-    /// - Pinned fingerprint may not change (SecurityError).
     /// - Release in both: TRUD SHA-256 and filesize must match (SecurityError).
-    /// - Dataset in both: manifest_digest must match (SecurityError). Fetched copy may add withdrawn and dataset_doi.
-    /// - Additions: fetched index may add releases and datasets.
-    /// - Mirrors: replaced by fetched list when non-empty.
+    /// - Dataset in both: manifest_digest must match (SecurityError). Candidate copy may add withdrawn and dataset_doi.
+    /// - Additions: candidate index may add releases and datasets.
+    /// - Mirrors: replaced by candidate list when non-empty.
     pub fn merge(&self, fetched: &OdsReleaseIndex) -> Result<OdsReleaseIndex> {
-        self.validate().context("validating baked index")?;
-        fetched.validate().context("validating fetched index")?;
-
-        if self.trud_signing_key_fingerprint != fetched.trud_signing_key_fingerprint {
-            return Err(SecurityError(format!(
-                "fetched index changes signing key fingerprint: baked {} != fetched {}",
-                self.trud_signing_key_fingerprint, fetched.trud_signing_key_fingerprint
-            ))
-            .into());
-        }
+        self.validate().context("validating existing index")?;
+        fetched.validate().context("validating candidate index")?;
 
         for baked_rel in &self.releases {
             if let Some(fetched_rel) = fetched
@@ -419,9 +410,15 @@ impl OdsReleaseIndex {
             self.mirrors.clone()
         };
 
+        let fingerprint = if !fetched.trud_signing_key_fingerprint.is_empty() {
+            fetched.trud_signing_key_fingerprint.clone()
+        } else {
+            self.trud_signing_key_fingerprint.clone()
+        };
+
         Ok(OdsReleaseIndex {
             schema: self.schema.clone(),
-            trud_signing_key_fingerprint: self.trud_signing_key_fingerprint.clone(),
+            trud_signing_key_fingerprint: fingerprint,
             mirrors,
             releases: merged_releases,
         })
@@ -761,15 +758,18 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_refuses_changed_signing_key_fingerprint() {
+    fn test_merge_accepts_changed_signing_key_fingerprint() -> Result<()> {
         let baked = valid_test_index();
         let mut fetched = valid_test_index();
         fetched.trud_signing_key_fingerprint =
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
 
-        let res = baked.merge(&fetched);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().to_string().contains("signing key fingerprint"));
+        let merged = baked.merge(&fetched)?;
+        assert_eq!(
+            merged.trud_signing_key_fingerprint,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        );
+        Ok(())
     }
 
     #[test]

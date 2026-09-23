@@ -28,7 +28,7 @@ fn empty_dir_listing(dir: &std::path::Path) -> Vec<String> {
 }
 
 /// A one-shot local HTTP server serving `response_body` for every request, so a
-/// test can exercise the "successful fetch" branch of `resolve_index_with_baked`
+/// test can exercise the "successful fetch" branch of `resolve_index`
 /// without reaching the real network. Stop it by sending on the returned channel.
 fn run_mock_http_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");

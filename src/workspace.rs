@@ -819,7 +819,7 @@ impl VerificationOutcome {
 
 pub fn verify_release_dir(
     release_dir: &Path,
-    custom_index: Option<&crate::index::OdsReleaseIndex>,
+    index: &crate::index::OdsReleaseIndex,
 ) -> VerificationOutcome {
     let prov = match crate::provenance::OdsProvenance::load_from_dir(release_dir).ok() {
         Some(p) => p,
@@ -888,31 +888,26 @@ pub fn verify_release_dir(
         }
     }
 
-    let baked_index = crate::index::OdsReleaseIndex::baked().ok();
-    let index_to_check = custom_index.or(baked_index.as_ref());
+    let dataset = index
+        .releases
+        .iter()
+        .find(|r| r.trud_release_date == date)
+        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
 
-    if let Some(index) = index_to_check {
-        let dataset = index
-            .releases
-            .iter()
-            .find(|r| r.trud_release_date == date)
-            .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
-
-        if let Some(entry) = dataset {
-            if entry.manifest_digest == reconstructed_digest {
-                return VerificationOutcome::VerifiedPublished {
-                    date,
-                    version,
-                    digest: reconstructed_digest,
-                };
-            } else {
-                return VerificationOutcome::Mismatch {
-                    date,
-                    version,
-                    expected_digest: entry.manifest_digest.clone(),
-                    reconstructed_digest,
-                };
-            }
+    if let Some(entry) = dataset {
+        if entry.manifest_digest == reconstructed_digest {
+            return VerificationOutcome::VerifiedPublished {
+                date,
+                version,
+                digest: reconstructed_digest,
+            };
+        } else {
+            return VerificationOutcome::Mismatch {
+                date,
+                version,
+                expected_digest: entry.manifest_digest.clone(),
+                reconstructed_digest,
+            };
         }
     }
 
@@ -921,10 +916,6 @@ pub fn verify_release_dir(
         version,
         digest: reconstructed_digest,
     }
-}
-
-pub fn is_release_dir_verified(release_dir: &Path) -> bool {
-    verify_release_dir(release_dir, None).is_verified()
 }
 
 #[cfg(test)]

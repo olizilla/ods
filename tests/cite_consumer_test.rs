@@ -267,7 +267,7 @@ impl ods::commands::pull::OciBlobFetcher for RequestRecordingFetcher {
         Ok(None)
     }
 
-    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
+    fn fetch_release_index_raw(&self) -> Result<Option<(Vec<u8>, String)>> {
         self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(None)
     }

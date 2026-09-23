@@ -69,19 +69,38 @@ pub struct ReleaseListItemJson {
     pub manifest_digest: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexOrigin {
+    Flag(String),
+    Fetched(String),
+    WorkspaceCache(PathBuf),
+    BuiltIn,
+}
+
+impl std::fmt::Display for IndexOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Flag(v) => write!(f, "--index {}", v),
+            Self::Fetched(url) => write!(f, "{}", url),
+            Self::WorkspaceCache(p) => write!(f, "{}", p.display()),
+            Self::BuiltIn => write!(f, "built-in"),
+        }
+    }
+}
+
 pub trait OciBlobFetcher: Send + Sync {
     fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>>;
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
-        if let Some(bytes) = self.fetch_release_index_raw()? {
+        if let Some((bytes, _)) = self.fetch_release_index_raw()? {
             if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
                 return Ok(Some(idx));
             }
         }
         Ok(None)
     }
-    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
+    fn fetch_release_index_raw(&self) -> Result<Option<(Vec<u8>, String)>> {
         if let Some(idx) = self.fetch_release_index()? {
-            return Ok(Some(serde_json::to_vec_pretty(&idx)?));
+            return Ok(Some((serde_json::to_vec_pretty(&idx)?, "remote".to_string())));
         }
         Ok(None)
     }
@@ -104,7 +123,7 @@ impl OciBlobFetcher for HttpOciFetcher {
         download_bytes_with_auth(url, None)
     }
 
-    fn fetch_release_index_raw(&self) -> Result<Option<Vec<u8>>> {
+    fn fetch_release_index_raw(&self) -> Result<Option<(Vec<u8>, String)>> {
         log_custom_index_url_if_needed();
         let custom_url = std::env::var("ODS_RELEASE_INDEX_URL").ok();
         let default_urls = [
@@ -123,7 +142,7 @@ impl OciBlobFetcher for HttpOciFetcher {
                     .map(|idx| idx.validate().is_ok())
                     .unwrap_or(false);
                 if valid {
-                    return Ok(Some(bytes));
+                    return Ok(Some((bytes, url.to_string())));
                 } else {
                     eprintln!("! Ignoring {}: it isn't a release index this ods can read", url);
                 }
@@ -133,7 +152,7 @@ impl OciBlobFetcher for HttpOciFetcher {
     }
 
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
-        if let Some(bytes) = self.fetch_release_index_raw()? {
+        if let Some((bytes, _)) = self.fetch_release_index_raw()? {
             if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
                 return Ok(Some(idx));
             }
@@ -242,7 +261,7 @@ pub fn download_bytes_with_auth(url: &str, initial_token: Option<&str>) -> Resul
 pub fn run(args: Args) -> Result<()> {
     let fetcher = HttpOciFetcher;
     // Find a workspace without creating one: `--list` only reads, and
-    // `run_with_fetcher_and_baked_and_writer` earns a workspace itself when installing.
+    // `run_with_fetcher_and_writer` earns a workspace itself when installing.
     let workspace_root = Workspace::open(None)
         .map(|ws| ws.root().to_path_buf())
         .unwrap_or_else(|_| PathBuf::from(crate::workspace::DEFAULT_WORKSPACE_DIR));
@@ -264,26 +283,6 @@ pub fn run_with_fetcher_and_writer<F: OciBlobFetcher, W: Write>(
     fetcher: &F,
     writer: &mut W,
 ) -> Result<()> {
-    run_with_fetcher_and_baked_and_writer(args, workspace_root, fetcher, None, writer)
-}
-
-pub fn run_with_fetcher_and_baked<F: OciBlobFetcher>(
-    args: Args,
-    workspace_root: &Path,
-    fetcher: &F,
-    baked_override: Option<OdsReleaseIndex>,
-) -> Result<()> {
-    let mut stderr = std::io::stderr();
-    run_with_fetcher_and_baked_and_writer(args, workspace_root, fetcher, baked_override, &mut stderr)
-}
-
-pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
-    args: Args,
-    workspace_root: &Path,
-    fetcher: &F,
-    baked_override: Option<OdsReleaseIndex>,
-    writer: &mut W,
-) -> Result<()> {
     let caps = ProgressCaps::detect(args.quiet, args.verbose, args.no_progress);
     let progress = Progress::stderr(caps);
 
@@ -295,12 +294,12 @@ pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
     }
 
     // Step 1: Resolve index
-    let (index, _) = resolve_index_with_baked(
+    let (index, _) = resolve_index(
         workspace_root,
-        fetcher,
-        baked_override,
         args.index.as_deref(),
+        true,
         !args.list || workspace_exists,
+        fetcher,
     )?;
 
     let mut ctx = PullContext {
@@ -339,16 +338,15 @@ pub fn run_with_fetcher_and_baked_and_writer<F: OciBlobFetcher, W: Write>(
     )
 }
 
-pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
+pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
     workspace_root: &Path,
-    fetcher: &F,
-    baked_override: Option<OdsReleaseIndex>,
-    index_override: Option<&str>,
+    index_arg: Option<&str>,
+    allow_fetch: bool,
     create: bool,
-) -> Result<(OdsReleaseIndex, Option<String>)> {
-    let baked = baked_override.unwrap_or_else(|| OdsReleaseIndex::baked().unwrap_or_default());
-
-    if let Some(val) = index_override {
+    fetcher: &F,
+) -> Result<(OdsReleaseIndex, IndexOrigin)> {
+    // 1. --index <val>
+    if let Some(val) = index_arg {
         let is_http = val.starts_with("http://") || val.starts_with("https://");
         let bytes = if is_http {
             match fetcher.fetch_bytes(val) {
@@ -389,58 +387,51 @@ pub fn resolve_index_with_baked<F: OciBlobFetcher + ?Sized>(
             return Err(AlreadyReported.into());
         }
 
-        let merged = baked.merge(&fetched_index)?;
-        return Ok((merged, Some("just now".to_string())));
+        return Ok((fetched_index, IndexOrigin::Flag(val.to_string())));
     }
 
-    // 1. Try fetching remote index
-    match fetcher.fetch_release_index_raw() {
-        Ok(Some(raw_bytes)) => {
+    // 2. Remote fetch (if allowed)
+    if allow_fetch {
+        if let Ok(Some((raw_bytes, url))) = fetcher.fetch_release_index_raw() {
             if let Ok(fetched) = serde_json::from_slice::<OdsReleaseIndex>(&raw_bytes) {
                 if fetched.validate().is_ok() {
-                    match baked.merge(&fetched) {
-                        Ok(merged) => {
-                            if create {
-                                let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
-                            }
-                            return Ok((merged, Some("just now".to_string())));
-                        }
-                        Err(e) => {
-                            // Security contradiction on a baked release MUST abort immediately!
-                            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                                return Err(e);
-                            }
-                            // Non-security fetch/parse/validation errors fall back to cache/baked
-                        }
+                    if create {
+                        let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
                     }
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                return Err(e);
-            }
-        }
-    }
-
-    // 2. Try loading cached index from workspace
-    if let Ok(Some(loaded)) = OdsReleaseIndex::load_from_workspace(workspace_root) {
-        match baked.merge(&loaded) {
-            Ok(merged) => return Ok((merged, None)),
-            Err(e) => {
-                if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                    return Err(e);
+                    return Ok((fetched, IndexOrigin::Fetched(url)));
+                } else {
+                    eprintln!("! Ignoring {}: it isn't a release index this ods can read", url);
                 }
             }
         }
     }
 
-    // 3. Fall back to baked index
+    // 3. Workspace cache
+    let cache_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
+    if cache_path.exists() {
+        let valid_cache = match fs::read(&cache_path) {
+            Ok(bytes) => match serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+                Ok(idx) if idx.validate().is_ok() => Some(idx),
+                _ => None,
+            },
+            Err(_) => None,
+        };
+        if let Some(loaded) = valid_cache {
+            return Ok((loaded, IndexOrigin::WorkspaceCache(cache_path)));
+        } else {
+            eprintln!(
+                "! Ignoring {}: it isn't a release index this ods can read",
+                cache_path.display()
+            );
+        }
+    }
+
+    // 4. Built-in baked index
     if create {
         let _ = crate::workspace::ensure_workspace_marker(workspace_root);
     }
-    Ok((baked, None))
+    let baked = OdsReleaseIndex::baked()?;
+    Ok((baked, IndexOrigin::BuiltIn))
 }
 
 fn list_releases_cmd(
@@ -597,7 +588,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
 
     // Cache hit & self-healing check
     if rel_dir.exists() && !ctx.args.force {
-        let outcome = verify_release_dir(&rel_dir, Some(index));
+        let outcome = verify_release_dir(&rel_dir, index);
         match outcome {
             crate::workspace::VerificationOutcome::VerifiedPublished { ref date, ref version, ref digest } => {
                 if digest == &dataset.manifest_digest {
@@ -818,7 +809,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
 
     // 3. All verified
     if failed_layers.is_empty() {
-        let outcome = verify_release_dir(&temp_path, Some(index));
+        let outcome = verify_release_dir(&temp_path, index);
         if !outcome.is_verified() {
             bail!("✖ Assembled release directory failed verification");
         }
@@ -870,7 +861,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     }
 
     let has_verified_existing =
-        rel_dir.exists() && verify_release_dir(&rel_dir, Some(index)).is_verified();
+        rel_dir.exists() && verify_release_dir(&rel_dir, index).is_verified();
 
     let mut max_width = 8;
     for failed in &failed_layers {

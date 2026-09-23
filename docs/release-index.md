@@ -34,12 +34,8 @@ Every field and its constraints are defined in [releases.v1.json](https://ods.fy
 - **Append-only releases.** A release date is never removed from the index. Once recorded, its hash and size can never change.
 - **Datasets are blessed; releases are recorded.** Trust rules — manifest digests, citations, withdrawal — apply to datasets. A release row records what TRUD published. A release may have no datasets yet, and every reader treats an empty list as normal.
 - **Mirrors are places to look.** They are an ordered list for the whole index. Content digests name the bytes wherever they're stored, so a miss on the first mirror falls through to the next.
-- **The pinned fingerprint anchors trust.** `trud_signing_key_fingerprint` pins NHS England's 40-hex PGP key (`71ED5964BAE53E83556320A42BE59DADEE84BEB0`), so signatures can be checked against it even after TRUD is decommissioned.
-- **What merge refuses.** When `ods` fetches an updated index from ods.fyi or GitHub, `merge` will refuse it with a security error if:
-  - The signing-key fingerprint differs from the baked-in key.
-  - A known TRUD release changes its `trud_release_sha256` or `trud_release_filesize_bytes`.
-  - An existing dataset changes its `manifest_digest`.
-  Fetched indexes may append new releases, add new datasets, or update metadata such as `withdrawn` notices and DOIs.
+- **The selected index decides.** Commands select a single index by precedence: `--index`, then fetched from ods.fyi or GitHub, then the workspace cache (`_releases.json`), then the index built into `ods`. The signing-key fingerprint is the selected index's, with no separate compiled copy in `ods` to compare it against.
+- **Append-only enforced at publish time.** Contradiction checking moves to `ods make release`, where candidate release indexes may append rows and metadata but may never contradict existing TRUD hashes, sizes, or manifest digests. Clients trust the selected index; a local release directory's own manifest digest remains what catches a changed dataset locally.
 
 ## Naming
 

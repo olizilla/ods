@@ -31,12 +31,13 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
         );
     }
 
-    let index = if let Ok(Some(loaded)) = crate::index::OdsReleaseIndex::load_from_workspace(&workspace_root) {
-        let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_else(|_| loaded.clone());
-        baked.merge(&loaded).unwrap_or(baked)
-    } else {
-        crate::index::OdsReleaseIndex::baked().unwrap_or_default()
-    };
+    let (index, _) = crate::commands::pull::resolve_index(
+        &workspace_root,
+        None,
+        false,
+        false,
+        &crate::commands::pull::HttpOciFetcher,
+    )?;
 
     let already_active = if let Ok((active_date, _)) = ws.active_release() {
         active_date == args.release_date
@@ -53,7 +54,7 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
     }
     writeln!(err_writer, "  current → releases/{}", args.release_date)?;
 
-    let outcome = crate::workspace::verify_release_dir(&release_dir, Some(&index));
+    let outcome = crate::workspace::verify_release_dir(&release_dir, &index);
     match outcome {
         crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
             writeln!(err_writer, "✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version)?;

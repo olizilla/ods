@@ -420,3 +420,261 @@ fn test_select_dataset_helper() {
     assert!(ods::index::select_dataset(&index.releases[0]).is_none());
 }
 
+use ods::commands::pull::{resolve_index, AlreadyReported, IndexOrigin, OciBlobFetcher};
+use tempfile::TempDir;
+
+struct MockPrecedenceFetcher {
+    raw_response: Option<(Vec<u8>, String)>,
+}
+
+impl OciBlobFetcher for MockPrecedenceFetcher {
+    fn fetch_bytes(&self, _url: &str) -> Result<Vec<u8>> {
+        unimplemented!()
+    }
+    fn fetch_release_index_raw(&self) -> Result<Option<(Vec<u8>, String)>> {
+        Ok(self.raw_response.clone())
+    }
+}
+
+#[test]
+fn test_precedence_index_flag_wins_over_all() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    // Cache index in workspace
+    let cache_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000001")],
+    )]);
+    std::fs::write(workspace.join("_releases.json"), cache_index.to_json_pretty()?)?;
+
+    // Remote index served by fetcher
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000002")],
+    )]);
+    let fetcher = MockPrecedenceFetcher {
+        raw_response: Some((remote_index.to_json_pretty()?.into_bytes(), "https://ods.fyi/v2/releases.json".to_string())),
+    };
+
+    // Flag index file
+    let flag_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000003")],
+    )]);
+    let flag_path = tmp.path().join("flag_releases.json");
+    std::fs::write(&flag_path, flag_index.to_json_pretty()?)?;
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        Some(flag_path.to_str().unwrap()),
+        true,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::Flag(f) => assert_eq!(f, flag_path.to_str().unwrap()),
+        _ => panic!("Expected IndexOrigin::Flag, got {:?}", origin),
+    }
+    assert_eq!(index.releases[0].datasets[0].manifest_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000003");
+    Ok(())
+}
+
+#[test]
+fn test_precedence_remote_wins_over_cache_and_baked() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    // Cache index in workspace
+    let cache_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000001")],
+    )]);
+    std::fs::write(workspace.join("_releases.json"), cache_index.to_json_pretty()?)?;
+
+    // Remote index served by fetcher
+    let remote_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000002")],
+    )]);
+    let fetcher = MockPrecedenceFetcher {
+        raw_response: Some((remote_index.to_json_pretty()?.into_bytes(), "https://ods.fyi/v2/releases.json".to_string())),
+    };
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        None,
+        true,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::Fetched(url) => assert_eq!(url, "https://ods.fyi/v2/releases.json"),
+        _ => panic!("Expected IndexOrigin::Fetched, got {:?}", origin),
+    }
+    assert_eq!(index.releases[0].datasets[0].manifest_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000002");
+    Ok(())
+}
+
+#[test]
+fn test_precedence_workspace_cache_wins_over_baked() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    let cache_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000001")],
+    )]);
+    let cache_path = workspace.join("_releases.json");
+    std::fs::write(&cache_path, cache_index.to_json_pretty()?)?;
+
+    let fetcher = MockPrecedenceFetcher { raw_response: None };
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        None,
+        false,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::WorkspaceCache(p) => assert_eq!(p, cache_path),
+        _ => panic!("Expected IndexOrigin::WorkspaceCache, got {:?}", origin),
+    }
+    assert_eq!(index.releases[0].datasets[0].manifest_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000001");
+    Ok(())
+}
+
+#[test]
+fn test_precedence_baked_is_fallback() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    let fetcher = MockPrecedenceFetcher { raw_response: None };
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        None,
+        false,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::BuiltIn => {}
+        _ => panic!("Expected IndexOrigin::BuiltIn, got {:?}", origin),
+    }
+    let baked = OdsReleaseIndex::baked()?;
+    assert_eq!(index.releases.len(), baked.releases.len());
+    Ok(())
+}
+
+#[test]
+fn test_invalid_index_flag_fails_and_names_file() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    let invalid_path = tmp.path().join("broken_index.json");
+    std::fs::write(&invalid_path, "{ \"not_valid_json\": }")?;
+
+    let fetcher = MockPrecedenceFetcher { raw_response: None };
+
+    let res = resolve_index(
+        &workspace,
+        Some(invalid_path.to_str().unwrap()),
+        false,
+        false,
+        &fetcher,
+    );
+
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(
+        err.downcast_ref::<AlreadyReported>().is_some() || err.to_string().contains("broken_index.json"),
+        "Must return error after reporting invalid index"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_invalid_workspace_cache_warns_and_falls_back_to_baked() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    let invalid_cache = workspace.join("_releases.json");
+    std::fs::write(&invalid_cache, "{ not json")?;
+
+    let fetcher = MockPrecedenceFetcher { raw_response: None };
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        None,
+        false,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::BuiltIn => {}
+        _ => panic!("Expected fallback to IndexOrigin::BuiltIn, got {:?}", origin),
+    }
+    let baked = OdsReleaseIndex::baked()?;
+    assert_eq!(index.releases.len(), baked.releases.len());
+    Ok(())
+}
+
+#[test]
+fn test_invalid_remote_fetch_warns_and_falls_back_to_cache() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+
+    let cache_index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.0", "sha256:0000000000000000000000000000000000000000000000000000000000000001")],
+    )]);
+    let cache_path = workspace.join("_releases.json");
+    std::fs::write(&cache_path, cache_index.to_json_pretty()?)?;
+
+    let fetcher = MockPrecedenceFetcher {
+        raw_response: Some((b"not valid json".to_vec(), "https://ods.fyi/v2/releases.json".to_string())),
+    };
+
+    let (index, origin) = resolve_index(
+        &workspace,
+        None,
+        true,
+        false,
+        &fetcher,
+    )?;
+
+    match origin {
+        IndexOrigin::WorkspaceCache(p) => assert_eq!(p, cache_path),
+        _ => panic!("Expected fallback to IndexOrigin::WorkspaceCache, got {:?}", origin),
+    }
+    assert_eq!(index.releases[0].datasets[0].manifest_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000001");
+    Ok(())
+}

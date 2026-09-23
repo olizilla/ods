@@ -317,7 +317,7 @@ pub fn run(args: Args) -> Result<()> {
         let content = fs::read_to_string(&target_index_path)?;
         serde_json::from_str(&content)?
     } else {
-        OdsReleaseIndex::default()
+        OdsReleaseIndex::baked()?
     };
 
     // Guarantee the built date's row from _provenance.json before reading TRUD response
@@ -347,7 +347,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    // Step 3: Add dataset
+    // Step 3: Add dataset (or preserve existing on identical re-publish)
     let new_dataset = Dataset {
         dataset_version: version.clone(),
         manifest_digest: manifest_digest.clone(),
@@ -359,7 +359,20 @@ pub fn run(args: Args) -> Result<()> {
         .iter_mut()
         .find(|r| r.trud_release_date == date)
         .expect("Release row for date must exist");
-    rel.datasets.push(new_dataset.clone());
+    if let Some(existing_ds) = rel.datasets.iter_mut().find(|d| d.dataset_version == version) {
+        if existing_ds.manifest_digest == manifest_digest {
+            if args.doi.is_some() {
+                existing_ds.dataset_doi = args.doi.clone();
+            }
+        } else {
+            existing_ds.manifest_digest = manifest_digest.clone();
+            if args.doi.is_some() {
+                existing_ds.dataset_doi = args.doi.clone();
+            }
+        }
+    } else {
+        rel.datasets.push(new_dataset.clone());
+    }
     rel.datasets.sort_by(|a, b| {
         let va = parse_semver(&a.dataset_version).unwrap_or((0, 0, 0));
         let vb = parse_semver(&b.dataset_version).unwrap_or((0, 0, 0));
@@ -482,7 +495,7 @@ pub fn perform_all_release_checks(
     }
 
     // Index checks (Steps 1, 2, 3)
-    let mut candidate_index = if let Some(idx) = custom_index {
+    let previous_index = if let Some(idx) = custom_index {
         idx.clone()
     } else if let Some(tr) = tool_repo {
         let p = tr.join("data").join("releases.json");
@@ -506,11 +519,13 @@ pub fn perform_all_release_checks(
                 }
             }
         } else {
-            crate::index::OdsReleaseIndex::default()
+            crate::index::OdsReleaseIndex::baked()?
         }
     } else {
-        crate::index::OdsReleaseIndex::default()
+        crate::index::OdsReleaseIndex::baked()?
     };
+
+    let mut candidate_index = previous_index.clone();
 
     let date = prov.trud_release_date.as_deref().unwrap_or("");
     let prov_sha = prov.trud_release_sha256.as_deref().unwrap_or("").to_uppercase();
@@ -572,17 +587,28 @@ pub fn perform_all_release_checks(
         }
     }
 
-    // Step 3 (Check 14): no dataset with this dataset_version on this date
+    // Step 3 (Check 14): Append-only check via previous.merge(&candidate)
+    let candidate_manifest_digest = match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, expected_version) {
+        Ok((m, _)) => match m.digest() {
+            Ok(d) => d,
+            Err(e) => {
+                failures.push(format!("Cannot compute candidate manifest digest: {}", e));
+                return Ok(failures);
+            }
+        },
+        Err(e) => {
+            failures.push(format!("Cannot build candidate manifest: {}", e));
+            return Ok(failures);
+        }
+    };
+
     if let Some(rel_row) = candidate_index.releases.iter_mut().find(|r| r.trud_release_date == date) {
-        if rel_row.datasets.iter().any(|d| d.dataset_version == expected_version) {
-            failures.push(format!(
-                "data/releases.json already has a dataset for {} {}\n  A published (date, version) pair names one set of bytes forever.\n  Bump dataset_version and re-pack.",
-                date, expected_version
-            ));
+        if let Some(existing_ds) = rel_row.datasets.iter_mut().find(|d| d.dataset_version == expected_version) {
+            existing_ds.manifest_digest = candidate_manifest_digest;
         } else {
             rel_row.datasets.push(Dataset {
                 dataset_version: expected_version.to_string(),
-                manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                manifest_digest: candidate_manifest_digest,
                 dataset_doi: None,
                 withdrawn: None,
             });
@@ -600,6 +626,13 @@ pub fn perform_all_release_checks(
     if failures.is_empty() {
         if let Err(e) = candidate_index.validate() {
             failures.push(format!("Candidate release index fails validation: {}", e));
+        }
+    }
+
+    // Append-only check: previous.merge(&candidate) ensures no contradictions to existing data
+    if failures.is_empty() {
+        if let Err(e) = previous_index.merge(&candidate_index) {
+            failures.push(e.to_string());
         }
     }
 

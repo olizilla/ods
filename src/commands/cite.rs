@@ -30,28 +30,6 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write) -> Result<()
     run_with_writer_and_fetcher(args, writer, &crate::commands::pull::HttpOciFetcher, &pwd)
 }
 
-pub fn resolve_cite_index(
-    workspace_root: Option<&Path>,
-) -> Result<crate::index::OdsReleaseIndex> {
-    let baked = crate::index::OdsReleaseIndex::baked().unwrap_or_default();
-
-    // 1. Try loading cached index from workspace
-    if let Some(ws) = workspace_root {
-        if let Ok(Some(loaded)) = crate::index::OdsReleaseIndex::load_from_workspace(ws) {
-            match baked.merge(&loaded) {
-                Ok(merged) => return Ok(merged),
-                Err(e) => {
-                    if e.downcast_ref::<crate::index::SecurityError>().is_some() || e.to_string().contains("Security error") {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to baked index
-    Ok(baked)
-}
 
 pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     args: Args,
@@ -119,10 +97,16 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         None => crate::workspace::find_workspace_root_from(cwd, None)?,
     };
 
-    let index = resolve_cite_index(workspace_root.as_deref())?;
+    let (index, _) = crate::commands::pull::resolve_index(
+        workspace_root.as_deref().unwrap_or(cwd),
+        None,
+        false,
+        false,
+        _fetcher,
+    )?;
 
     // 3. Verify directory against index
-    let outcome = crate::workspace::verify_release_dir(&input_dir, Some(&index));
+    let outcome = crate::workspace::verify_release_dir(&input_dir, &index);
     match outcome {
         crate::workspace::VerificationOutcome::Mismatch { expected_digest, reconstructed_digest, .. } => {
             anyhow::bail!(

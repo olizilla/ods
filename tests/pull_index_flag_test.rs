@@ -3,7 +3,7 @@ mod common;
 use anyhow::Result;
 use common::make_v1_index;
 use ods::commands::pull::{
-    resolve_index_with_baked, run_with_fetcher, run_with_fetcher_and_baked, Args, OciBlobFetcher,
+    resolve_index, run_with_fetcher, Args, OciBlobFetcher,
 };
 use ods::index::OdsReleaseIndex;
 use sha2::Digest;
@@ -348,81 +348,55 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
 }
 
 #[test]
-fn test_contradicting_digest_fails_with_security_error_naming_both_digests() {
+fn test_supplied_index_selects_and_does_not_merge_or_reject_differing_digest() {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
     fs::create_dir_all(&workspace).unwrap();
 
-    let baked_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-    let tampered_digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let custom_digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
-    let baked_index = make_v1_index(&[(
+    let custom_index = make_v1_index(&[(
         "2026-07-31",
         "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
         37983173,
-        &[("1.0.1", baked_digest)],
+        &[("1.0.1", custom_digest)],
     )]);
 
-    let tampered_index = make_v1_index(&[(
-        "2026-07-31",
-        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-        37983173,
-        &[("1.0.1", tampered_digest)],
-    )]);
-
-    let tampered_file = tmp.path().join("tampered_index.json");
-    fs::write(&tampered_file, serde_json::to_vec_pretty(&tampered_index).unwrap()).unwrap();
+    let custom_file = tmp.path().join("custom_index.json");
+    fs::write(&custom_file, serde_json::to_vec_pretty(&custom_index).unwrap()).unwrap();
 
     let fetcher = MockOciFetcher {
         remote_index: None,
         responses: BTreeMap::new(),
     };
 
-    // Test resolve_index_with_baked directly
-    let err = resolve_index_with_baked(
+    // Test resolve_index directly selects the supplied index
+    let (selected, _) = resolve_index(
         &workspace,
-        &fetcher,
-        Some(baked_index.clone()),
-        Some(tampered_file.to_str().unwrap()),
+        Some(custom_file.to_str().unwrap()),
         true,
+        true,
+        &fetcher,
     )
-    .unwrap_err();
+    .unwrap();
 
-    let err_str = err.to_string();
-    assert!(
-        err.downcast_ref::<ods::index::SecurityError>().is_some(),
-        "Error must downcast to SecurityError"
-    );
-    assert!(
-        err_str.contains(baked_digest),
-        "Error message must name baked digest: {}",
-        err_str
-    );
-    assert!(
-        err_str.contains(tampered_digest),
-        "Error message must name fetched/supplied digest: {}",
-        err_str
+    assert_eq!(
+        selected.releases[0].datasets[0].manifest_digest,
+        custom_digest,
+        "Selected index must be the supplied one, not merged with baked"
     );
 
-    // Also test via run_with_fetcher_and_baked
-    let run_err = run_with_fetcher_and_baked(
+    // Also test via run_with_fetcher
+    let res = run_with_fetcher(
         Args {
-            index: Some(tampered_file.to_str().unwrap().to_string()),
+            index: Some(custom_file.to_str().unwrap().to_string()),
             list: true,
             ..Default::default()
         },
         &workspace,
         &fetcher,
-        Some(baked_index),
-    )
-    .unwrap_err();
-
-    let run_err_str = run_err.to_string();
-    assert!(
-        run_err_str.contains(baked_digest) && run_err_str.contains(tampered_digest),
-        "run_with_fetcher_and_baked must propagate SecurityError naming both digests: {}",
-        run_err_str
     );
+    assert!(res.is_ok());
 }
 
 #[test]

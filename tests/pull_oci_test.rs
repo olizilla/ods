@@ -326,19 +326,12 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
 }
 
 #[test]
-fn test_pull_oci_security_contradiction_aborts_immediately() {
+fn test_pull_oci_remote_index_selected_without_merge_contradiction_error() {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
+    fs::create_dir_all(&workspace).unwrap();
 
-    // Baked index knows 2026-07-31 with a legitimate digest
-    let baked_index = make_v1_index(&[(
-        "2026-07-31",
-        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-        37983173,
-        &[("1.0.1", "sha256:1111111111111111111111111111111111111111111111111111111111111111")],
-    )]);
-
-    // Attack / contradiction: remote index serves a different manifest_digest for baked release 2026-07-31
+    // Contradiction: remote index serves a different manifest_digest for baked release 2026-07-31
     let mut tampered_index = make_v1_index(&[(
         "2026-07-31",
         "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
@@ -355,19 +348,21 @@ fn test_pull_oci_security_contradiction_aborts_immediately() {
         ..Default::default()
     };
 
-    let res = ods::commands::pull::run_with_fetcher_and_baked(
+    let res = ods::commands::pull::run_with_fetcher(
         Args {
             release_date: Some("2026-07-31".to_string()),
             ..Default::default()
         },
         &workspace,
         &fetcher,
-        Some(baked_index),
     );
 
-    assert!(res.is_err(), "Security contradiction must abort immediately");
+    // Selected remote index is used directly (no SecurityError merge refusal);
+    // pull fails at mirror fetch time because evil-mirror has no asset.
+    assert!(res.is_err());
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("Security error"), "Error must be Security error, got: {}", err);
+    assert!(!err.contains("Security error"), "Select, don't merge: must not raise SecurityError on read");
+    assert!(err.contains("evil-mirror.example.com"));
 }
 
 #[test]
@@ -831,7 +826,7 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists(), "release dir must exist");
 
-    let outcome = ods::workspace::verify_release_dir(&rel_dir, Some(&remote_index));
+    let outcome = ods::workspace::verify_release_dir(&rel_dir, &remote_index);
     assert!(outcome.is_verified(), "installed release must be verified");
 
     let (active_date, _) = Workspace::open(Some(&workspace))?.active_release()?;
@@ -1175,7 +1170,7 @@ fn test_pull_recovers_from_partial_install_when_upstream_fixed() -> Result<()> {
     assert!(rel_dir.join("successions.parquet").exists());
     assert_eq!(fs::read(rel_dir.join("successions.parquet"))?, succ_good_bytes);
 
-    let outcome = ods::workspace::verify_release_dir(&rel_dir, Some(&remote_index));
+    let outcome = ods::workspace::verify_release_dir(&rel_dir, &remote_index);
     assert!(outcome.is_verified(), "recovered release must be verified");
 
     let (active_date, _) = Workspace::open(Some(&workspace))?.active_release()?;

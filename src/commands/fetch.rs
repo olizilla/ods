@@ -1224,40 +1224,42 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
     trud_fetcher: Option<&F>,
     oci_fetcher: Option<&OF>,
 ) -> Result<ArchiveVerificationOutcome> {
+    let default_oci = crate::commands::pull::HttpOciFetcher;
+    let oci: &dyn crate::commands::pull::OciBlobFetcher = match oci_fetcher {
+        Some(f) => f as &dyn crate::commands::pull::OciBlobFetcher,
+        None => &default_oci,
+    };
+
     // 1. Release index lookup
     let index_res = if allow_network {
         if let Some(override_path) = index_override {
-            let default_oci = crate::commands::pull::HttpOciFetcher;
-            let oci: &dyn crate::commands::pull::OciBlobFetcher = match oci_fetcher {
-                Some(f) => f as &dyn crate::commands::pull::OciBlobFetcher,
-                None => &default_oci,
-            };
-            crate::commands::pull::resolve_index_with_baked(
+            crate::commands::pull::resolve_index(
                 workspace_root,
-                oci,
-                None,
                 Some(override_path),
+                true,
                 persist_index,
+                oci,
             )
             .map(|(idx, _)| Some(idx))
         } else {
-            // First check baked + workspace copy offline
-            let offline_idx = crate::commands::cite::resolve_cite_index(Some(workspace_root))?;
+            // First check cached + baked copy offline
+            let (offline_idx, _) = crate::commands::pull::resolve_index(
+                workspace_root,
+                None,
+                false,
+                false,
+                oci,
+            )?;
             if offline_idx.releases.iter().any(|r| r.trud_release_date == release_date) {
                 Ok(Some(offline_idx))
             } else {
                 // Fetch published index
-                let default_oci = crate::commands::pull::HttpOciFetcher;
-                let oci: &dyn crate::commands::pull::OciBlobFetcher = match oci_fetcher {
-                    Some(f) => f as &dyn crate::commands::pull::OciBlobFetcher,
-                    None => &default_oci,
-                };
-                match crate::commands::pull::resolve_index_with_baked(
+                match crate::commands::pull::resolve_index(
                     workspace_root,
-                    oci,
                     None,
-                    None,
+                    true,
                     persist_index,
+                    oci,
                 ) {
                     Ok((idx, _)) => Ok(Some(idx)),
                     Err(_) => Ok(Some(offline_idx)),
@@ -1265,8 +1267,15 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
             }
         }
     } else {
-        // Offline only: baked index merged with workspace copy
-        crate::commands::cite::resolve_cite_index(Some(workspace_root)).map(Some)
+        // Offline only: workspace cache then baked index
+        crate::commands::pull::resolve_index(
+            workspace_root,
+            None,
+            false,
+            false,
+            oci,
+        )
+        .map(|(idx, _)| Some(idx))
     };
 
     if let Ok(Some(index)) = index_res {
