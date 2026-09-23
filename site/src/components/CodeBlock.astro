@@ -1,0 +1,85 @@
+---
+// A dark code box with no chrome strip, for SQL and JSON. Colouring is line/token-based
+// rather than a full parser: SQL keywords and JSON keys in accent, quoted strings dim,
+// everything else ink — close to the design without hand-authoring a span per token.
+interface Props {
+  content: string;
+}
+
+const { content } = Astro.props;
+
+type Kind = 'ink' | 'dim' | 'accent';
+interface Segment {
+  text: string;
+  kind: Kind;
+}
+
+const KEYWORDS = /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|LIKE)\b/g;
+const JSON_KEY = /^(\s*)("[^"]+")(:)/;
+const QUOTED = /('[^']*'|"[^"]*")/g;
+
+function classifyLine(line: string): Segment[] {
+  const jsonKeyMatch = line.match(JSON_KEY);
+  if (jsonKeyMatch) {
+    const [, indent, key, colon] = jsonKeyMatch;
+    const rest = line.slice(indent.length + key.length + colon.length);
+    return [
+      { text: indent, kind: 'ink' },
+      { text: key, kind: 'accent' },
+      { text: colon, kind: 'ink' },
+      { text: rest, kind: 'ink' },
+    ];
+  }
+
+  const segments: Segment[] = [];
+  let cursor = 0;
+  const combined = new RegExp(`${KEYWORDS.source}|${QUOTED.source}`, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = combined.exec(line)) !== null) {
+    if (match.index > cursor) {
+      segments.push({ text: line.slice(cursor, match.index), kind: 'ink' });
+    }
+    const isQuoted = match[0].startsWith("'") || match[0].startsWith('"');
+    segments.push({ text: match[0], kind: isQuoted ? 'dim' : 'accent' });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < line.length) {
+    segments.push({ text: line.slice(cursor), kind: 'ink' });
+  }
+  return segments.length > 0 ? segments : [{ text: line, kind: 'ink' }];
+}
+
+const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
+---
+
+<div class="code">
+  {lines.map((segments) => (
+    <div class="line">
+      {segments.map((seg) => <span class={`seg-${seg.kind}`}>{seg.text}</span>)}
+    </div>
+  ))}
+</div>
+
+<style>
+  .code {
+    background: var(--term-bg);
+    border: 1px solid var(--term-edge);
+    padding: 18px 22px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .line {
+    white-space: pre;
+  }
+  .seg-ink {
+    color: var(--term-ink);
+  }
+  .seg-dim {
+    color: var(--term-dim);
+  }
+  .seg-accent {
+    color: var(--term-accent);
+  }
+</style>

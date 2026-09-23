@@ -1,0 +1,48 @@
+---
+// A colour swatch, a label and a right-aligned count — the GP-nations breakdown and the
+// trusts breakdown both use this shape. `color` is one of a handful of fixed tokens, passed
+// with define:vars rather than an inline style, like every other prop-dependent style here.
+interface Props {
+  label: string;
+  count: string;
+  color: string;
+  first?: boolean;
+}
+
+const { label, count, color, first = false } = Astro.props;
+---
+
+<div class:list={['row', { first }]}>
+  <span class="swatch"></span>
+  <span class="label">{label}</span>
+  <span class="count">{count}</span>
+</div>
+
+<style define:vars={{ color }}>
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 14px;
+    color: var(--ink-secondary);
+  }
+  .row:not(.first) {
+    border-top: 1px solid var(--border);
+  }
+  .swatch {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    background: var(--color);
+  }
+  .label {
+    flex: 1;
+    min-width: 0;
+  }
+  .count {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    font-weight: 600;
+  }
+</style>

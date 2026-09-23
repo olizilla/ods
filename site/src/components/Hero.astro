@@ -1,0 +1,73 @@
+---
+---
+
+<div class="hero">
+  <div class="inner">
+    <h1>
+      All the sites in the NHS Organisation Data Service, as <a href="#query">queryable</a> and <a
+        href="#prov">verifiable</a> Parquet files
+    </h1>
+    <p class="lede">
+      Deterministic projections of the official NHS TRUD release. Query them offline with SQL,
+      rebuild them yourself to verify, rehost them anywhere.
+    </p>
+    <div class="ctas">
+      <a href="#install" class="primary">Install ods</a>
+      <a href="#download" class="secondary">Download the files</a>
+    </div>
+  </div>
+</div>
+
+<style>
+  .hero {
+    background: var(--blue);
+    padding: 48px 32px 40px;
+    font-family: var(--font-sans);
+  }
+  .inner {
+    max-width: 640px;
+  }
+  h1 {
+    margin: 0 0 16px;
+    font-weight: 700;
+    font-size: 40px;
+    line-height: 1.15;
+    color: var(--white);
+    letter-spacing: -0.015em;
+    text-wrap: pretty;
+  }
+  h1 a {
+    color: var(--white);
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 255, 255, 0.5);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 5px;
+  }
+  .lede {
+    margin: 0 0 28px;
+    font-size: 18px;
+    line-height: 1.55;
+    color: var(--panel);
+    max-width: 58ch;
+  }
+  .ctas {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .primary {
+    text-decoration: none;
+    background: var(--green);
+    box-shadow: 0 4px 0 var(--green-shadow);
+    color: var(--white);
+    font-weight: 600;
+    font-size: 16px;
+    padding: 12px 22px;
+  }
+  .secondary {
+    color: var(--white);
+    font-size: 16px;
+    font-weight: 500;
+  }
+</style>

@@ -1,0 +1,20 @@
+---
+// One segment of the GP-practices stacked bar. Its width (relative to the other segments)
+// and colour depend on the nation's count, so they're passed with define:vars rather than
+// an inline style attribute.
+interface Props {
+  count: number;
+  color: string;
+}
+
+const { count, color } = Astro.props;
+---
+
+<span class="segment"></span>
+
+<style define:vars={{ count, color }}>
+  .segment {
+    flex: var(--count) 1 0;
+    background: var(--color);
+  }
+</style>

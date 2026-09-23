@@ -14,3 +14,6 @@
 /worker/dist
 /worker/results
 /results
+/site/node_modules
+/site/dist
+/site/.astro

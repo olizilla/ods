@@ -1,0 +1,275 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Hero from '../components/Hero.astro';
+import ReleaseMeta from '../components/ReleaseMeta.astro';
+import StatsBand from '../components/StatsBand.astro';
+import Section from '../components/Section.astro';
+import Terminal from '../components/Terminal.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import InstallPanel from '../components/InstallPanel.astro';
+import Card from '../components/Card.astro';
+import Callout from '../components/Callout.astro';
+import FilesTable from '../components/FilesTable.astro';
+import Footer from '../components/Footer.astro';
+
+import release from '../data/release.json';
+import findGpSw9 from '../data/terminal/find-gp-sw9.txt?raw';
+import findGpSql from '../data/terminal/find-gp-sql.txt?raw';
+import cite from '../data/terminal/cite.txt?raw';
+
+const provenanceJson = JSON.stringify(JSON.parse(release.provenance), null, 2);
+const duckdbHttpQuery = `duckdb -c "
+  SELECT ods_code, name, postcode
+    FROM 'https://ods.fyi/orgs.parquet'
+   WHERE status = 'active'
+     AND list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])
+     AND postcode LIKE 'SW9%';"`;
+---
+
+<Layout
+  title="ods.fyi — NHS organisation data as Parquet"
+  description="All the sites in the NHS Organisation Data Service, as queryable and verifiable Parquet files."
+>
+  <div id="top" class="page">
+    <Header />
+    <Hero />
+
+    <div class="content">
+      <ReleaseMeta
+        date={release.release.date}
+        tableCount={release.release.tableCount}
+        totalSizeBytes={release.release.totalSizeBytes}
+        orgsRecordCount={release.release.orgsRecordCount}
+      />
+
+      <StatsBand
+        gpTotal={release.gpPractices.total}
+        gpByCountry={release.gpPractices.byCountry}
+        pcnTotal={release.pcns.total}
+        trustsMarkedActive={release.trusts.markedActive}
+        trustsOpen={release.trusts.open}
+        trustsMovingToSuccessor={release.trusts.movingToSuccessor}
+        trustsClosingNoSuccessor={release.trusts.closingNoSuccessor}
+      />
+
+      <Section tag="Get started" title="Find an organisation" id="find">
+        <p class="body-text">
+          Install the <code>ods</code> cli to search the data with no SQL required. <code
+            >ods pull</code
+          > fetches and verifies the latest release. <code>ods find</code> lets you search by name,
+          roles, locations and more.
+        </p>
+        <Terminal content={findGpSw9} />
+      </Section>
+
+      <InstallPanel />
+
+      <div class="about">
+        <div class="about-label">About</div>
+        <div class="about-body">
+          <p>
+            <code>ods</code> is an independent open source project inspired by the principles of{' '}
+            <a href="https://github.com/pacharanero/sct"><code>sct</code></a>, the SNOMED CT CLI.
+            It is not (currently) affiliated with or endorsed by the NHS, but does aspire to be
+            adopted there either as a project or a set of ideas.
+          </p>
+          <p>
+            ods.fyi republishes NHS England's Organisation Data Service XML as reproducible
+            Parquet files under the Open Government Licence v3.0.
+          </p>
+        </div>
+      </div>
+
+      <Section tag="No lock in" title="It shows its working" id="working">
+        <p class="body-text">
+          Add <code>--sql</code> to any <code>ods find</code> and it prints the query it would have
+          run, with flags expanded into the role codes they stand for.
+        </p>
+        <div class="code-with-terminal">
+          <Terminal content={findGpSql} label="Terminal" />
+        </div>
+        <p class="body-text trailing">
+          Run that query via <code>duckdb</code> against the parquet files and it returns the same
+          rows <code>ods find --gp</code> returns. The <code>ods</code> cli lets us share useful SQL
+          queries without making you dependent on the tool.
+        </p>
+      </Section>
+
+      <Section tag="Local first" title="Download the files" id="download">
+        <p class="body-text">
+          Each release is 4 Parquet files, its schema as a Frictionless <code
+            >datapackage.json</code
+          > and its provenance info, published as an OCI Image, stored by the hash of the data. <code
+            >ods</code
+          > (or any OCI client) can download a release to your machine and verify the integrity.
+        </p>
+        <div class="card-row">
+          <Card variant="bordered" title="With ods" command="ods pull">
+            Verified, kept in a dated folder, works offline
+          </Card>
+          <Card variant="bordered" title="Over HTTPS" command="https://ods.fyi/orgs.parquet">
+            Follows the newest release
+          </Card>
+          <Card
+            variant="bordered"
+            title="From the mirror"
+            muted
+            tag="Coming soon"
+            command="ghcr.io/olizilla/ods-data"
+          >
+            Same OCI image, byte for byte
+          </Card>
+        </div>
+        <FilesTable files={release.files} />
+      </Section>
+
+      <Section tag="Really open format" title="Query it with your own tools" id="query">
+        <p class="body-text">
+          For one-off queries, <code>https://ods.fyi/orgs.parquet</code> follows the newest release
+          and DuckDB will read it over HTTP without downloading the whole file.
+        </p>
+        <div class="code-with-terminal">
+          <CodeBlock content={duckdbHttpQuery} />
+        </div>
+        <Callout>
+          pandas, Polars, R and Spark read the same files. No account, no API keys, and nothing new
+          to install.
+        </Callout>
+      </Section>
+
+      <Section tag="Verifiable" title="Provenance and reproducibility" id="prov">
+        <p class="body-text">
+          A dataset you cannot rebuild is one you have to take on trust. Every release here can be
+          checked against the NHS TRUD archive it came from, so a result in a paper, an audit or a
+          month-on-month diff points at exact, identical bytes.
+        </p>
+        <div class="card-row-2">
+          <Card variant="top-rule" title="Byte-for-byte reproducible">
+            With an NHS TRUD API key use <code>ods trud pull</code> to fetch any upstream source release
+            zip and rebuild the parquet files with <code>ods make</code>. They will have the same hashes
+            as the release published to ods.fyi.
+          </Card>
+          <Card variant="top-rule" title="Hash chain to the source">
+            The source archive SHA-256 is checked against the one NHS TRUD publishes and it is carried
+            through as metadata available in every derived file.
+          </Card>
+        </div>
+        <p class="body-text">Each release records its source facts and build facts, and nothing else.</p>
+        <div class="code-with-terminal">
+          <CodeBlock content={provenanceJson} />
+        </div>
+        <Callout>
+          To check a release yourself: <code>ods trud pull</code> fetches and verifies the source archive,{' '}
+          <code>ods make</code> rebuilds the tables, and <code>ods trud audit</code> compares a release
+          against the source XML.
+        </Callout>
+      </Section>
+
+      <Section tag="Research ready" title="Cite a release" id="cite">
+        <p class="body-text">
+          <code>ods cite</code> provides a recommended academic citation format in APA 7th edition,{' '}
+          <code>bibtex</code>, or <code>csljson</code> so you can import it into Zotero or pandoc to
+          keep your references tidy.
+        </p>
+        <div class="code-with-terminal cite-terminal">
+          <Terminal content={cite} label="Terminal" />
+        </div>
+      </Section>
+    </div>
+
+    <Footer />
+  </div>
+</Layout>
+
+<style>
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--white);
+    min-height: 100vh;
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .content {
+    padding: 0 32px;
+  }
+  .body-text {
+    margin: 0 0 20px;
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--ink);
+    max-width: 70ch;
+  }
+  .body-text.trailing {
+    margin: 0 0 56px;
+  }
+  .body-text code,
+  .about-body code {
+    font-family: var(--font-mono);
+    font-size: 15px;
+  }
+  .code-with-terminal {
+    margin-bottom: 24px;
+  }
+  .cite-terminal {
+    margin-bottom: 56px;
+  }
+  .about {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr);
+    gap: 24px;
+    align-items: baseline;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 0;
+    margin: 56px 0;
+    font-family: var(--font-sans);
+  }
+  .about-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .about-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  .about-body p {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--ink-secondary);
+    max-width: 68ch;
+    text-wrap: pretty;
+  }
+  .about-body code {
+    font-size: 14px;
+  }
+  .card-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card-row-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+    margin-bottom: 28px;
+  }
+
+  @media (max-width: 720px) {
+    .about {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .card-row,
+    .card-row-2 {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

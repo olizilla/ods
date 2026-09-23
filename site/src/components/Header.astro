@@ -1,0 +1,69 @@
+---
+const links = [
+  { href: '#install', label: 'Install' },
+  { href: '#download', label: 'Download' },
+  { href: '#prov', label: 'Provenance' },
+];
+---
+
+<header class="header">
+  <div class="bar">
+    <div class="wordmark-group">
+      <span class="wordmark">ods.fyi</span>
+      <span class="tagline">NHS organisation data as Parquet</span>
+    </div>
+    <nav class="nav">
+      {links.map((link) => <a href={link.href}>{link.label}</a>)}
+    </nav>
+  </div>
+</header>
+
+<style>
+  .header {
+    background: var(--blue);
+    padding: 0 32px;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    font-family: var(--font-sans);
+  }
+  .wordmark-group {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .wordmark {
+    font-weight: 700;
+    font-size: 22px;
+    color: var(--white);
+    letter-spacing: -0.01em;
+  }
+  .tagline {
+    font-size: 13px;
+    color: var(--blue-pale);
+  }
+  .nav {
+    display: flex;
+    gap: 24px;
+    font-size: 14px;
+  }
+  .nav a {
+    color: var(--white);
+    text-decoration: none;
+  }
+
+  @media (max-width: 600px) {
+    .header {
+      padding: 0 20px;
+    }
+    .tagline {
+      display: none;
+    }
+    .nav {
+      gap: 16px;
+    }
+  }
+</style>

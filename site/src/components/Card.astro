@@ -1,0 +1,94 @@
+---
+// Two shapes share this component: a bordered card (the download row) and a top-rule card
+// (the provenance row). `muted` is the ghcr.io "Coming soon" card — every text colour drops
+// to --ink-muted, the title weight drops to 600, and a tag sits beside it, with no opacity
+// so contrast stays at AA.
+interface Props {
+  variant: 'bordered' | 'top-rule';
+  title: string;
+  muted?: boolean;
+  tag?: string;
+  command?: string;
+}
+
+const { variant, title, muted = false, tag, command } = Astro.props;
+---
+
+<div class:list={['card', variant, { muted }]}>
+  <div class="heading-row">
+    <div class="title">{title}</div>
+    {tag && <span class="tag">{tag}</span>}
+  </div>
+  <div class="body">
+    <slot />
+  </div>
+  {command && <div class="command">{command}</div>}
+</div>
+
+<style>
+  .card {
+    min-width: 0;
+    font-family: var(--font-sans);
+  }
+  .card.bordered {
+    border: 1px solid var(--border);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .card.top-rule {
+    border-top: 4px solid var(--blue);
+    padding: 16px 0 0;
+  }
+  .heading-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card.bordered .title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .card.top-rule .title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .card.muted .title {
+    font-weight: 600;
+    color: var(--ink-muted);
+  }
+  .tag {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+  }
+  .body {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-secondary);
+  }
+  .card.top-rule .body {
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .card.muted .body {
+    color: var(--ink-muted);
+  }
+  .command {
+    margin-top: 6px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .card.muted .command {
+    color: var(--ink-muted);
+  }
+</style>

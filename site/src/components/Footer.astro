@@ -1,0 +1,103 @@
+---
+---
+
+<footer class="footer">
+  <div class="grid">
+    <div>
+      <div class="wordmark">ods.fyi</div>
+      <p>An independent project, not commissioned by the NHS.</p>
+      <p>Inspired by <code>sct</code>, the SNOMED CT CLI.</p>
+    </div>
+    <div>
+      <div class="col-label">Project</div>
+      <div class="links">
+        <a href="https://github.com/olizilla/ods">GitHub</a>
+        <a href="https://ods.fyi/releases.json">Releases</a>
+      </div>
+    </div>
+    <div>
+      <div class="col-label">Source data</div>
+      <div class="links">
+        <a href="https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5">NHS TRUD</a>
+        <a href="https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html"
+          >ODS data model</a
+        >
+      </div>
+    </div>
+  </div>
+  <div class="licence">
+    ODS data © NHS England, published under the Open Government Licence v3.0. <code>ods</code> is
+    MIT licensed.
+  </div>
+</footer>
+
+<style>
+  .footer {
+    background: var(--panel);
+    border-top: 4px solid var(--blue);
+    padding: 36px 32px 28px;
+    font-family: var(--font-sans);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 40px;
+    margin-bottom: 28px;
+  }
+  .wordmark {
+    font: 600 20px var(--font-mono);
+    color: var(--ink);
+    letter-spacing: -0.03em;
+    margin-bottom: 10px;
+  }
+  p {
+    margin: 0 0 8px;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--ink-secondary);
+    max-width: 44ch;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+  p code {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .col-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 10px;
+  }
+  .links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .links a {
+    color: var(--blue);
+    font-size: 15px;
+  }
+  .licence {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-muted);
+  }
+  .licence code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+
+  @media (max-width: 720px) {
+    .grid {
+      grid-template-columns: 1fr;
+      gap: 24px;
+    }
+  }
+</style>

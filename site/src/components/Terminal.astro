@@ -1,0 +1,135 @@
+---
+// Body text is hardcoded terminal output (site/src/data/terminal/*.txt, imported with
+// ?raw), coloured here by simple line shape rather than the design's per-character spans:
+// a `❯` prompt line, a `#`/`*` comment line, a pure box-drawing border, or a row that mixes
+// box-drawing separators with cell text.
+interface Props {
+  label?: string;
+  content: string;
+}
+
+const { label = 'Terminal', content } = Astro.props;
+
+type Kind = 'ink' | 'dim' | 'accent' | 'frame' | 'header';
+interface Segment {
+  text: string;
+  kind: Kind;
+}
+
+const BOX_CHAR = /[┌┬┐│┆╞═╪╡├┴┤└─┘]/;
+const BOX_RUN = /([┌┬┐│┆╞═╪╡├┴┤└─┘]+)/;
+const KEYWORDS = /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|LIKE)\b/g;
+const QUOTED = /('[^']*'|"[^"]*")/g;
+// `ods cite`'s own sub-headers: short, no trailing punctuation but a colon, or a bare title.
+const SUB_HEADER = /^\s*(The source|The data|The tool):\s*$/;
+const BARE_HEADER = /^(How to Cite|Data availability)$/;
+
+// SQL keywords and quoted strings, for lines of `ods find --sql`'s own output — the rest of
+// this component's coloured-by-line-shape approach doesn't otherwise touch SQL syntax.
+function colourSql(line: string): Segment[] {
+  const segments: Segment[] = [];
+  let cursor = 0;
+  const combined = new RegExp(`${KEYWORDS.source}|${QUOTED.source}`, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = combined.exec(line)) !== null) {
+    if (match.index > cursor) {
+      segments.push({ text: line.slice(cursor, match.index), kind: 'ink' });
+    }
+    const isQuoted = match[0].startsWith("'") || match[0].startsWith('"');
+    segments.push({ text: match[0], kind: isQuoted ? 'dim' : 'accent' });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < line.length) {
+    segments.push({ text: line.slice(cursor), kind: 'ink' });
+  }
+  return segments.length > 0 ? segments : [{ text: line, kind: 'ink' }];
+}
+
+function classifyLine(line: string): Segment[] {
+  if (line.startsWith('❯')) {
+    return [
+      { text: '❯', kind: 'accent' },
+      { text: line.slice(1), kind: 'ink' },
+    ];
+  }
+  if (line.startsWith('#') || line.startsWith('*')) {
+    return [{ text: line, kind: 'dim' }];
+  }
+  if (SUB_HEADER.test(line) || BARE_HEADER.test(line)) {
+    return [{ text: line, kind: 'header' }];
+  }
+  const stripped = line.replace(/\s/g, '');
+  if (stripped.length > 0 && [...stripped].every((c) => BOX_CHAR.test(c))) {
+    return [{ text: line, kind: 'frame' }];
+  }
+  if (BOX_CHAR.test(line)) {
+    return line
+      .split(BOX_RUN)
+      .filter((part) => part.length > 0)
+      .map((part) => ({ text: part, kind: (BOX_CHAR.test(part) ? 'frame' : 'ink') as Kind }));
+  }
+  return colourSql(line);
+}
+
+const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
+---
+
+<div class="terminal">
+  <div class="chrome">
+    <span class="chrome-label">{label}</span>
+  </div>
+  <div class="body">
+    {lines.map((segments) => (
+      <div class="line">
+        {segments.map((seg) => <span class={`seg-${seg.kind}`}>{seg.text}</span>)}
+      </div>
+    ))}
+  </div>
+</div>
+
+<style>
+  .terminal {
+    font-family: var(--font-mono);
+  }
+  .chrome {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 7px 8px 7px 16px;
+    background: var(--term-chrome);
+    border: 1px solid var(--term-edge);
+    border-bottom: none;
+  }
+  .chrome-label {
+    font-size: 12.5px;
+    color: var(--term-label);
+  }
+  .body {
+    background: var(--term-bg);
+    border: 1px solid var(--term-edge);
+    padding: 18px 22px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .line {
+    white-space: pre;
+  }
+  .seg-ink {
+    color: var(--term-ink);
+  }
+  .seg-dim {
+    color: var(--term-dim);
+  }
+  .seg-accent {
+    color: var(--term-accent);
+  }
+  .seg-frame {
+    color: var(--term-frame);
+  }
+  .seg-header {
+    color: var(--term-mid);
+    font-weight: 600;
+  }
+</style>

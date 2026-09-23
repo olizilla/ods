@@ -1,0 +1,22 @@
+❯ ods pull
+❯ ods find --gp --in SW9
+* Source: releases/2026-08-28/orgs.parquet
+* --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
+┌──────────┬──────────────────────────────┬──────────┬────────────────┬───────┬──────────┐
+│ ODS Code ┆ Name                         ┆ Postcode ┆ Roles          ┆ Class ┆ Matched  │
+╞══════════╪══════════════════════════════╪══════════╪════════════════╪═══════╪══════════╡
+│ G85028   ┆ STOCKWELL GROUP PRACTICE     ┆ SW9 9TJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85054   ┆ LAMBETH WALK GROUP PRACTICE  ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85073   ┆ VASSALL MEDICAL CENTRE       ┆ SW9 6NA  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85100   ┆ BECKETT HOUSE PRACTICE       ┆ SW9 9DL  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85135   ┆ MINET GREEN HEALTH PRACTICE  ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ G85695   ┆ AKERMAN MEDICAL PRACTICE     ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y00020   ┆ THE GRANTHAM PRACTICE        ┆ SW9 9BH  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y03063   ┆ HETHERINGTON AT THE PAVILION ┆ SW9 8DJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y05161   ┆ FIVEWAYS PCN EA HUB          ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
+│ Y05163   ┆ LARC CLINIC (LA)             ┆ SW9 8DJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
+├──────────┴──────────────────────────────┴──────────┴────────────────┴───────┴──────────┤
+│ 10 open                                                    Use --all to include closed │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+# ...or use duckdb to query the data over http from ods.fyi directly.
+❯ duckdb -c "SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5"

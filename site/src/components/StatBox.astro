@@ -1,0 +1,61 @@
+---
+interface Props {
+  label: string;
+  number: string;
+  command: string;
+}
+
+const { label, number, command } = Astro.props;
+---
+
+<div class="box">
+  <div class="inner">
+    <div class="label">{label}</div>
+    <div class="number">{number}</div>
+    <slot />
+    <div class="command-row">
+      <div class="command">❯ {command}</div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .box {
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .inner {
+    padding: 20px 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+  }
+  .label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .number {
+    font-size: 34px;
+    font-weight: 700;
+    color: var(--blue);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .command-row {
+    margin-top: auto;
+    padding-top: 6px;
+  }
+  .command {
+    font: 400 12px/1.5 var(--font-mono);
+    color: var(--ink-muted);
+    overflow-wrap: anywhere;
+    padding-left: 1.4em;
+    text-indent: -1.4em;
+  }
+</style>

@@ -57,7 +57,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: worker/package-lock.json
+          cache-dependency-path: |
+            worker/package-lock.json
+            site/package-lock.json
 
       # 1.26 is in the runner image's tool cache; the conformance runner needs 1.24+.
       # No go.sum in this repo, so setup-go's module cache has nothing to key on.

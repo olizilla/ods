@@ -29,6 +29,7 @@ A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide an open, res
 
 ## Query the data
 
+- Install with `cargo install --locked --git https://github.com/olizilla/ods.git`.
 - Use `duckdb` to query the hosted parquet files directly. 
 - Use `ods pull` to fetch the data to your computer.
 - Use `ods find` to explore the data without SQL.

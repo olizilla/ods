@@ -1,0 +1,96 @@
+---
+import StatBox from './StatBox.astro';
+import StatRow from './StatRow.astro';
+import BarSegment from './BarSegment.astro';
+import { formatCount } from '../lib/format';
+
+interface CountryCount {
+  country: string;
+  count: number;
+}
+
+interface Props {
+  gpTotal: number;
+  gpByCountry: CountryCount[];
+  pcnTotal: number;
+  trustsMarkedActive: number;
+  trustsOpen: number;
+  trustsMovingToSuccessor: number;
+  trustsClosingNoSuccessor: number;
+}
+
+const {
+  gpTotal,
+  gpByCountry,
+  pcnTotal,
+  trustsMarkedActive,
+  trustsOpen,
+  trustsMovingToSuccessor,
+  trustsClosingNoSuccessor,
+} = Astro.props;
+
+const nations = [
+  { key: 'ENGLAND', label: 'England', color: 'var(--blue-dark)' },
+  { key: 'SCOTLAND', label: 'Scotland', color: 'var(--blue)' },
+  { key: 'WALES', label: 'Wales', color: 'var(--blue-mid)' },
+  { key: 'NORTHERN IRELAND', label: 'Northern Ireland', color: 'var(--blue-bright)' },
+].map((nation) => ({
+  ...nation,
+  count: gpByCountry.find((c) => c.country === nation.key)?.count ?? 0,
+}));
+---
+
+<div class="band">
+  <StatBox label="GP practices" number={formatCount(gpTotal)} command="ods find --gp">
+    <div class="bar">
+      {nations.map((nation) => <BarSegment count={nation.count} color={nation.color} />)}
+    </div>
+    <div>
+      {nations.map((nation, i) => (
+        <StatRow label={nation.label} count={formatCount(nation.count)} color={nation.color} first={i === 0} />
+      ))}
+    </div>
+  </StatBox>
+
+  <StatBox label="PCNs" number={formatCount(pcnTotal)} command="ods role pcn">
+    <div class="description">Primary care networks grouping practices</div>
+  </StatBox>
+
+  <StatBox label="NHS trusts in England" number={formatCount(trustsOpen)} command="ods find --role 'NHS Trust' --in england">
+    <div class="description trusts-description">open, of {formatCount(trustsMarkedActive)} marked active in ODS</div>
+    <div>
+      <StatRow label="Open" count={formatCount(trustsOpen)} color="var(--blue)" first />
+      <StatRow label="Moving to a successor" count={formatCount(trustsMovingToSuccessor)} color="var(--blue-bright)" />
+      <StatRow label="Closing down, no successor" count={formatCount(trustsClosingNoSuccessor)} color="var(--ink-quiet)" />
+    </div>
+  </StatBox>
+</div>
+
+<style>
+  .band {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1.5fr);
+    gap: 2px;
+    margin-bottom: 20px;
+  }
+  .bar {
+    display: flex;
+    gap: 2px;
+    height: 10px;
+    margin: 4px 0 6px;
+  }
+  .description {
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-secondary);
+  }
+  .trusts-description {
+    margin-bottom: 2px;
+  }
+
+  @media (max-width: 720px) {
+    .band {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

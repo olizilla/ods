@@ -1,5 +1,6 @@
 export interface Env {
   BUCKET: R2Bucket;
+  ASSETS: Fetcher;
 }
 
 const CORS_HEADERS: Record<string, string> = {
@@ -25,7 +26,7 @@ as queryable & verifiable Parquet files. An independent project.
 
 Running more than a few queries? Fetch it once and query locally:
 
-  cargo install --git https://github.com/olizilla/ods
+  cargo install --locked --git https://github.com/olizilla/ods.git
   ods pull
 
 Releases:  https://ods.fyi/releases.json
@@ -272,8 +273,24 @@ export default {
       });
     }
 
+    // Astro's hashed assets, ahead of the dataset lookup so the site's own files never
+    // fall through to pathToKey.
+    if (pathname.startsWith('/_astro/')) {
+      const assetRes = await env.ASSETS.fetch(request);
+      const headers = new Headers(assetRes.headers);
+      headers.set('Cache-Control', 'public, max-age=300');
+      return new Response(assetRes.body, { status: assetRes.status, headers });
+    }
+
     // Root endpoint
     if (pathname === '/' || pathname === '') {
+      const accept = request.headers.get('accept') ?? '';
+      if (accept.includes('text/html')) {
+        const assetRes = await env.ASSETS.fetch(request);
+        const headers = new Headers(assetRes.headers);
+        headers.set('Cache-Control', 'public, max-age=300');
+        return new Response(assetRes.body, { status: assetRes.status, headers });
+      }
       if (request.method === 'HEAD') {
         const headers = new Headers(CORS_HEADERS);
         headers.set('Content-Type', 'text/plain; charset=utf-8');

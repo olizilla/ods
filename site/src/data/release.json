@@ -1,0 +1,62 @@
+{
+  "release": {
+    "date": "2026-08-28",
+    "datasetVersion": "0.1.0",
+    "tableCount": 4,
+    "totalSizeBytes": 29690329,
+    "orgsRecordCount": 370917
+  },
+  "gpPractices": {
+    "total": 7941,
+    "byCountry": [
+      {
+        "country": "ENGLAND",
+        "count": 6225
+      },
+      {
+        "country": "SCOTLAND",
+        "count": 1011
+      },
+      {
+        "country": "WALES",
+        "count": 400
+      },
+      {
+        "country": "NORTHERN IRELAND",
+        "count": 305
+      }
+    ]
+  },
+  "pcns": {
+    "total": 1299
+  },
+  "trusts": {
+    "markedActive": 244,
+    "open": 199,
+    "movingToSuccessor": 42,
+    "closingNoSuccessor": 3
+  },
+  "files": [
+    {
+      "name": "orgs.parquet",
+      "records": 370917,
+      "sizeBytes": 16435840
+    },
+    {
+      "name": "relationships.parquet",
+      "records": 769527,
+      "sizeBytes": 7837834
+    },
+    {
+      "name": "roles.parquet",
+      "records": 529348,
+      "sizeBytes": 5092610
+    },
+    {
+      "name": "successions.parquet",
+      "records": 24373,
+      "sizeBytes": 324045
+    }
+  ],
+  "provenance": "{\n  \"$schema\": \"https://ods.fyi/schema/provenance.v1.json\",\n  \"trud_release_date\": \"2026-08-28\",\n  \"trud_release_sha256\": \"ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801\",\n  \"trud_release_sha256_verified\": \"trud_api\",\n  \"trud_release_filesize_bytes\": 38064419,\n  \"trud_schema_version\": \"2-0-0\",\n  \"tool_version\": \"0.1.0\",\n  \"tool_git_sha\": \"3dd504e23172b0dce702ab094e85850321249d7c\",\n  \"tool_git_dirty\": true\n}"
+}

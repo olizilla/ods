@@ -1,0 +1,113 @@
+---
+const command = 'cargo install --locked --git https://github.com/olizilla/ods.git';
+---
+
+<div id="install" class="panel">
+  <div class="heading-row">
+    <h3>Install ods</h3>
+    <span class="platforms">macOS, Linux and Windows</span>
+  </div>
+  <p class="note">
+    A single binary, built from source with Cargo. You will need a Rust toolchain; <a href="#top"
+      >rustup.rs</a
+    > sets one up.
+  </p>
+  <div class="command-row">
+    <div class="command"><span class="prompt">❯</span> {command}</div>
+    <button type="button" class="copy" data-command={command}>Copy</button>
+  </div>
+  <p class="note">
+    Homebrew and prebuilt binaries will follow. Check it worked with <code>ods --version</code>,
+    then run <code>ods pull</code>.
+  </p>
+</div>
+
+<style>
+  .panel {
+    background: var(--panel);
+    border-top: 4px solid var(--blue);
+    padding: 28px 28px 26px;
+    margin-bottom: 56px;
+    font-family: var(--font-sans);
+  }
+  .heading-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  h3 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .platforms {
+    font-size: 14px;
+    color: var(--ink-muted);
+  }
+  .note {
+    margin: 0 0 18px;
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--ink);
+    max-width: 62ch;
+  }
+  .note code {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    color: var(--ink);
+  }
+  .command-row {
+    display: flex;
+    align-items: stretch;
+    background: var(--term-bg);
+    border: 1px solid var(--term-edge);
+    margin-bottom: 14px;
+  }
+  .command {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 16px 20px;
+    overflow-x: auto;
+    white-space: pre;
+    font-family: var(--font-mono);
+    font-size: 14.5px;
+    color: var(--term-ink);
+  }
+  .prompt {
+    color: var(--term-accent);
+  }
+  .copy {
+    flex: none;
+    border: none;
+    cursor: pointer;
+    background: var(--green);
+    color: var(--white);
+    font: 600 15px var(--font-sans);
+    padding: 0 22px;
+    box-shadow: inset 0 -4px 0 var(--green-shadow);
+  }
+</style>
+
+<script>
+  const buttons = document.querySelectorAll<HTMLButtonElement>('.copy[data-command]');
+  for (const button of buttons) {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    button.addEventListener('click', async () => {
+      const command = button.dataset.command ?? '';
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch {
+        // clipboard access denied or unavailable; the button still shows the command
+      }
+      button.textContent = 'Copied';
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        button.textContent = 'Copy';
+      }, 1600);
+    });
+  }
+</script>

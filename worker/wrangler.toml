@@ -6,3 +6,8 @@ routes = [{ pattern = "ods.fyi", custom_domain = true }]
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "ods-fyi"
+
+[assets]
+directory = "../site/dist"
+binding = "ASSETS"
+run_worker_first = true

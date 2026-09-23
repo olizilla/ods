@@ -1,0 +1,38 @@
+---
+interface Props {
+  tag: string;
+  title: string;
+  id: string;
+}
+
+const { tag, title, id } = Astro.props;
+---
+
+<section class="section">
+  <div class="tag">{tag}</div>
+  <h2 id={id}>{title}</h2>
+  <slot />
+</section>
+
+<style>
+  .section {
+    margin-top: 48px;
+  }
+  .tag {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--blue);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+    font-family: var(--font-sans);
+  }
+  h2 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    font-family: var(--font-sans);
+  }
+</style>

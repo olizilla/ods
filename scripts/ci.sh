@@ -156,6 +156,19 @@ worker_install() {
 
 worker_typecheck() { (cd worker && npx tsc --noEmit); }
 
+site_lock_sha() { shasum -a 256 site/package-lock.json | cut -d' ' -f1; }
+
+site_install() {
+  if [ -f site/node_modules/.ci-lock-sha ] && [ "$(cat site/node_modules/.ci-lock-sha)" = "$(site_lock_sha)" ]; then
+    echo "site/node_modules already matches package-lock.json"
+    return 0
+  fi
+  npm ci --prefix site && site_lock_sha > site/node_modules/.ci-lock-sha
+}
+
+site_build() { npm run build --prefix site; }
+
+# worker tests' [assets] directory is site/dist, so the site must build first.
 worker_tests() { npm test --prefix worker; }
 
 has_conformance() {
@@ -211,6 +224,8 @@ fi
 if ! has npm; then
   skip "worker install" "npm not installed"
   skip "worker typecheck" "npm not installed"
+  skip "site install" "npm not installed"
+  skip "site build" "npm not installed"
   skip "worker tests" "npm not installed"
 else
   run "worker install" worker_install
@@ -219,17 +234,35 @@ else
 
   if [ "$installed" -ne 0 ]; then
     skip "worker typecheck" "install failed"
+    skip "site install" "install failed"
+    skip "site build" "install failed"
     skip "worker tests" "install failed"
   else
     run "worker typecheck" worker_typecheck
     record ""
-    if [ "$compiled" -ne 0 ]; then
-      skip "worker tests" "compile failed, so there is no target/debug/ods"
+
+    run "site install" site_install
+    if grep -q 'already matches' "$LOG"; then record "lockfile unchanged"; else record ""; fi
+    site_installed=$STATUS
+
+    if [ "$site_installed" -ne 0 ]; then
+      skip "site build" "install failed"
+      skip "worker tests" "site install failed"
     else
-      run "worker tests" worker_tests
-      detail=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -E '^ *Tests ' | tail -n 1 | sed 's/^ *Tests *//')
-      has_conformance || detail="$detail; OCI conformance runner not installed, so its test skips"
-      record "$detail"
+      run "site build" site_build
+      record ""
+      site_built=$STATUS
+
+      if [ "$compiled" -ne 0 ]; then
+        skip "worker tests" "compile failed, so there is no target/debug/ods"
+      elif [ "$site_built" -ne 0 ]; then
+        skip "worker tests" "site build failed, so there is no site/dist"
+      else
+        run "worker tests" worker_tests
+        detail=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -E '^ *Tests ' | tail -n 1 | sed 's/^ *Tests *//')
+        has_conformance || detail="$detail; OCI conformance runner not installed, so its test skips"
+        record "$detail"
+      fi
     fi
   fi
 fi

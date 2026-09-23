@@ -1,0 +1,54 @@
+:root {
+  --white: #fff;
+
+  /* NHS blues */
+  --blue: #005eb8;
+  --blue-dark: #003087;
+  --blue-mid: #0072ce;
+  --blue-bright: #41b6e6;
+  --blue-pale: #a8cdec;
+
+  /* Greys */
+  --ink: #212b32;
+  --ink-secondary: #425563;
+  --ink-muted: #4c6272;
+  --ink-quiet: #768692;
+  --border-strong: #aeb7bd;
+  --border: #d8dde0;
+  --panel: #e8edee;
+  --page-bg: #f0f4f5;
+
+  /* Action green */
+  --green: #007f3b;
+  --green-shadow: #00401e;
+
+  /* Fonts */
+  --font-sans: 'Public Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* Radius: 0 everywhere */
+  --radius: 0;
+
+  /* Spacing, 8px base */
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 16px;
+  --space-4: 20px;
+  --space-5: 24px;
+  --space-6: 28px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 56px;
+
+  /* Terminal and code blocks: always dark, never switched */
+  --term-bg: #212b32;
+  --term-edge: #212b32;
+  --term-frame: #5d7181;
+  --term-accent: #41b6e6;
+  --term-ink: #e8edee;
+  --term-mid: #c5d1d9;
+  --term-dim: #8ba0af;
+  --term-label: #8ba0af;
+  --term-chrome: #2c3a44;
+}

@@ -1,0 +1,95 @@
+---
+import { formatCount, formatMB } from '../lib/format';
+
+interface FileRow {
+  name: string;
+  records: number;
+  sizeBytes: number;
+}
+
+interface Props {
+  files: FileRow[];
+}
+
+const { files } = Astro.props;
+
+const DESCRIPTIONS: Record<string, string> = {
+  'orgs.parquet': 'Every org and site, active first. The main table',
+  'relationships.parquet': 'ICB, Trust, PCN and parent links',
+  'roles.parquet': 'Primary and secondary roles per organisation',
+  'successions.parquet': 'Successor chains through mergers and closures',
+};
+---
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="left">Table</th>
+        <th class="right">Rows</th>
+        <th class="right">Size</th>
+        <th class="left">Contents</th>
+      </tr>
+    </thead>
+    <tbody>
+      {files.map((file) => (
+        <tr>
+          <td class="left"><a href="#download">{file.name}</a></td>
+          <td class="right nums">{formatCount(file.records)}</td>
+          <td class="right nums">{formatMB(file.sizeBytes)}</td>
+          <td class="left contents">{DESCRIPTIONS[file.name] ?? ''}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .table-wrap {
+    overflow-x: auto;
+    margin-bottom: 56px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+    color: var(--ink);
+    font-family: var(--font-sans);
+  }
+  th {
+    font-weight: 700;
+    border-bottom: 2px solid var(--ink-secondary);
+  }
+  th.left {
+    text-align: left;
+    padding: 10px 12px 10px 0;
+  }
+  th.right {
+    text-align: right;
+    padding: 10px 12px;
+  }
+  td {
+    border-bottom: 1px solid var(--border);
+  }
+  td.left {
+    padding: 12px 12px 12px 0;
+  }
+  td.right {
+    padding: 12px;
+    text-align: right;
+  }
+  td.contents {
+    padding: 12px 0 12px 12px;
+    color: var(--ink-secondary);
+  }
+  .nums {
+    font-variant-numeric: tabular-nums;
+  }
+  td.left a {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--blue);
+    text-decoration: none;
+  }
+</style>
