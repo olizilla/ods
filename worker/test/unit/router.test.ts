@@ -98,8 +98,15 @@ describe('Router & Path-to-Key Mapping', () => {
     // inside the test itself.
     const res = await worker.fetch(new Request('https://ods.fyi/_astro/index.kmYNuTWW.css'), env);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     expect(res.headers.get('content-type')).toContain('text/css');
+  });
+
+  it('serves the unhashed site icons through ASSETS instead of falling through to the dataset lookup', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/favicon-32.png'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(res.headers.get('content-type')).toContain('image/png');
   });
 });
 

@@ -19,6 +19,13 @@ const SCHEMAS: Record<string, unknown> = {
   'provenance.v1.json': provenanceV1Schema,
 };
 
+// Astro's site/public/ files that land at the root, unhashed — generated from the actual
+// site/dist output by scripts/generate-site-root-files.sh (run as part of `npm run build
+// --prefix site`), since run_worker_first means nothing reaches ASSETS unless fetch() routes
+// it there and a hand-maintained list would drift from what a build actually produced.
+import siteRootFiles from './site-root-files.json';
+const SITE_ROOT_FILES = new Set(siteRootFiles as string[]);
+
 const ROOT_TEXT = `ods.fyi — All the organisations and sites in the NHS Organisation Data Service,
 as queryable & verifiable Parquet files. An independent project.
 
@@ -274,8 +281,19 @@ export default {
     }
 
     // Astro's hashed assets, ahead of the dataset lookup so the site's own files never
-    // fall through to pathToKey.
+    // fall through to pathToKey. Every filename under _astro/ carries a content hash
+    // (Vite's <name>.<hash>.<ext> convention), so a changed file is always a new URL —
+    // safe to cache immutably rather than revalidate.
     if (pathname.startsWith('/_astro/')) {
+      const assetRes = await env.ASSETS.fetch(request);
+      const headers = new Headers(assetRes.headers);
+      headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+      return new Response(assetRes.body, { status: assetRes.status, headers });
+    }
+
+    // Unhashed site files (favicons, manifest) — same treatment as / itself: a little
+    // caching, not immutable, since a filename swap without a content hash is how these get updated.
+    if (SITE_ROOT_FILES.has(pathname)) {
       const assetRes = await env.ASSETS.fetch(request);
       const headers = new Headers(assetRes.headers);
       headers.set('Cache-Control', 'public, max-age=300');

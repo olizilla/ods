@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && ../scripts/generate-site-root-files.sh",
     "preview": "astro preview",
     "astro": "astro"
   },
