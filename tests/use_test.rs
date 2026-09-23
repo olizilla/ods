@@ -2,25 +2,51 @@ mod common;
 
 use anyhow::Result;
 use common::make_v1_index;
-use ods::commands::use_cmd::{run as use_run, Args as UseArgs};
 use std::fs;
+use std::process::Command;
 use tempfile::TempDir;
+
+fn ods_cmd() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_ods"))
+}
+
+#[test]
+fn test_use_refuses_unknown_workspace_flag() {
+    let tmp = TempDir::new().unwrap();
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "--workspace", "x", "2026-07-31"])
+        .output()
+        .expect("run ods use with --workspace");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument '--workspace'")
+            || stderr.contains("unexpected argument '--workspace' found")
+            || stderr.contains("unknown argument '--workspace'"),
+        "stderr must report unknown argument, got:\n{}",
+        stderr
+    );
+}
 
 #[test]
 fn test_use_refuses_when_release_does_not_exist() {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
     fs::create_dir_all(&workspace).unwrap();
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
 
-    let res = use_run(UseArgs {
-        release_date: "2026-07-31".to_string(),
-        workspace: Some(workspace.clone()),
-    });
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
 
-    assert!(res.is_err());
-    let err = res.unwrap_err().to_string();
-    assert!(err.contains("Release 2026-07-31 not found"));
-    assert!(err.contains("Run 'ods pull 2026-07-31' to download it"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Release 2026-07-31 not found"), "got:\n{}", stderr);
+    assert!(stderr.contains("Run 'ods pull 2026-07-31' to download it"), "got:\n{}", stderr);
 }
 
 #[test]
@@ -40,7 +66,6 @@ fn test_use_pins_mismatched_release_and_warns() {
     )
     .unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
-
     fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
 
     // Cache an index with a different manifest digest
@@ -53,29 +78,26 @@ fn test_use_pins_mismatched_release_and_warns() {
     let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &workspace).unwrap();
 
-    let mut stderr_buf = Vec::new();
-    let res = ods::commands::use_cmd::run_with_writer(
-        UseArgs {
-            release_date: "2026-07-31".to_string(),
-            workspace: Some(workspace.clone()),
-        },
-        &mut stderr_buf,
-    );
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
 
-    assert!(res.is_ok(), "use must exit 0 on mismatch, got: {:?}", res);
+    assert!(output.status.success(), "use must exit 0 on mismatch, got: {:?}", output);
 
     let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
     let (active_date, path) = ws.active_release().unwrap();
     assert_eq!(active_date, "2026-07-31");
     assert_eq!(path, fs::canonicalize(&rel_dir).unwrap());
 
-    let stderr = String::from_utf8(stderr_buf).unwrap();
-    assert!(stderr.contains("✓ Active release set to 2026-07-31"));
-    assert!(stderr.contains("  current → releases/2026-07-31"));
-    assert!(stderr.contains("! releases/2026-07-31 does not match the published 2026-07-31 (1.0.1)"));
-    assert!(stderr.contains("  expected manifest sha256:0000000000000000000000000000000000000000000000000000000000000000"));
-    assert!(stderr.contains("  got      sha256:"));
-    assert!(stderr.contains("  Repair it: ods pull --force 2026-07-31"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✓ Active release set to 2026-07-31"), "got:\n{}", stderr);
+    assert!(stderr.contains("  current → releases/2026-07-31"), "got:\n{}", stderr);
+    assert!(stderr.contains("! releases/2026-07-31 does not match the published 2026-07-31 (1.0.1)"), "got:\n{}", stderr);
+    assert!(stderr.contains("  expected manifest sha256:0000000000000000000000000000000000000000000000000000000000000000"), "got:\n{}", stderr);
+    assert!(stderr.contains("  got      sha256:"), "got:\n{}", stderr);
+    assert!(stderr.contains("  Repair it: ods pull --force 2026-07-31"), "got:\n{}", stderr);
 }
 
 #[test]
@@ -84,30 +106,27 @@ fn test_use_pins_corrupted_release_and_warns() {
     let workspace = tmp.path().join("ods_data");
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
 
     // No _provenance.json -> Corrupted("Missing or unreadable _provenance.json")
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
 
-    let mut stderr_buf = Vec::new();
-    let res = ods::commands::use_cmd::run_with_writer(
-        UseArgs {
-            release_date: "2026-07-31".to_string(),
-            workspace: Some(workspace.clone()),
-        },
-        &mut stderr_buf,
-    );
-
-    assert!(res.is_ok(), "use must exit 0 on corrupted release, got: {:?}", res);
+    assert!(output.status.success(), "use must exit 0 on corrupted release, got: {:?}", output);
 
     let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
     let (active_date, path) = ws.active_release().unwrap();
     assert_eq!(active_date, "2026-07-31");
     assert_eq!(path, fs::canonicalize(&rel_dir).unwrap());
 
-    let stderr = String::from_utf8(stderr_buf).unwrap();
-    assert!(stderr.contains("✓ Active release set to 2026-07-31"));
-    assert!(stderr.contains("  current → releases/2026-07-31"));
-    assert!(stderr.contains("! releases/2026-07-31 can't be checked: Missing or unreadable _provenance.json"));
-    assert!(stderr.contains("  Repair it: ods pull --force 2026-07-31"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✓ Active release set to 2026-07-31"), "got:\n{}", stderr);
+    assert!(stderr.contains("  current → releases/2026-07-31"), "got:\n{}", stderr);
+    assert!(stderr.contains("! releases/2026-07-31 can't be checked: Missing or unreadable _provenance.json"), "got:\n{}", stderr);
+    assert!(stderr.contains("  Repair it: ods pull --force 2026-07-31"), "got:\n{}", stderr);
 }
 
 #[test]
@@ -131,14 +150,12 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
     fs::write(rel_dir.join("orgs.parquet"), orgs_bytes)?;
 
     // 1. Run with unpublished local release: outputs "* reconstructed manifest ... verified (unpublished local release)"
-    let mut err_buf1 = Vec::new();
-    ods::commands::use_cmd::run_with_writer(
-        UseArgs {
-            release_date: "2026-07-31".to_string(),
-            workspace: Some(workspace.clone()),
-        },
-        &mut err_buf1,
-    )?;
+    let output1 = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
+    assert!(output1.status.success());
 
     let current = workspace.join("current");
     assert!(current.exists());
@@ -146,10 +163,10 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
     assert_eq!(active_date, "2026-07-31");
     assert_eq!(path, fs::canonicalize(&rel_dir)?);
 
-    let stderr1 = String::from_utf8(err_buf1)?;
-    assert!(stderr1.contains("✓ Active release set to 2026-07-31"));
-    assert!(stderr1.contains("  current → releases/2026-07-31"));
-    assert!(stderr1.contains("* reconstructed manifest") && stderr1.contains("verified (unpublished local release)"));
+    let stderr1 = String::from_utf8_lossy(&output1.stderr);
+    assert!(stderr1.contains("✓ Active release set to 2026-07-31"), "got:\n{}", stderr1);
+    assert!(stderr1.contains("  current → releases/2026-07-31"), "got:\n{}", stderr1);
+    assert!(stderr1.contains("* reconstructed manifest") && stderr1.contains("verified (unpublished local release)"), "got:\n{}", stderr1);
 
     // 2. Compute reconstructed manifest digest, add matching index entry, run again:
     // outputs "✓ reconstructed manifest ... matches the index for 2026-07-31 (1.0.1)"
@@ -166,19 +183,17 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
         &workspace,
     )?;
 
-    let mut err_buf2 = Vec::new();
-    ods::commands::use_cmd::run_with_writer(
-        UseArgs {
-            release_date: "2026-07-31".to_string(),
-            workspace: Some(workspace.clone()),
-        },
-        &mut err_buf2,
-    )?;
+    let output2 = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use second time");
+    assert!(output2.status.success());
 
-    let stderr2 = String::from_utf8(err_buf2)?;
-    assert!(stderr2.contains("* Release 2026-07-31 already active"));
-    assert!(stderr2.contains("  current → releases/2026-07-31"));
-    assert!(stderr2.contains(&format!("✓ reconstructed manifest {} matches the index for 2026-07-31 (1.0.1)", digest)));
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
+    assert!(stderr2.contains("* Release 2026-07-31 already active"), "got:\n{}", stderr2);
+    assert!(stderr2.contains("  current → releases/2026-07-31"), "got:\n{}", stderr2);
+    assert!(stderr2.contains(&format!("✓ reconstructed manifest {} matches the index for 2026-07-31 (1.0.1)", digest)), "got:\n{}", stderr2);
 
     // Verify workspace README was generated
     let readme = workspace.join("README.md");

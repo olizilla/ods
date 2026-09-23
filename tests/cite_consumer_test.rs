@@ -435,15 +435,21 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
         .output()
         .expect("execute ods cite");
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let marker_canon = marker_path.canonicalize().unwrap_or_else(|_| marker_path.clone());
     assert!(
-        stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_canon.display()))
-            || stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_path.display())),
-        "stderr must contain marker refusal, got:\n{}",
+        stderr.contains("! Ignoring"),
+        "stderr must contain ! Ignoring notice, got:\n{}",
         stderr
     );
-    assert!(stderr.contains("Expected $schema https://ods.fyi/schema/releases.v1.json"));
-    assert!(stderr.contains("Delete it and run `ods pull` to replace it."));
+    assert!(
+        stderr.contains("it isn't a release index this ods can read"),
+        "stderr must note invalid release index, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("The next ods pull will replace it."),
+        "stderr must note next pull will replace it, got:\n{}",
+        stderr
+    );
 }

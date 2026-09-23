@@ -73,7 +73,7 @@ Options:
   -o, --output <OUTPUT>                Custom output directory for downloaded archive and provenance (defaults to workspace release dir ./ods_data/releases/<date>/)
       --verify-only <VERIFY_ONLY>      Verify local archive file checksum against TRUD API without downloading
       --local-archive <LOCAL_ARCHIVE>  Local archive or directory containing canned TRUD response.json & ZIP for offline testing
-  -w, --workspace <WORKSPACE>          Workspace directory (defaults to ./ods_data if omitted)
+  -w, --workspace <WORKSPACE>          Workspace directory (default: the one found from the current directory)
   -v, --verbose                        Print verbose output (URL fetched and raw API response text before deserialization)
   -h, --help                           Print help
 
@@ -86,7 +86,7 @@ Options:
       --all                    List all available TRUD releases without truncating
       --format <FORMAT>        Output format (json for machine-readable list)
       --api-key <API_KEY>      TRUD API Key [env: TRUD_API_KEY=]
-  -w, --workspace <WORKSPACE>  Workspace directory (defaults to ./ods_data if omitted)
+  -w, --workspace <WORKSPACE>  Workspace directory (default: the one found from the current directory)
   -v, --verbose                Print verbose output (URL fetched and raw API response text before deserialization)
   -h, --help                   Print help
 

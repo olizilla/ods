@@ -328,3 +328,87 @@ fn trud_pull_local_archive_with_workspace_flag_creates_that_workspace() {
         "the default ods_data/ must not also appear"
     );
 }
+
+#[test]
+fn use_in_empty_directory_writes_nothing() {
+    let cwd = TempDir::new().unwrap();
+    let output = ods_binary()
+        .current_dir(cwd.path())
+        .args(["use", "2026-08-28"])
+        .output()
+        .expect("run ods use");
+
+    assert!(
+        !output.status.success(),
+        "ods use in empty directory must fail"
+    );
+    let entries = empty_dir_listing(cwd.path());
+    assert!(
+        entries.is_empty(),
+        "an empty directory must stay empty after `ods use`, found: {:?}",
+        entries
+    );
+}
+
+#[test]
+fn make_with_output_writes_no_releases_json() {
+    let src = TempDir::new().unwrap();
+    let zip_path = create_mock_trud_zip(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    let cwd = TempDir::new().unwrap();
+    let out = cwd.path().join("ods_data").join("releases").join("2026-07-31");
+    let output = ods_binary()
+        .current_dir(cwd.path())
+        .args(["make", "--input"])
+        .arg(&zip_path)
+        .arg("--output")
+        .arg(&out)
+        .output()
+        .expect("run ods make");
+
+    assert!(
+        output.status.success(),
+        "ods make failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let ws = cwd.path().join("ods_data");
+    assert!(ws.exists(), "output created ods_data");
+    assert!(
+        !ws.join("_releases.json").exists(),
+        "ods make with --output must not write _releases.json"
+    );
+
+    // ods use pins the release without creating _releases.json
+    let use_output = ods_binary()
+        .current_dir(cwd.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
+    assert!(
+        use_output.status.success(),
+        "use failed:\n{}",
+        String::from_utf8_lossy(&use_output.stderr)
+    );
+    assert!(
+        !ws.join("_releases.json").exists(),
+        "ods use must not write _releases.json"
+    );
+
+    // ods find --gp from the same directory works without _releases.json
+    let find_output = ods_binary()
+        .current_dir(cwd.path())
+        .args(["find", "--gp"])
+        .output()
+        .expect("run ods find");
+    assert!(
+        find_output.status.success(),
+        "find failed:\n{}",
+        String::from_utf8_lossy(&find_output.stderr)
+    );
+    assert!(
+        !ws.join("_releases.json").exists(),
+        "ods find must not write _releases.json"
+    );
+}
+

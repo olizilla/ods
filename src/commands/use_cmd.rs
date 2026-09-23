@@ -1,16 +1,11 @@
 use anyhow::{bail, Result};
 use clap::Args as ClapArgs;
-use std::path::PathBuf;
 use crate::workspace::Workspace;
 
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
     /// The release date to pin (e.g. 2026-07-31)
     pub release_date: String,
-
-    /// Workspace path (defaults to ./ods_data)
-    #[arg(long)]
-    pub workspace: Option<PathBuf>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -18,7 +13,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Result<()> {
-    let ws = Workspace::open_or_create(args.workspace.as_deref())?;
+    let ws = Workspace::open(None)?;
     let workspace_root = ws.root().to_path_buf();
 
     let release_dir = workspace_root.join("releases").join(&args.release_date);

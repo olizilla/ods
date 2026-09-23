@@ -21,7 +21,7 @@ pub struct Args {
     #[arg(long, env = "TRUD_API_KEY")]
     pub api_key: Option<String>,
 
-    /// Workspace directory (defaults to ./ods_data if omitted)
+    /// Workspace directory (default: the one found from the current directory)
     #[arg(long, short = 'w')]
     pub workspace: Option<PathBuf>,
 

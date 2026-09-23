@@ -63,7 +63,7 @@ pub struct Args {
     #[arg(long)]
     pub local_archive: Option<PathBuf>,
 
-    /// Workspace directory (defaults to ./ods_data if omitted)
+    /// Workspace directory (default: the one found from the current directory)
     #[arg(long, short = 'w')]
     pub workspace: Option<PathBuf>,
 

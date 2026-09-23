@@ -27,35 +27,99 @@ pub fn validate_releases_json(dir: &Path) -> bool {
     false
 }
 
+static WARNED_WORKSPACES: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+pub fn emit_cache_notice_if_needed(workspace_root: &Path) {
+    let mut guard = WARNED_WORKSPACES.lock().unwrap();
+    let set = guard.get_or_insert_with(std::collections::HashSet::new);
+    if !set.insert(workspace_root.to_path_buf()) {
+        return;
+    }
+    let marker_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
+    if marker_path.exists() {
+        eprintln!(
+            "! Ignoring {}: it isn't a release index this ods can read\n  Using the index built into ods. The next ods pull will replace it.",
+            marker_path.display()
+        );
+    } else {
+        eprintln!(
+            "! Missing {}: using the index built into ods",
+            marker_path.display()
+        );
+    }
+}
+
+#[cfg(test)]
+pub fn reset_cache_notices() {
+    let mut guard = WARNED_WORKSPACES.lock().unwrap();
+    if let Some(set) = guard.as_mut() {
+        set.clear();
+    }
+}
+
+/// Checks whether `dir/releases/` contains at least one date-shaped directory
+/// (`\d{4}-\d{2}-\d{2}`) holding a readable `_provenance.json`.
+///
+/// Bounded traversal: `releases/` is only opened if it exists.
+/// Stops at the first valid release found without enumerating the rest.
+pub fn has_readable_release(dir: &Path) -> bool {
+    let releases_dir = dir.join("releases");
+    if !releases_dir.is_dir() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(&releases_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok()
+            && crate::provenance::OdsProvenance::load_from_dir(&path).ok().is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Checks the `_releases.json` marker in `dir`:
-/// - Returns Ok(false) if file does not exist.
-/// - Returns Ok(true) if file exists and validates as OdsReleaseIndex.
-/// - Returns Err with actionable diagnostic if file exists and fails validation.
+/// - Returns Ok(false) if file does not exist or fails validation (allowing candidate to qualify on releases).
+/// - Returns Ok(true) if file exists, validates structurally, and does not contradict baked index.
+/// - Returns Err with SecurityError if file exists and contradicts baked index.
 pub fn check_releases_json(dir: &Path) -> Result<bool> {
+    if let Ok(baked) = crate::index::OdsReleaseIndex::baked() {
+        check_releases_json_with_baked(dir, &baked)
+    } else {
+        check_releases_json_with_baked(dir, &crate::index::OdsReleaseIndex::default())
+    }
+}
+
+pub fn check_releases_json_with_baked(dir: &Path, baked: &crate::index::OdsReleaseIndex) -> Result<bool> {
     let path = dir.join(crate::index::RELEASES_JSON_FILENAME);
     if !path.is_file() {
         return Ok(false);
     }
-    let bytes = fs::read(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    match serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes) {
-        Ok(idx) => {
-            if idx.validate().is_ok() {
-                Ok(true)
-            } else {
-                anyhow::bail!(
-                    "✖ {} isn't a release index this ods can read\n  Expected $schema https://ods.fyi/schema/releases.v1.json\n  Delete it and run `ods pull` to replace it.",
-                    path.display()
-                )
-            }
-        }
-        Err(_) => {
-            anyhow::bail!(
-                "✖ {} isn't a release index this ods can read\n  Expected $schema https://ods.fyi/schema/releases.v1.json\n  Delete it and run `ods pull` to replace it.",
-                path.display()
-            )
-        }
+    let Ok(bytes) = fs::read(&path) else {
+        return Ok(false);
+    };
+    let idx: crate::index::OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+        Ok(i) => i,
+        Err(_) => return Ok(false),
+    };
+    if idx.validate().is_err() {
+        return Ok(false);
     }
+
+    // A cache that parses but contradicts a baked fact is a security error from merge
+    baked.merge(&idx)?;
+
+    Ok(true)
 }
 
 #[derive(Debug)]
@@ -80,6 +144,9 @@ impl Workspace {
                 );
             }
             if check_releases_json(path)? {
+                path.to_path_buf()
+            } else if has_readable_release(path) {
+                emit_cache_notice_if_needed(path);
                 path.to_path_buf()
             } else if let Some(found) = find_workspace_root_from(path, None)? {
                 found
@@ -150,7 +217,8 @@ impl Workspace {
     pub fn set_active(&self, date: &str) -> Result<()> {
         set_active_release(&self.root, date)?;
         let _ = generate_workspace_readme(&self.root, date, None, None);
-        ensure_workspace_root(&self.root)?;
+        ensure_workspace_gitignore(&self.root)?;
+        ensure_workspace_readme(&self.root)?;
         Ok(())
     }
 
@@ -247,8 +315,17 @@ pub fn find_workspace_root_from_with_home(
         if check_releases_json(a)? {
             return Ok(Some(a.to_path_buf()));
         }
+        if has_readable_release(a) {
+            emit_cache_notice_if_needed(a);
+            return Ok(Some(a.to_path_buf()));
+        }
+
         let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
         if check_releases_json(&default_ws)? {
+            return Ok(Some(default_ws));
+        }
+        if has_readable_release(&default_ws) {
+            emit_cache_notice_if_needed(&default_ws);
             return Ok(Some(default_ws));
         }
 
@@ -338,14 +415,14 @@ pub fn ensure_workspace_root(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Seeds the workspace marker `_releases.json` from the baked index verbatim if absent.
+/// Seeds the workspace cache `_releases.json` from the baked index verbatim if absent or unreadable.
 pub fn ensure_workspace_marker(workspace_root: &Path) -> Result<()> {
     fs::create_dir_all(workspace_root)
         .with_context(|| format!("creating directory at {}", workspace_root.display()))?;
     let marker_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
-    if !marker_path.exists() {
+    if !marker_path.exists() || !validate_releases_json(workspace_root) {
         fs::write(&marker_path, crate::index::BAKED_RELEASES_JSON_BYTES)
-            .with_context(|| format!("writing workspace marker to {}", marker_path.display()))?;
+            .with_context(|| format!("writing workspace index cache to {}", marker_path.display()))?;
     }
     Ok(())
 }

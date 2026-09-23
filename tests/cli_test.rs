@@ -508,12 +508,11 @@ fn test_use_cmd_repairs_missing_furniture() {
     assert!(!ws_dir.join(".gitignore").exists());
     assert!(!ws_dir.join("README.md").exists());
 
-    // Run `ods use 2026-07-31 --workspace <dir>`
+    // Run `ods use 2026-07-31` from within the workspace directory
     let use_output = ods_binary()
+        .current_dir(&ws_dir)
         .arg("use")
         .arg("2026-07-31")
-        .arg("--workspace")
-        .arg(&ws_dir)
         .output()
         .expect("execute ods use");
 
@@ -632,10 +631,9 @@ fn test_find_with_non_active_release_honours_explicit_release_dir() {
 
     // Pin active release to release 2 (2026-07-31)
     let use_output = ods_binary()
+        .current_dir(tmp.path())
         .arg("use")
         .arg("2026-07-31")
-        .arg("--workspace")
-        .arg(&ws_dir)
         .output()
         .expect("ods use");
     assert!(use_output.status.success());
@@ -708,10 +706,9 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
 
     // Pin active release to release 2 (2026-07-31)
     let use_output = ods_binary()
+        .current_dir(tmp.path())
         .arg("use")
         .arg("2026-07-31")
-        .arg("--workspace")
-        .arg(&ws_dir)
         .output()
         .expect("ods use");
     assert!(use_output.status.success());
@@ -744,7 +741,7 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
 }
 
 #[test]
-fn test_ods_make_explicit_output_seeds_releases_json() {
+fn test_ods_make_explicit_output_writes_no_releases_json() {
     let tmp = TempDir::new().unwrap();
     let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let custom_ws = tmp.path().join("custom_root");
@@ -761,13 +758,11 @@ fn test_ods_make_explicit_output_seeds_releases_json() {
 
     assert!(make_output.status.success());
     let seeded_marker = custom_ws.join("_releases.json");
-    assert!(seeded_marker.is_file(), "_releases.json must be seeded in custom root");
-    let bytes = fs::read(&seeded_marker).unwrap();
-    assert_eq!(bytes, ods::index::BAKED_RELEASES_JSON_BYTES, "_releases.json must be byte-identical to baked index");
+    assert!(!seeded_marker.exists(), "_releases.json must NOT be seeded by ods make");
 }
 
 #[test]
-fn test_ods_use_seeds_missing_marker() {
+fn test_ods_use_in_workspace_writes_no_releases_json() {
     let tmp = TempDir::new().unwrap();
     let ws_dir = tmp.path().join("ods_data");
     let rel_dir = ws_dir.join("releases").join("2026-07-31");
@@ -784,7 +779,7 @@ fn test_ods_use_seeds_missing_marker() {
         .expect("ods make");
     assert!(make_output.status.success());
 
-    // Explicitly remove the marker if created, to test that `ods use` seeds it if missing
+    // Explicitly remove the marker if created, to test that `ods use` does not write it
     let marker = ws_dir.join("_releases.json");
     if marker.exists() {
         fs::remove_file(&marker).unwrap();
@@ -792,16 +787,14 @@ fn test_ods_use_seeds_missing_marker() {
     assert!(!marker.exists());
 
     let use_output = ods_binary()
+        .current_dir(tmp.path())
         .arg("use")
         .arg("2026-07-31")
-        .arg("--workspace")
-        .arg(&ws_dir)
         .output()
         .expect("ods use");
 
     assert!(use_output.status.success());
-    assert!(marker.is_file(), "ods use must seed missing _releases.json");
-    assert_eq!(fs::read(&marker).unwrap(), ods::index::BAKED_RELEASES_JSON_BYTES);
+    assert!(!marker.exists(), "ods use must NOT write _releases.json");
 }
 
 #[test]
@@ -823,10 +816,9 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
     assert!(make_output.status.success());
 
     let use_output = ods_binary()
+        .current_dir(tmp.path())
         .arg("use")
         .arg("2020-01-01")
-        .arg("--workspace")
-        .arg(&ws_dir)
         .output()
         .expect("ods use");
     assert!(use_output.status.success());

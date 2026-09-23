@@ -397,8 +397,11 @@ fn test_find_workspace_root_rejects_nested_index_shape() {
     let nested_json = r#"{"fetched_at": "2026-08-28T12:00:00Z", "index": {"foo": "bar"}}"#;
     fs::write(ws.join("_releases.json"), nested_json).unwrap();
 
-    // Must return Err because invalid _releases.json stops discovery with exit 1
-    assert!(ods::workspace::find_workspace_root_from(&ws, None).is_err());
+    // Boundary so discovery does not escape to repo
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+    // An invalid _releases.json in a directory with no releases is not recognized as a workspace
+    assert_eq!(ods::workspace::find_workspace_root_from(&ws, None).unwrap(), None);
 }
 
 #[test]
@@ -407,6 +410,9 @@ fn test_workspace_marker_without_valid_schema_stops_command() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
     fs::write(ws.join("_releases.json"), b"{\"foo\":\"bar\"}").unwrap();
+
+    // Boundary so discovery does not escape to repo
+    fs::create_dir_all(tmp.path().join(".git")).unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
         .current_dir(tmp.path())
@@ -417,21 +423,15 @@ fn test_workspace_marker_without_valid_schema_stops_command() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.clone());
-    let marker_canon = ws_canon.join("_releases.json");
-    let marker_plain = ws.join("_releases.json");
     assert!(
-        stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_canon.display()))
-            || stderr.contains(&format!("✖ {} isn't a release index this ods can read", marker_plain.display())),
-        "stderr should contain expected marker, got:\n{}",
+        stderr.contains("✖ no ods workspace found here"),
+        "stderr should state no workspace found, got:\n{}",
         stderr
     );
-    assert!(stderr.contains("Expected $schema https://ods.fyi/schema/releases.v1.json"));
-    assert!(stderr.contains("Delete it and run `ods pull` to replace it."));
 }
 
 #[test]
-fn test_release_dir_with_no_releases_json_is_not_discovered() {
+fn test_workspace_discovered_by_release_dir_without_releases_json() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws_without_marker");
     let rel_dir = ws.join("releases").join("2026-07-31");
@@ -442,14 +442,212 @@ fn test_release_dir_with_no_releases_json_is_not_discovered() {
         serde_json::to_string_pretty(&prov).unwrap(),
     ).unwrap();
 
-    // In a directory structure where ws has NO _releases.json, discovering from inside releases/2026-07-31 must fail
     // Boundary .git prevents discovery from escaping to repo root
     fs::create_dir_all(tmp.path().join(".git")).unwrap();
-    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(), None);
 
-    // Now seed the marker in ws, and discovery succeeds
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
-    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(), Some(ws));
+    // Under W2, releases are the evidence: an ancestor holding a readable release IS discovered without _releases.json
+    assert_eq!(ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(), Some(ws.clone()));
+    assert_eq!(ods::workspace::find_workspace_root_from(&ws, None).unwrap(), Some(ws));
+}
+
+#[test]
+fn test_workspace_discovered_by_release_without_releases_json() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let ws = root.join("ods_data");
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    parquet::run(parquet::Args {
+        input: Some(zip),
+        output: Some(rel_dir.clone()),
+        ..Default::default()
+    }).unwrap();
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("releases/2026-07-31", ws.join("current")).unwrap();
+
+    assert!(!ws.join("_releases.json").exists());
+
+    // Boundary to stop discovery escaping
+    fs::create_dir_all(root.join(".git")).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(root)
+        .args(["find", "--gp"])
+        .output()
+        .expect("execute ods find");
+
+    assert!(output.status.success(), "ods find failed: {}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("! Missing"),
+        "stderr must contain ! Missing notice, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("using the index built into ods"),
+        "stderr must note using built-in index, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_workspace_discovered_by_release_with_malformed_releases_json() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let ws = root.join("ods_data");
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    parquet::run(parquet::Args {
+        input: Some(zip),
+        output: Some(rel_dir.clone()),
+        ..Default::default()
+    }).unwrap();
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("releases/2026-07-31", ws.join("current")).unwrap();
+
+    // Write malformed _releases.json
+    fs::write(ws.join("_releases.json"), b"{ not json").unwrap();
+
+    // Boundary to stop discovery escaping
+    fs::create_dir_all(root.join(".git")).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(root)
+        .args(["find", "--gp"])
+        .output()
+        .expect("execute ods find");
+
+    assert!(output.status.success(), "ods find must exit 0: {}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("! Ignoring"),
+        "stderr must contain ! Ignoring notice, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("it isn't a release index this ods can read"),
+        "got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("The next ods pull will replace it."),
+        "got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_workspace_with_contradicting_releases_json_halts_with_security_error() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ods_data");
+    fs::create_dir_all(&ws).unwrap();
+
+    let baked = common::make_v1_index(&[(
+        "2026-08-28",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_000_000,
+        &[("1.0.0", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+
+    // Contradicts 2026-08-28 in baked releases
+    let bad_index = common::make_v1_index(&[(
+        "2026-08-28",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        12345,
+        &[],
+    )]);
+    fs::write(ws.join("_releases.json"), serde_json::to_string(&bad_index).unwrap()).unwrap();
+
+    let err = ods::workspace::check_releases_json_with_baked(&ws, &baked).unwrap_err();
+    assert!(
+        err.to_string().contains("contradicts baked release"),
+        "error must report security error, got:\n{}",
+        err
+    );
+}
+
+#[test]
+fn test_pull_repairs_malformed_releases_json() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let ws = root.join("ods_data");
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    parquet::run(parquet::Args {
+        input: Some(zip),
+        output: Some(rel_dir.clone()),
+        ..Default::default()
+    }).unwrap();
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("releases/2026-07-31", ws.join("current")).unwrap();
+
+    // Write malformed index
+    fs::write(ws.join("_releases.json"), b"corrupted bytes").unwrap();
+
+    // Boundary to stop discovery escaping
+    fs::create_dir_all(root.join(".git")).unwrap();
+
+    // Calling ensure_workspace_marker repairs the malformed index
+    ods::workspace::ensure_workspace_marker(&ws).unwrap();
+
+    let repaired_bytes = fs::read(ws.join("_releases.json")).unwrap();
+    assert_eq!(repaired_bytes, ods::index::BAKED_RELEASES_JSON_BYTES);
+
+    // Subsequent ods find prints no warning notice
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(root)
+        .args(["find", "--gp"])
+        .output()
+        .expect("execute ods find");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("! Ignoring"), "repaired index emits no ignoring notice");
+    assert!(!stderr.contains("! Missing"), "repaired index emits no missing notice");
+}
+
+#[test]
+fn test_workspace_discovery_bounded_does_not_find_unnamed_subdirectories() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let ws = root.join("ws");
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    parquet::run(parquet::Args {
+        input: Some(zip),
+        output: Some(rel_dir.clone()),
+        ..Default::default()
+    }).unwrap();
+
+    // Boundary so discovery does not escape
+    fs::create_dir_all(root.join(".git")).unwrap();
+
+    // Running ods find from root must NOT find ./ws because ws is not named ods_data and is not an ancestor
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(root)
+        .args(["find", "--gp"])
+        .output()
+        .expect("execute ods find");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✖ no ods workspace found here"), "got:\n{}", stderr);
+
+    // But explicit --input ./ws/releases/2026-07-31 works
+    let output_explicit = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .current_dir(root)
+        .args(["find", "--gp", "--input", rel_dir.to_str().unwrap()])
+        .output()
+        .expect("execute ods find with --input");
+
+    assert!(output_explicit.status.success(), "explicit find failed:\n{}", String::from_utf8_lossy(&output_explicit.stderr));
 }
 
 #[test]

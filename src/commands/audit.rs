@@ -35,7 +35,7 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Workspace directory (defaults to ./ods_data if omitted)
+    /// Workspace directory (default: the one found from the current directory)
     #[arg(long, short)]
     pub workspace: Option<PathBuf>,
 
