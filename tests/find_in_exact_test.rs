@@ -372,7 +372,9 @@ fn get_matched_cells(table_str: &str) -> Vec<String> {
     let mut current_row: Option<String> = None;
 
     for l in table_str.lines() {
-        if l.starts_with("│ ") && !l.contains("ODS Code") && !l.contains("record") {
+        // A data row always has column dividers; the footer row never does, whatever
+        // words it uses (`open`, `legally closed`, `record(s)`, ...).
+        if l.starts_with("│ ") && !l.contains("ODS Code") && l.contains('┆') {
             let cols: Vec<&str> = l.split('┆').collect();
             let first_col = cols.first().map(|c| c.trim_start_matches('│').trim()).unwrap_or("");
             let last_col = cols.last().map(|c| c.trim().trim_end_matches('│').trim()).unwrap_or("");

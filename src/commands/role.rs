@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use arrow::array::{Array, ListArray, StringArray};
+use arrow::array::{Array, Date32Array, ListArray, StringArray};
 use clap::{Parser, ValueEnum};
 use comfy_table::{presets, ContentArrangement, Table};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -34,7 +34,7 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Count inactive organisations as holders too
+    /// Count closed and inactive organisations as holders too
     #[arg(long)]
     pub all: bool,
 
@@ -262,10 +262,23 @@ fn count_role_holders(path: &Path, include_inactive: bool) -> Result<HashMap<Str
             .as_any()
             .downcast_ref::<StringArray>()
             .context("status StringArray")?;
+        let legal_end_arr = schema.index_of("legal_end").ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Date32Array>());
+        let trud_release_date_arr = schema.index_of("trud_release_date").ok()
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Date32Array>());
 
         for i in 0..batch.num_rows() {
-            if !include_inactive && status_arr.value(i) != "active" {
-                continue;
+            if !include_inactive {
+                if status_arr.value(i) != "active" {
+                    continue;
+                }
+                if let (Some(legal_end), Some(trud_release_date)) = (legal_end_arr, trud_release_date_arr) {
+                    if legal_end.is_valid(i) && trud_release_date.is_valid(i)
+                        && legal_end.value(i) <= trud_release_date.value(i)
+                    {
+                        continue;
+                    }
+                }
             }
             if role_codes_arr.is_valid(i) {
                 let value_arr = role_codes_arr.value(i);

@@ -38,8 +38,8 @@ them: each test enforces one, and a failing test names the one that broke.
 - **Q3. Values add rows, flags remove them.** Values given to `--in`, repeated or comma-separated, combine as a union. Different flags combine as an intersection, so adding `--gp` or `--role` never adds rows.
 - **Q4. `--sql` returns what `find` returned.** Run in DuckDB, the query returns the same set of rows as `ods find`. The order matches wherever we can make it match, and the tests check it, but the order is not guaranteed.
 - **Q5. `info` shows the whole record.** `ods info <code>` accepts a code in any letter case, shows its relationships and succession chain, and fails on an unknown code.
-- **Q6. Holders are active holders.** `ods role` counts the active organisations that actively hold each role, and every organisation with `--all`.
-- **Q7. Active unless you say `--all`.** `ods find` and `ods role` cover active organisations only; `--all` adds the inactive ones from the same table.
+- **Q6. Holders are open holders.** `ods role` counts the organisations that are open and actively hold each role, and every organisation with `--all`.
+- **Q7. Open unless you say `--all`.** `ods find` and `ods role` cover what is open — active, and not past its legal end as of the release date — not NHS's `active`, which stays true while a legally dissolved organisation's suppliers migrate off it. `status` keeps NHS's meaning unchanged, in the data, in `--all`, and in `ods info`, which never filters; `--all` adds the legally-closed and inactive rows from the same table.
 
 ## Output
 

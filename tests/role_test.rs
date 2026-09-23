@@ -352,14 +352,62 @@ fn test_role_holders_counts_on_release_data() {
 
     assert_eq!(
         real_map.get("RO198"),
-        Some(&38256),
-        "RO198 must have 38,256 active holders in 2026-08-28 release (not 49,575)"
+        Some(&35116),
+        "RO198 (NHS Trust Site) drops from 38,256 active to 35,116 open once legally-closed \
+         holders count as closed, not just not-yet-closed-in-every-sense"
     );
     assert_eq!(
         real_map.get("RO101"),
         Some(&31738),
-        "RO101 must have 31,738 active holders in 2026-08-28 release (not 50,114)"
+        "RO101 (Social Care Site) is unchanged at 31,738: none of its holders are legally closed"
     );
+    assert_eq!(
+        real_map.get("RO76"),
+        Some(&7566),
+        "RO76 (GP Practice) is unchanged at 7,566: none of its holders are legally closed"
+    );
+    assert_eq!(
+        real_map.get("RO197"),
+        Some(&202),
+        "RO197 (NHS Trust) drops from 247 active to 202 open, matching `ods find --role RO197`"
+    );
+}
+
+/// `--all` is already the unfiltered table (`include_inactive: true`), a code path the open
+/// filter never reaches, so it must count exactly what it counted before this brief.
+#[test]
+#[ignore = "requires full release 2026-08-28"]
+fn test_role_all_is_unchanged_by_the_open_filter() {
+    let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
+    let mut out = Vec::new();
+    role::run_with_writer(
+        Args {
+            format: OutputFormat::Csv,
+            all: true,
+            input: Some(release_dir.clone()),
+            ..Default::default()
+        },
+        &mut out,
+        &release_dir,
+    )
+    .expect("ods role --all on real data should succeed");
+
+    let s = String::from_utf8(out).unwrap();
+    let mut counts = std::collections::HashMap::new();
+    for line in s.lines().skip(1) {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() == 3 {
+            counts.insert(parts[0].to_string(), parts[2].parse::<usize>().unwrap());
+        }
+    }
+
+    for (code, expected) in [("RO198", 61592), ("RO76", 10112), ("RO197", 689), ("RO227", 1390), ("RO315", 321)] {
+        assert_eq!(
+            counts.get(code),
+            Some(&expected),
+            "{code} with --all must be unchanged from today"
+        );
+    }
 }
 
 #[test]

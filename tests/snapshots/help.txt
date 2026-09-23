@@ -114,7 +114,7 @@ Options:
           Filter by role code (e.g. RO76) or curated role name (repeatable and comma-separated). Codes never change; use codes for durable queries and scripts
 
   -a, --all
-          Include inactive and closed organisations, not only active ones
+          Include closed and inactive organisations, not only open ones
 
   -v, --verbose
           Show full role set in stored order without +N de-emphasis

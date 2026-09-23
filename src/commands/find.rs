@@ -69,7 +69,7 @@ pub struct Args {
     #[arg(long, help_heading = "Role Shortcuts")]
     pub dentist: bool,
 
-    /// Include inactive and closed organisations, not only active ones
+    /// Include closed and inactive organisations, not only open ones
     #[arg(long, short)]
     pub all: bool,
 
@@ -987,6 +987,7 @@ pub fn build_sql_query(
 
     if !args.all {
         clauses.push("status = 'active'".to_string());
+        clauses.push("(legal_end IS NULL OR legal_end > trud_release_date)".to_string());
     }
 
     if let Some(ref q) = args.query {
@@ -1256,6 +1257,7 @@ pub fn run_with_writer_color(
     let mut location_counts: HashMap<String, usize> = HashMap::new();
     let mut matched_location_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut district_subs_map: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+    let mut legally_closed_count: usize = 0;
 
     for batch in reader {
         let batch = batch?;
@@ -1415,6 +1417,19 @@ pub fn run_with_writer_color(
             };
 
             let org = extract_org_row_from_batch(&batch, i, &indices);
+
+            // A row past its legal end as of the release date is closed, not merely
+            // not-yet-closed in every sense NHS tracks — checked last, against only
+            // what the search would otherwise have returned, so the footer can say
+            // how many of *this search's* matches were held back, not the dataset's.
+            if !args.all {
+                if let Some(ref legal_end) = org.legal_end {
+                    if legal_end.as_str() <= org.trud_release_date.as_str() {
+                        legally_closed_count += 1;
+                        continue;
+                    }
+                }
+            }
 
             matches.push(Match {
                 org,
@@ -1715,22 +1730,38 @@ pub fn run_with_writer_color(
                     // 4. Render table with footer
                     let n = matched_count;
                     let (left, right) = if args.all {
+                        // Nothing was filtered, so open/legally-closed/inactive partition
+                        // every row: recover the breakdown from what each row already says.
                         let active_count = matches.iter().filter(|r| r.org.status.eq_ignore_ascii_case("active")).count();
+                        let legally_closed_count = matches.iter().filter(|r| {
+                            r.org.status.eq_ignore_ascii_case("active")
+                                && r.org.legal_end.as_deref().is_some_and(|le| le <= r.org.trud_release_date.as_str())
+                        }).count();
+                        let open_count = active_count.saturating_sub(legally_closed_count);
                         let inactive_count = n.saturating_sub(active_count);
-                        let left_str = if n == 1 {
+                        let left_str = format!(
+                            "{} open · {} legally closed · {} inactive",
+                            open_count, legally_closed_count, inactive_count
+                        );
+                        let right_str = if n == 1 {
                             "1 record".to_string()
                         } else {
                             format!("{} records", n)
                         };
-                        let right_str = format!("{} active · {} inactive", active_count, inactive_count);
                         (left_str, right_str)
                     } else {
-                        let left_str = if n == 1 {
-                            "1 active record".to_string()
+                        // `matches` already holds only open rows; `legally_closed_count`
+                        // was counted where the filter dropped them, at no extra cost.
+                        let left_str = if legally_closed_count > 0 {
+                            format!("{} open · {} legally closed", n, legally_closed_count)
                         } else {
-                            format!("{} active records", n)
+                            format!("{} open", n)
                         };
-                        let right_str = "Use --all to include inactive".to_string();
+                        let right_str = if legally_closed_count == 1 {
+                            "Use --all to see it".to_string()
+                        } else {
+                            "Use --all to include closed".to_string()
+                        };
                         (left_str, right_str)
                     };
 
@@ -2110,6 +2141,146 @@ mod tests {
         }
         assert_eq!(json_keys[23], "predecessors");
         assert_eq!(json_keys[24], "successors");
+    }
+
+    /// A code whose legal end is the release date is closed, `>` not `>=`
+    /// (`open-not-just-active.md`, decided 2026-09-23).
+    #[test]
+    fn test_open_filter_excludes_a_legal_end_equal_to_the_release_date() {
+        let dir = tempdir().unwrap();
+        let parquet_dir = dir.path().to_path_buf();
+
+        let records = vec![crate::ods_xml::OdsRecord {
+            ods_code: "FG241".to_string(),
+            name: "GUNNS PHARMACY".to_string(),
+            status: "active".to_string(),
+            role: "pharmacy".to_string(),
+            record_class: "org".to_string(),
+            dates: vec![crate::ods_xml::OdsDate {
+                date_type: "Legal".to_string(),
+                start: Some("2000-01-01".to_string()),
+                end: Some("2026-07-31".to_string()),
+            }],
+            ..Default::default()
+        }];
+
+        let edges = crate::commands::parquet::build_succession_edges(&records);
+        let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
+        let mut prov = crate::provenance::OdsProvenance::default();
+        prov.trud_release_date = Some("2026-07-31".to_string());
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+
+        let mut out = Vec::new();
+        run_with_writer(
+            Args {
+                code: vec!["FG241".to_string()],
+                format: OutputFormat::Csv,
+                input: Some(parquet_dir.clone()),
+                ..Default::default()
+            },
+            &mut out,
+            &parquet_dir,
+        ).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            !s.contains("FG241"),
+            "a legal end equal to the release date is closed, not open:\n{s}"
+        );
+
+        let mut out_all = Vec::new();
+        run_with_writer(
+            Args {
+                code: vec!["FG241".to_string()],
+                all: true,
+                format: OutputFormat::Csv,
+                input: Some(parquet_dir.clone()),
+                ..Default::default()
+            },
+            &mut out_all,
+            &parquet_dir,
+        ).unwrap();
+        let s_all = String::from_utf8(out_all).unwrap();
+        assert!(s_all.contains("FG241"), "--all still shows it:\n{s_all}");
+    }
+
+    /// The footer's three non-`--all` shapes, and the `--all` breakdown
+    /// (`open-not-just-active.md` Task 2).
+    #[test]
+    fn test_footer_names_what_it_held_back() {
+        let dir = tempdir().unwrap();
+        let parquet_dir = dir.path().to_path_buf();
+        let release_date = "2026-07-31";
+
+        fn org(code: &str, name: &str, status: &str, legal_end: Option<&str>) -> crate::ods_xml::OdsRecord {
+            crate::ods_xml::OdsRecord {
+                ods_code: code.to_string(),
+                name: name.to_string(),
+                status: status.to_string(),
+                role: "org".to_string(),
+                record_class: "org".to_string(),
+                dates: legal_end.map(|end| vec![crate::ods_xml::OdsDate {
+                    date_type: "Legal".to_string(),
+                    start: Some("2000-01-01".to_string()),
+                    end: Some(end.to_string()),
+                }]).unwrap_or_default(),
+                ..Default::default()
+            }
+        }
+
+        let records = vec![
+            // "Nothing held back" shape: two open, nothing legally closed.
+            org("N001", "Nothing Held Open One", "active", None),
+            org("N002", "Nothing Held Open Two", "active", None),
+            // "Singular" shape: nothing open, exactly one legally closed.
+            org("S001", "Singular Held Closed", "active", Some(release_date)),
+            // "Plural" shape and the --all breakdown: two open, two legally
+            // closed, one inactive.
+            org("P001", "Plural Held Open One", "active", None),
+            org("P002", "Plural Held Open Two", "active", None),
+            org("P003", "Plural Held Closed One", "active", Some(release_date)),
+            org("P004", "Plural Held Closed Two", "active", Some("2000-01-01")),
+            org("P005", "Plural Held Inactive", "inactive", None),
+        ];
+
+        let edges = crate::commands::parquet::build_succession_edges(&records);
+        let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
+        let mut prov = crate::provenance::OdsProvenance::default();
+        prov.trud_release_date = Some(release_date.to_string());
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+
+        let run = |query: &str, all: bool| -> String {
+            let mut out = Vec::new();
+            run_with_writer(
+                Args {
+                    query: Some(query.to_string()),
+                    all,
+                    sort: Some(SortBy::Code),
+                    format: OutputFormat::Table,
+                    input: Some(parquet_dir.clone()),
+                    ..Default::default()
+                },
+                &mut out,
+                &parquet_dir,
+            ).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+
+        let nothing_held = run("Nothing Held", false);
+        assert!(nothing_held.contains("2 open"), "got:\n{nothing_held}");
+        assert!(!nothing_held.contains("legally closed"), "got:\n{nothing_held}");
+        assert!(nothing_held.contains("Use --all to include closed"), "got:\n{nothing_held}");
+
+        let singular = run("Singular Held", false);
+        assert!(singular.contains("0 open · 1 legally closed"), "got:\n{singular}");
+        assert!(singular.contains("Use --all to see it"), "got:\n{singular}");
+
+        let plural = run("Plural Held", false);
+        assert!(plural.contains("2 open · 2 legally closed"), "got:\n{plural}");
+        assert!(plural.contains("Use --all to include closed"), "got:\n{plural}");
+
+        let plural_all = run("Plural Held", true);
+        assert!(plural_all.contains("2 open · 2 legally closed · 1 inactive"), "got:\n{plural_all}");
+        assert!(plural_all.contains("5 records"), "got:\n{plural_all}");
     }
 
     #[test]

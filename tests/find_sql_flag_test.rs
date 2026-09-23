@@ -387,7 +387,9 @@ fn test_find_sql_output_hygiene_and_isolation() {
     let sql_bare = run_find_sql(Args::default(), &parquet_dir);
     assert!(sql_bare.contains("SELECT *\nFROM"));
     assert!(sql_bare.contains("ORDER BY ods_code;"));
-    assert!(sql_bare.contains("WHERE status = 'active'\nORDER BY ods_code;"));
+    assert!(sql_bare.contains(
+        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\nORDER BY ods_code;"
+    ));
     assert!(!sql_bare.contains("No search filters given"));
 
     // ods find --sql reads no Parquet file (works on empty/non-existent parquet dir)
@@ -419,7 +421,9 @@ fn test_task2_clause_presence() {
         },
         &parquet_dir,
     );
-    assert!(sql_code.contains("WHERE status = 'active'\n  AND ods_code IN ('A82608')\nORDER BY ods_code;"));
+    assert!(sql_code.contains(
+        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\n  AND ods_code IN ('A82608')\nORDER BY ods_code;"
+    ));
 
     // --code A82608,8GJ58
     let sql_multi_code = run_find_sql(
@@ -705,7 +709,7 @@ fn test_sql_flag_macro_emission_counts_match_on_release_data() {
         (Args { location: vec!["isle of man".to_string()], ..Default::default() }, 201),
         (Args { location: vec!["la10".to_string()], ..Default::default() }, 14),
         (Args { location: vec!["durham".to_string()], gp: true, ..Default::default() }, 15),
-        (Args { location: vec!["durham".to_string(), "cumbria".to_string()], ..Default::default() }, 1667),
+        (Args { location: vec!["durham".to_string(), "cumbria".to_string()], ..Default::default() }, 1631),
     ];
 
     for (args, expected_rows) in cases {

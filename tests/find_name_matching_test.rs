@@ -246,12 +246,12 @@ fn test_name_matching_ignores_spacing_punctuation_and_matches_row_counts_on_rele
     let release_dir = get_release_dir().expect("requires ods_data/releases/2026-08-28");
 
     let queries_and_targets = [
-        ("christchurch", 161),
-        ("christ church", 161),
-        ("homecare", 2880),
+        ("christchurch", 153),
+        ("christ church", 153),
+        ("homecare", 2879),
         ("daynight", 32),
         ("l'arche", 20),
-        ("st marys", 577),
+        ("st marys", 566),
         ("sedbergh", 6),
     ];
 
@@ -386,7 +386,7 @@ fn test_ordering_positions_exact_matches_first_on_release_data() {
         }
     }
 
-    // st marys: ST MARY STREET SURGERY at 465 of 577, TEDBURN ST MARY SCHOOL at 367
+    // st marys: ST MARY STREET SURGERY at 461 of 566, TEDBURN ST MARY SCHOOL at 363
     let mut out_sm = Vec::new();
     find::run_with_writer(
         Args {
@@ -400,13 +400,13 @@ fn test_ordering_positions_exact_matches_first_on_release_data() {
     )
     .unwrap();
     let sm_rows: Vec<String> = String::from_utf8(out_sm).unwrap().lines().skip(1).map(|l| l.to_string()).collect();
-    assert_eq!(sm_rows.len(), 577);
+    assert_eq!(sm_rows.len(), 566);
     let pos_surgery = sm_rows.iter().position(|r| r.contains("ST MARY STREET SURGERY")).map(|p| p + 1);
-    assert_eq!(pos_surgery, Some(465), "ST MARY STREET SURGERY must be at pos 465 of 577 for 'st marys'");
+    assert_eq!(pos_surgery, Some(461), "ST MARY STREET SURGERY must be at pos 461 of 566 for 'st marys'");
     let pos_school = sm_rows.iter().position(|r| r.contains("TEDBURN ST MARY SCHOOL")).map(|p| p + 1);
-    assert_eq!(pos_school, Some(367), "TEDBURN ST MARY SCHOOL must be at pos 367 of 577 for 'st marys'");
+    assert_eq!(pos_school, Some(363), "TEDBURN ST MARY SCHOOL must be at pos 363 of 566 for 'st marys'");
 
-    // st mary's: ST MARY STREET SURGERY at 527 of 577, TEDBURN ST MARY SCHOOL at 512
+    // st mary's: ST MARY STREET SURGERY at 517 of 566, TEDBURN ST MARY SCHOOL at 502
     let mut out_sma = Vec::new();
     find::run_with_writer(
         Args {
@@ -420,11 +420,11 @@ fn test_ordering_positions_exact_matches_first_on_release_data() {
     )
     .unwrap();
     let sma_rows: Vec<String> = String::from_utf8(out_sma).unwrap().lines().skip(1).map(|l| l.to_string()).collect();
-    assert_eq!(sma_rows.len(), 577);
+    assert_eq!(sma_rows.len(), 566);
     let pos_surgery_a = sma_rows.iter().position(|r| r.contains("ST MARY STREET SURGERY")).map(|p| p + 1);
-    assert_eq!(pos_surgery_a, Some(527), "ST MARY STREET SURGERY must be at pos 527 of 577 for 'st mary\\'s'");
+    assert_eq!(pos_surgery_a, Some(517), "ST MARY STREET SURGERY must be at pos 517 of 566 for 'st mary\\'s'");
     let pos_school_a = sma_rows.iter().position(|r| r.contains("TEDBURN ST MARY SCHOOL")).map(|p| p + 1);
-    assert_eq!(pos_school_a, Some(512), "TEDBURN ST MARY SCHOOL must be at pos 512 of 577 for 'st mary\\'s'");
+    assert_eq!(pos_school_a, Some(502), "TEDBURN ST MARY SCHOOL must be at pos 502 of 566 for 'st mary\\'s'");
 }
 
 
@@ -477,7 +477,7 @@ fn test_st_marys_sql_output_format_on_release_data() {
         &release_dir,
     );
 
-    let expected_suffix = "WHERE status = 'active'\n  AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
+    let expected_suffix = "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\n  AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
     assert!(
         sql.contains(expected_suffix),
         "SQL output must contain expected clause and order by, got:\n{}",

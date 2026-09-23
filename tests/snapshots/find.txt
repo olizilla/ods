@@ -20,7 +20,7 @@ $ COLUMNS=100 ods find --in sedbergh --sort code
 │ VN6C2     ┆ SEDBERGH REHABILITATION    ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ town    │
 │           ┆ CENTRE                     ┆          ┆                         ┆       ┆         │
 ├───────────┴────────────────────────────┴──────────┴─────────────────────────┴───────┴─────────┤
-│ 14 active records                                               Use --all to include inactive │
+│ 14 open                                                           Use --all to include closed │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find sedbergh --gp --in cumbria
@@ -33,7 +33,7 @@ $ COLUMNS=100 ods find sedbergh --gp --in cumbria
 │ D2E8H    ┆ SEDBERGH FIRST RESPONDERS ┆ LA10 5AA ┆ GP Practice    ┆ org   ┆ county  │
 │ RX796    ┆ SEDBERGH MEDICAL SERVICES ┆ LA10 5AA ┆ GP Practice    ┆ org   ┆ county  │
 ├──────────┴───────────────────────────┴──────────┴────────────────┴───────┴─────────┤
-│ 3 active records                                     Use --all to include inactive │
+│ 3 open                                                 Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find FAH
@@ -42,9 +42,8 @@ $ COLUMNS=100 ods find FAH
 │ ODS Code ┆ Name ┆ Postcode ┆ Roles ┆ Class │
 ╞══════════╪══════╪══════════╪═══════╪═══════╡
 ├──────────┴──────┴──────────┴───────┴───────┤
-│ 0 active records                           │
+│ 0 open         Use --all to include closed │
 └────────────────────────────────────────────┘
-* Use --all to include inactive
 
 * 'FAH' is also an ODS code — ods info FAH
 
@@ -78,7 +77,7 @@ $ COLUMNS=100 ods find 'SEDBERGH MEDICAL PRACTICE'
 ╞══════════╪═══════════════════════════╪══════════╪════════════════╪═══════╡
 │ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ GP Practice +1 ┆ org   │
 ├──────────┴───────────────────────────┴──────────┴────────────────┴───────┤
-│ 1 active record                            Use --all to include inactive │
+│ 1 open                                       Use --all to include closed │
 └──────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find 'SEDBERGH MEDICAL PRACTICE' --verbose
@@ -88,7 +87,7 @@ $ COLUMNS=100 ods find 'SEDBERGH MEDICAL PRACTICE' --verbose
 ╞══════════╪═══════════════════════════╪══════════╪══════════════════════════════════════╪═══════╡
 │ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ Prescribing Cost Centre, GP Practice ┆ org   │
 ├──────────┴───────────────────────────┴──────────┴──────────────────────────────────────┴───────┤
-│ 1 active record                                                  Use --all to include inactive │
+│ 1 open                                                             Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find --code RJZ
@@ -99,7 +98,7 @@ $ COLUMNS=100 ods find --code RJZ
 │ RJZ      ┆ KING'S COLLEGE HOSPITAL NHS FOUNDATION ┆ SE5 9RS  ┆ NHS Trust, Hospice +1 ┆ org   │
 │          ┆ TRUST                                  ┆          ┆                       ┆       │
 ├──────────┴────────────────────────────────────────┴──────────┴───────────────────────┴───────┤
-│ 1 active record                                                Use --all to include inactive │
+│ 1 open                                                           Use --all to include closed │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find --code A85619
@@ -109,7 +108,7 @@ $ COLUMNS=100 ods find --code A85619
 ╞══════════╪═══════════════════════╪══════════╪══════════════════════════════════╪═══════╡
 │ A85619   ┆ DUMMY PRACTICE A85619 ┆ NE1 1AA  ┆ Other Prescribing Cost Centre +1 ┆ org   │
 ├──────────┴───────────────────────┴──────────┴──────────────────────────────────┴───────┤
-│ 1 active record                                          Use --all to include inactive │
+│ 1 open                                                     Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find CLWYD --all --sort code
@@ -119,7 +118,7 @@ $ COLUMNS=100 ods find CLWYD --all --sort code
 ╞══════════╪═════════════════════╪══════════╪═════════════╪═══════╪══════════╡
 │ CLWYD    ┆ CLWYD → CONWY UA +4 ┆ CH7 1AA  ┆ GP Practice ┆ org   ┆ inactive │
 ├──────────┴─────────────────────┴──────────┴─────────────┴───────┴──────────┤
-│ 1 record                                             0 active · 1 inactive │
+│ 0 open · 0 legally closed · 1 inactive                            1 record │
 └────────────────────────────────────────────────────────────────────────────┘
 
 * 'CLWYD' is also an ODS code — ods info CLWYD
@@ -142,7 +141,7 @@ $ COLUMNS=100 ods find sedbergh
 │ RX796    ┆ SEDBERGH MEDICAL SERVICES       ┆ LA10 5AA ┆ GP Practice             ┆ org   │
 │ VN6C2    ┆ SEDBERGH REHABILITATION CENTRE  ┆ LA10 5AA ┆ Pharmacy                ┆ site  │
 ├──────────┴─────────────────────────────────┴──────────┴─────────────────────────┴───────┤
-│ 12 active records                                         Use --all to include inactive │
+│ 12 open                                                     Use --all to include closed │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find sedbergh --all
@@ -163,7 +162,7 @@ $ COLUMNS=100 ods find sedbergh --all
 │ RX796    ┆ SEDBERGH MEDICAL SERVICES       ┆ LA10 5AA ┆ GP Practice             ┆ org   ┆ active │
 │ VN6C2    ┆ SEDBERGH REHABILITATION CENTRE  ┆ LA10 5AA ┆ Pharmacy                ┆ site  ┆ active │
 ├──────────┴─────────────────────────────────┴──────────┴─────────────────────────┴───────┴────────┤
-│ 12 records                                                                12 active · 0 inactive │
+│ 12 open · 0 legally closed · 0 inactive                                               12 records │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find --code A82608
@@ -173,7 +172,7 @@ $ COLUMNS=100 ods find --code A82608
 ╞══════════╪═══════════════════════════╪══════════╪════════════════╪═══════╡
 │ A82608   ┆ SEDBERGH MEDICAL PRACTICE ┆ LA10 5DL ┆ GP Practice +1 ┆ org   │
 ├──────────┴───────────────────────────┴──────────┴────────────────┴───────┤
-│ 1 active record                            Use --all to include inactive │
+│ 1 open                                       Use --all to include closed │
 └──────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find nonexistentquery12345
@@ -182,9 +181,8 @@ $ COLUMNS=100 ods find nonexistentquery12345
 │ ODS Code ┆ Name ┆ Postcode ┆ Roles ┆ Class │
 ╞══════════╪══════╪══════════╪═══════╪═══════╡
 ├──────────┴──────┴──────────┴───────┴───────┤
-│ 0 active records                           │
+│ 0 open         Use --all to include closed │
 └────────────────────────────────────────────┘
-* Use --all to include inactive
 
 $ COLUMNS=40 ods find sedbergh
 * Source: releases/2026-07-31/orgs.parquet
@@ -259,9 +257,8 @@ $ COLUMNS=40 ods find sedbergh
 │       ┆ CENTR ┆       ┆       ┆      │
 │       ┆ E     ┆       ┆       ┆      │
 ├───────┴───────┴───────┴───────┴──────┤
-│ 12 active records                    │
+│ 12 open  Use --all to include closed │
 └──────────────────────────────────────┘
-* Use --all to include inactive
 
 $ COLUMNS=100 ods find --in SW1
 * Source: releases/2026-07-31/orgs.parquet
@@ -271,7 +268,7 @@ $ COLUMNS=100 ods find --in SW1
 ╞══════════╪══════════════════════╪══════════╪══════════╪═══════╪══════════╡
 │ SW1A01   ┆ WESTMINSTER PRACTICE ┆ SW1A 1AA ┆ Pharmacy ┆ site  ┆ postcode │
 ├──────────┴──────────────────────┴──────────┴──────────┴───────┴──────────┤
-│ 1 active record                            Use --all to include inactive │
+│ 1 open                                       Use --all to include closed │
 └──────────────────────────────────────────────────────────────────────────┘
 
 $ COLUMNS=100 ods find --in E1
@@ -283,5 +280,5 @@ $ COLUMNS=100 ods find --in E1
 │ E101     ┆ WHITECHAPEL HEALTH ┆ E1 1AA   ┆ Pharmacy ┆ site  ┆ postcode │
 │ E1W01    ┆ WAPPING CLINIC     ┆ E1W 1AA  ┆ Pharmacy ┆ site  ┆ postcode │
 ├──────────┴────────────────────┴──────────┴──────────┴───────┴──────────┤
-│ 2 active records                         Use --all to include inactive │
+│ 2 open                                     Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────┘

@@ -43,6 +43,7 @@ duckdb -c "
   SELECT ods_code, name, postcode, role_names
     FROM 'https://ods.fyi/orgs.parquet'
    WHERE status = 'active'
+     AND (legal_end IS NULL OR legal_end > trud_release_date)
    AND list_contains(role_names, 'GP Practice')
    AND postcode LIKE 'SW9%';"
 ```
@@ -70,7 +71,7 @@ ods find --gp --in SW9
 │ Y05161   ┆ FIVEWAYS PCN EA HUB          ┆ SW9 6AF  ┆ GP Practice +1 ┆ org   ┆ postcode │
 │ Y05163   ┆ LARC CLINIC (LA)             ┆ SW9 8DJ  ┆ GP Practice +1 ┆ org   ┆ postcode │
 ├──────────┴──────────────────────────────┴──────────┴────────────────┴───────┴──────────┤
-│ 10 active records                                        Use --all to include inactive │
+│ 10 open                                                    Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 

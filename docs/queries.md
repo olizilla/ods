@@ -2,7 +2,15 @@
 
 Some interesting queries with real output. The schema and the reasoning behind it is in [parquet.md].
 
-You can point `duckdb` at the parquet files and go. Local-first! All examples here show the output given from the `2026-08-28` release. `orgs.parquet` holds every organisation, closed ones too, so a query about what's open today needs `WHERE status = 'active'`.
+You can point `duckdb` at the parquet files and go. Local-first! All examples here show the output given from the `2026-08-28` release. `orgs.parquet` holds every organisation, closed ones too, so most queries below filter with `WHERE status = 'active'`.
+
+`status = 'active'` alone isn't the same question as "is this open": NHS keeps a legally dissolved organisation `active` for a migration window that's meant to be six months and often runs years over (see [nhs.md](./nhs.md#status-active-and-open)). What `ods find` and `ods role` actually filter on, and what a query should use if it means the same thing, is:
+
+```sql
+WHERE status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date)
+```
+
+Compare to `trud_release_date`, the column, never to `current_date`: a query against a dated, immutable release should answer the same way whenever you run it. Comparing to today's date instead makes the same query drift out of date the moment it's written, and answer differently on the same file next year.
 
 ```console
 $ duckdb -c "SELECT ods_code, name, role_names FROM 'ods_data/current/orgs.parquet' WHERE status = 'active' AND town = 'SEDBERGH'"

@@ -20,7 +20,7 @@ ods find [QUERY] [OPTIONS]
 | `-r, --role <ROLES>` | Filter by role codes (e.g. `RO76`) or curated names (repeatable and comma-separated) |
 | `--gp` | Shortcut for GP practices (`RO76,RO227,RO315`) |
 | `--dentist` | Shortcut for dental practices (`RO110,RO65`) |
-| `-a, --all` | Include inactive and closed organisations, which `find` leaves out by default (adds a Status column) |
+| `-a, --all` | Include closed and inactive organisations; `find` shows only open ones by default (adds a Status column) |
 | `-v, --verbose` | Show full role set in stored order without `+N` de-emphasis |
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
 | `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, `json`, or `tsv` |
@@ -64,7 +64,7 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
   Or use codes: ods find --role RO76,RO227,RO315
 ```
 
-Discover role codes and holder counts using `ods role [QUERY]`. Holders are active organisations; `ods role --all` counts inactive ones too.
+Discover role codes and holder counts using `ods role [QUERY]`. Holders are open organisations; `ods role --all` counts closed and inactive ones too.
 
 ### Role Shortcuts (`--gp`, `--dentist`)
 Convenience flags expand directly into `--role` with OR semantics:
