@@ -116,7 +116,6 @@ gp_total=$(echo "$gp_json" | jq '[.[]."count_star()"] | add')
 jq -n \
   --arg date "$TRUD_RELEASE_DATE" \
   --arg version "$DATASET_VERSION" \
-  --argjson tableCount 4 \
   --argjson totalSizeBytes "$total_size" \
   --argjson orgsRecordCount "$orgs_count" \
   --argjson gpTotal "$gp_total" \
@@ -138,7 +137,6 @@ jq -n \
     release: {
       date: $date,
       datasetVersion: $version,
-      tableCount: $tableCount,
       totalSizeBytes: $totalSizeBytes,
       orgsRecordCount: $orgsRecordCount
     },

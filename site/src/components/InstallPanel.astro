@@ -13,7 +13,7 @@ const command = 'cargo install --locked --git https://github.com/olizilla/ods.gi
     > sets one up.
   </p>
   <div class="command-row">
-    <div class="command"><span class="prompt">❯</span> {command}</div>
+    <div class="command"><span class="prompt">❯ </span>{command}</div>
     <button type="button" class="copy" data-command={command}>Copy</button>
   </div>
   <p class="note">
@@ -76,9 +76,29 @@ const command = 'cargo install --locked --git https://github.com/olizilla/ods.gi
     font-family: var(--font-mono);
     font-size: 14.5px;
     color: var(--term-ink);
+    user-select: all;
   }
   .prompt {
     color: var(--term-accent);
+    user-select: none;
+  }
+  @media (max-width: 800px) {
+    .panel {
+      margin-inline: calc(var(--gutter) * -1);
+      padding-inline: 16px;
+    }
+    .command-row {
+      margin-inline: -16px;
+      border-inline: none;
+    }
+    .command {
+      padding-inline: 16px;
+    }
+  }
+  @media (max-width: 600px) {
+    .command {
+      font-size: 12px;
+    }
   }
   .copy {
     flex: none;
@@ -89,6 +109,11 @@ const command = 'cargo install --locked --git https://github.com/olizilla/ods.gi
     font: 600 15px var(--font-sans);
     padding: 0 22px;
     box-shadow: inset 0 -4px 0 var(--green-shadow);
+  }
+  @media (max-width: 800px) {
+    .copy {
+      display: none;
+    }
   }
 </style>
 

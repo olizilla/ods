@@ -22,7 +22,7 @@ const { variant, title, muted = false, tag, command } = Astro.props;
   <div class="body">
     <slot />
   </div>
-  {command && <div class="command">{command}</div>}
+  {command && <div class="command"><span class="prompt">❯ </span>{command}</div>}
 </div>
 
 <style>
@@ -90,5 +90,9 @@ const { variant, title, muted = false, tag, command } = Astro.props;
   }
   .card.muted .command {
     color: var(--ink-muted);
+  }
+  .prompt {
+    color: var(--blue);
+    user-select: none;
   }
 </style>

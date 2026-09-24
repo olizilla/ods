@@ -1,6 +1,5 @@
 ❯ ods pull
 ❯ ods find --gp --in SW9
-* Source: releases/2026-08-28/orgs.parquet
 * --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
 ┌──────────┬──────────────────────────────┬──────────┬────────────────┬───────┬──────────┐
 │ ODS Code ┆ Name                         ┆ Postcode ┆ Roles          ┆ Class ┆ Matched  │
@@ -18,5 +17,19 @@
 ├──────────┴──────────────────────────────┴──────────┴────────────────┴───────┴──────────┤
 │ 10 open                                                    Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────────┘
+
+# see details by ods code
+❯ ods info G85028
+
+# learn more about roles
+❯ ods role 'trust'
+┌───────┬───────────────────────────────────────────────┬─────────┐
+│ Code  ┆ Name                                          ┆ Holders │
+╞═══════╪═══════════════════════════════════════════════╪═════════╡
+│ RO198 ┆ NHS Trust Site                                ┆ 35,116  │
+│ RO108 ┆ Care Trust Site                               ┆ 533     │
+│ RO197 ┆ NHS Trust                                     ┆ 202     │
+│ RO57  ┆ Foundation Trust                              ┆ 141     │
+
 # ...or use duckdb to query the data over http from ods.fyi directly.
 ❯ duckdb -c "SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5"

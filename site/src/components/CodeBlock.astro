@@ -1,24 +1,20 @@
 ---
-// A dark code box with no chrome strip, for SQL and JSON. Colouring is line/token-based
-// rather than a full parser: SQL keywords and JSON keys in accent, quoted strings dim,
-// everything else ink — close to the design without hand-authoring a span per token.
+// A dark code box under a Terminal-style label strip, for a duckdb SQL command or JSON.
+// Colouring is line/token-based rather than a full parser: keywords and JSON keys in accent;
+// in SQL the syntax recedes and quoted literals stand out, in JSON it's the other way round.
+import { colourDuckdbCommand, colourQuoted, markRoleCodes, type Segment } from '../lib/syntax';
+
 interface Props {
   content: string;
+  label: string;
+  lang: 'sql' | 'json';
 }
 
-const { content } = Astro.props;
+const { content, label, lang } = Astro.props;
 
-type Kind = 'ink' | 'dim' | 'accent';
-interface Segment {
-  text: string;
-  kind: Kind;
-}
-
-const KEYWORDS = /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|LIKE)\b/g;
 const JSON_KEY = /^(\s*)("[^"]+")(:)/;
-const QUOTED = /('[^']*'|"[^"]*")/g;
 
-function classifyLine(line: string): Segment[] {
+function classifyJsonLine(line: string): Segment[] {
   const jsonKeyMatch = line.match(JSON_KEY);
   if (jsonKeyMatch) {
     const [, indent, key, colon] = jsonKeyMatch;
@@ -30,37 +26,42 @@ function classifyLine(line: string): Segment[] {
       { text: rest, kind: 'ink' },
     ];
   }
-
-  const segments: Segment[] = [];
-  let cursor = 0;
-  const combined = new RegExp(`${KEYWORDS.source}|${QUOTED.source}`, 'g');
-  let match: RegExpExecArray | null;
-  while ((match = combined.exec(line)) !== null) {
-    if (match.index > cursor) {
-      segments.push({ text: line.slice(cursor, match.index), kind: 'ink' });
-    }
-    const isQuoted = match[0].startsWith("'") || match[0].startsWith('"');
-    segments.push({ text: match[0], kind: isQuoted ? 'dim' : 'accent' });
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < line.length) {
-    segments.push({ text: line.slice(cursor), kind: 'ink' });
-  }
-  return segments.length > 0 ? segments : [{ text: line, kind: 'ink' }];
+  return colourQuoted(line, 'ink', 'dim');
 }
 
-const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
+const rawLines = content.replace(/\n$/, '').split('\n');
+const lines = (lang === 'sql' ? colourDuckdbCommand(rawLines) : rawLines.map(classifyJsonLine)).map(
+  markRoleCodes,
+);
 ---
 
-<div class="code">
-  {lines.map((segments) => (
-    <div class="line">
-      {segments.map((seg) => <span class={`seg-${seg.kind}`}>{seg.text}</span>)}
-    </div>
-  ))}
+<div class="codeblock">
+  <div class="chrome">
+    <span class="chrome-label">{label}</span>
+  </div>
+  <div class="code">
+    {lines.map((segments) => (
+      <div class="line">
+        {segments.map((seg) => <span class={`seg-${seg.kind}`}>{seg.text}</span>)}
+      </div>
+    ))}
+  </div>
 </div>
 
 <style>
+  .chrome {
+    display: flex;
+    align-items: center;
+    padding: 7px 8px 7px 16px;
+    background: var(--term-chrome);
+    border: 1px solid var(--term-edge);
+    border-bottom: none;
+    font-family: var(--font-mono);
+  }
+  .chrome-label {
+    font-size: 12.5px;
+    color: var(--term-label);
+  }
   .code {
     background: var(--term-bg);
     border: 1px solid var(--term-edge);
@@ -73,6 +74,19 @@ const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
   .line {
     white-space: pre;
   }
+  @media (max-width: 800px) {
+    .codeblock {
+      margin-inline: calc(var(--gutter) * -1);
+    }
+    .chrome,
+    .code {
+      border-inline: none;
+    }
+    .code {
+      padding-inline: 16px;
+      font-size: 12px;
+    }
+  }
   .seg-ink {
     color: var(--term-ink);
   }
@@ -81,5 +95,8 @@ const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
   }
   .seg-accent {
     color: var(--term-accent);
+  }
+  .seg-role {
+    color: var(--term-role);
   }
 </style>

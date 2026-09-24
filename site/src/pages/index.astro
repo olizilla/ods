@@ -38,7 +38,6 @@ const duckdbHttpQuery = `duckdb -c "
     <div class="content">
       <ReleaseMeta
         date={release.release.date}
-        tableCount={release.release.tableCount}
         totalSizeBytes={release.release.totalSizeBytes}
         orgsRecordCount={release.release.orgsRecordCount}
       />
@@ -69,14 +68,20 @@ const duckdbHttpQuery = `duckdb -c "
         <div class="about-label">About</div>
         <div class="about-body">
           <p>
-            <code>ods</code> is an independent open source project inspired by the principles of{' '}
+            The <a href="https://github.com/olizilla/ods"><code>ods</code></a> tool converts the NHS Organisation Data Service XML open data
+            archives into smaller, reproducible parquet files you can query with SQL. It is an
+            independent open source project inspired by the principles of{' '}
             <a href="https://github.com/pacharanero/sct"><code>sct</code></a>, the SNOMED CT CLI.
-            It is not (currently) affiliated with or endorsed by the NHS, but does aspire to be
-            adopted there either as a project or a set of ideas.
           </p>
           <p>
-            ods.fyi republishes NHS England's Organisation Data Service XML as reproducible
-            Parquet files under the Open Government Licence v3.0.
+            <a href="https://ods.fyi">ods.fyi</a> hosts the parquet output of the <a href="https://github.com/olizilla/ods"><code>ods</code></a>{' '}
+            tool as content-addressed OCI Images to allow their verifiable distribution over a
+            standard protocol. The datasets are republished under the same Open Government Licence
+            v3.0 as the source.
+          </p>
+          <p>
+            The project is not affiliated with or endorsed by the NHS, but does aspire to be adopted
+            there, either as a project or a set of ideas.
           </p>
         </div>
       </div>
@@ -87,7 +92,7 @@ const duckdbHttpQuery = `duckdb -c "
           run, with flags expanded into the role codes they stand for.
         </p>
         <div class="code-with-terminal">
-          <Terminal content={findGpSql} label="Terminal" />
+          <Terminal content={findGpSql} sql />
         </div>
         <p class="body-text trailing">
           Run that query via <code>duckdb</code> against the parquet files and it returns the same
@@ -130,7 +135,7 @@ const duckdbHttpQuery = `duckdb -c "
           and DuckDB will read it over HTTP without downloading the whole file.
         </p>
         <div class="code-with-terminal">
-          <CodeBlock content={duckdbHttpQuery} />
+          <CodeBlock content={duckdbHttpQuery} label="Shell" lang="sql" />
         </div>
         <Callout>
           pandas, Polars, R and Spark read the same files. No account, no API keys, and nothing new
@@ -157,7 +162,7 @@ const duckdbHttpQuery = `duckdb -c "
         </div>
         <p class="body-text">Each release records its source facts and build facts, and nothing else.</p>
         <div class="code-with-terminal">
-          <CodeBlock content={provenanceJson} />
+          <CodeBlock content={provenanceJson} label="cat _provenance.json" lang="json" />
         </div>
         <Callout>
           To check a release yourself: <code>ods trud pull</code> fetches and verifies the source archive,{' '}
@@ -173,7 +178,7 @@ const duckdbHttpQuery = `duckdb -c "
           keep your references tidy.
         </p>
         <div class="code-with-terminal cite-terminal">
-          <Terminal content={cite} label="Terminal" />
+          <Terminal content={cite} />
         </div>
       </Section>
     </div>
@@ -191,7 +196,7 @@ const duckdbHttpQuery = `duckdb -c "
     box-shadow: 0 0 0 1px var(--border);
   }
   .content {
-    padding: 0 32px;
+    padding: 0 var(--gutter);
   }
   .body-text {
     margin: 0 0 20px;
@@ -228,7 +233,7 @@ const duckdbHttpQuery = `duckdb -c "
   .about-label {
     font-size: 13px;
     font-weight: 600;
-    color: var(--ink-muted);
+    color: var(--blue);
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }

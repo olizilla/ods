@@ -1,25 +1,20 @@
 ---
 import { formatCount, formatMB } from '../lib/format';
 
-const NUMBER_WORDS: Record<number, string> = { 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five' };
-
 interface Props {
   date: string;
-  tableCount: number;
   totalSizeBytes: number;
   orgsRecordCount: number;
 }
 
-const { date, tableCount, totalSizeBytes, orgsRecordCount } = Astro.props;
-const tableCountWord = NUMBER_WORDS[tableCount] ?? String(tableCount);
+const { date, totalSizeBytes, orgsRecordCount } = Astro.props;
 ---
 
 <div class="meta">
-  <div class="line">
-    Release <span class="date">{date}</span> · {tableCountWord} Parquet tables · {formatMB(totalSizeBytes)}{' '}
-    · {formatCount(orgsRecordCount)} records
+  <div class="line">Release <span class="date">{date}</span></div>
+  <div class="facts">
+    <span class="records">{formatCount(orgsRecordCount)} records · </span>{formatMB(totalSizeBytes)} · <abbr title="Open Government Licence v3.0">OGL v3</abbr>
   </div>
-  <div class="licence">Open Government Licence v3.0</div>
 </div>
 
 <style>
@@ -29,24 +24,30 @@ const tableCountWord = NUMBER_WORDS[tableCount] ?? String(tableCount);
     justify-content: space-between;
     gap: 24px;
     flex-wrap: wrap;
-    border-bottom: 1px solid var(--border);
-    padding: 28px 0 10px;
-    margin-bottom: 24px;
+    padding: 28px 0 0;
+    margin-bottom: 16px;
     font-family: var(--font-sans);
   }
   .line {
-    flex: 1 1 auto;
     min-width: 0;
     font-size: 15px;
     color: var(--ink-secondary);
   }
+  .facts {
+    min-width: 0;
+    font-size: 14px;
+    color: var(--ink-muted);
+  }
+  abbr {
+    text-decoration: none;
+  }
+  @media (max-width: 500px) {
+    .records {
+      display: none;
+    }
+  }
   .date {
     font-weight: 700;
     color: var(--ink);
-  }
-  .licence {
-    flex: none;
-    font-size: 14px;
-    color: var(--ink-muted);
   }
 </style>

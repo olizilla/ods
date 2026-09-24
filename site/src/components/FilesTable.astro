@@ -27,16 +27,16 @@ const DESCRIPTIONS: Record<string, string> = {
       <tr>
         <th class="left">Table</th>
         <th class="right">Rows</th>
-        <th class="right">Size</th>
+        <th class="right size">Size</th>
         <th class="left">Contents</th>
       </tr>
     </thead>
     <tbody>
       {files.map((file) => (
         <tr>
-          <td class="left"><a href="#download">{file.name}</a></td>
+          <td class="left"><a href="#download">{file.name.replace(/\.parquet$/, '')}<span class="ext">.parquet</span></a></td>
           <td class="right nums">{formatCount(file.records)}</td>
-          <td class="right nums">{formatMB(file.sizeBytes)}</td>
+          <td class="right nums size">{formatMB(file.sizeBytes)}</td>
           <td class="left contents">{DESCRIPTIONS[file.name] ?? ''}</td>
         </tr>
       ))}
@@ -91,5 +91,26 @@ const DESCRIPTIONS: Record<string, string> = {
     font-weight: 600;
     color: var(--blue);
     text-decoration: none;
+  }
+  @media (max-width: 800px) {
+    .table-wrap {
+      margin-inline: calc(var(--gutter) * -1);
+    }
+    th:first-child,
+    td:first-child {
+      padding-left: 16px;
+    }
+    th:last-child,
+    td:last-child {
+      padding-right: 16px;
+    }
+    .ext {
+      display: none;
+    }
+  }
+  @media (max-width: 600px) {
+    .size {
+      display: none;
+    }
   }
 </style>

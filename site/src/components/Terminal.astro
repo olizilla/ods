@@ -3,50 +3,68 @@
 // ?raw), coloured here by simple line shape rather than the design's per-character spans:
 // a `❯` prompt line, a `#`/`*` comment line, a pure box-drawing border, or a row that mixes
 // box-drawing separators with cell text.
+import {
+  colourDuckdbCommand,
+  colourQuoted,
+  colourSql,
+  markRoleCodes,
+  type Kind,
+  type Segment,
+} from '../lib/syntax';
+
 interface Props {
   label?: string;
   content: string;
+  // The lines that aren't prompts, comments or tables are SQL, so their syntax recedes.
+  sql?: boolean;
 }
 
-const { label = 'Terminal', content } = Astro.props;
-
-type Kind = 'ink' | 'dim' | 'accent' | 'frame' | 'header';
-interface Segment {
-  text: string;
-  kind: Kind;
-}
+const { label = 'Shell', content, sql = false } = Astro.props;
 
 const BOX_CHAR = /[┌┬┐│┆╞═╪╡├┴┤└─┘]/;
 const BOX_RUN = /([┌┬┐│┆╞═╪╡├┴┤└─┘]+)/;
-const KEYWORDS = /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|LIKE)\b/g;
-const QUOTED = /('[^']*'|"[^"]*")/g;
 // `ods cite`'s own sub-headers: short, no trailing punctuation but a colon, or a bare title.
 const SUB_HEADER = /^\s*(The source|The data|The tool):\s*$/;
 const BARE_HEADER = /^(How to Cite|Data availability)$/;
+// An ODS code is a letter then letters/digits, at least one digit; RO-codes are roles, not orgs.
+const ODS_CODE = /^(?=.*\d)[A-Z][A-Z0-9]{2,8}$/;
+const ODS_INFO = /^❯( ods info )(\S+)(.*)$/;
 
-// SQL keywords and quoted strings, for lines of `ods find --sql`'s own output — the rest of
-// this component's coloured-by-line-shape approach doesn't otherwise touch SQL syntax.
-function colourSql(line: string): Segment[] {
-  const segments: Segment[] = [];
-  let cursor = 0;
-  const combined = new RegExp(`${KEYWORDS.source}|${QUOTED.source}`, 'g');
-  let match: RegExpExecArray | null;
-  while ((match = combined.exec(line)) !== null) {
-    if (match.index > cursor) {
-      segments.push({ text: line.slice(cursor, match.index), kind: 'ink' });
-    }
-    const isQuoted = match[0].startsWith("'") || match[0].startsWith('"');
-    segments.push({ text: match[0], kind: isQuoted ? 'dim' : 'accent' });
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < line.length) {
-    segments.push({ text: line.slice(cursor), kind: 'ink' });
-  }
-  return segments.length > 0 ? segments : [{ text: line, kind: 'ink' }];
+// The first cell of a table row is the ODS code when it looks like one, keeping its padding.
+function markOdsCode(parts: Segment[]): Segment[] {
+  const first = parts.findIndex((p) => p.kind === 'ink');
+  if (first === -1) return parts;
+  const cell = parts[first].text;
+  const code = cell.trim();
+  if (!ODS_CODE.test(code) || /^RO\d+$/.test(code)) return parts;
+  const start = cell.indexOf(code);
+  return [
+    ...parts.slice(0, first),
+    { text: cell.slice(0, start), kind: 'ink' as Kind },
+    { text: code, kind: 'accent' as Kind },
+    { text: cell.slice(start + code.length), kind: 'ink' as Kind },
+    ...parts.slice(first + 1),
+  ];
 }
 
 function classifyLine(line: string): Segment[] {
+  if (line.startsWith('❯ duckdb -c "')) {
+    return [
+      { text: '❯', kind: 'accent' },
+      { text: ' ', kind: 'ink' },
+      ...colourDuckdbCommand([line.slice(2)])[0],
+    ];
+  }
   if (line.startsWith('❯')) {
+    const info = line.match(ODS_INFO);
+    if (info) {
+      return [
+        { text: '❯', kind: 'accent' },
+        { text: info[1], kind: 'ink' },
+        { text: info[2], kind: 'accent' },
+        { text: info[3], kind: 'ink' },
+      ];
+    }
     return [
       { text: '❯', kind: 'accent' },
       { text: line.slice(1), kind: 'ink' },
@@ -63,15 +81,17 @@ function classifyLine(line: string): Segment[] {
     return [{ text: line, kind: 'frame' }];
   }
   if (BOX_CHAR.test(line)) {
-    return line
-      .split(BOX_RUN)
-      .filter((part) => part.length > 0)
-      .map((part) => ({ text: part, kind: (BOX_CHAR.test(part) ? 'frame' : 'ink') as Kind }));
+    return markOdsCode(
+      line
+        .split(BOX_RUN)
+        .filter((part) => part.length > 0)
+        .map((part) => ({ text: part, kind: (BOX_CHAR.test(part) ? 'frame' : 'ink') as Kind })),
+    );
   }
-  return colourSql(line);
+  return sql ? colourSql(line) : colourQuoted(line, 'ink', 'dim');
 }
 
-const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
+const lines = content.replace(/\n$/, '').split('\n').map((line) => markRoleCodes(classifyLine(line)));
 ---
 
 <div class="terminal">
@@ -115,6 +135,23 @@ const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
   }
   .line {
     white-space: pre;
+    min-height: 1lh;
+  }
+  @media (max-width: 800px) {
+    .terminal {
+      margin-inline: calc(var(--gutter) * -1);
+    }
+    .chrome,
+    .body {
+      border-inline: none;
+    }
+    .chrome {
+      padding-left: 8px;
+    }
+    .body {
+      padding-inline: 8px 16px;
+      font-size: 12px;
+    }
   }
   .seg-ink {
     color: var(--term-ink);
@@ -124,6 +161,9 @@ const lines = content.replace(/\n$/, '').split('\n').map(classifyLine);
   }
   .seg-accent {
     color: var(--term-accent);
+  }
+  .seg-role {
+    color: var(--term-role);
   }
   .seg-frame {
     color: var(--term-frame);

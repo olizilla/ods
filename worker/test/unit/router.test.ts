@@ -92,11 +92,14 @@ describe('Router & Path-to-Key Mapping', () => {
   });
 
   it('serves /_astro/ files through ASSETS, with their own type, ahead of the dataset lookup', async () => {
-    // The hash in this filename comes from site/src/styles' content at the last `npm run
-    // build --prefix site` — re-run that and update this literal if it changes. The test
-    // pool sandboxes the filesystem, so this can't be discovered with fs.readdirSync from
-    // inside the test itself.
-    const res = await worker.fetch(new Request('https://ods.fyi/_astro/index.kmYNuTWW.css'), env);
+    // The hashed filename changes whenever the styles do, so read it from the page itself.
+    const page = await worker.fetch(
+      new Request('https://ods.fyi/', { headers: { Accept: 'text/html' } }),
+      env
+    );
+    const href = (await page.text()).match(/href="(\/_astro\/[^"]+\.css)"/)?.[1];
+    expect(href).toBeTruthy();
+    const res = await worker.fetch(new Request(`https://ods.fyi${href}`), env);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     expect(res.headers.get('content-type')).toContain('text/css');

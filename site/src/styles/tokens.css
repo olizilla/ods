@@ -26,6 +26,9 @@
   --font-sans: 'Public Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
 
+  /* Page side padding; code boxes bleed out by this much on narrow screens */
+  --gutter: 32px;
+
   /* Radius: 0 everywhere */
   --radius: 0;
 
@@ -46,6 +49,7 @@
   --term-edge: #212b32;
   --term-frame: #5d7181;
   --term-accent: #41b6e6;
+  --term-role: #d7ba7d;
   --term-ink: #e8edee;
   --term-mid: #c5d1d9;
   --term-dim: #8ba0af;
