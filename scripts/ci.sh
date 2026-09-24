@@ -154,6 +154,7 @@ worker_install() {
   npm ci --prefix worker && lock_sha > worker/node_modules/.ci-lock-sha
 }
 
+# The worker imports worker/src/site-root-files.json, which the site build generates.
 worker_typecheck() { (cd worker && npx tsc --noEmit); }
 
 site_lock_sha() { shasum -a 256 site/package-lock.json | cut -d' ' -f1; }
@@ -223,9 +224,9 @@ fi
 
 if ! has npm; then
   skip "worker install" "npm not installed"
-  skip "worker typecheck" "npm not installed"
   skip "site install" "npm not installed"
   skip "site build" "npm not installed"
+  skip "worker typecheck" "npm not installed"
   skip "worker tests" "npm not installed"
 else
   run "worker install" worker_install
@@ -233,25 +234,30 @@ else
   installed=$STATUS
 
   if [ "$installed" -ne 0 ]; then
-    skip "worker typecheck" "install failed"
     skip "site install" "install failed"
     skip "site build" "install failed"
+    skip "worker typecheck" "install failed"
     skip "worker tests" "install failed"
   else
-    run "worker typecheck" worker_typecheck
-    record ""
-
     run "site install" site_install
     if grep -q 'already matches' "$LOG"; then record "lockfile unchanged"; else record ""; fi
     site_installed=$STATUS
 
     if [ "$site_installed" -ne 0 ]; then
       skip "site build" "install failed"
+      skip "worker typecheck" "site install failed, so there is no worker/src/site-root-files.json"
       skip "worker tests" "site install failed"
     else
       run "site build" site_build
       record ""
       site_built=$STATUS
+
+      if [ "$site_built" -ne 0 ]; then
+        skip "worker typecheck" "site build failed, so there is no worker/src/site-root-files.json"
+      else
+        run "worker typecheck" worker_typecheck
+        record ""
+      fi
 
       if [ "$compiled" -ne 0 ]; then
         skip "worker tests" "compile failed, so there is no target/debug/ods"
