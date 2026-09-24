@@ -831,7 +831,8 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
     let (active_date, _) = Workspace::open(Some(&workspace))?.active_release()?;
     assert_eq!(active_date, "2026-07-31", "current must be pinned to 2026-07-31");
 
-    let stderr = String::from_utf8(stderr_buf)?;
+    let raw_stderr = String::from_utf8(stderr_buf)?;
+    let stderr = ods::ansi::strip_ansi(&raw_stderr);
     assert!(
         stderr.contains("2026-07-31") && stderr.contains("from 2 mirrors"),
         "block must name both mirrors that served layers, got:\n{}",
@@ -1610,7 +1611,8 @@ fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()
     let (active_date, _) = Workspace::open(Some(&workspace))?.active_release()?;
     assert_eq!(active_date, "2026-08-28", "pin must land on the newest fully-verified release");
 
-    let stderr = String::from_utf8_lossy(&stderr_buf);
+    let raw_stderr = String::from_utf8_lossy(&stderr_buf);
+    let stderr = ods::ansi::strip_ansi(&raw_stderr);
     let pulled_idx = stderr.find("pulled        2 releases").expect("pulled row");
     let linked_idx = stderr.find("linked        current → releases/2026-08-28").expect("linked row");
     let incomplete_idx = stderr.find("arrived incomplete: 1 of 6 files failed verification").expect("incomplete block");
