@@ -1,6 +1,6 @@
 mod common;
 
-use common::{make_v1_index, setup_find_test_workspace};
+use common::{make_v1_index, setup_find_test_workspace, setup_test_release_for_cite};
 use sha2::Digest;
 use std::fs;
 use std::io::{Read, Write};
@@ -836,4 +836,44 @@ fn snapshot_make() {
         .collect();
 
     check_snapshot("make.txt", &actual_cases, &case_names);
+}
+
+#[test]
+fn snapshot_cite() {
+    let (_tmp, rel_dir) = setup_test_release_for_cite(None);
+
+    let cases = [
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
+        TestCase {
+            cmd_str: "ods cite -f apa",
+            columns: None,
+            args: vec!["cite", "-f", "apa"],
+            use_input: true,
+        },
+        TestCase {
+            cmd_str: "ods cite -f bibtex",
+            columns: None,
+            args: vec!["cite", "-f", "bibtex"],
+            use_input: true,
+        },
+        TestCase {
+            cmd_str: "ods cite -f csljson",
+            columns: None,
+            args: vec!["cite", "-f", "csljson"],
+            use_input: true,
+        },
+    ];
+
+    let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
+    let actual_cases: Vec<String> = cases
+        .iter()
+        .map(|c| run_case(c, Some(&rel_dir)))
+        .collect();
+
+    check_snapshot("cite.txt", &actual_cases, &case_names);
 }

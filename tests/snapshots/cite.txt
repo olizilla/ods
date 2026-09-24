@@ -1,0 +1,133 @@
+$ ods cite
+* Source: releases/2026-08-31 (1.0.1)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-31
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-31 (Version 1.0.1) [Data set]. ods.fyi. https://ods.fyi
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.4.3) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-31_1.0.1 is available from https://ods.fyi. This OCI manifest
+  digest identifies its exact files:
+    sha256:0d4bcc2c7dd1825b8d06949161ab9f42244c1fd0c51d5a9bde71ea20860a8441
+  ods/v0.4.3 built it from nhs-ods-xml/2026-08-31, the TRUD archive with SHA-256:
+    665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2
+  Rebuild and verify with `ods trud pull 2026-08-31 && ods make`.
+
+$ ods cite -f apa
+NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-31 [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+
+Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31 (Version 1.0.1) [Data set]. ods.fyi. https://ods.fyi
+
+Evans, O. (2026). ods (Version 0.4.3) [Computer software]. https://github.com/olizilla/ods
+
+$ ods cite -f bibtex
+@misc{nhs-ods-xml/2026-08-31,
+  author = {NHS England},
+  title = {NHS Organisation Data Service XML Data, release 2026-08-31},
+  year = {2026},
+  month = {08},
+  howpublished = {NHS TRUD},
+  url = {https://isd.digital.nhs.uk/trud},
+  note = {Release 2026-08-31, SHA-256 665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2.}
+}
+
+@misc{ods-data/2026-08-31_1.0.1,
+  author = {Evans, Oli},
+  title = {ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31},
+  year = {2026},
+  month = {08},
+  version = {1.0.1},
+  howpublished = {ods.fyi},
+  url = {https://ods.fyi},
+  note = {Manifest: sha256:0d4bcc2c7dd1825b8d06949161ab9f42244c1fd0c51d5a9bde71ea20860a8441. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
+}
+
+@misc{ods/v0.4.3,
+  author = {Evans, Oli},
+  title = {ods},
+  year = {2026},
+  version = {0.4.3},
+  howpublished = {Computer software},
+  url = {https://github.com/olizilla/ods}
+}
+
+$ ods cite -f csljson
+[
+  {
+    "type": "dataset",
+    "id": "nhs-ods-xml/2026-08-31",
+    "title": "NHS Organisation Data Service XML Data, release 2026-08-31",
+    "author": [
+      {
+        "literal": "NHS England"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          8,
+          31
+        ]
+      ]
+    },
+    "publisher": "NHS TRUD",
+    "URL": "https://isd.digital.nhs.uk/trud",
+    "note": "Release 2026-08-31, SHA-256 665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2."
+  },
+  {
+    "type": "dataset",
+    "id": "ods-data/2026-08-31_1.0.1",
+    "title": "ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31",
+    "author": [
+      {
+        "family": "Evans",
+        "given": "Oli"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          8,
+          31
+        ]
+      ]
+    },
+    "publisher": "ods.fyi",
+    "URL": "https://ods.fyi",
+    "version": "1.0.1",
+    "note": "Manifest: sha256:0d4bcc2c7dd1825b8d06949161ab9f42244c1fd0c51d5a9bde71ea20860a8441. Contains information from NHS England, licensed under the current version of the Open Government Licence."
+  },
+  {
+    "type": "software",
+    "id": "ods/v0.4.3",
+    "title": "ods",
+    "author": [
+      {
+        "family": "Evans",
+        "given": "Oli"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026
+        ]
+      ]
+    },
+    "URL": "https://github.com/olizilla/ods",
+    "version": "0.4.3"
+  }
+]

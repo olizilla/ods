@@ -31,9 +31,10 @@ static WARNED_WORKSPACES: std::sync::Mutex<Option<std::collections::HashSet<Path
     std::sync::Mutex::new(None);
 
 pub fn emit_cache_notice_if_needed(workspace_root: &Path) {
+    let canonical = std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
     let mut guard = WARNED_WORKSPACES.lock().unwrap();
     let set = guard.get_or_insert_with(std::collections::HashSet::new);
-    if !set.insert(workspace_root.to_path_buf()) {
+    if !set.insert(canonical) {
         return;
     }
     let marker_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);

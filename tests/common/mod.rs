@@ -1294,3 +1294,63 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     (tmp, rel_dir)
 }
+
+#[allow(dead_code)]
+pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let rel_dir = tmp.path().join("releases").join("2026-08-31");
+    let trud_dir = rel_dir.join("trud");
+    std::fs::create_dir_all(&trud_dir).unwrap();
+
+    let outer_zip_path = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260831000001.zip");
+    {
+        let outer_file = std::fs::File::create(&outer_zip_path).unwrap();
+        let mut outer_zip = zip::ZipWriter::new(outer_file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .last_modified_time(zip::DateTime::from_date_and_time(2026, 8, 31, 0, 0, 0).unwrap());
+        outer_zip.start_file("dummy.txt", options).unwrap();
+        std::io::Write::write_all(&mut outer_zip, b"dummy source zip").unwrap();
+        outer_zip.finish().unwrap();
+    }
+    let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
+
+    std::fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
+    std::fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-08-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some(zip_sha256.clone()),
+        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
+        tool_version: Some("0.4.3".to_string()),
+        tool_git_sha: Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string()),
+        tool_git_dirty: Some(false),
+        ..Default::default()
+    };
+
+    let prov_path = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
+    std::fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1").unwrap();
+    let manifest_digest = manifest.digest().unwrap();
+
+    let mut index = make_v1_index(&[(
+        "2026-08-31",
+        &zip_sha256,
+        1_000_000,
+        &[("1.0.1", &manifest_digest)],
+    )]);
+    if let Some(reason) = withdrawn_reason {
+        index.releases[0].datasets[0].withdrawn = Some(reason.to_string());
+    }
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, tmp.path()).unwrap();
+
+    // Prevent day-count staleness nudge in snapshots and tests by ensuring
+    // 2026-08-31 is not the newest local release in the workspace
+    let future_rel = tmp.path().join("releases").join("2099-01-01");
+    std::fs::create_dir_all(&future_rel).unwrap();
+
+    (tmp, rel_dir)
+}

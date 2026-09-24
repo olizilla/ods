@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::Datelike;
 use clap::Parser;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde_json::json;
@@ -172,35 +173,51 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         }
     }
 
-    let year = if trud_date.len() >= 4 {
-        &trud_date[0..4]
-    } else {
-        "unknown"
-    };
+    let parsed_date = chrono::NaiveDate::parse_from_str(&trud_date, "%Y-%m-%d")
+        .context("parsing release date")?;
+    let year = parsed_date.year();
+    let d_y = parsed_date.year();
+    let d_m = parsed_date.month();
+    let d_d = parsed_date.day();
+    let d_month = format!("{:02}", d_m);
 
     let d_tag = &trud_date;
+    let src_key = format!("nhs-ods-xml/{}", d_tag);
+    let data_key = format!("ods-data/{}_{}", d_tag, dataset_version);
+    let tool_key = format!("ods/v{}", tool_version);
 
-    let (d_y, d_m, d_d) = if d_tag.len() == 10 {
-        let parts: Vec<&str> = d_tag.split('-').collect();
-        (
-            parts[0].parse().unwrap_or(2026),
-            parts[1].parse().unwrap_or(8),
-            parts[2].parse().unwrap_or(28),
-        )
+    let data_url = if let Some(ref doi) = dataset_doi {
+        if doi.starts_with("http") {
+            doi.clone()
+        } else {
+            format!("https://doi.org/{}", doi)
+        }
     } else {
-        (2026, 8, 28)
-    };
-
-    let d_month = if d_tag.len() >= 7 {
-        &d_tag[5..7]
-    } else {
-        "08"
+        "https://ods.fyi".to_string()
     };
 
     match args.format.to_lowercase().as_str() {
         "bibtex" => {
-            // 1. Data release
-            let data_key = format!("ods-data/{}_{}", d_tag, dataset_version);
+            // 1. Upstream source
+            writeln!(writer, "@misc{{{},", src_key)?;
+            writeln!(writer, "  author = {{NHS England}},")?;
+            writeln!(
+                writer,
+                "  title = {{NHS Organisation Data Service XML Data, release {}}},",
+                d_tag
+            )?;
+            writeln!(writer, "  year = {{{}}},", year)?;
+            writeln!(writer, "  month = {{{}}},", d_month)?;
+            writeln!(writer, "  howpublished = {{NHS TRUD}},")?;
+            writeln!(writer, "  url = {{https://isd.digital.nhs.uk/trud}},")?;
+            writeln!(
+                writer,
+                "  note = {{Release {}, SHA-256 {}.}}",
+                d_tag, archive_sha256
+            )?;
+            writeln!(writer, "}}\n")?;
+
+            // 2. Data release
             writeln!(writer, "@misc{{{},", data_key)?;
             writeln!(writer, "  author = {{Evans, Oli}},")?;
             writeln!(
@@ -223,8 +240,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             )?;
             writeln!(writer, "}}\n")?;
 
-            // 2. Tool
-            let tool_key = format!("ods/v{}", tool_version);
+            // 3. Tool
             writeln!(writer, "@misc{{{},", tool_key)?;
             writeln!(writer, "  author = {{Evans, Oli}},")?;
             writeln!(writer, "  title = {{ods}},")?;
@@ -232,32 +248,23 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             writeln!(writer, "  version = {{{}}},", tool_version)?;
             writeln!(writer, "  howpublished = {{Computer software}},")?;
             writeln!(writer, "  url = {{https://github.com/olizilla/ods}}")?;
-            writeln!(writer, "}}\n")?;
-
-            // 3. Upstream source
-            let src_key = format!("nhs-ods-xml/{}", d_tag);
-            writeln!(writer, "@misc{{{},", src_key)?;
-            writeln!(writer, "  author = {{NHS England}},")?;
-            writeln!(
-                writer,
-                "  title = {{NHS Organisation Data Service XML Data, release {}}},",
-                d_tag
-            )?;
-            writeln!(writer, "  year = {{{}}},", year)?;
-            writeln!(writer, "  month = {{{}}},", d_month)?;
-            writeln!(writer, "  howpublished = {{NHS TRUD}},")?;
-            writeln!(writer, "  url = {{https://isd.digital.nhs.uk/trud}},")?;
-            writeln!(
-                writer,
-                "  note = {{Release {}, SHA-256 {}.}}",
-                d_tag, archive_sha256
-            )?;
             writeln!(writer, "}}")?;
         }
         "csljson" | "csl-json" | "json" => {
+            let src_obj = json!({
+                "type": "dataset",
+                "id": src_key,
+                "title": format!("NHS Organisation Data Service XML Data, release {}", d_tag),
+                "author": [{ "literal": "NHS England" }],
+                "issued": { "date-parts": [[d_y, d_m, d_d]] },
+                "publisher": "NHS TRUD",
+                "URL": "https://isd.digital.nhs.uk/trud",
+                "note": format!("Release {}, SHA-256 {}.", d_tag, archive_sha256)
+            });
+
             let mut data_obj = json!({
                 "type": "dataset",
-                "id": format!("ods-data/{}_{}", d_tag, dataset_version),
+                "id": data_key,
                 "title": format!("ods: NHS Organisation Data as verifiable Parquet files, release {}", d_tag),
                 "author": [{ "family": "Evans", "given": "Oli" }],
                 "issued": { "date-parts": [[d_y, d_m, d_d]] },
@@ -272,7 +279,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
             let tool_obj = json!({
                 "type": "software",
-                "id": format!("ods/v{}", tool_version),
+                "id": tool_key,
                 "title": "ods",
                 "author": [{ "family": "Evans", "given": "Oli" }],
                 "issued": { "date-parts": [[d_y]] },
@@ -280,44 +287,24 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "version": tool_version
             });
 
-            let src_obj = json!({
-                "type": "dataset",
-                "id": format!("nhs-ods-xml/{}", d_tag),
-                "title": format!("NHS Organisation Data Service XML Data, release {}", d_tag),
-                "author": [{ "literal": "NHS England" }],
-                "issued": { "date-parts": [[d_y, d_m, d_d]] },
-                "publisher": "NHS TRUD",
-                "URL": "https://isd.digital.nhs.uk/trud",
-                "note": format!("Release {}, SHA-256 {}.", d_tag, archive_sha256)
-            });
-
-            let csl = json!([data_obj, tool_obj, src_obj]);
+            let csl = json!([src_obj, data_obj, tool_obj]);
             writeln!(writer, "{}", serde_json::to_string_pretty(&csl)?)?;
         }
         "apa" => {
-            let data_url = if let Some(ref doi) = dataset_doi {
-                if doi.starts_with("http") {
-                    doi.clone()
-                } else {
-                    format!("https://doi.org/{}", doi)
-                }
-            } else {
-                "https://ods.fyi".to_string()
-            };
             writeln!(
                 writer,
-                "Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files, release {} (Version {}) [Data set]. ods.fyi. {}",
+                "NHS England. ({}). NHS Organisation Data Service XML Data, release {} [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n",
+                year, d_tag
+            )?;
+            writeln!(
+                writer,
+                "Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files, release {} (Version {}) [Data set]. ods.fyi. {}\n",
                 year, d_tag, dataset_version, data_url
             )?;
             writeln!(
                 writer,
                 "Evans, O. ({}). ods (Version {}) [Computer software]. https://github.com/olizilla/ods",
                 year, tool_version
-            )?;
-            writeln!(
-                writer,
-                "NHS England. ({}). NHS Organisation Data Service XML Data, release {} [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud",
-                year, d_tag
             )?;
         }
         _ => {
@@ -328,18 +315,15 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             }
             writeln!(writer)?;
 
-            let data_url = if let Some(ref doi) = dataset_doi {
-                if doi.starts_with("http") {
-                    doi.clone()
-                } else {
-                    format!("https://doi.org/{}", doi)
-                }
-            } else {
-                "https://ods.fyi".to_string()
-            };
-
             // How to Cite
             writeln!(writer, "How to Cite")?;
+            writeln!(writer, "  The source:")?;
+            writeln!(
+                writer,
+                "    NHS England. ({}). NHS Organisation Data Service XML Data, release {}\n    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n    Contains information from NHS England, licensed under the current version of the\n    Open Government Licence.",
+                year, d_tag
+            )?;
+            writeln!(writer)?;
             writeln!(writer, "  The data:")?;
             writeln!(
                 writer,
@@ -354,53 +338,23 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 year, tool_version
             )?;
             writeln!(writer)?;
-            writeln!(writer, "  The source:")?;
-            writeln!(
-                writer,
-                "    NHS England. ({}). NHS Organisation Data Service XML Data, release {}\n    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n    Contains information from NHS England, licensed under the current version of the\n    Open Government Licence.",
-                year, d_tag
-            )?;
-            writeln!(writer)?;
 
-            // Data
-            writeln!(writer, "Data")?;
-            writeln!(writer, "  Dataset version:    v{}", dataset_version)?;
-            writeln!(writer, "  Manifest digest:    {}", manifest_digest)?;
-            if let Some(ref doi) = dataset_doi {
-                writeln!(writer, "  Dataset DOI:        {}", doi)?;
-            }
+            // Data availability
+            writeln!(writer, "Data availability")?;
             writeln!(
                 writer,
-                "  {:19} github.com/olizilla/ods v{}",
-                "Created by:",
-                tool_version
+                "  {} is available from {}. This OCI manifest\n  digest identifies its exact files:\n    {}",
+                data_key, data_url, manifest_digest
             )?;
-            writeln!(writer, "  Format:             Apache Parquet")?;
-            for f in &files {
-                let path = input_dir.join(f);
-                if path.exists() {
-                    if let Ok(hash) = crate::provenance::compute_file_sha256(&path) {
-                        writeln!(writer, "  {:19} {}", format!("{}:", f), hash.to_ascii_uppercase())?;
-                    } else {
-                        writeln!(writer, "  {:19} <error computing hash>", format!("{}:", f))?;
-                    }
-                } else {
-                    writeln!(writer, "  {:19} <not generated>", format!("{}:", f))?;
-                }
-            }
-            writeln!(writer)?;
-
-            // Source
-            writeln!(writer, "Source")?;
             writeln!(
                 writer,
-                "  NHS England Organisation Data Service (ODS), published via NHS TRUD."
+                "  {} built it from {}, the TRUD archive with SHA-256:\n    {}",
+                tool_key, src_key, archive_sha256
             )?;
-            writeln!(writer, "  Release SHA-256:    {}", archive_sha256)?;
-            writeln!(writer)?;
             writeln!(
                 writer,
-                "  These Parquet files are deterministic projections of the official\n  TRUD ODS XML. You can verify this by running `ods trud audit` or\n  by rebuilding from source with `ods trud pull && ods make`."
+                "  Rebuild and verify with `ods trud pull {} && ods make`.",
+                d_tag
             )?;
         }
     }

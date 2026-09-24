@@ -476,10 +476,7 @@ pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
         if let Some(loaded) = valid_cache {
             return Ok((loaded, IndexOrigin::WorkspaceCache(cache_path)));
         } else {
-            eprintln!(
-                "! Ignoring {}: it isn't a release index this ods can read",
-                cache_path.display()
-            );
+            crate::workspace::emit_cache_notice_if_needed(workspace_root);
         }
     }
 
