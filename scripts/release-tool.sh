@@ -71,7 +71,7 @@ fi
 
 # Tag, push and release
 note "Tagging $TAG..."
-git tag "$TAG"
+git tag -s "$TAG" -m "ods $TAG"
 ok "Tagged $TAG"
 
 git push origin "$TAG"
