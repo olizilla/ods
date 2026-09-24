@@ -8,15 +8,4 @@ How to Cite
   The data:
     Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
     release 2026-08-28 (Version 0.1.0) [Data set]. ods.fyi. https://ods.fyi
-
-  The tool:
-    Evans, O. (2026). ods (Version 0.1.0) [Computer software].
-    https://github.com/olizilla/ods
-
-Data availability
-  ods-data/2026-08-28_0.1.0 is available from https://ods.fyi. This OCI manifest
-  digest identifies its exact files:
-    sha256:490a810e44098480bdc89fc11b88dc3de220d69b831b609c66bd7582f4e81ee7
-  ods/v0.1.0 built it from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
-    ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
-  Rebuild and verify with `ods trud pull 2026-08-28 && ods make`.
+...

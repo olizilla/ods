@@ -23,6 +23,11 @@ const { label = 'Shell', content, sql = false } = Astro.props;
 
 const BOX_CHAR = /[┌┬┐│┆╞═╪╡├┴┤└─┘]/;
 const BOX_RUN = /([┌┬┐│┆╞═╪╡├┴┤└─┘]+)/;
+// Glyphs IBM Plex Mono doesn't ship: the browser draws them from a fallback font whose advance
+// width can differ from the text's (about 1.2x wider on Android Chrome), which pushes table
+// columns out of line. Each gets a cell exactly one character wide.
+const FALLBACK_GLYPH = /([┌┬┐│┆╞═╪╡├┴┤└─┘❯])/;
+const inCells = (text: string) => text.split(FALLBACK_GLYPH).filter((part) => part.length > 0);
 // `ods cite`'s own sub-headers: short, no trailing punctuation but a colon, or a bare title.
 const SUB_HEADER = /^\s*(The source|The data|The tool):\s*$/;
 const BARE_HEADER = /^(How to Cite|Data availability)$/;
@@ -101,7 +106,11 @@ const lines = content.replace(/\n$/, '').split('\n').map((line) => markRoleCodes
   <div class="body">
     {lines.map((segments) => (
       <div class="line">
-        {segments.map((seg) => <span class={`seg-${seg.kind}`}>{seg.text}</span>)}
+        {segments.map((seg) => (
+          <span class={`seg-${seg.kind}`}>
+            {inCells(seg.text).map((part) => (FALLBACK_GLYPH.test(part) ? <span class="cell">{part}</span> : part))}
+          </span>
+        ))}
       </div>
     ))}
   </div>
@@ -136,6 +145,12 @@ const lines = content.replace(/\n$/, '').split('\n').map((line) => markRoleCodes
   .line {
     white-space: pre;
     min-height: 1lh;
+  }
+  .cell {
+    display: inline-flex;
+    justify-content: center;
+    width: 1ch;
+    overflow: clip;
   }
   @media (max-width: 800px) {
     .terminal {

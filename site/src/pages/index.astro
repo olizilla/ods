@@ -64,7 +64,7 @@ const duckdbHttpQuery = `duckdb -c "
 
       <InstallPanel />
 
-      <div class="about">
+      <div id="about" class="about">
         <div class="about-label">About</div>
         <div class="about-body">
           <p>
@@ -103,11 +103,13 @@ const duckdbHttpQuery = `duckdb -c "
 
       <Section tag="Local first" title="Download the files" id="download">
         <p class="body-text">
-          Each release is 4 Parquet files, its schema as a Frictionless <code
-            >datapackage.json</code
-          > and its provenance info, published as an OCI Image, stored by the hash of the data. <code
-            >ods</code
-          > (or any OCI client) can download a release to your machine and verify the integrity.
+          Each release is 4 Parquet files plus its provenance metadata and its schema as a
+          Frictionless <code>datapackage.json</code>, published as an OCI Image, stored by the hash
+          of the data.
+        </p>
+        <p class="body-text">
+          <code>ods</code> (or any OCI client) can download a release to your machine and verify the
+          integrity.
         </p>
         <div class="card-row">
           <Card variant="bordered" title="With ods" command="ods pull">
@@ -145,9 +147,15 @@ const duckdbHttpQuery = `duckdb -c "
 
       <Section tag="Verifiable" title="Provenance and reproducibility" id="prov">
         <p class="body-text">
-          A dataset you cannot rebuild is one you have to take on trust. Every release here can be
-          checked against the NHS TRUD archive it came from, so a result in a paper, an audit or a
-          month-on-month diff points at exact, identical bytes.
+          Every release on ods.fyi can be traced to the official NHS TRUD archive it came from. The
+          output of <code>ods</code> is designed and tested to ensure byte identical output for a
+          given input archive. Rebuilding the parquet from the source is encouraged to have more
+          people verifying those claims.
+        </p>
+        <p class="body-text">
+          In the meantime you can just <code>ods pull</code> and know that the files you get match
+          the files we published, and are a deterministic projection of the official source
+          archives.
         </p>
         <div class="card-row-2">
           <Card variant="top-rule" title="Byte-for-byte reproducible">
@@ -160,7 +168,6 @@ const duckdbHttpQuery = `duckdb -c "
             through as metadata available in every derived file.
           </Card>
         </div>
-        <p class="body-text">Each release records its source facts and build facts, and nothing else.</p>
         <div class="code-with-terminal">
           <CodeBlock content={provenanceJson} label="cat _provenance.json" lang="json" />
         </div>
