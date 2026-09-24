@@ -7,18 +7,13 @@
 
 mod common;
 
-use common::create_mock_trud_zip;
+use common::{create_mock_trud_zip, ods_binary};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 fn empty_dir_listing(dir: &std::path::Path) -> Vec<String> {
     fs::read_dir(dir)

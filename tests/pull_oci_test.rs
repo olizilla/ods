@@ -662,10 +662,8 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     let index_file = tmp.path().join("index.json");
     std::fs::write(&index_file, serde_json::to_vec_pretty(&index)?)?;
 
-    let ods_bin = env!("CARGO_BIN_EXE_ods");
-
     // 1. ods pull 2026-08-28 --index ...
-    let out_named = std::process::Command::new(ods_bin)
+    let out_named = common::ods_cmd()
         .current_dir(tmp.path())
         .args(["pull", "2026-08-28", "--index", index_file.to_str().unwrap()])
         .output()?;
@@ -678,7 +676,7 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     assert!(stderr_named.contains("Pull a valid release: ods pull"));
 
     // 2. bare ods pull --index ...
-    let out_bare = std::process::Command::new(ods_bin)
+    let out_bare = common::ods_cmd()
         .current_dir(tmp.path())
         .args(["pull", "--index", index_file.to_str().unwrap()])
         .output()?;
@@ -1381,8 +1379,7 @@ fn test_pull_bad_layer_real_http_integration() -> Result<()> {
         }
     });
 
-    let ods_bin = env!("CARGO_BIN_EXE_ods");
-    let out = std::process::Command::new(ods_bin)
+    let out = common::ods_cmd()
         .current_dir(tmp.path())
         .args(["pull", "2026-07-31", "--index", index_file.to_str().unwrap()])
         .output()?;

@@ -105,6 +105,24 @@ skip() { add_row "$1" skipped "" "$2"; }
 compile() { cargo test --no-fail-fast --no-run; }
 
 rust_tests() {
+  local leaks
+  leaks=$(grep -rn 'CARGO_BIN_EXE_ods' tests/ | grep -v '^tests/common/mod\.rs:' || true)
+  if [ -n "$leaks" ]; then
+    echo "CARGO_BIN_EXE_ods used outside tests/common/mod.rs:" >&2
+    echo "$leaks" >&2
+    return 1
+  fi
+
+  local hostile_home hostile_cache orig_home orig_rustup orig_cargo
+  hostile_home=$(mktemp -d)
+  hostile_cache=$(mktemp -d)
+  orig_home="$HOME"
+  orig_rustup="${RUSTUP_HOME:-$orig_home/.rustup}"
+  orig_cargo="${CARGO_HOME:-$orig_home/.cargo}"
+
+  mkdir -p "$hostile_home/ods_data"
+  echo "{}" > "$hostile_home/ods_data/_releases.json"
+
   # cargo runs test binaries with the package root as their working directory
   # regardless of where `cargo test` itself is invoked from (verified: running from
   # a fresh directory with --manifest-path still leaves stray writes in the repo
@@ -115,11 +133,27 @@ rust_tests() {
   local before after stray status
   before=$(git status --porcelain --ignored=matching --untracked-files=all)
   if [ "$release_data" = 1 ]; then
+    RUSTUP_HOME="$orig_rustup" \
+    CARGO_HOME="$orig_cargo" \
+    COLUMNS=40 \
+    ODS_RELEASE_INDEX_URL="http://127.0.0.1:9/unreachable.json" \
+    TRUD_API_KEY="not-a-key" \
+    ODS_CACHE_DIR="$hostile_cache" \
+    HOME="$hostile_home" \
     cargo test --no-fail-fast -- --include-ignored
   else
+    RUSTUP_HOME="$orig_rustup" \
+    CARGO_HOME="$orig_cargo" \
+    COLUMNS=40 \
+    ODS_RELEASE_INDEX_URL="http://127.0.0.1:9/unreachable.json" \
+    TRUD_API_KEY="not-a-key" \
+    ODS_CACHE_DIR="$hostile_cache" \
+    HOME="$hostile_home" \
     cargo test --no-fail-fast
   fi
   status=$?
+  rm -rf "$hostile_home" "$hostile_cache"
+
   after=$(git status --porcelain --ignored=matching --untracked-files=all)
   stray=$(comm -13 <(echo "$before" | sort) <(echo "$after" | sort))
   if [ -n "$stray" ]; then

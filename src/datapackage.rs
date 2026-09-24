@@ -2,11 +2,11 @@ use arrow::datatypes::{DataType, Field, Schema};
 use serde_json::{json, Value};
 
 pub const DATAPACKAGE_FILENAME: &str = "datapackage.json";
-pub const DATAPACKAGE_JSON: &str = include_str!("../data/datapackage.json");
 
-pub fn dataset_version() -> &'static str {
-    "0.1.0"
-}
+/// The dataset version. This is the single source of truth for the dataset version.
+/// Bumping this changes every OCI manifest digest built afterwards, because
+/// datapackage.json is a layer.
+pub const DATASET_VERSION: &str = "0.1.0";
 
 fn arrow_type_to_table_schema_type(dt: &DataType) -> &'static str {
     match dt {
@@ -133,7 +133,7 @@ pub fn generate_datapackage() -> Value {
         "name": "ods-fyi",
         "title": "ods: NHS Organisation Data as verifiable Parquet files",
         "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
-        "version": dataset_version(),
+        "version": DATASET_VERSION,
         "licenses": [
             {
                 "name": "OGL-UK-3.0",
@@ -160,7 +160,7 @@ pub fn generate_release_datapackage(
     dataset_doi: Option<&str>,
     dataset_version_opt: Option<&str>,
 ) -> Value {
-    let mut pkg: Value = serde_json::from_str(DATAPACKAGE_JSON).unwrap_or_else(|_| generate_datapackage());
+    let mut pkg = generate_datapackage();
 
     if let Some(doi) = dataset_doi {
         pkg["id"] = json!(doi);
@@ -170,7 +170,7 @@ pub fn generate_release_datapackage(
 
     let ver = dataset_version_opt
         .map(|s| s.to_string())
-        .unwrap_or_else(|| dataset_version().to_string());
+        .unwrap_or_else(|| DATASET_VERSION.to_string());
     pkg["version"] = json!(ver);
 
     if let Some(resources) = pkg["resources"].as_array_mut() {

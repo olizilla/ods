@@ -9,6 +9,52 @@ use ods::commands::parquet::{
 use ods::provenance::OdsProvenance;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+pub struct OdsCommand {
+    cmd: std::process::Command,
+    _cwd: TempDir,
+    _home: TempDir,
+}
+
+impl std::ops::Deref for OdsCommand {
+    type Target = std::process::Command;
+    fn deref(&self) -> &Self::Target {
+        &self.cmd
+    }
+}
+
+impl std::ops::DerefMut for OdsCommand {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cmd
+    }
+}
+
+#[allow(dead_code)]
+pub fn ods_cmd() -> OdsCommand {
+    let cwd = TempDir::new().expect("create temp dir for ods_cmd cwd");
+    let home = TempDir::new().expect("create temp dir for ods_cmd home");
+
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ods"));
+    cmd.current_dir(cwd.path());
+    cmd.env("HOME", home.path());
+    cmd.env_remove("CARGO_MANIFEST_DIR");
+    cmd.env_remove("TRUD_API_KEY");
+    cmd.env_remove("ODS_TRUD_API_URL");
+    cmd.env_remove("ODS_RELEASE_INDEX_URL");
+    cmd.env_remove("ODS_CACHE_DIR");
+    cmd.env_remove("NO_COLOR");
+    cmd.env_remove("PAGER");
+    cmd.env("COLUMNS", "200");
+    cmd.env("TERM", "dumb");
+
+    OdsCommand {
+        cmd,
+        _cwd: cwd,
+        _home: home,
+    }
+}
+
+#[allow(unused_imports, dead_code)]
+pub use ods_cmd as ods_binary;
 
 #[allow(clippy::vec_init_then_push, dead_code)]
 pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
@@ -1239,7 +1285,10 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     std::fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
     std::fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
-    std::fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"0.1.0\"}").unwrap();
+    std::fs::write(
+        rel_dir.join("datapackage.json"),
+        format!("{{\"name\": \"test\", \"version\": \"{}\"}}", ods::datapackage::DATASET_VERSION),
+    ).unwrap();
     std::fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
     // Create Cargo.toml and git repo

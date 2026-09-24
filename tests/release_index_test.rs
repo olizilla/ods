@@ -72,7 +72,7 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
     common::create_nested_trud_zip(&fixture_zip, &[("fullfile.zip", &inner_bytes)]);
 
     let pull_out = tmp_pull.path().join("releases").join("2026-07-31");
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let status = common::ods_cmd()
         .current_dir(tmp_pull.path())
         .arg("trud")
         .arg("pull")

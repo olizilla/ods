@@ -66,7 +66,14 @@ pub struct RoleEntry {
 pub fn run(args: Args) -> Result<()> {
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     let color = crate::ansi::stdout_color_enabled(args.plain);
-    run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, color)
+    let explicit_width = if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
+        Some(col_env)
+    } else if std::io::stdout().is_terminal() {
+        crossterm::terminal::size().ok().map(|(cols, _)| cols)
+    } else {
+        None
+    };
+    run_with_writer_color_width(args, &mut std::io::stdout(), &resolved_input, color, explicit_width)
 }
 
 pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path) -> Result<()> {
@@ -74,6 +81,16 @@ pub fn run_with_writer(args: Args, writer: &mut dyn std::io::Write, parquet_dir:
 }
 
 pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parquet_dir: &Path, color: bool) -> Result<()> {
+    run_with_writer_color_width(args, writer, parquet_dir, color, None)
+}
+
+pub fn run_with_writer_color_width(
+    args: Args,
+    writer: &mut dyn std::io::Write,
+    parquet_dir: &Path,
+    color: bool,
+    explicit_width: Option<u16>,
+) -> Result<()> {
     let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
@@ -170,15 +187,7 @@ pub fn run_with_writer_color(args: Args, writer: &mut dyn std::io::Write, parque
                 table.load_style(presets::UTF8_FULL_CONDENSED);
                 table.set_truncation_indicator("…");
                 table.set_content_arrangement(ContentArrangement::Dynamic);
-                if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
-                    table.set_width(col_env);
-                } else if std::io::stdout().is_terminal() {
-                    if let Ok((cols, _)) = crossterm::terminal::size() {
-                        table.set_width(cols);
-                    }
-                } else {
-                    table.set_width(120);
-                }
+                table.set_width(explicit_width.unwrap_or(120));
             }
 
             table.set_header(vec!["Code", "Name", "Holders"]);

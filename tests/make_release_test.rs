@@ -3,7 +3,6 @@ use ods::commands::make_release::{perform_all_release_checks, run, Args};
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::TempDir;
 
 mod common;
@@ -26,7 +25,7 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
 
-    let expected_ver = ods::datapackage::dataset_version();
+    let expected_ver = ods::datapackage::DATASET_VERSION;
     assert_eq!(index.releases.len(), 1);
     assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
     assert_eq!(index.releases[0].datasets.len(), 1);
@@ -48,7 +47,7 @@ fn test_make_release_fails_on_dirty_working_tree() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
     )?;
@@ -68,7 +67,7 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
     )?;
@@ -81,9 +80,12 @@ fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
 fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    let ver = ods::datapackage::dataset_version();
+    let ver = ods::datapackage::DATASET_VERSION;
     let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
-    let zip_sha = prov.trud_release_sha256.unwrap();
+    let zip_sha = prov.trud_release_sha256.clone().unwrap();
+
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, ver)?;
+    let fixture_digest = manifest.digest()?;
 
     let mut index = ods::index::OdsReleaseIndex::baked().unwrap();
     index.releases.push(ods::index::Release {
@@ -107,7 +109,7 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
     )?;
 
     assert!(failures.iter().any(|f| f.contains("sha256:0f2a000000000000000000000000000000000000000000000000000000000000")
-        && f.contains("sha256:253975bf8dae638fc314a17cf0719157c3243417a4bf5d3a94f981479bcc3aab")));
+        && f.contains(&fixture_digest)));
     Ok(())
 }
 
@@ -128,7 +130,7 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     assert!(dist_dir.exists(), "dist/ directory must exist");
     assert!(!dist_dir.join("releases.json").exists(), "dist/releases.json must NOT exist in dist/");
 
-    let ver = ods::datapackage::dataset_version();
+    let ver = ods::datapackage::DATASET_VERSION;
     let manifests_dir = dist_dir.join("v2").join("ods-data").join("manifests");
     assert!(manifests_dir.join(format!("2026-07-31_{}", ver)).exists());
     assert!(manifests_dir.join("2026-07-31").exists());
@@ -203,7 +205,7 @@ fn test_make_release_refuses_when_no_repo_found() {
     // 1. Direct check in perform_all_release_checks
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         None,
         None,
     ).unwrap();
@@ -236,7 +238,7 @@ fn test_make_release_refuses_unverified_provenance() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         None,
         None,
     )?;
@@ -262,7 +264,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         None,
         None,
     )?;
@@ -293,7 +295,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
         None,
     )?;
 
-    let expected_ver = ods::datapackage::dataset_version();
+    let expected_ver = ods::datapackage::DATASET_VERSION;
     let mismatch_failure = failures
         .iter()
         .find(|f| f.contains("datapackage.json version"))
@@ -450,8 +452,7 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
         .collect();
     assert_eq!(before_files, after_files, "release files and mtimes must be untouched");
 
-    // Also verify via CLI binary: exit 1, stderr names the path
-    let cli_out = Command::new(env!("CARGO_BIN_EXE_ods"))
+    let cli_out = common::ods_cmd()
         .arg("make")
         .arg("release")
         .arg("--input")
@@ -492,8 +493,7 @@ fn test_make_release_staging_with_relative_input() -> Result<()> {
     fs::copy(&index_src, &index_b)?;
 
     // 1. Run ods make release with relative --input and .current_dir(tmp.path())
-    let ods_bin = env!("CARGO_BIN_EXE_ods");
-    let rel_status = Command::new(ods_bin)
+    let rel_status = common::ods_cmd()
         .current_dir(tmp.path())
         .args([
             "make",
@@ -511,7 +511,7 @@ fn test_make_release_staging_with_relative_input() -> Result<()> {
     assert!(rel_status.success(), "make release with relative input failed");
 
     // 2. Run ods make release with absolute --input
-    let abs_status = Command::new(ods_bin)
+    let abs_status = common::ods_cmd()
         .current_dir(tmp.path())
         .args([
             "make",
@@ -849,7 +849,7 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
 
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         Some(&initial_index),
     )?;
@@ -898,7 +898,7 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
     assert_eq!(index.releases[0].datasets.len(), 2);
     assert_eq!(index.releases[0].datasets[0].dataset_version, "0.0.1");
-    assert_eq!(index.releases[0].datasets[1].dataset_version, ods::datapackage::dataset_version());
+    assert_eq!(index.releases[0].datasets[1].dataset_version, ods::datapackage::DATASET_VERSION);
 
     Ok(())
 }
@@ -959,7 +959,7 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
     // Verify release checks pass without data/releases.json
     let failures = perform_all_release_checks(
         &rel_dir,
-        ods::datapackage::dataset_version(),
+        ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
     )?;

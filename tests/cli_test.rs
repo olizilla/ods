@@ -1,16 +1,11 @@
 //! End-to-end CLI integration tests verifying binary execution and stdout/stderr output formatting.
 
 use std::fs;
-use std::process::Command;
 use tempfile::TempDir;
 
 mod common;
 
-use common::{create_mock_trud_zip, make_v1_index};
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
+use common::{create_mock_trud_zip, make_v1_index, ods_binary};
 
 #[test]
 fn test_cli_version_output_formatting() {
@@ -904,7 +899,8 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
             fs::copy(entry.path(), rel_dir.join(entry.file_name())).unwrap();
         }
     }
-    fs::write(rel_dir.join("datapackage.json"), ods::datapackage::DATAPACKAGE_JSON).unwrap();
+    let dp = ods::datapackage::generate_release_datapackage(&rel_dir, None, None);
+    fs::write(rel_dir.join("datapackage.json"), serde_json::to_string_pretty(&dp).unwrap()).unwrap();
 
     // 1. Unreadable provenance with no $schema
     let bad_prov = r#"{

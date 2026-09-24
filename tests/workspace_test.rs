@@ -414,7 +414,7 @@ fn test_workspace_marker_without_valid_schema_stops_command() {
     // Boundary so discovery does not escape to repo
     fs::create_dir_all(tmp.path().join(".git")).unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(tmp.path())
         .arg("find")
         .arg("foo")
@@ -472,7 +472,7 @@ fn test_workspace_discovered_by_release_without_releases_json() {
     // Boundary to stop discovery escaping
     fs::create_dir_all(root.join(".git")).unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(root)
         .args(["find", "--gp"])
         .output()
@@ -515,7 +515,7 @@ fn test_workspace_discovered_by_release_with_malformed_releases_json() {
     // Boundary to stop discovery escaping
     fs::create_dir_all(root.join(".git")).unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(root)
         .args(["find", "--gp"])
         .output()
@@ -600,7 +600,7 @@ fn test_pull_repairs_malformed_releases_json() {
     assert_eq!(repaired_bytes, ods::index::BAKED_RELEASES_JSON_BYTES);
 
     // Subsequent ods find prints no warning notice
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(root)
         .args(["find", "--gp"])
         .output()
@@ -630,7 +630,7 @@ fn test_workspace_discovery_bounded_does_not_find_unnamed_subdirectories() {
     fs::create_dir_all(root.join(".git")).unwrap();
 
     // Running ods find from root must NOT find ./ws because ws is not named ods_data and is not an ancestor
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(root)
         .args(["find", "--gp"])
         .output()
@@ -641,7 +641,7 @@ fn test_workspace_discovery_bounded_does_not_find_unnamed_subdirectories() {
     assert!(stderr.contains("✖ no ods workspace found here"), "got:\n{}", stderr);
 
     // But explicit --input ./ws/releases/2026-07-31 works
-    let output_explicit = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output_explicit = common::ods_cmd()
         .current_dir(root)
         .args(["find", "--gp", "--input", rel_dir.to_str().unwrap()])
         .output()

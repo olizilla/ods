@@ -1,12 +1,7 @@
 mod common;
 
-use common::setup_find_test_workspace;
+use common::{ods_binary, setup_find_test_workspace};
 use ods::commands::role::{self, Args, OutputFormat};
-use std::process::Command;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 #[test]
 fn test_role_lists_all_sorted_by_holders_desc() {

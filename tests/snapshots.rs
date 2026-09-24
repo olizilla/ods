@@ -6,7 +6,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 
@@ -23,11 +22,10 @@ fn run_case_full(
     cwd: Option<&Path>,
     envs: &[(&str, &str)],
 ) -> String {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ods"));
+    let mut cmd = common::ods_cmd();
     if let Some(cols) = case.columns {
         cmd.env("COLUMNS", cols.to_string());
     }
-    cmd.env_remove("PAGER");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }

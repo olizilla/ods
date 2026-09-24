@@ -5,6 +5,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -772,8 +773,15 @@ pub fn run(args: Args) -> Result<()> {
 
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     let color = crate::ansi::stdout_color_enabled(args.plain);
+    let explicit_width = if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
+        Some(col_env)
+    } else if std::io::stdout().is_terminal() {
+        crossterm::terminal::size().ok().map(|(cols, _)| cols)
+    } else {
+        None
+    };
 
-    run_with_writer_color(args, &mut std::io::stdout(), &resolved_input, color)
+    run_with_writer_color_width(args, &mut std::io::stdout(), &resolved_input, color, explicit_width)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1096,6 +1104,16 @@ pub fn run_with_writer_color(
     writer: &mut dyn std::io::Write,
     parquet_dir: &Path,
     color: bool,
+) -> Result<()> {
+    run_with_writer_color_width(args, writer, parquet_dir, color, None)
+}
+
+pub fn run_with_writer_color_width(
+    args: Args,
+    writer: &mut dyn std::io::Write,
+    parquet_dir: &Path,
+    color: bool,
+    explicit_width: Option<u16>,
 ) -> Result<()> {
     let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
     let file_name = "orgs.parquet";
@@ -1624,7 +1642,6 @@ pub fn run_with_writer_color(
                     }
                 }
             } else {
-                use std::io::IsTerminal;
                 use comfy_table::{Table, ContentArrangement, presets};
 
                 let mut table = Table::new();
@@ -1636,15 +1653,7 @@ pub fn run_with_writer_color(
                     table.load_style(presets::UTF8_FULL_CONDENSED);
                     table.set_truncation_indicator("…");
                     table.set_content_arrangement(ContentArrangement::Dynamic);
-                    if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
-                        table.set_width(col_env);
-                    } else if std::io::stdout().is_terminal() {
-                        if let Ok((cols, _)) = crossterm::terminal::size() {
-                            table.set_width(cols);
-                        }
-                    } else {
-                        table.set_width(120);
-                    }
+                    table.set_width(explicit_width.unwrap_or(120));
                 }
 
                 let has_location = !parsed_locations.is_empty();

@@ -4,24 +4,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-fn extract_schema_subtree(pkg: &Value) -> Value {
-    let resources = pkg["resources"].as_array().expect("resources array");
-    let mapped_resources: Vec<Value> = resources
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "name": r["name"],
-                "type": r["type"],
-                "path": r["path"],
-                "format": r["format"],
-                "mediatype": r["mediatype"],
-                "schema": r["schema"]
-            })
-        })
-        .collect();
-    serde_json::json!(mapped_resources)
-}
-
 #[test]
 fn test_datapackage_matches_committed_snapshot() -> Result<()> {
     let generated = ods::datapackage::generate_datapackage();
@@ -38,22 +20,14 @@ fn test_datapackage_matches_committed_snapshot() -> Result<()> {
         .expect("data/datapackage.json must exist in repo");
     let committed: Value = serde_json::from_str(&committed_str)?;
 
-    let gen_subtree = extract_schema_subtree(&generated);
-    let com_subtree = extract_schema_subtree(&committed);
-
-    if gen_subtree != com_subtree {
-        let gen_pretty = serde_json::to_string_pretty(&gen_subtree)?;
-        let com_pretty = serde_json::to_string_pretty(&com_subtree)?;
+    if generated != committed {
+        let gen_pretty = serde_json::to_string_pretty(&generated)?;
+        let com_pretty = serde_json::to_string_pretty(&committed)?;
         panic!(
-            "Schema differs from committed data/datapackage.json!\n\nGenerated:\n{}\n\nCommitted:\n{}\n\nRun `UPDATE_SCHEMA=1 cargo test` to regenerate, review the diff, and decide whether `version` needs a minor or major bump.",
+            "Data package differs from committed data/datapackage.json!\n\nGenerated:\n{}\n\nCommitted:\n{}\n\nRun `UPDATE_SCHEMA=1 cargo test --test schema_contract_test` to regenerate.",
             gen_pretty, com_pretty
         );
     }
-
-    assert_eq!(generated["$schema"], committed["$schema"]);
-    assert_eq!(generated["version"], committed["version"], "schema version in code must match committed package version");
-    assert_eq!(generated["name"], committed["name"]);
-    assert_eq!(generated["licenses"], committed["licenses"]);
 
     Ok(())
 }

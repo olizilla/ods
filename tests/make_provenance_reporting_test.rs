@@ -11,14 +11,9 @@
 
 mod common;
 
-use common::create_mock_trud_zip as create_mock_zip;
+use common::{create_mock_trud_zip as create_mock_zip, ods_binary};
 use std::fs;
-use std::process::Command;
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 // ---------------------------------------------------------------------------
 // Task 1: Report an unverified source at the start
@@ -81,6 +76,7 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
     // 5. ods make release refuses the unverified build
     let release_output = ods_binary()
         .current_dir(tmp.path())
+        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"))
         .arg("make")
         .arg("release")
         .arg("-i")

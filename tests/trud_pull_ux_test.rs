@@ -8,15 +8,11 @@ use ods::progress::{Progress, ProgressCaps};
 use sha2::Digest;
 use std::fs;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 mod common;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
+use common::ods_binary;
 
 fn create_mock_trud_zip_with_manifest(dir: &std::path::Path) -> std::path::PathBuf {
     let zip_path = dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");

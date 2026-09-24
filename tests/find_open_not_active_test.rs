@@ -9,12 +9,11 @@
 //! `cargo test --test find_open_not_active_test -- --include-ignored`, or
 //! `scripts/ci.sh --release-data`.
 
+mod common;
+
+use common::ods_binary;
 use std::path::PathBuf;
 use std::process::Command;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 /// The maintainer's real, already-built 2026-08-28 release, or `None` if this
 /// checkout doesn't have one. `ods_data/` is gitignored and per-checkout, so a

@@ -401,7 +401,7 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
     let marker_path = ws.join("_releases.json");
     fs::write(&marker_path, b"{\"bad\":\"marker\"}").unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .current_dir(tmp.path())
         .args(["cite", "-i", rel_dir.to_str().unwrap()])
         .output()

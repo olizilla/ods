@@ -2,14 +2,9 @@
 
 mod common;
 
-use common::create_mock_trud_zip as create_mock_zip;
+use common::{create_mock_trud_zip as create_mock_zip, ods_binary};
 use std::fs;
-use std::process::Command;
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 
 

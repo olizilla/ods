@@ -219,7 +219,7 @@ fn manifest_of(orgs: &[String]) -> String {
 
 /// Runs `ods make parquet` on a zip and returns its stderr. The build must succeed.
 fn make_stderr(zip: &std::path::Path, out: &std::path::Path, extra: &[&str]) -> String {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+    let output = common::ods_cmd()
         .args(["make", "parquet", "--input"])
         .arg(zip)
         .arg("--output")
@@ -325,3 +325,64 @@ fn make_quiet_prints_the_block_and_the_warnings_and_nothing_else() {
     assert!(!quiet.lines().any(|l| l.starts_with("* ") || l.starts_with("✓ ")), "no info lines under --quiet:\n{quiet}");
     assert!(loud.starts_with("* Source: "), "without --quiet the source line opens the report:\n{loud}");
 }
+
+/// D1: two archives with the same file name and byte length do not collide in ODS_CACHE_DIR;
+/// the second build reflects its own content, not stale cached XML from the first.
+#[test]
+fn same_name_same_length_zips_do_not_collide_in_xml_cache() {
+    let cache_dir = TempDir::new().unwrap();
+    let dir1 = TempDir::new().unwrap();
+    let dir2 = TempDir::new().unwrap();
+
+    let full1 = manifest_xml(1, &[("AAA1", "PRACTICE ONE", "Active")]);
+    let archive1 = manifest_xml(0, &[]);
+    let zip1 = write_release_zip(dir1.path(), &full1, &archive1);
+    let len1 = fs::metadata(&zip1).unwrap().len();
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let mut zip2 = dir2.path().join("placeholder");
+    for pad in 0..50 {
+        let name = format!("PRACTICE TWO{}", " ".repeat(pad));
+        let full2 = manifest_xml(1, &[("BBB2", &name, "Active")]);
+        let z = write_release_zip(dir2.path(), &full2, &archive1);
+        if fs::metadata(&z).unwrap().len() == len1 {
+            zip2 = z;
+            break;
+        }
+    }
+
+    assert_eq!(
+        fs::metadata(&zip1).unwrap().len(),
+        fs::metadata(&zip2).unwrap().len(),
+        "both zips must have the exact same byte length to test cache collision"
+    );
+
+    let out1 = dir1.path().join("out1");
+    let out2 = dir2.path().join("out2");
+
+    let run1 = common::ods_cmd()
+        .env("ODS_CACHE_DIR", cache_dir.path())
+        .args(["make", "-i", zip1.to_str().unwrap(), "-o", out1.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(run1.status.success(), "first make failed: {}", String::from_utf8_lossy(&run1.stderr));
+
+    let run2 = common::ods_cmd()
+        .env("ODS_CACHE_DIR", cache_dir.path())
+        .args(["make", "-i", zip2.to_str().unwrap(), "-o", out2.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(run2.status.success(), "second make failed: {}", String::from_utf8_lossy(&run2.stderr));
+
+    let rows1 = read_codes_and_statuses(&out1.join("orgs.parquet"));
+    assert_eq!(rows1, [("AAA1".to_string(), "active".to_string())]);
+
+    let rows2 = read_codes_and_statuses(&out2.join("orgs.parquet"));
+    assert_eq!(
+        rows2,
+        [("BBB2".to_string(), "active".to_string())],
+        "second build must reflect zip2 content rather than stale cache from zip1"
+    );
+}
+

@@ -1,14 +1,9 @@
 mod common;
 
 use anyhow::Result;
-use common::make_v1_index;
+use common::{make_v1_index, ods_cmd};
 use std::fs;
-use std::process::Command;
 use tempfile::TempDir;
-
-fn ods_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 #[test]
 fn test_use_refuses_unknown_workspace_flag() {

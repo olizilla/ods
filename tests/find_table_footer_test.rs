@@ -11,15 +11,10 @@
 
 mod common;
 
-use common::setup_find_test_workspace;
+use common::{ods_binary, setup_find_test_workspace};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 /// Helper creating a workspace with two releases:
 /// - active: 2026-07-31 (current)

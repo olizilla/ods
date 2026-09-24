@@ -62,3 +62,8 @@ them: each test enforces one, and a failing test names the one that broke.
 
 - **H1. Named paths serve the release's own bytes.** `/orgs.parquet`, `/latest/…` and `/<date>/<version>/…` return the blobs of the manifest they name, and byte ranges of them.
 - **H2. It is an OCI registry.** Any OCI client can pull a release from ods.fyi through the distribution API.
+
+## The suite
+
+- **T1. Tests are hermetic.** A test's result depends only on the code and its own fixtures: never on the working directory, `HOME`, the terminal or the environment of whoever runs it. Every test that runs `ods` launches it through the helper in `tests/common/mod.rs`, and CI runs the suite in a hostile environment to prove it.
+- **T2. A version is set in one place.** The tool version is `version` in `Cargo.toml`; the dataset version is `DATASET_VERSION` in `src/datapackage.rs`, shown in the committed `data/datapackage.json` and checked against it. `scripts/bump-version.sh` changes either and regenerates the two committed files derived from it, after which the suite passes. Test data that describes a release names its own version.

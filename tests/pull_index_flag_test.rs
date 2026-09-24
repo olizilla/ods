@@ -1,7 +1,7 @@
 mod common;
 
 use anyhow::Result;
-use common::make_v1_index;
+use common::{make_v1_index, ods_binary};
 use ods::commands::pull::{
     resolve_index, run_with_fetcher, Args, OciBlobFetcher,
 };
@@ -11,14 +11,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 fn sample_release_index() -> OdsReleaseIndex {
     make_v1_index(&[(

@@ -1,7 +1,7 @@
 mod common;
 
 use anyhow::Result;
-use common::{create_mock_trud_zip, make_v1_index};
+use common::{create_mock_trud_zip, make_v1_index, ods_binary};
 use ods::commands::fetch::{
     run_local_archive_with_fetchers, Args as FetchArgs, TrudFetcher, TrudReleaseItem,
 };
@@ -9,13 +9,8 @@ use ods::progress::{Progress, ProgressCaps};
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-
-fn ods_binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
-}
 
 struct BufferWriter(Arc<Mutex<Vec<u8>>>);
 impl std::io::Write for BufferWriter {

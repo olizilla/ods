@@ -280,10 +280,16 @@ fn cache_key(zip_path: &Path) -> Result<String> {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "release".to_string());
-    let len = std::fs::metadata(zip_path)
-        .with_context(|| format!("reading metadata for {}", zip_path.display()))?
-        .len();
-    Ok(format!("{stem}_{len}_v2"))
+    let meta = std::fs::metadata(zip_path)
+        .with_context(|| format!("reading metadata for {}", zip_path.display()))?;
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Ok(format!("{stem}_{len}_{mtime}_v2"))
 }
 
 /// True when an XML file name says it is the archive product.

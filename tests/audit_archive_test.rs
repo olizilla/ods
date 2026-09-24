@@ -4,7 +4,6 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use tempfile::TempDir;
 
 const HEADER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -102,7 +101,7 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
 }
 
 fn audit(release: &Release) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_ods"))
+    common::ods_cmd()
         .args(["trud", "audit", "--full", "-w"])
         .arg(&release.workspace)
         .arg("-i")

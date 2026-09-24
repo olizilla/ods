@@ -481,7 +481,7 @@ pub fn perform_all_release_checks(
     // Check 13: datapackage.json version matches built-in constant and parses as semver
     let dp_ver = crate::datapackage::read_dataset_version_from_dir(release_dir);
     if let Some(ref ver) = dp_ver {
-        let tool_dataset_ver = crate::datapackage::dataset_version();
+        let tool_dataset_ver = crate::datapackage::DATASET_VERSION;
         if ver != tool_dataset_ver {
             failures.push(format!(
                 "datapackage.json version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
