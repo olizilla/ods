@@ -307,11 +307,29 @@ reparenting are all recoverable [across an archive](./queries.md#across-releases
 
 ## Frictionless Data Package
 
-`datapackage.json` describes each release in [Frictionless Table Schema][frictionless]
-format. `roles`, `relationships` and `successions` validate with the Frictionless
-framework. `orgs` uses native Parquet list columns, which Table
-Schema's flat-cell model doesn't cover — read those with DuckDB, Polars or Arrow,
-which handle them natively.
+`datapackage.json` is a [Data Package v2][datapackage] descriptor. It carries what a copied
+release needs to explain itself: the dataset `version`, the licence and attribution, each
+table's columns and types, the join keys between tables, and each file's size and SHA-256. The
+four list columns in `orgs` are declared as Table Schema's `array` type. Its `list` type, with
+`itemType: string`, is the closer fit for a Parquet `LIST<VARCHAR>`, but it's a delimited string
+in the spec's lexical form, and the published v2 profile (`datapackage.org/profiles/2.0`) has no
+`list` type, so a descriptor that used it would fail that profile.
+
+`frictionless validate` can't check a release yet. frictionless-py reads Parquet through pandas,
+which hands list cells over as NumPy arrays, so every list column reads as a type error. It also
+skips counting and hashing Parquet files, so every declared `bytes` and `hash` fails. Both are
+bugs in its Parquet reader, not in the release. It needs `pandas` installed alongside the
+`parquet` extra ([#1773][fl-1773]), and loads each file whole ([#1203][fl-1203]).
+
+To check a release's files against its descriptor today:
+
+```console
+$ jq -r '.resources[] | "\(.hash[7:])  \(.path)"' datapackage.json | shasum -a 256 -c
+orgs.parquet: OK
+roles.parquet: OK
+relationships.parquet: OK
+successions.parquet: OK
+```
 
 ## Provenance
 
@@ -385,6 +403,8 @@ to handle it. [Docuemtned here](./queries.md#other-things-to-check-before-you-tr
 Join on `ods_code`, always — [worked through here](./queries.md#names-are-not-identifiers).
 
 [queries.md]: ./queries.md
-[frictionless]: https://specs.frictionlessdata.io/table-schema/
+[datapackage]: https://datapackage.org/
+[fl-1773]: https://github.com/frictionlessdata/frictionless-py/issues/1773
+[fl-1203]: https://github.com/frictionlessdata/frictionless-py/issues/1203
 [ods-model]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 [ods-relationships]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Relationships_571324965.html
