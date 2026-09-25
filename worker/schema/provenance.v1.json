@@ -2,11 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ods.fyi/schema/provenance.v1.json",
   "title": "ODS Dataset Provenance",
-  "description": "Provenance document identifying the source TRUD archive for an ods dataset release. Provenance records where the data came from; the dataset descriptor (datapackage.json) records what it is and its version, and the release index records which ods built each published dataset. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (validate_baseline and perform_all_release_checks): trud_release_date, trud_release_sha256 and trud_release_filesize_bytes; all other fields are optional.",
+  "description": "Provenance document identifying the source TRUD archive for an ods dataset release. Provenance records where the data came from; the dataset descriptor (datapackage.json) records what it is and its version, and the release index records which ods built each published dataset. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (validate_baseline and perform_all_release_checks): trud_release_date, trud_release_sha256, trud_release_filesize_bytes, license and attribution; all other fields are optional.",
   "$comment": "Facts about who built the dataset or how the archive was checked are intentionally excluded from this document, so that any ods at the same dataset version rebuilds a published dataset byte for byte, manifest included: the manifest digest is a function of the source archive and the dataset version only. The ods that built a published dataset is recorded in its row of the release index, and its signed proof is the CI attestation for the same digest. How the archive was checked is shown when the check runs. Build-run facts such as runner machine identifiers, execution timestamps, job IDs, and build environment details are excluded for the same reason. dataset_version belongs in datapackage.json (Frictionless version field) rather than provenance so that relabelling or re-tagging a release produces byte-identical provenance.",
   "type": "object",
   "required": [
-    "$schema"
+    "$schema",
+    "trud_release_date",
+    "trud_release_sha256",
+    "trud_release_filesize_bytes",
+    "license",
+    "attribution"
   ],
   "additionalProperties": false,
   "properties": {
@@ -30,9 +35,15 @@
       "minimum": 1,
       "description": "Size in bytes of the source TRUD ZIP archive file, greater than zero. Measured and recorded by ods trud pull."
     },
-    "trud_schema_version": {
+    "license": {
       "type": "string",
-      "description": "The schema version declared in the <Version> attribute of the source XML manifest in the TRUD archive (e.g. '2-0-0'). Recorded by ods make."
+      "const": "OGL-UK-3.0",
+      "description": "The SPDX identifier of the licence the data is published under."
+    },
+    "attribution": {
+      "type": "string",
+      "const": "Contains information from NHS England, licensed under the current version of the Open Government Licence.",
+      "description": "The attribution TRUD specifies for the data."
     }
   }
 }

@@ -72,12 +72,15 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
     common::create_nested_trud_zip(&fixture_zip, &[("fullfile.zip", &inner_bytes)]);
 
     let pull_out = tmp_pull.path().join("releases").join("2026-07-31");
+    let index_file = common::write_index_for_zip(tmp_pull.path(), "2026-07-31", &fixture_zip);
     let status = common::ods_cmd()
         .current_dir(tmp_pull.path())
         .arg("trud")
         .arg("pull")
         .arg("--local-archive")
         .arg(&fixture_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&pull_out)
         .status()?;
@@ -88,7 +91,12 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
     assert!(pull_errors.is_empty(), "trud pull provenance schema errors: {:?}", pull_errors);
 
     // 3. Verify that adding dropped keys causes validation to fail
-    let dropped_keys = ["dataset_version", "trud_release_name", "trud_release_file"];
+    let dropped_keys = [
+        "dataset_version",
+        "trud_release_name",
+        "trud_release_file",
+        "trud_schema_version",
+    ];
     for key in dropped_keys {
         let mut mutated = prov_json.clone();
         mutated[key] = serde_json::json!("should_fail");

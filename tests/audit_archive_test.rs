@@ -78,11 +78,11 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
     let zip = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     common::create_nested_trud_zip(&zip, &[("fullfile.zip", &full), ("archive.zip", &archive)]);
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some(ods::provenance::compute_file_sha256(&zip).unwrap()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        &ods::provenance::compute_file_sha256(&zip).unwrap(),
+        fs::metadata(&zip).unwrap().len(),
+    );
     fs::write(
         release_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -94,7 +94,6 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
         input: Some(release_dir.clone()),
         output: Some(release_dir.clone()), ..Default::default() })
     .unwrap();
-    ods::provenance::update_provenance(&release_dir).unwrap();
 
     Release { _tmp: tmp, workspace, zip, release_dir }
 }

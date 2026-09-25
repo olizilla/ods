@@ -91,11 +91,19 @@ fn test_make_zip_absent_from_index_is_unverified() {
 
     assert!(output.status.success(), "ods make must succeed, stderr:\n{}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let expected_warning = format!("! No provenance info found for {}. Source is unverified.", zip_path.display());
-    assert!(stderr.contains(&expected_warning), "stderr must report unverified: {}", stderr);
+    let filename = zip_path.file_name().unwrap().to_str().unwrap();
+    assert!(
+        stderr.contains(&format!("! {} isn't a TRUD release ods knows", filename)),
+        "stderr must report unverified: {}",
+        stderr
+    );
+    assert!(stderr.contains("Built without provenance. You can explore it with find, info and role, but not cite or publish it."));
 
     let prov_file = out_dir.join(PROVENANCE_FILENAME);
-    assert!(prov_file.exists());
+    assert!(
+        !prov_file.exists(),
+        "_provenance.json must NOT be written for unmatched archive"
+    );
 }
 
 #[test]
@@ -264,8 +272,9 @@ fn test_trud_pull_local_archive_hash_mismatch_exits_1_and_leaves_workspace_untou
     let releases_dir = ws.join("releases");
     fs::create_dir_all(&releases_dir).unwrap();
 
-    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
-    let actual_sha = compute_file_sha256(&zip_path).unwrap();
+    let zip_path =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let _actual_sha = compute_file_sha256(&zip_path).unwrap();
 
     let bad_sha = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
     let index = make_v1_index(&[(
@@ -295,9 +304,15 @@ fn test_trud_pull_local_archive_hash_mismatch_exits_1_and_leaves_workspace_untou
     assert_eq!(output.status.code(), Some(1));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("✖ SHA-256 Checksum Failed!"), "stderr:\n{}", stderr);
-    assert!(stderr.contains(&format!("Local SHA-256: {}", actual_sha)), "stderr:\n{}", stderr);
-    assert!(stderr.contains(&format!("Index SHA-256: {}", bad_sha)), "stderr:\n{}", stderr);
+    let filename = zip_path.file_name().unwrap().to_str().unwrap();
+    assert!(
+        stderr.contains(&format!("✖ {} isn't a TRUD release ods knows", filename)),
+        "stderr:\n{}",
+        stderr
+    );
+    assert!(stderr.contains(
+        "Build it outside the workspace with -o <dir>, or run ods pull for a newer release index."
+    ));
 
     let after_tree = list_directory_recursive(&releases_dir);
     assert_eq!(
@@ -458,20 +473,25 @@ fn test_trud_pull_local_archive_failing_trud_api_stays_unverified_and_prints_war
         Option::<&ods::commands::pull::HttpOciFetcher>::None,
     );
 
-    assert!(res.is_ok(), "must exit 0 on failing TRUD API during --local-archive");
+    assert!(
+        res.is_err(),
+        "must fail when TRUD API fails and archive not in index"
+    );
 
     let output = String::from_utf8(buffer.lock().unwrap().clone())?;
     assert!(
         output.contains("! TRUD API check failed: connection refused (os error 111)"),
         "output was: {output}"
     );
-    assert!(
-        !output.contains("Set TRUD_API_KEY to check it against TRUD"),
-        "output should not tell user to set key when key is set: {output}"
-    );
 
-    let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
-    assert!(prov_file.exists());
+    let prov_file = ws
+        .join("releases")
+        .join("2026-07-31")
+        .join(PROVENANCE_FILENAME);
+    assert!(
+        !prov_file.exists(),
+        "pull must refuse and write no provenance"
+    );
 
     Ok(())
 }
@@ -533,5 +553,401 @@ fn test_trud_verify_failing_trud_api_exits_1_and_names_failure() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_r11_zip_matched_by_hash_across_all_release_rows_not_filename() {
+    let tmp = TempDir::new().unwrap();
+    // Filename says 1999-01-01, but the index row has 2026-07-31 for this hash
+    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_19990101000001.zip");
+    let sha256 = compute_file_sha256(&zip_path).unwrap();
+    let file_size = fs::metadata(&zip_path).unwrap().len();
+
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        &sha256,
+        file_size,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let index_file = tmp.path().join("index.json");
+    fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+
+    let out_dir = tmp.path().join("out");
+    let output = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&zip_path)
+        .arg("-o")
+        .arg(&out_dir)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .expect("execute ods make");
+
+    assert!(output.status.success(), "ods make must succeed, stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+    let prov_file = out_dir.join(PROVENANCE_FILENAME);
+    assert!(prov_file.exists(), "_provenance.json must exist");
+    let prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    assert_eq!(prov.trud_release_date.as_deref(), Some("2026-07-31"));
+    assert_eq!(prov.trud_release_sha256.as_deref(), Some(sha256.as_str()));
+    assert_eq!(prov.trud_release_filesize_bytes, Some(file_size));
+    assert_eq!(prov.license.as_deref(), Some(ods::terms::LICENSE));
+    assert_eq!(prov.attribution.as_deref(), Some(ods::terms::ATTRIBUTION));
+}
+
+#[test]
+fn test_r11_same_zip_renamed_archive_zip_matches_with_byte_identical_provenance() {
+    let tmp = TempDir::new().unwrap();
+    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_19990101000001.zip");
+    let sha256 = compute_file_sha256(&zip_path).unwrap();
+    let file_size = fs::metadata(&zip_path).unwrap().len();
+
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        &sha256,
+        file_size,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let index_file = tmp.path().join("index.json");
+    fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+
+    let out1 = tmp.path().join("out1");
+    let output1 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&zip_path)
+        .arg("-o")
+        .arg(&out1)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .expect("execute ods make");
+    assert!(output1.status.success());
+
+    // Rename to archive.zip (not a TRUD pattern)
+    let renamed_zip = tmp.path().join("archive.zip");
+    fs::copy(&zip_path, &renamed_zip).unwrap();
+
+    let out2 = tmp.path().join("out2");
+    let output2 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&renamed_zip)
+        .arg("-o")
+        .arg(&out2)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .expect("execute ods make");
+    assert!(output2.status.success(), "ods make on archive.zip must succeed, stderr:\n{}", String::from_utf8_lossy(&output2.stderr));
+
+    let prov1_bytes = fs::read(out1.join(PROVENANCE_FILENAME)).unwrap();
+    let prov2_bytes = fs::read(out2.join(PROVENANCE_FILENAME)).unwrap();
+    assert_eq!(prov1_bytes, prov2_bytes, "provenance bytes must be identical for renamed archive");
+}
+
+fn serve_mock_trud(key: &str, date: &str, zip_name: &str, zip_sha256: &str, zip_size: u64) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let content = format!("/keys/{key}/content/items/341");
+    let url = |name: &str| format!("{base}{content}/{name}");
+    let mut routes: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+
+    let release_item = serde_json::json!({
+        "id": zip_name,
+        "name": format!("Release {}", date),
+        "releaseDate": date,
+        "archiveFileUrl": url(zip_name),
+        "archiveFileName": zip_name,
+        "archiveFileSizeBytes": zip_size,
+        "archiveFileSha256": zip_sha256,
+        "checksumFileUrl": url("trud_x.xml"),
+        "checksumFileName": "trud_x.xml",
+        "signatureFileUrl": url("trud_x.xml.asc"),
+        "signatureFileName": "trud_x.xml.sig",
+        "publicKeyFileUrl": url("trud-public-key.pgp"),
+        "publicKeyFileName": "trud-public-key.pgp",
+    });
+    let listing = serde_json::json!({ "apiVersion": "1", "releases": [release_item] });
+    routes.insert(format!("/keys/{key}/items/341/releases"), listing.to_string().into_bytes());
+    for name in ["trud_x.xml", "trud_x.xml.asc", "trud-public-key.pgp"] {
+        routes.insert(format!("{content}/{name}"), b"NHS's bytes".to_vec());
+    }
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+            let clean_path = path.split('?').next().unwrap_or(&path);
+            match routes.get(clean_path) {
+                Some(body) => {
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+                None => {
+                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            }
+        }
+    });
+    base
+}
+
+#[test]
+fn test_r11_provenance_byte_identical_across_all_four_paths() {
+    let tmp = TempDir::new().unwrap();
+    let zip_name = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
+    let zip_path = create_mock_trud_zip(tmp.path(), zip_name);
+    let sha256 = compute_file_sha256(&zip_path).unwrap();
+    let file_size = fs::metadata(&zip_path).unwrap().len();
+
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        &sha256,
+        file_size,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let index_file = tmp.path().join("index.json");
+    fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+
+    let trud_base = serve_mock_trud("testkey", "2026-07-31", zip_name, &sha256, file_size);
+
+    // Route 1: ods make <zip> -o <dir>
+    let make_out = tmp.path().join("make_out");
+    let out1 = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&zip_path)
+        .arg("-o")
+        .arg(&make_out)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .unwrap();
+    assert!(out1.status.success(), "make failed: {}", String::from_utf8_lossy(&out1.stderr));
+    let prov_make = fs::read(make_out.join(PROVENANCE_FILENAME)).unwrap();
+
+    // Route 2: ods trud pull --local-archive <zip> into workspace
+    let ws2 = tmp.path().join("ws2");
+    fs::create_dir_all(&ws2).unwrap();
+    let out2 = ods_binary()
+        .arg("trud")
+        .arg("pull")
+        .arg("--local-archive")
+        .arg(&zip_path)
+        .arg("-w")
+        .arg(&ws2)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .unwrap();
+    assert!(out2.status.success(), "local-archive pull failed: {}", String::from_utf8_lossy(&out2.stderr));
+    let prov_local = fs::read(ws2.join("releases/2026-07-31").join(PROVENANCE_FILENAME)).unwrap();
+
+    // Route 3: heal_release_dir's refresh via ods trud pull --force
+    let out3 = ods_binary()
+        .arg("trud")
+        .arg("pull")
+        .arg("2026-07-31")
+        .arg("--force")
+        .arg("-w")
+        .arg(&ws2)
+        .arg("--index")
+        .arg(&index_file)
+        .env("TRUD_API_KEY", "testkey")
+        .env("ODS_TRUD_API_URL", &trud_base)
+        .output()
+        .unwrap();
+    assert!(out3.status.success(), "force pull failed: {}", String::from_utf8_lossy(&out3.stderr));
+    let prov_force = fs::read(ws2.join("releases/2026-07-31").join(PROVENANCE_FILENAME)).unwrap();
+
+    // Route 4: write_provenance_file (direct function test)
+    let direct_dir = tmp.path().join("direct_fn");
+    fs::create_dir_all(&direct_dir).unwrap();
+    let _prov_fn = ods::provenance::write_provenance(
+        &direct_dir,
+        "2026-07-31",
+        &sha256,
+        file_size,
+    ).unwrap();
+    let prov_direct = fs::read(direct_dir.join(PROVENANCE_FILENAME)).unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&prov_make),
+        String::from_utf8_lossy(&prov_local),
+        "make and local-archive provenance must be byte-identical"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&prov_local),
+        String::from_utf8_lossy(&prov_force),
+        "local-archive and force refresh provenance must be byte-identical"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&prov_force),
+        String::from_utf8_lossy(&prov_direct),
+        "force refresh and write_provenance must be byte-identical"
+    );
+}
+
+#[test]
+fn test_make_release_refuses_unprovenanced_build() {
+    let tmp = TempDir::new().unwrap();
+    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let out_dir = tmp.path().join("unprovenanced");
+
+    // Make unmatched without provenance
+    let make_out = ods_binary()
+        .arg("make")
+        .arg("-i")
+        .arg(&zip_path)
+        .arg("-o")
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    assert!(make_out.status.success());
+    assert!(!out_dir.join(PROVENANCE_FILENAME).exists());
+
+    // Try ods make release -i <dir>
+    let rel_out = ods_binary()
+        .arg("make")
+        .arg("release")
+        .arg("-i")
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    assert!(!rel_out.status.success(), "make release must refuse unprovenanced release");
+    let stderr = String::from_utf8_lossy(&rel_out.stderr);
+    assert!(stderr.contains("has no provenance"), "stderr was: {stderr}");
+}
+
+#[test]
+fn test_trud_audit_refuses_unprovenanced_release() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("workspace");
+    let releases_dir = ws.join("releases");
+    let rel_2026 = releases_dir.join("2026-07-31");
+    fs::create_dir_all(&rel_2026).unwrap();
+
+    // Create a dummy parquet and releases.json marker so workspace is valid
+    fs::write(rel_2026.join("orgs.parquet"), b"dummy parquet").unwrap();
+    let index = make_v1_index(&[]);
+    fs::write(ws.join("_releases.json"), serde_json::to_string_pretty(&index).unwrap()).unwrap();
+    // Set active release symlink
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("2026-07-31", releases_dir.join("current")).unwrap();
+
+    // Active release has orgs.parquet but NO _provenance.json
+    assert!(!rel_2026.join(PROVENANCE_FILENAME).exists());
+
+    // An input zip with XML
+    let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    let output = ods_binary()
+        .arg("trud")
+        .arg("audit")
+        .arg("-i")
+        .arg(&zip_path)
+        .arg("-w")
+        .arg(&ws)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "trud audit must refuse release without provenance");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("has no provenance: it was built from an archive ods couldn't match to a TRUD release"), "stderr was: {stderr}");
+    assert!(stderr.contains("To cite or publish it, get the archive through ods trud pull"), "stderr was: {stderr}");
+}
+
+#[test]
+fn test_stale_terms_repair_with_force_pull_enables_make() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let zip_name = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
+    let zip_path = create_mock_trud_zip(tmp.path(), zip_name);
+    let sha256 = compute_file_sha256(&zip_path).unwrap();
+    let file_size = fs::metadata(&zip_path).unwrap().len();
+
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        &sha256,
+        file_size,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let index_file = tmp.path().join("index.json");
+    fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+
+    let trud_base = serve_mock_trud("testkey", "2026-07-31", zip_name, &sha256, file_size);
+
+    // Pull into workspace
+    let pull_out = ods_binary()
+        .arg("trud")
+        .arg("pull")
+        .arg("--local-archive")
+        .arg(&zip_path)
+        .arg("-w")
+        .arg(&ws)
+        .arg("--index")
+        .arg(&index_file)
+        .output()
+        .unwrap();
+    assert!(pull_out.status.success(), "local-archive pull failed: {}", String::from_utf8_lossy(&pull_out.stderr));
+
+    let release_dir = ws.join("releases/2026-07-31");
+    let prov_file = release_dir.join(PROVENANCE_FILENAME);
+
+    // Tamper with terms to simulate stale terms
+    let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    prov.license = Some("Old Stale Licence".to_string());
+    fs::write(&prov_file, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+
+    // ods make must refuse
+    let make_fail = ods_binary()
+        .current_dir(&ws)
+        .arg("make")
+        .arg("-i")
+        .arg(&release_dir)
+        .output()
+        .unwrap();
+    assert!(!make_fail.status.success(), "make must refuse stale terms");
+    let stderr = String::from_utf8_lossy(&make_fail.stderr);
+    assert!(stderr.contains("has older licence terms than this ods"), "stderr was: {stderr}");
+    assert!(stderr.contains("Refresh it without downloading the archive: ods trud pull 2026-07-31 --force"), "stderr was: {stderr}");
+
+    // Repair with ods trud pull 2026-07-31 --force
+    let force_out = ods_binary()
+        .arg("trud")
+        .arg("pull")
+        .arg("2026-07-31")
+        .arg("--force")
+        .arg("-w")
+        .arg(&ws)
+        .arg("--index")
+        .arg(&index_file)
+        .env("TRUD_API_KEY", "testkey")
+        .env("ODS_TRUD_API_URL", &trud_base)
+        .output()
+        .unwrap();
+    assert!(force_out.status.success(), "force pull must succeed: {}", String::from_utf8_lossy(&force_out.stderr));
+
+    // Provenance now has current terms
+    let refreshed_prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    assert!(refreshed_prov.has_current_terms());
+
+    // ods make now succeeds!
+    let make_ok = ods_binary()
+        .current_dir(&ws)
+        .arg("make")
+        .arg("-i")
+        .arg(&release_dir)
+        .output()
+        .unwrap();
+    assert!(make_ok.status.success(), "make must succeed after force refresh, stderr:\n{}", String::from_utf8_lossy(&make_ok.stderr));
 }
 

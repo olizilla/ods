@@ -218,12 +218,20 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let prov = match OdsProvenance::load_from_dir(&release_dir).error_building()? {
-        Some(p) => p,
-        None => bail!(
-            "Missing or unreadable _provenance.json in {}",
-            release_dir.display()
-        ),
+    let prov = match OdsProvenance::load_from_dir(&release_dir) {
+        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
+        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
+            bail!(
+                "{}",
+                crate::provenance::format_unreadable_provenance_error(&path, &date)
+            );
+        }
+        crate::provenance::ProvenanceLoad::Absent => {
+            bail!(
+                "{}",
+                crate::provenance::format_no_provenance_error(&release_dir)
+            );
+        }
     };
 
     let version = crate::datapackage::read_dataset_version_from_dir(&release_dir).ok_or_else(|| {

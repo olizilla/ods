@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{create_mock_trud_zip, ods_binary};
+use common::{create_mock_trud_zip_with_index, ods_binary};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -239,13 +239,19 @@ fn pull_list_in_existing_workspace_refreshes_its_cached_index() {
 #[test]
 fn trud_pull_local_archive_with_output_creates_only_that_directory() {
     let src = TempDir::new().unwrap();
-    let zip_path = create_mock_trud_zip(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip_path, index_path) = create_mock_trud_zip_with_index(
+        src.path(),
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
 
     let cwd = TempDir::new().unwrap();
     let output = ods_binary()
         .current_dir(cwd.path())
         .args(["trud", "pull", "--local-archive"])
         .arg(&zip_path)
+        .arg("--index")
+        .arg(&index_path)
         .arg("-o")
         .arg("out")
         .output()
@@ -270,13 +276,19 @@ fn trud_pull_local_archive_with_output_creates_only_that_directory() {
 #[test]
 fn trud_pull_local_archive_without_output_still_creates_workspace() {
     let src = TempDir::new().unwrap();
-    let zip_path = create_mock_trud_zip(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip_path, index_path) = create_mock_trud_zip_with_index(
+        src.path(),
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
 
     let cwd = TempDir::new().unwrap();
     let output = ods_binary()
         .current_dir(cwd.path())
         .args(["trud", "pull", "--local-archive"])
         .arg(&zip_path)
+        .arg("--index")
+        .arg(&index_path)
         .output()
         .expect("run ods trud pull with no -o");
 
@@ -294,7 +306,11 @@ fn trud_pull_local_archive_without_output_still_creates_workspace() {
 #[test]
 fn trud_pull_local_archive_with_workspace_flag_creates_that_workspace() {
     let src = TempDir::new().unwrap();
-    let zip_path = create_mock_trud_zip(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip_path, index_path) = create_mock_trud_zip_with_index(
+        src.path(),
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
 
     let cwd = TempDir::new().unwrap();
     // `Workspace::open_or_create` only creates an explicit path that already exists
@@ -307,6 +323,8 @@ fn trud_pull_local_archive_with_workspace_flag_creates_that_workspace() {
         .current_dir(cwd.path())
         .args(["trud", "pull", "--local-archive"])
         .arg(&zip_path)
+        .arg("--index")
+        .arg(&index_path)
         .arg("--workspace")
         .arg(&ws)
         .output()
@@ -348,7 +366,11 @@ fn use_in_empty_directory_writes_nothing() {
 #[test]
 fn make_with_output_writes_no_releases_json() {
     let src = TempDir::new().unwrap();
-    let zip_path = create_mock_trud_zip(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip_path, index_path) = create_mock_trud_zip_with_index(
+        src.path(),
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
 
     let cwd = TempDir::new().unwrap();
     let out = cwd.path().join("ods_data").join("releases").join("2026-07-31");
@@ -356,6 +378,8 @@ fn make_with_output_writes_no_releases_json() {
         .current_dir(cwd.path())
         .args(["make", "--input"])
         .arg(&zip_path)
+        .arg("--index")
+        .arg(&index_path)
         .arg("--output")
         .arg(&out)
         .output()

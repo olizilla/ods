@@ -1136,13 +1136,9 @@ mod tests {
         let base_tmp = tempfile::tempdir().unwrap();
 
         let make_prov_json = |date: &str, sha: &str| -> String {
-            serde_json::to_string_pretty(&crate::provenance::OdsProvenance {
-                schema: crate::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
-                trud_release_date: Some(date.to_string()),
-                trud_release_sha256: Some(sha.to_string()),
-                trud_release_filesize_bytes: Some(38064419),
-                ..Default::default()
-            })
+            serde_json::to_string_pretty(&crate::provenance::OdsProvenance::from_trud_statement(
+                date, sha, 38064419,
+            ))
             .unwrap()
         };
 

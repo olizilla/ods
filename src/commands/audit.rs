@@ -330,7 +330,22 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         active_release_path.join("parquet")
     };
 
-    let workspace_prov: Option<OdsProvenance> = OdsProvenance::load_from_dir(&active_release_path).error_building()?;
+    let workspace_prov_val = match OdsProvenance::load_from_dir(&active_release_path) {
+        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
+        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
+            anyhow::bail!(
+                "{}",
+                crate::provenance::format_unreadable_provenance_error(&path, &date)
+            );
+        }
+        crate::provenance::ProvenanceLoad::Absent => {
+            anyhow::bail!(
+                "{}",
+                crate::provenance::format_no_provenance_error(&active_release_path)
+            );
+        }
+    };
+    let workspace_prov = Some(workspace_prov_val);
 
     let mut warnings = Vec::new();
     let mut discrepancies = Vec::new();
@@ -338,24 +353,33 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // ------------------------------------------------------------------------
     // SECTION 1: File integrity
     // ------------------------------------------------------------------------
-    let input_prov = OdsProvenance::load_from_dir(&input_path)
-        .error_building()?
-        .or_else(|| OdsProvenance::try_extract_trud_zip_provenance(&input_path))
-        .unwrap_or_else(|| {
-            crate::ods_xml::parse_release(&xml_paths)
-                .map(|r| r.provenance)
-                .unwrap_or_default()
-        });
+    let (input_sha256, input_date, input_size) =
+        if let Some(prov) = OdsProvenance::load_from_dir(&input_path).error_building()? {
+            (
+                prov.trud_release_sha256,
+                prov.trud_release_date,
+                prov.trud_release_filesize_bytes,
+            )
+        } else if let Some(facts) = crate::provenance::try_extract_trud_zip_facts(&input_path) {
+            let date = facts
+                .zip_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(crate::archive::parse_trud_archive_filename)
+                .map(|(_, _, d)| d);
+            (Some(facts.sha256), date, Some(facts.filesize_bytes))
+        } else {
+            (None, None, None)
+        };
 
-    let input_sha256 = input_prov.trud_release_sha256.clone();
     let workspace_sha256 = workspace_prov
         .as_ref()
         .and_then(|p| p.trud_release_sha256.clone());
+    let workspace_size = workspace_prov
+        .as_ref()
+        .and_then(|p| p.trud_release_filesize_bytes);
 
-    let input_date = input_prov
-        .trud_release_date
-        .clone()
-        .unwrap_or_else(|| workspace_date.clone());
+    let input_date = input_date.unwrap_or_else(|| workspace_date.clone());
 
     let matched_release = match (&input_sha256, &workspace_sha256) {
         (Some(i_sha), Some(w_sha)) => i_sha.eq_ignore_ascii_case(w_sha),
@@ -376,6 +400,14 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         } else {
             discrepancies.push(format!(
                 "Release mismatch: Input date ({input_date}) != workspace active release ({workspace_date})"
+            ));
+        }
+    }
+
+    if let (Some(i_sz), Some(w_sz)) = (input_size, workspace_size) {
+        if i_sz != w_sz {
+            discrepancies.push(format!(
+                "Release mismatch: Input size ({i_sz} bytes) != workspace active release ({w_sz} bytes)"
             ));
         }
     }

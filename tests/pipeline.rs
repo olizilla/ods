@@ -8,21 +8,8 @@
 mod common;
 
 use ods::commands::parquet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
-
-fn create_mock_trud_zip_with_provenance(dir: &Path) -> PathBuf {
-    let zip_path = common::create_mock_trud_zip(dir, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
-
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    std::fs::write(
-        dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
-
-    zip_path
-}
 
 // ---------------------------------------------------------------------------
 // Stage 1 — make parquet from XML
@@ -44,7 +31,9 @@ fn make_parquet_rejects_bare_xml() {
 #[test]
 fn make_parquet_produces_tables_with_correct_records() {
     let tmp = TempDir::new().unwrap();
-    let zip_path = create_mock_trud_zip_with_provenance(tmp.path());
+    let zip_path =
+        common::create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &zip_path);
     let parquet_dir = tmp.path().join("out");
 
     // Stray ndjson in directory must not affect parquet generation
@@ -53,7 +42,10 @@ fn make_parquet_produces_tables_with_correct_records() {
 
     parquet::run(parquet::Args {
         input: Some(zip_path),
-        output: Some(parquet_dir.clone()), ..Default::default() })
+        output: Some(parquet_dir.clone()),
+        index: Some(index_file.to_str().unwrap().to_string()),
+        ..Default::default()
+    })
     .expect("parquet::run should succeed");
 
     assert!(parquet_dir.join("orgs.parquet").exists(), "orgs.parquet not created");

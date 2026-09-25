@@ -1115,7 +1115,7 @@ pub fn run_with_writer_color_width(
     color: bool,
     explicit_width: Option<u16>,
 ) -> Result<()> {
-    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
+    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading(parquet_dir);
     let file_name = "orgs.parquet";
 
     // Expand alias flags (--gp, --dentist) into role filters with OR semantics

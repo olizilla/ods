@@ -1165,8 +1165,11 @@ pub fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
     let zip_path = dir.join(filename);
     let zip_file = std::fs::File::create(&zip_path).unwrap();
     let mut zip_writer = zip::ZipWriter::new(zip_file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip_writer.start_file("HSCOrgRefData_Full_mock.xml", options).unwrap();
+    let options = zip::write::SimpleFileOptions::default()
+        .last_modified_time(zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0).unwrap());
+    zip_writer
+        .start_file("HSCOrgRefData_Full_mock.xml", options)
+        .unwrap();
     let xml_content = std::fs::read_to_string(FIXTURE_MOCK_XML).unwrap();
     std::io::Write::write_all(&mut zip_writer, xml_content.as_bytes()).unwrap();
     zip_writer.finish().unwrap();
@@ -1257,6 +1260,38 @@ pub fn make_v1_index(
     }
 }
 
+/// Write a fixture releases.json for a zip file, matching the zip's sha256 and size.
+#[allow(dead_code)]
+pub fn write_index_for_zip(dir: &Path, date: &str, zip_path: &Path) -> PathBuf {
+    let sha256 = ods::provenance::compute_file_sha256(zip_path).unwrap();
+    let file_size = std::fs::metadata(zip_path).unwrap().len();
+    let index = make_v1_index(&[(
+        date,
+        &sha256,
+        file_size,
+        &[(
+            "1.0.1",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )],
+    )]);
+    let index_file = dir.join(format!("{date}_releases.json"));
+    std::fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+    index_file
+}
+
+/// Creates a mock TRUD zip and writes a matching release index file next to it.
+/// Returns (zip_path, index_path).
+#[allow(dead_code)]
+pub fn create_mock_trud_zip_with_index(
+    dir: &Path,
+    filename: &str,
+    date: &str,
+) -> (PathBuf, PathBuf) {
+    let zip_path = create_mock_trud_zip(dir, filename);
+    let index_path = write_index_for_zip(dir, date, &zip_path);
+    (zip_path, index_path)
+}
+
 #[allow(dead_code)]
 pub fn git_cmd(repo_dir: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
@@ -1329,13 +1364,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_filesize_bytes: Some(37_983_173),
-        trud_release_sha256: Some(zip_sha256),
-        trud_schema_version: Some("2-0-0".to_string()),
-        ..Default::default()
-    };
+    let prov = OdsProvenance::from_trud_statement("2026-07-31", &zip_sha256, 37_983_173);
 
     let prov_path = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
     std::fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -1382,12 +1411,7 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
     std::fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
     std::fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-08-31".to_string()),
-        trud_release_filesize_bytes: Some(37_983_173),
-        trud_release_sha256: Some(zip_sha256.clone()),
-        ..Default::default()
-    };
+    let prov = OdsProvenance::from_trud_statement("2026-08-31", &zip_sha256, 37_983_173);
 
     let prov_path = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
     std::fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();

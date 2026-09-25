@@ -25,21 +25,22 @@ ods_data/
 
 ## `_provenance.json` Specification & Schema
 
-Every release folder contains a `_provenance.json` file recording the integrity, source parameters, and build tool environment of the dataset.
+Every release folder contains a `_provenance.json` file recording the integrity, source parameters, and licence attribution of the dataset.
 
 ### Provenance keys
 
-`_provenance.json` holds five keys, all describing NHS's archive: `$schema` and the four `trud_*` facts.
+`_provenance.json` holds exactly six keys, all describing NHS's archive and the terms under which it was published: `$schema`, the three `trud_*` facts, `license`, and `attribution`.
 
-- **Origin**: Fetched directly from the **NHS TRUD REST API** (`/items/341/releases`) and extracted from the XML root manifest.
+- **Origin**: Fetched directly from the **NHS TRUD REST API** (`/items/341/releases`) or recorded in the release index.
 - **Scope**: Represents the **source archive** published on TRUD.
 - **Fields**:
   - `trud_release_date`: Official release date in `YYYY-MM-DD` format (e.g. `"2026-07-31"`).
-  - `trud_release_filesize_bytes`: Archive file size in bytes (`37983173`).
   - `trud_release_sha256`: Published SHA-256 checksum from NHS TRUD.
-  - `trud_schema_version`: ODS XML schema version extracted from the manifest namespace (e.g. `"2-0-0"`).
+  - `trud_release_filesize_bytes`: Archive file size in bytes (`37983173`).
+  - `license`: Official data licence terms (`"Open Government Licence v3.0"`).
+  - `attribution`: Required attribution statement (`"Contains public sector information licensed under the Open Government Licence v3.0."`).
 
-Which `ods` built a published dataset is recorded in its release index row (`tool_version`, `tool_git_sha`, see [release-index.md](./release-index.md)) and in the CI attestation, not here. How the archive was checked is printed when the check runs and not stored. See [provenance.md](./provenance.md) for why.
+Which `ods` built a published dataset is recorded in its release index row (`tool_version`, `tool_git_sha`, see [release-index.md](./release-index.md)) and in the CI attestation, not here. How the archive was checked is printed when the check runs and not stored. See [provenance.md](./provenance.md) for details on provenance and unmatched archive handling.
 
 ### Example `_provenance.json`
 
@@ -47,9 +48,10 @@ Which `ods` built a published dataset is recorded in its release index row (`too
 {
   "$schema": "https://ods.fyi/schema/provenance.v1.json",
   "trud_release_date": "2026-07-31",
-  "trud_release_filesize_bytes": 37983173,
   "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-  "trud_schema_version": "2-0-0"
+  "trud_release_filesize_bytes": 37983173,
+  "license": "Open Government Licence v3.0",
+  "attribution": "Contains public sector information licensed under the Open Government Licence v3.0."
 }
 ```
 

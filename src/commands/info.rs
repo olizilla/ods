@@ -82,7 +82,7 @@ pub fn run_with_writer_color<W: Write + ?Sized>(
     parquet_dir: &Path,
     use_color: bool,
 ) -> Result<()> {
-    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading();
+    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading(parquet_dir);
     if !parquet_dir.join("orgs.parquet").exists() {
         if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
             anyhow::bail!(

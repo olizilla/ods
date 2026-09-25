@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -239,9 +241,12 @@ fn test_trud_pull_local_archive_states_no_attestations() {
     };
     let progress = Progress::new(caps, Box::new(BufferWriter(buffer.clone())));
 
+    let index_path = common::write_index_for_zip(tmp.path(), "2026-07-31", &zip_path);
+
     let args = Args {
         local_archive: Some(zip_path),
         workspace: Some(ws),
+        index: Some(index_path.to_str().unwrap().to_string()),
         ..Default::default()
     };
 

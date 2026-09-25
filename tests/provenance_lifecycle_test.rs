@@ -96,43 +96,58 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
 
 #[test]
 fn test_provenance_keys_on_make() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let output_dir = temp_dir.path();
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+    );
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_schema_version = Some("2-0-0".to_string());
-
-    let prov_json = serde_json::to_string_pretty(&prov)?;
-    fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
-
-    // Run update_provenance
-    ods::provenance::update_provenance(output_dir)?;
-
-    // D1: provenance is the archive's facts and nothing about who built the dataset or how the
-    // archive was checked, so a manifest digest is a function of the archive and the dataset version.
-    let saved_json = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
+    let saved_json = serde_json::to_string_pretty(&prov)?;
     let saved: serde_json::Value = serde_json::from_str(&saved_json)?;
     let keys: Vec<&str> = saved.as_object().unwrap().keys().map(|k| k.as_str()).collect();
     let mut expected = vec![
         "$schema",
+        "attribution",
+        "license",
         "trud_release_date",
         "trud_release_filesize_bytes",
         "trud_release_sha256",
-        "trud_schema_version",
     ];
     let mut actual = keys.clone();
     actual.sort();
     expected.sort();
-    assert_eq!(actual, expected, "provenance must hold exactly the five archive keys");
-    assert!(!saved_json.contains("xml_manifest_created"), "xml_manifest_created must NOT be in JSON");
-    assert!(!saved_json.contains("ods_cmd_version"), "ods_cmd_version must NOT be in JSON");
-    assert!(!saved_json.contains("tool_parquet_version"), "tool_parquet_version must NOT be in JSON");
-    assert!(!saved_json.contains("tool_arrow_version"), "tool_arrow_version must NOT be in JSON");
-    assert!(!saved_json.contains("tool_zstd_level"), "tool_zstd_level must NOT be in JSON");
-    assert!(!saved_json.contains("dataset_version"), "dataset_version must NOT be in JSON");
+    assert_eq!(
+        actual, expected,
+        "provenance must hold exactly the six archive keys"
+    );
+    assert!(
+        !saved_json.contains("trud_schema_version"),
+        "trud_schema_version must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("xml_manifest_created"),
+        "xml_manifest_created must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("ods_cmd_version"),
+        "ods_cmd_version must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("tool_parquet_version"),
+        "tool_parquet_version must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("tool_arrow_version"),
+        "tool_arrow_version must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("tool_zstd_level"),
+        "tool_zstd_level must NOT be in JSON"
+    );
+    assert!(
+        !saved_json.contains("dataset_version"),
+        "dataset_version must NOT be in JSON"
+    );
 
     Ok(())
 }
@@ -202,39 +217,45 @@ fn test_cite_unverified_release_delivers_citation_and_warns() -> Result<()> {
 }
 
 #[test]
-fn test_update_provenance_populates_trud_schema_version_from_xml() -> Result<()> {
+fn test_make_fails_when_provenance_has_older_terms() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
     let trud_dir = output_dir.join("trud");
     fs::create_dir_all(&trud_dir)?;
 
-    let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
-  <un:ManifestHeader>
-    <un:Version value="2-0-0" />
-    <un:RecordCount value="0" />
-  </un:ManifestHeader>
-</un:OrganisationManifest>"#;
-    let inner_zip = common::create_inner_zip("HSCOrgRefData.xml", xml_content.as_bytes());
-    let zip_path = trud_dir.join("hscorgrefdata.zip");
-    fs::write(&zip_path, inner_zip)?;
-    let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path)?;
+    let fixture_zip =
+        common::create_mock_trud_zip(&trud_dir, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let zip_sha256 = ods::provenance::compute_file_sha256(&fixture_zip)?;
+    let zip_size = fs::metadata(&fixture_zip)?.len();
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256);
+    let mut prov =
+        ods::provenance::OdsProvenance::from_trud_statement("2026-07-31", &zip_sha256, zip_size);
+    prov.attribution = Some("Old terms".to_string());
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
 
-    ods::provenance::update_provenance(output_dir)?;
-
-    let saved_json = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
-    let updated_prov: ods::provenance::OdsProvenance = serde_json::from_str(&saved_json)?;
-
-    assert_eq!(updated_prov.trud_schema_version, Some("2-0-0".to_string()), "trud_schema_version must be populated from XML manifest");
-    assert_eq!(updated_prov.trud_release_date, Some("2026-07-31".to_string()), "trud_release_date must be preserved");
+    let args = ods::commands::parquet::Args {
+        input: Some(output_dir.to_path_buf()),
+        output: Some(temp_dir.path().join("out")),
+        ..Default::default()
+    };
+    let result = ods::commands::parquet::run(args);
+    assert!(
+        result.is_err(),
+        "ods make must fail when provenance has older terms"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("older licence terms"),
+        "must report older licence terms, got: {}",
+        err
+    );
+    assert!(
+        err.contains("Refresh it without downloading the archive"),
+        "must suggest refresh, got: {}",
+        err
+    );
 
     Ok(())
 }
@@ -265,7 +286,8 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
 </un:OrganisationManifest>"#;
 
     fs::write(&xml_path, xml_content)?;
-    let header = ods::ods_xml::extract_manifest_header(&xml_path)?;
+    let file = fs::File::open(&xml_path)?;
+    let header = ods::ods_xml::parse_manifest_header(quick_xml::Reader::from_reader(std::io::BufReader::new(file)))?;
 
     let scope = header.primary_role_scope.expect("primary_role_scope must be parsed");
     assert_eq!(scope, vec!["RO180".to_string(), "RO198".to_string()]);
@@ -275,25 +297,21 @@ fn test_primary_role_scope_parsing_and_export() -> Result<()> {
 
 #[test]
 fn test_provenance_does_not_have_dataset_version() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let output_dir = temp_dir.path();
-
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    fs::write(
-        output_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov)?,
-    )?;
-
-    ods::provenance::update_provenance(output_dir)?;
-
-    let prov_content = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
-    assert!(!prov_content.contains("dataset_version"), "dataset_version must not be in _provenance.json");
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+    );
+    let prov_content = serde_json::to_string_pretty(&prov)?;
+    assert!(
+        !prov_content.contains("dataset_version"),
+        "dataset_version must not be in _provenance.json"
+    );
     Ok(())
 }
 
 #[test]
-fn test_update_provenance_fails_when_archive_hash_mismatches() -> Result<()> {
+fn test_make_fails_when_archive_hash_mismatches() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
@@ -302,19 +320,29 @@ fn test_update_provenance_fails_when_archive_hash_mismatches() -> Result<()> {
     fs::create_dir_all(&trud_dir)?;
     fs::write(trud_dir.join(archive_file), b"corrupted archive bytes")?;
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+    );
     fs::write(
         output_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov)?,
     )?;
 
-    let result = ods::provenance::update_provenance(output_dir);
-    assert!(result.is_err(), "update_provenance must fail when trud archive hash mismatches");
+    let args = ods::commands::parquet::Args {
+        input: Some(output_dir.to_path_buf()),
+        output: Some(temp_dir.path().join("out")),
+        ..Default::default()
+    };
+    let result = ods::commands::parquet::run(args);
+    assert!(
+        result.is_err(),
+        "ods make must fail when trud archive hash mismatches"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("verification mismatch") || err.contains("matched trud_release_sha256") || err.contains("No archive"),
+        err.contains("verification mismatch") || err.contains("Pre-build archive verification"),
         "error must mention archive match failure, got: {}",
         err
     );
@@ -324,30 +352,44 @@ fn test_update_provenance_fails_when_archive_hash_mismatches() -> Result<()> {
 
 #[test]
 fn test_trud_pull_writes_no_tool_or_dataset_keys() -> Result<()> {
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37983173);
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+    );
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     let raw_val: serde_json::Value = serde_json::from_str(&prov_json)?;
     let obj = raw_val.as_object().expect("provenance must be JSON object");
 
-    // Must ONLY contain $schema and trud_* keys
+    // Must ONLY contain $schema, trud_*, license, attribution
     for key in obj.keys() {
         assert!(
-            key == "$schema" || key.starts_with("trud_"),
-            "trud pull baseline must NOT write key '{}'. Only $schema and trud_* allowed.",
+            key == "$schema" || key.starts_with("trud_") || key == "license" || key == "attribution",
+            "trud pull baseline must NOT write key '{}'. Only $schema, trud_*, license, and attribution allowed.",
             key
         );
     }
-
-    assert!(!obj.contains_key("trud_release_url"), "trud_release_url must not exist in provenance");
-    assert!(!obj.contains_key("tool_version"), "tool_version must not exist after trud pull");
-    assert!(!obj.contains_key("tool_git_sha"), "tool_git_sha must not exist after trud pull");
-    assert!(!obj.contains_key("tool_git_dirty"), "tool_git_dirty must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_version"), "dataset_version must not exist after trud pull");
-
+    assert!(
+        !obj.contains_key("trud_release_url"),
+        "trud_release_url must not exist in provenance"
+    );
+    assert!(
+        !obj.contains_key("tool_version"),
+        "tool_version must not exist after trud pull"
+    );
+    assert!(
+        !obj.contains_key("tool_git_sha"),
+        "tool_git_sha must not exist after trud pull"
+    );
+    assert!(
+        !obj.contains_key("tool_git_dirty"),
+        "tool_git_dirty must not exist after trud pull"
+    );
+    assert!(
+        !obj.contains_key("dataset_version"),
+        "dataset_version must not exist after trud pull"
+    );
     Ok(())
 }
 

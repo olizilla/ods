@@ -255,7 +255,7 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
 fn load_xml(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
     let release = parse_release_at(path)?;
     let map: HashMap<String, OdsRecord> = convert_parsed_orgs(release.orgs).into_iter().collect();
-    Ok((Some(release.provenance), map))
+    Ok((None, map))
 }
 
 fn load_zip(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {

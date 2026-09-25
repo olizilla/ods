@@ -33,8 +33,8 @@ fn create_mock_trud_zip_with_manifest(dir: &std::path::Path) -> std::path::PathB
 fn test_trud_pull_stdout_is_empty_on_default_run() {
     let tmp = TempDir::new().unwrap();
     let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &fixture_zip);
 
-    let tmp = TempDir::new().unwrap();
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
@@ -43,6 +43,8 @@ fn test_trud_pull_stdout_is_empty_on_default_run() {
         .arg("pull")
         .arg("--local-archive")
         .arg(&fixture_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&out_dir)
         .output()
@@ -63,7 +65,7 @@ fn test_trud_pull_stdout_is_empty_on_default_run() {
 }
 
 #[test]
-fn test_trud_pull_local_archive_claims_honest_no_trud_checksum() {
+fn test_trud_pull_local_archive_refuses_unmatched_archive() {
     let tmp = TempDir::new().unwrap();
     let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
     let out_dir = tmp.path().join("releases").join("2026-07-31");
@@ -79,28 +81,18 @@ fn test_trud_pull_local_archive_claims_honest_no_trud_checksum() {
         .output()
         .expect("Failed to execute trud pull with local archive");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr_str = String::from_utf8_lossy(&output.stderr);
 
-    // Must state honest claim
     assert!(
-        stderr_str.contains("local archive, no TRUD checksum to compare")
-            || stderr_str.contains("* 2026-07-31"),
-        "stderr must state that local archive has no TRUD checksum to compare, got:\n{}",
+        stderr_str.contains("isn't a TRUD release ods knows"),
+        "stderr must refuse unmatched archive, got:\n{}",
         stderr_str
     );
-
-    // Gutter line advising to set TRUD_API_KEY
     assert!(
-        stderr_str.contains("Set TRUD_API_KEY to check it against TRUD"),
-        "stderr must contain gutter line to set TRUD_API_KEY, got:\n{}",
-        stderr_str
-    );
-
-    // Must NOT claim verification against TRUD on a local file hash
-    assert!(
-        !stderr_str.contains("✓ SHA-256 OK (8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933)"),
-        "stderr must NOT print full hex hash on success, got:\n{}",
+        stderr_str.contains("Build it outside the workspace with -o <dir>, or run ods pull for a newer release index."),
+        "stderr must guide user to build outside workspace, got:\n{}",
         stderr_str
     );
 }
@@ -499,38 +491,10 @@ fn test_in_flight_rendering_on_tty() {
 }
 
 #[test]
-fn test_extract_manifest_header_from_nested_real_trud_fixture() {
-    let tmp = TempDir::new().unwrap();
-    let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
-
-    let header = ods::ods_xml::extract_manifest_header(&fixture_zip)
-        .expect("extract_manifest_header must succeed on real TRUD zip-of-zips fixture");
-
-    assert_eq!(header.trud_schema_version.as_deref(), Some("2-0-0"));
-    assert_eq!(header.record_count, Some(305541));
-}
-
-#[test]
-fn test_extract_manifest_header_fails_on_archive_without_xml() {
-    let tmp = TempDir::new().unwrap();
-    let bad_zip = tmp.path().join("bad_trud.zip");
-
-    // Create a zip with no XML inside
-    let file = fs::File::create(&bad_zip).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default();
-    zip.start_file("Newsletter.pdf", options).unwrap();
-    zip.write_all(b"dummy pdf content").unwrap();
-    zip.finish().unwrap();
-
-    let res = ods::ods_xml::extract_manifest_header(&bad_zip);
-    assert!(res.is_err(), "extract_manifest_header must return Err when no XML exists in archive");
-}
-
-#[test]
 fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     let tmp = TempDir::new().unwrap();
     let fixture_zip = create_mock_trud_zip_with_manifest(tmp.path());
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &fixture_zip);
     let out_dir = tmp.path().join("releases").join("2026-07-31");
 
     let output = ods_binary()
@@ -539,6 +503,8 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
         .arg("pull")
         .arg("--local-archive")
         .arg(&fixture_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&out_dir)
         .output()
@@ -551,21 +517,46 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
     let prov_content = fs::read_to_string(&prov_file).unwrap();
     let prov: serde_json::Value = serde_json::from_str(&prov_content).unwrap();
 
-    assert_eq!(prov.get("trud_schema_version").and_then(|v| v.as_str()), Some("2-0-0"));
-    assert_eq!(prov.get("trud_release_date").and_then(|v| v.as_str()), Some("2026-07-31"));
+    assert!(prov.get("trud_schema_version").is_none());
+    assert_eq!(
+        prov.get("trud_release_date").and_then(|v| v.as_str()),
+        Some("2026-07-31")
+    );
+    assert_eq!(
+        prov.get("license").and_then(|v| v.as_str()),
+        Some(ods::terms::LICENSE)
+    );
+    assert_eq!(
+        prov.get("attribution").and_then(|v| v.as_str()),
+        Some(ods::terms::ATTRIBUTION)
+    );
 
-    // Ownership rule: trud pull writes ONLY trud_* (and $schema)
+    // Ownership rule: trud pull writes ONLY the six provenance keys
     let obj = prov.as_object().unwrap();
-    for key in obj.keys() {
-        assert!(
-            key == "$schema" || key.starts_with("trud_"),
-            "trud pull must NOT write key '{}'. Only $schema and trud_* allowed.",
-            key
-        );
-    }
-    assert!(!obj.contains_key("tool_version"), "tool_version must not exist after trud pull");
-    assert!(!obj.contains_key("tool_git_sha"), "tool_git_sha must not exist after trud pull");
-    assert!(!obj.contains_key("dataset_version"), "dataset_version must not exist after trud pull");
+    let mut expected_keys = vec![
+        "$schema",
+        "attribution",
+        "license",
+        "trud_release_date",
+        "trud_release_filesize_bytes",
+        "trud_release_sha256",
+    ];
+    let mut actual_keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+    actual_keys.sort();
+    expected_keys.sort();
+    assert_eq!(actual_keys, expected_keys);
+    assert!(
+        !obj.contains_key("tool_version"),
+        "tool_version must not exist after trud pull"
+    );
+    assert!(
+        !obj.contains_key("tool_git_sha"),
+        "tool_git_sha must not exist after trud pull"
+    );
+    assert!(
+        !obj.contains_key("dataset_version"),
+        "dataset_version must not exist after trud pull"
+    );
 }
 
 #[test]

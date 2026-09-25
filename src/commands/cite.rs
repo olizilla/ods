@@ -66,7 +66,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         );
     }
 
-    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).warn_reading();
+    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).ok();
 
     let prov_unwrapped = prov.as_ref().cloned().unwrap_or_default();
     let dataset_version = crate::datapackage::read_dataset_version_from_dir(&input_dir)
@@ -134,12 +134,10 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             return Err(crate::commands::pull::AlreadyReported.into());
         }
         crate::workspace::VerificationOutcome::NoProvenance => {
-            let dir_display = crate::workspace::relative_to_cwd(&input_dir);
             eprintln!(
-                "✖ {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
-                dir_display.display()
+                "{}",
+                crate::provenance::format_no_provenance_error(&input_dir)
             );
-            eprintln!("  To cite or publish it, get the archive through ods trud pull.");
             return Err(crate::commands::pull::AlreadyReported.into());
         }
         crate::workspace::VerificationOutcome::Corrupted(err) => {

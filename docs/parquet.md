@@ -334,8 +334,8 @@ successions.parquet: OK
 ## Provenance
 
 Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
-archive it came from, its SHA-256 and size, and the TRUD schema version. Hashes are uppercase throughout, matching TRUD.
-`_provenance.json` holds those five keys and nothing about who built the release or how the archive was checked. The `ods` that built a published dataset is recorded in its release index row (`tool_version` and `tool_git_sha`) and, as signed proof, in the CI attestation for the same manifest digest.
+archive it came from, its SHA-256 and size, and NHS's licence and attribution. Hashes are uppercase throughout, matching TRUD.
+`_provenance.json` holds those six keys and nothing about who built the release or how the archive was checked. The `ods` that built a published dataset is recorded in its release index row (`tool_version` and `tool_git_sha`) and, as signed proof, in the CI attestation for the same manifest digest.
 `ods cite` renders it as a citation.
 
 Each Parquet file carries a deliberate subset of provenance in its key-value metadata:

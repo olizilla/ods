@@ -27,7 +27,7 @@ pub struct OdsProvenance {
     #[serde(rename = "$schema")]
     pub schema: String,
 
-    // --- 1. Official TRUD API Release Metadata (trud_*) ---
+    // --- Official TRUD API Release Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_date: Option<String>,
 
@@ -37,9 +37,12 @@ pub struct OdsProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_filesize_bytes: Option<u64>,
 
-    // --- 2. Inner XML Manifest Metadata (trud_*) ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_schema_version: Option<String>,
+    // --- Terms ---
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<String>,
 }
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
@@ -51,12 +54,40 @@ impl Default for OdsProvenance {
             trud_release_date: None,
             trud_release_sha256: None,
             trud_release_filesize_bytes: None,
-            trud_schema_version: None,
+            license: None,
+            attribution: None,
         }
     }
 }
 
 impl OdsProvenance {
+    pub fn from_trud_statement(date: &str, sha256: &str, filesize_bytes: u64) -> Self {
+        Self {
+            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
+            trud_release_date: Some(date.to_string()),
+            trud_release_sha256: Some(sha256.to_string()),
+            trud_release_filesize_bytes: Some(filesize_bytes),
+            license: Some(crate::terms::LICENSE.to_string()),
+            attribution: Some(crate::terms::ATTRIBUTION.to_string()),
+        }
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        serde_json::to_string_pretty(self).map_err(Into::into)
+    }
+
+    pub fn write_to_dir(&self, release_dir: &Path) -> Result<()> {
+        let prov_path = release_dir.join(PROVENANCE_FILENAME);
+        let json = self.to_json_string()?;
+        std::fs::write(&prov_path, json).with_context(|| format!("writing {}", prov_path.display()))?;
+        Ok(())
+    }
+
+    pub fn has_current_terms(&self) -> bool {
+        self.license.as_deref() == Some(crate::terms::LICENSE)
+            && self.attribution.as_deref() == Some(crate::terms::ATTRIBUTION)
+    }
+
     /// Declared Parquet key-value metadata subset:
     /// - ods.trud_release_date
     /// - ods.trud_release_sha256
@@ -92,6 +123,47 @@ pub fn format_unreadable_provenance_error(path: &Path, date: &str) -> String {
         disp,
         PROVENANCE_SCHEMA_V1_URL,
         date
+    )
+}
+
+pub fn format_no_provenance_error(dir: &Path) -> String {
+    let dir_display = crate::workspace::relative_to_cwd(dir);
+    format!(
+        "✖ {} has no provenance: it was built from an archive ods couldn't match to a TRUD release\n  To cite or publish it, get the archive through ods trud pull.",
+        dir_display.display()
+    )
+}
+
+pub fn format_older_terms_error(prov_path: &Path, date: &str) -> String {
+    let disp = format_provenance_display_path(prov_path);
+    format!(
+        "✖ {} has older licence terms than this ods\n  Refresh it without downloading the archive: ods trud pull {} --force",
+        disp, date
+    )
+}
+
+pub fn truncate_sha256_for_display(sha: &str) -> String {
+    let sha_upper = sha.to_uppercase();
+    if sha_upper.len() >= 12 {
+        format!("{}…{}", &sha_upper[..8], &sha_upper[sha_upper.len() - 4..])
+    } else {
+        sha_upper
+    }
+}
+
+pub fn format_unmatched_archive_warning(filename: &str, sha: &str) -> String {
+    let trunc_sha = truncate_sha256_for_display(sha);
+    format!(
+        "! {} isn't a TRUD release ods knows (SHA-256 {})\n  Built without provenance. You can explore it with find, info and role, but not cite or publish it.",
+        filename, trunc_sha
+    )
+}
+
+pub fn format_unmatched_archive_refusal(filename: &str, sha: &str) -> String {
+    let trunc_sha = truncate_sha256_for_display(sha);
+    format!(
+        "✖ {} isn't a TRUD release ods knows (SHA-256 {})\n  Build it outside the workspace with -o <dir>, or run ods pull for a newer release index.",
+        filename, trunc_sha
     )
 }
 
@@ -131,7 +203,7 @@ impl ProvenanceLoad {
         }
     }
 
-    pub fn warn_reading(self) -> Option<OdsProvenance> {
+    pub fn warn_reading(self, dir: &Path) -> Option<OdsProvenance> {
         match self {
             Self::Read(prov, _) => Some(*prov),
             Self::Unreadable { path, .. } => {
@@ -142,7 +214,14 @@ impl ProvenanceLoad {
                 );
                 None
             }
-            Self::Absent => None,
+            Self::Absent => {
+                let disp = crate::workspace::relative_to_cwd(dir);
+                eprintln!(
+                    "! {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
+                    disp.display()
+                );
+                None
+            }
         }
     }
 
@@ -258,60 +337,6 @@ impl OdsProvenance {
         Self::load_from_dir_with_path(dir)
     }
 
-    pub fn try_extract_trud_zip_provenance(input_path: &Path) -> Option<Self> {
-        let find_zip = |dir: &Path| -> Option<std::path::PathBuf> {
-            if dir.is_file() && dir.extension().is_some_and(|ext| ext == "zip") {
-                return Some(dir.to_path_buf());
-            }
-            if dir.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
-                            return Some(p);
-                        }
-                    }
-                }
-                let trud_sub = dir.join("trud");
-                if trud_sub.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(&trud_sub) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
-                                return Some(p);
-                            }
-                        }
-                    }
-                }
-            }
-            None
-        };
-
-        let zip_path = find_zip(input_path)?;
-        let file_name = zip_path.file_name()?.to_string_lossy().to_string();
-
-        let (_version, _release_name, release_date) = crate::archive::parse_trud_archive_filename(&file_name)?;
-
-        let mut prov = Self::new(Some(release_date));
-
-        if let Ok(meta) = std::fs::metadata(&zip_path) {
-            prov.trud_release_filesize_bytes = Some(meta.len());
-        }
-        if let Ok(hash) = compute_file_sha256(&zip_path) {
-            prov.trud_release_sha256 = Some(hash);
-        }
-
-        Some(prov)
-    }
-
-    pub fn new(trud_release_date: Option<String>) -> Self {
-        Self {
-            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_date,
-            ..Default::default()
-        }
-    }
-
     pub fn validate_baseline(&self) -> Result<()> {
         let date = self.trud_release_date.as_deref().unwrap_or("");
         if date.is_empty() {
@@ -337,6 +362,52 @@ impl OdsProvenance {
 
         failures
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TrudZipFacts {
+    pub zip_path: PathBuf,
+    pub sha256: String,
+    pub filesize_bytes: u64,
+}
+
+pub fn try_extract_trud_zip_facts(input_path: &Path) -> Option<TrudZipFacts> {
+    let find_zip = |dir: &Path| -> Option<std::path::PathBuf> {
+        if dir.is_file() && dir.extension().is_some_and(|ext| ext == "zip") {
+            return Some(dir.to_path_buf());
+        }
+        if dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
+                        return Some(p);
+                    }
+                }
+            }
+            let trud_sub = dir.join("trud");
+            if trud_sub.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&trud_sub) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file() && p.extension().is_some_and(|ext| ext == "zip") {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    let zip_path = find_zip(input_path)?;
+    let meta = std::fs::metadata(&zip_path).ok()?;
+    let sha256 = compute_file_sha256(&zip_path).ok()?;
+    Some(TrudZipFacts {
+        zip_path,
+        sha256,
+        filesize_bytes: meta.len(),
+    })
 }
 
 pub fn compute_file_sha256(path: &Path) -> Result<String> {
@@ -407,52 +478,15 @@ pub fn format_provenance_display_path(prov_path: &Path) -> String {
     prov_path.display().to_string()
 }
 
-pub fn update_provenance(output_dir: &Path) -> Result<()> {
-    let prov_path = output_dir.join(PROVENANCE_FILENAME);
-    let mut prov = match OdsProvenance::load_from_file(&prov_path) {
-        ProvenanceLoad::Read(p, _) => *p,
-        ProvenanceLoad::Unreadable { path, date } => {
-            anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
-        }
-        ProvenanceLoad::Absent => {
-            match OdsProvenance::load_from_dir(output_dir) {
-                ProvenanceLoad::Read(p, _) => *p,
-                ProvenanceLoad::Unreadable { path, date } => {
-                    anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
-                }
-                ProvenanceLoad::Absent => {
-                    OdsProvenance::try_extract_trud_zip_provenance(output_dir).unwrap_or_default()
-                }
-            }
-        }
-    };
-
-    // Pre-amend verification: Check archive in trud/ matches trud_release_sha256
-    if let Some(ref expected_sha) = prov.trud_release_sha256 {
-        let trud_dir = output_dir.join("trud");
-        let (matched, zips) = find_archive_by_sha(&trud_dir, expected_sha);
-        if !zips.is_empty() && matched.is_none() {
-            anyhow::bail!(
-                "✖ Pre-build archive verification mismatch in {}: expected SHA-256 {}",
-                trud_dir.display(),
-                expected_sha
-            );
-        }
-    }
-
-    // Freshly parsed XML manifest trud_schema_version wins over stale or missing fields on disk
-    if let Ok(header) = crate::ods_xml::extract_manifest_header(output_dir) {
-        if header.trud_schema_version.is_some() {
-            prov.trud_schema_version = header.trud_schema_version;
-        }
-    }
-
-    prov.schema = PROVENANCE_SCHEMA_V1_URL.to_string();
-
-    let updated_json = serde_json::to_string_pretty(&prov)?;
-    std::fs::write(&prov_path, updated_json)?;
-
-    Ok(())
+pub fn write_provenance(
+    release_dir: &Path,
+    date: &str,
+    sha256: &str,
+    filesize_bytes: u64,
+) -> Result<OdsProvenance> {
+    let prov = OdsProvenance::from_trud_statement(date, sha256, filesize_bytes);
+    prov.write_to_dir(release_dir)?;
+    Ok(prov)
 }
 
 #[cfg(test)]
@@ -461,8 +495,10 @@ mod tests {
 
     #[test]
     fn test_provenance_serde() {
-        let prov = OdsProvenance::new(
-            Some("2026-07-31".to_string()),
+        let prov = OdsProvenance::from_trud_statement(
+            "2026-07-31",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            38064419,
         );
 
         let json = serde_json::to_string(&prov).unwrap();
@@ -482,10 +518,13 @@ mod tests {
 
     #[test]
     fn test_to_parquet_declared_metadata_pins_exact_two_keys() {
-        let mut prov = OdsProvenance::default();
-        prov.trud_release_date = Some("2026-07-31".to_string());
-        prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-        prov.trud_schema_version = Some("2-0-0".to_string());
+        let prov = OdsProvenance {
+            trud_release_date: Some("2026-07-31".to_string()),
+            trud_release_sha256: Some(
+                "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
+            ),
+            ..Default::default()
+        };
 
         // The Parquet files carry two metadata keys: ods.trud_release_date and ods.trud_release_sha256.
         // The rule is nothing that changes when a release is relabelled or the tool is re-tagged.

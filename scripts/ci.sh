@@ -168,8 +168,29 @@ smoke() {
   tmp=$(mktemp -d)
   local zip="$tmp/hscorgrefdataxml_data_7.0.0_20260731000001.zip"
   local ws="$tmp/ods_data"
-  zip -j -q "$zip" tests/fixtures/mock_hscorgrefdata.xml &&
-    ./target/debug/ods make --input "$zip" --output "$ws/releases/2026-07-31" &&
+  local index="$tmp/candidate_index.json"
+  zip -j -q "$zip" tests/fixtures/mock_hscorgrefdata.xml && {
+    local zip_sha; zip_sha=$(shasum -a 256 "$zip" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+    local zip_size; zip_size=$(wc -c < "$zip" | tr -d ' ')
+    cat <<EOF > "$index"
+{
+  "\$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": [
+    "0000000000000000000000000000000000000000"
+  ],
+  "mirrors": [],
+  "releases": [
+    {
+      "trud_release_date": "2026-07-31",
+      "trud_release_sha256": "$zip_sha",
+      "trud_release_filesize_bytes": $zip_size,
+      "datasets": []
+    }
+  ]
+}
+EOF
+  } &&
+    ./target/debug/ods make --input "$zip" --output "$ws/releases/2026-07-31" --index "$index" &&
     ./target/debug/ods trud audit --input "$zip" --workspace "$ws" --full &&
     ./target/debug/ods make oci --input "$ws/releases/2026-07-31" &&
     ./target/debug/ods make oci --input "$ws/releases/2026-07-31" --check

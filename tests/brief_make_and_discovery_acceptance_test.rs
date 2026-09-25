@@ -22,7 +22,8 @@ fn test_custom_named_workspace_discovery_from_inside_and_release_subdir() {
     fs::create_dir_all(&trud_dir).unwrap();
 
     let zip_filename = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
-    let zip_path = create_mock_zip(&trud_dir, zip_filename);
+    let (zip_path, index_path) =
+        common::create_mock_trud_zip_with_index(&trud_dir, zip_filename, "2026-07-31");
 
     // Compile parquet in release dir
     let res = ods_binary()
@@ -31,13 +32,18 @@ fn test_custom_named_workspace_discovery_from_inside_and_release_subdir() {
         .arg(&zip_path)
         .arg("-o")
         .arg(&rel_dir)
+        .arg("--index")
+        .arg(&index_path)
         .output()
         .expect("execute ods make");
     assert!(res.status.success());
 
     // Write valid _releases.json and pin current
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
-    ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
+    fs::copy(&index_path, ws.join("_releases.json")).unwrap();
+    ods::workspace::Workspace::open_or_create(Some(&ws))
+        .unwrap()
+        .set_active("2026-07-31")
+        .unwrap();
 
     // 1. Run `ods find` from inside nhs-archive/
     let out_find = ods_binary()
@@ -160,7 +166,8 @@ fn test_audit_workspace_flag_authoritative_on_unpinned_workspace() {
     fs::create_dir_all(&trud_dir).unwrap();
 
     let zip_filename = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
-    let zip_path = create_mock_zip(&trud_dir, zip_filename);
+    let (zip_path, index_path) =
+        common::create_mock_trud_zip_with_index(&trud_dir, zip_filename, "2026-07-31");
 
     // Make parquet in release dir (which generates verified parquet + provenance)
     let res_make = ods_binary()
@@ -169,11 +176,13 @@ fn test_audit_workspace_flag_authoritative_on_unpinned_workspace() {
         .arg(&zip_path)
         .arg("-o")
         .arg(&rel_dir)
+        .arg("--index")
+        .arg(&index_path)
         .output()
         .expect("make into external workspace");
     assert!(res_make.status.success());
 
-    fs::write(external_ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::copy(&index_path, external_ws.join("_releases.json")).unwrap();
 
     // Verify that the workspace has NO active release pinned
     assert!(ods::workspace::Workspace::open(Some(&external_ws)).unwrap().active_release().is_err(), "workspace should be unpinned");

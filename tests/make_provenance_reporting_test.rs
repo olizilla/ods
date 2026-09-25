@@ -44,10 +44,16 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // 1. Warning line on stderr naming the input path
-    let expected_warning = format!("! No provenance info found for {}. Source is unverified.", zip_path.display());
+    let filename = zip_path.file_name().unwrap().to_str().unwrap();
+    let expected_warning = format!("! {} isn't a TRUD release ods knows", filename);
     assert!(
         stderr.contains(&expected_warning),
         "stderr must contain unverified warning, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Built without provenance. You can explore it with find, info and role, but not cite or publish it."),
+        "stderr must note built without provenance, got:\n{}",
         stderr
     );
 
@@ -115,12 +121,11 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_sha256: Some(zip_sha256),
-        trud_release_filesize_bytes: Some(37_000_000),
-        ..Default::default()
-    };
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-08-28",
+        &zip_sha256,
+        fs::metadata(&zip_path).unwrap().len(),
+    );
 
     let prov_file = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
     fs::write(&prov_file, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -177,17 +182,21 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
 fn test_make_after_trud_pull_prints_no_warning() {
     let tmp = TempDir::new().unwrap();
     let zip_dir = tmp.path().join("prov_dir");
-    fs::create_dir_all(&zip_dir).unwrap();
-    let zip_path = create_mock_zip(&zip_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
+    let trud_dir = zip_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_sha256: Some(zip_sha256),
-        trud_release_filesize_bytes: Some(37_000_000),
-        ..Default::default()
-    };
-    fs::write(zip_dir.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-08-28",
+        &zip_sha256,
+        fs::metadata(&zip_path).unwrap().len(),
+    );
+    fs::write(
+        zip_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    )
+    .unwrap();
 
     let out_dir = tmp.path().join("out");
     fs::create_dir_all(&out_dir).unwrap();
@@ -196,7 +205,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
         .current_dir(tmp.path())
         .arg("make")
         .arg("-i")
-        .arg(&zip_path)
+        .arg(&zip_dir)
         .arg("-o")
         .arg(&out_dir)
         .output()

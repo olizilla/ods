@@ -666,11 +666,11 @@ fn build_padded_oci_release(
     version: &str,
     target_total: usize,
 ) -> PaddedOciRelease {
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some(date.to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        date,
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+    );
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
     let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
     let dp_bytes = serde_json::to_vec_pretty(&dp).unwrap();

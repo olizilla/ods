@@ -457,10 +457,15 @@ fn test_workspace_discovered_by_release_without_releases_json() {
     let ws = root.join("ods_data");
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip, index_path) = common::create_mock_trud_zip_with_index(
+        root,
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
     parquet::run(parquet::Args {
         input: Some(zip),
         output: Some(rel_dir.clone()),
+        index: Some(index_path.to_str().unwrap().to_string()),
         ..Default::default()
     }).unwrap();
 
@@ -499,10 +504,15 @@ fn test_workspace_discovered_by_release_with_malformed_releases_json() {
     let ws = root.join("ods_data");
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-    let zip = create_mock_trud_zip(root, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let (zip, index_path) = common::create_mock_trud_zip_with_index(
+        root,
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "2026-07-31",
+    );
     parquet::run(parquet::Args {
         input: Some(zip),
         output: Some(rel_dir.clone()),
+        index: Some(index_path.to_str().unwrap().to_string()),
         ..Default::default()
     }).unwrap();
 

@@ -237,7 +237,11 @@ fn make_stderr(zip: &std::path::Path, out: &std::path::Path, extra: &[&str]) -> 
 fn data_warnings(stderr: &str) -> Vec<&str> {
     stderr
         .lines()
-        .filter(|l| l.starts_with("! ") && !l.contains("No provenance info found"))
+        .filter(|l| {
+            l.starts_with("! ")
+                && !l.contains("isn't a TRUD release ods knows")
+                && !l.contains("No provenance info found")
+        })
         .collect()
 }
 
@@ -316,14 +320,32 @@ fn make_quiet_prints_the_block_and_the_warnings_and_nothing_else() {
     let quiet = make_stderr(&zip, &tmp.path().join("out1"), &["--quiet"]);
     let loud = make_stderr(&zip, &tmp.path().join("out2"), &[]);
 
-    // Six block rows, then the two `!` lines: the dropped record and the unverified source.
+    // Six block rows, then the warning lines: the dropped record and the unverified source note.
     let lines: Vec<&str> = quiet.lines().collect();
-    assert_eq!(lines.len(), 8, "the block and the warnings only:\n{quiet}");
-    assert!(lines[0].starts_with("  reading xml   "), "the block comes first:\n{quiet}");
-    assert!(lines[6].starts_with("! T1 has two complete records"), "{quiet}");
-    assert!(lines[7].starts_with("! No provenance info found"), "{quiet}");
-    assert!(!quiet.lines().any(|l| l.starts_with("* ") || l.starts_with("✓ ")), "no info lines under --quiet:\n{quiet}");
-    assert!(loud.starts_with("* Source: "), "without --quiet the source line opens the report:\n{loud}");
+    assert_eq!(lines.len(), 9, "the block and the warnings only:\n{quiet}");
+    assert!(
+        lines[0].starts_with("  reading xml   "),
+        "the block comes first:\n{quiet}"
+    );
+    assert!(
+        lines[6].starts_with("! T1 has two complete records"),
+        "{quiet}"
+    );
+    assert!(
+        lines[7].contains("isn't a TRUD release ods knows"),
+        "{quiet}"
+    );
+    assert!(lines[8].contains("Built without provenance"), "{quiet}");
+    assert!(
+        !quiet
+            .lines()
+            .any(|l| l.starts_with("* ") || l.starts_with("✓ ")),
+        "no info lines under --quiet:\n{quiet}"
+    );
+    assert!(
+        loud.starts_with("* Source: "),
+        "without --quiet the source line opens the report:\n{loud}"
+    );
 }
 
 /// D1: two archives with the same file name and byte length do not collide in ODS_CACHE_DIR;

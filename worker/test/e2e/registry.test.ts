@@ -91,7 +91,8 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
         trud_release_date: '2026-07-31',
         trud_release_sha256: zipSha256,
         trud_release_filesize_bytes: 37983173,
-        trud_schema_version: '2-0-0',
+        license: 'OGL-UK-3.0',
+        attribution: 'Contains information from NHS England, licensed under the current version of the Open Government Licence.',
       };
       fs.writeFileSync(path.join(fixtureDir, '_provenance.json'), JSON.stringify(provenanceObj, null, 2));
 

@@ -93,11 +93,11 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256.clone());
-
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        &zip_sha256,
+        fs::metadata(&outer_zip_path).unwrap().len(),
+    );
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -111,8 +111,6 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
-
-    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     (tmp, workspace_root, outer_zip_path)
 }
@@ -264,7 +262,6 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
-    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -312,7 +309,6 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
     let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
     ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
-    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -365,7 +361,6 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
         &empty_closures,
         prov.as_ref(),
     )?;
-    ods::provenance::update_provenance(&active_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -431,10 +426,11 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some(zip_sha256);
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        &ods::provenance::compute_file_sha256(&outer_zip_path).unwrap(),
+        fs::metadata(&outer_zip_path).unwrap().len(),
+    );
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -446,7 +442,6 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
-    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -478,10 +473,11 @@ fn test_audit_all_skips_unmade_releases() -> Result<()> {
     // Create a second release that has trud/ and _provenance.json but NO derived parquet files
     let unmade_dir = workspace_root.join("releases").join("2020-01-01");
     fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2020-01-01".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2020-01-01",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        0,
+    );
     fs::write(
         unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -512,10 +508,11 @@ fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
     for date in &["2020-01-01", "2020-02-01"] {
         let unmade_dir = workspace_root.join("releases").join(date);
         fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-        let prov = ods::provenance::OdsProvenance {
-            trud_release_date: Some(date.to_string()),
-            ..Default::default()
-        };
+        let prov = ods::provenance::OdsProvenance::from_trud_statement(
+            date,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            0,
+        );
         fs::write(
             unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
             serde_json::to_string_pretty(&prov).unwrap(),
@@ -590,10 +587,11 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some(zip_sha256);
+    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        "2026-07-31",
+        &ods::provenance::compute_file_sha256(&outer_zip_path).unwrap(),
+        fs::metadata(&outer_zip_path).unwrap().len(),
+    );
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -605,7 +603,6 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
-    ods::provenance::update_provenance(&rel_dir).unwrap();
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -665,9 +662,6 @@ fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
         }
         writer.close()?;
     }
-
-    // Update provenance
-    ods::provenance::update_provenance(&rel_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),
@@ -732,8 +726,6 @@ fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
         }
         writer.close()?;
     }
-
-    ods::provenance::update_provenance(&rel_dir)?;
 
     let args = ods::commands::audit::Args {
         input: Some(outer_zip_path),

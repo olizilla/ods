@@ -4,7 +4,7 @@ use quick_xml::reader::Reader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -694,7 +694,6 @@ fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) ->
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ManifestHeader {
-    pub trud_schema_version: Option<String>,
     pub record_count: Option<usize>,
     pub primary_role_scope: Option<Vec<String>>,
 }
@@ -713,9 +712,7 @@ pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Resu
                 if name_ref.eq_ignore_ascii_case(b"Organisation") || name_ref.eq_ignore_ascii_case(b"Organisations") {
                     break;
                 }
-                if name_ref == b"Version" {
-                    header.trud_schema_version = get_manifest_attr(e, &reader);
-                } else if name_ref == b"RecordCount" {
+                if name_ref == b"RecordCount" {
                     header.record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") {
                     for attr in e.attributes().flatten() {
@@ -740,107 +737,8 @@ pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Resu
     Ok(header)
 }
 
-fn extract_manifest_header_from_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<ManifestHeader> {
-    let mut inner_zip_names = Vec::new();
-    let mut direct_xml_names = Vec::new();
-
-    for i in 0..archive.len() {
-        if let Ok(file) = archive.by_index(i) {
-            let name = file.name().to_string();
-            let lower = name.to_lowercase();
-            if lower.ends_with(".zip") {
-                inner_zip_names.push(name);
-            } else if lower.ends_with(".xml") {
-                direct_xml_names.push(name);
-            }
-        }
-    }
-
-    if !inner_zip_names.is_empty() {
-        let selected_inner = inner_zip_names
-            .iter()
-            .find(|n| n.to_lowercase().contains("full"))
-            .or_else(|| inner_zip_names.iter().find(|n| !n.to_lowercase().contains("archive")));
-
-        let selected_inner = match selected_inner {
-            Some(name) => name.clone(),
-            None => {
-                anyhow::bail!("No full dataset ZIP found inside archive. Package contains only historical 'archive.zip'.");
-            }
-        };
-
-        let mut inner_file = archive.by_name(&selected_inner)?;
-        let mut inner_bytes = Vec::new();
-        inner_file.read_to_end(&mut inner_bytes)?;
-        let cursor = std::io::Cursor::new(inner_bytes);
-        let mut inner_archive = zip::ZipArchive::new(cursor)?;
-        return extract_manifest_header_from_archive(&mut inner_archive);
-    }
-
-    if !direct_xml_names.is_empty() {
-        let selected_xml = direct_xml_names
-            .iter()
-            .find(|n| n.to_lowercase().contains("full"))
-            .or_else(|| direct_xml_names.iter().find(|n| !n.to_lowercase().contains("archive")));
-
-        let selected_xml = match selected_xml {
-            Some(name) => name.clone(),
-            None => {
-                anyhow::bail!("No full dataset XML found inside archive.");
-            }
-        };
-
-        let xml_file = archive.by_name(&selected_xml)?;
-        return parse_manifest_header(Reader::from_reader(BufReader::new(xml_file)));
-    }
-
-    anyhow::bail!("No XML or ZIP files found inside archive")
-}
-
-pub fn extract_manifest_header(path: &Path) -> Result<ManifestHeader> {
-    if path.is_file() && path.extension().is_some_and(|e| e == "xml") {
-        let file = File::open(path)?;
-        return parse_manifest_header(Reader::from_reader(BufReader::new(file)));
-    }
-
-    let mut zip_candidates = Vec::new();
-    let mut xml_candidates = Vec::new();
-
-    if path.is_file() && path.extension().is_some_and(|e| e == "zip") {
-        zip_candidates.push(path.to_path_buf());
-    } else if path.is_dir() {
-        for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
-            let p = entry.path();
-            if p.is_file() {
-                if p.extension().is_some_and(|e| e == "zip") {
-                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                    if !name.contains("archive") {
-                        zip_candidates.push(p.to_path_buf());
-                    }
-                } else if p.extension().is_some_and(|e| e == "xml") {
-                    xml_candidates.push(p.to_path_buf());
-                }
-            }
-        }
-    }
-
-    if let Some(xml_path) = xml_candidates.first() {
-        let file = File::open(xml_path)?;
-        return parse_manifest_header(Reader::from_reader(BufReader::new(file)));
-    }
-
-    if let Some(zip_path) = zip_candidates.first() {
-        let file = File::open(zip_path)?;
-        let mut archive = zip::ZipArchive::new(file)?;
-        return extract_manifest_header_from_archive(&mut archive);
-    }
-
-    anyhow::bail!("No XML or ZIP files found in {}", path.display())
-}
-
 /// One XML file as parsed: its organisations in document order, before any merge.
 struct ParsedFile {
-    provenance: crate::provenance::OdsProvenance,
     concept_map: HashMap<String, String>,
     orgs: Vec<ParsedOrg>,
     declared: Option<usize>,
@@ -857,7 +755,6 @@ pub struct FileCount {
 /// A whole release: every organisation from every XML file, merged.
 #[derive(Debug)]
 pub struct ParsedRelease {
-    pub provenance: crate::provenance::OdsProvenance,
     pub concept_map: HashMap<String, String>,
     pub orgs: HashMap<String, ParsedOrg>,
     pub files: Vec<FileCount>,
@@ -930,7 +827,6 @@ pub fn parse_release_reporting(
     on_progress: &(dyn Fn(usize, u64) + Sync),
 ) -> Result<ParsedRelease> {
     let mut release = ParsedRelease {
-        provenance: crate::provenance::OdsProvenance::default(),
         concept_map: HashMap::new(),
         orgs: HashMap::new(),
         files: Vec::new(),
@@ -970,9 +866,6 @@ pub fn parse_release_reporting(
     for (idx, name) in names.iter().enumerate() {
         let file = std::mem::replace(&mut parsed_files[idx], Err(anyhow::anyhow!("already merged")))?;
 
-        if idx == 0 {
-            release.provenance = file.provenance;
-        }
         for (k, v) in file.concept_map {
             release.concept_map.entry(k).or_insert(v);
         }
@@ -1070,7 +963,6 @@ fn parse_file(xml_path: &Path, on_progress: &(dyn Fn(usize, u64) + Sync)) -> Res
     let mut parser_state = ParserState::new();
     let mut buf = Vec::new();
 
-    let mut xml_version = None;
     let mut manifest_record_count = None;
     let (mut reported_records, mut reported_bytes) = (0usize, 0u64);
 
@@ -1083,8 +975,6 @@ fn parse_file(xml_path: &Path, on_progress: &(dyn Fn(usize, u64) + Sync)) -> Res
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
-                } else if name_ref == b"Version" {
-                    xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
                     manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") && !parser_state.in_organisation {
@@ -1104,8 +994,6 @@ fn parse_file(xml_path: &Path, on_progress: &(dyn Fn(usize, u64) + Sync)) -> Res
                 let name_ref = name.as_ref();
                 if name_ref == b"concept" || name_ref == b"Concept" {
                     parse_concept_attrs(e, &reader, &mut concept_map)?;
-                } else if name_ref == b"Version" {
-                    xml_version = get_manifest_attr(e, &reader);
                 } else if name_ref == b"RecordCount" {
                     manifest_record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
                 } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") && !parser_state.in_organisation {
@@ -1142,14 +1030,16 @@ fn parse_file(xml_path: &Path, on_progress: &(dyn Fn(usize, u64) + Sync)) -> Res
         buf.clear();
     }
 
-    let provenance = crate::provenance::OdsProvenance {
-        trud_schema_version: xml_version,
-        ..Default::default()
-    };
+    on_progress(
+        parsed.len() - reported_records,
+        reader.buffer_position() as u64 - reported_bytes,
+    );
 
-    on_progress(parsed.len() - reported_records, reader.buffer_position() as u64 - reported_bytes);
-
-    Ok(ParsedFile { provenance, concept_map, orgs: parsed, declared: manifest_record_count })
+    Ok(ParsedFile {
+        concept_map,
+        orgs: parsed,
+        declared: manifest_record_count,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

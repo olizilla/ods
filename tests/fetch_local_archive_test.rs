@@ -31,9 +31,11 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     create_mock_zip(&local_zip, "2025-05-01")?;
 
     // 3. Execute fetch with local_archive targeting workspace_root
+    let index_file = common::write_index_for_zip(temp_dir.path(), "2025-05-01", &local_zip);
     let args = ods::commands::fetch::Args {
         local_archive: Some(local_zip.clone()),
         workspace: Some(workspace_root.clone()),
+        index: Some(index_file.to_str().unwrap().to_string()),
         ..Default::default()
     };
 

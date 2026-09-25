@@ -19,7 +19,7 @@ How to Cite
 Data availability
   ods-data/2026-08-31_1.0.1 is available from https://ods.fyi. This OCI manifest
   digest identifies its exact files:
-    sha256:6984347d7a279a22e27b0ff66c9c2692b7556e6514ba07d45892dee48ec8fab5
+    sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272
 
   ods/v0.4.3 built it from nhs-ods-xml/2026-08-31, the TRUD archive with SHA-256:
     665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2
@@ -51,7 +51,7 @@ $ ods cite -f bibtex
   version = {1.0.1},
   howpublished = {ods.fyi},
   url = {https://ods.fyi},
-  note = {Manifest: sha256:6984347d7a279a22e27b0ff66c9c2692b7556e6514ba07d45892dee48ec8fab5. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
+  note = {Manifest: sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
 }
 
 @misc{ods/v0.4.3,
@@ -109,7 +109,7 @@ $ ods cite -f csljson
     "publisher": "ods.fyi",
     "URL": "https://ods.fyi",
     "version": "1.0.1",
-    "note": "Manifest: sha256:6984347d7a279a22e27b0ff66c9c2692b7556e6514ba07d45892dee48ec8fab5. Contains information from NHS England, licensed under the current version of the Open Government Licence."
+    "note": "Manifest: sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272. Contains information from NHS England, licensed under the current version of the Open Government Licence."
   },
   {
     "type": "software",

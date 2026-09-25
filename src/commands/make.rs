@@ -26,6 +26,10 @@ pub struct MakeArgs {
     /// Show how many stubs the merge set aside
     #[arg(long, short = 'v')]
     pub verbose: bool,
+
+    /// Read the release index from this path or URL instead of the network
+    #[arg(long, hide = true)]
+    pub index: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -51,7 +55,9 @@ pub fn run(args: MakeArgs) -> Result<()> {
             quiet: args.quiet,
             no_progress: args.no_progress,
             verbose: args.verbose,
-        }).map(|_| ()),
+            index: args.index,
+        })
+        .map(|_| ()),
     }
 }
 

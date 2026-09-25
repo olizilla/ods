@@ -436,7 +436,9 @@ fn test_trud_pull_furniture_and_ods_make_succeeds() {
     let project_dir = tmp.path().join("project");
     fs::create_dir_all(&project_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
 
     // 1. Run `ods trud pull --local-archive <zip>`
     let trud_pull_output = ods_binary()
@@ -445,6 +447,8 @@ fn test_trud_pull_furniture_and_ods_make_succeeds() {
         .arg("pull")
         .arg("--local-archive")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .output()
         .expect("execute ods trud pull");
 
@@ -487,11 +491,15 @@ fn test_use_cmd_repairs_missing_furniture() {
     fs::create_dir_all(&rel_dir).unwrap();
 
     // Export fixture XML directly into release dir so verify_release_dir passes
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
     let make_output = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel_dir)
         .output()
@@ -599,13 +607,17 @@ fn test_find_with_non_active_release_honours_explicit_release_dir() {
     fs::create_dir_all(&rel1_dir).unwrap();
     fs::create_dir_all(&rel2_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
 
     // Build release 1
     let make1 = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel1_dir)
         .output()
@@ -617,6 +629,8 @@ fn test_find_with_non_active_release_honours_explicit_release_dir() {
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel2_dir)
         .output()
@@ -676,12 +690,16 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
     fs::create_dir_all(&rel1_dir).unwrap();
     fs::create_dir_all(&rel2_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
 
     let make1 = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel1_dir)
         .output()
@@ -692,6 +710,8 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel2_dir)
         .output()
@@ -761,11 +781,15 @@ fn test_ods_use_in_workspace_writes_no_releases_json() {
     let rel_dir = ws_dir.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
     let make_output = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel_dir)
         .output()
@@ -797,11 +821,15 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
     let rel_dir = ws_dir.join("releases").join("2020-01-01");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let mock_zip = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20200101000001.zip");
+    let mock_zip =
+        create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20200101000001.zip");
+    let index_file = common::write_index_for_zip(tmp.path(), "2020-01-01", &mock_zip);
     let make_output = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
+        .arg("--index")
+        .arg(&index_file)
         .arg("-o")
         .arg(&rel_dir)
         .output()
@@ -985,9 +1013,23 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     assert!(!make_oci_absent.status.success(), "make oci must fail when provenance is absent");
     assert_eq!(make_oci_absent.status.code(), Some(1));
     assert!(
-        make_oci_stderr.contains("Missing or unreadable _provenance.json"),
-        "stderr should report missing provenance, got:\n{}",
+        make_oci_stderr.contains(
+            "has no provenance: it was built from an archive ods couldn't match to a TRUD release"
+        ),
+        "stderr should report no provenance refusal, got:\n{}",
         make_oci_stderr
+    );
+    assert!(
+        make_oci_stderr.contains("To cite or publish it, get the archive through ods trud pull."),
+        "stderr should guide user to pull, got:\n{}",
+        make_oci_stderr
+    );
+    assert!(
+        absent_stderr.contains(
+            "has no provenance: it was built from an archive ods couldn't match to a TRUD release"
+        ),
+        "stderr should report no provenance warning for find, got:\n{}",
+        absent_stderr
     );
 }
 
