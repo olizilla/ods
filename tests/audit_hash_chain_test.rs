@@ -97,7 +97,6 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
@@ -144,7 +143,7 @@ fn create_inner_zip(filename: &str, content: &str) -> Vec<u8> {
 }
 
 #[test]
-fn test_audit_passes_on_verified_trud_release() -> Result<()> {
+fn test_audit_passes_on_a_release_whose_provenance_matches_the_archive() -> Result<()> {
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
 
     let args = ods::commands::audit::Args {
@@ -157,37 +156,7 @@ fn test_audit_passes_on_verified_trud_release() -> Result<()> {
     };
 
     let result = ods::commands::audit::run(args);
-    assert!(result.is_ok(), "audit must pass on verified release");
-    Ok(())
-}
-
-#[test]
-fn test_audit_runs_full_suite_and_succeeds_on_unverified_local_archive() -> Result<()> {
-    let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
-    let (date, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
-    assert_eq!(date, "2026-07-31");
-
-    // Set trud_release_sha256_verified to Unverified
-    let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    let mut prov: ods::provenance::OdsProvenance =
-        serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
-    let args = ods::commands::audit::Args {
-        input: Some(zip_path),
-        workspace: Some(workspace_root),
-        json: false,
-        sample: 50,
-        full: true,
-        all: false,
-    };
-
-    let result = ods::commands::audit::run(args);
-    assert!(
-        result.is_ok(),
-        "audit must succeed on unverified local archive when data matches"
-    );
+    assert!(result.is_ok(), "audit must pass when the release matches its archive");
     Ok(())
 }
 
@@ -466,7 +435,6 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some(zip_sha256);
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),
@@ -626,7 +594,6 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some(zip_sha256);
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(
         rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),

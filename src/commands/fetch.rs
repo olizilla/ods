@@ -365,7 +365,7 @@ fn pull_single_release<F: TrudFetcher>(
     if dest_path.exists() && !args.force {
         let local_sha256 = compute_file_sha256(&dest_path)?;
         if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-            write_provenance_json(&dest_dir, &target_release, &local_sha256, false, progress)?;
+            write_provenance_json(&dest_dir, &target_release, false)?;
             let mut pin_moved = false;
             if is_workspace {
                 pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
@@ -533,7 +533,7 @@ fn pull_single_release<F: TrudFetcher>(
     // Rename .part to .zip once hash matches
     std::fs::rename(&part_path, &dest_path)?;
 
-    write_provenance_json(&dest_dir, &target_release, &local_sha256, true, progress)?;
+    write_provenance_json(&dest_dir, &target_release, true)?;
     let mut pin_moved = false;
     if is_workspace {
         pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
@@ -921,7 +921,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                 }
                             } else {
                                 let _ = std::fs::rename(&part_path, &dest_path);
-                                let _ = write_provenance_json(&release_dir, release, &local_sha, true, &progress);
+                                let _ = write_provenance_json(&release_dir, release, true);
                                 capture_attestations(
                                     &trud_dir,
                                     release,
@@ -1061,24 +1061,12 @@ fn mark_bad_sha_file(path: &Path) -> PathBuf {
     bad_path
 }
 
-fn write_provenance_json(
-    release_dir: &Path,
-    release: &TrudReleaseItem,
-    sha256: &str,
-    force: bool,
-    progress: &Progress,
-) -> Result<()> {
+fn write_provenance_json(release_dir: &Path, release: &TrudReleaseItem, force: bool) -> Result<()> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
     if prov_path.exists() && !force {
         return Ok(());
     }
-    write_provenance_json_with_verification(
-        release_dir,
-        release,
-        sha256,
-        crate::provenance::TrudVerificationSource::TrudApi,
-        progress,
-    )
+    write_provenance_file(release_dir, release)
 }
 
 fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
@@ -1428,13 +1416,7 @@ pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull
         ..Default::default()
     };
 
-    write_provenance_json_with_verification(
-        &dest_dir,
-        &release_item,
-        &local_sha256,
-        verified_source,
-        progress,
-    )?;
+    write_provenance_file(&dest_dir, &release_item)?;
     let mut pin_moved = false;
     if is_workspace {
         pin_moved = update_active_release_link_if_changed(workspace_root, &release_date)?;
@@ -1586,13 +1568,7 @@ pub fn run_verify_only_with_fetchers<F: TrudFetcher, OF: crate::commands::pull::
     }
 }
 
-fn write_provenance_json_with_verification(
-    release_dir: &Path,
-    release: &TrudReleaseItem,
-    _sha256: &str,
-    verified: crate::provenance::TrudVerificationSource,
-    _progress: &Progress,
-) -> Result<()> {
+fn write_provenance_file(release_dir: &Path, release: &TrudReleaseItem) -> Result<()> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
     let trud_dir = release_dir.join("trud");
     let header = crate::ods_xml::extract_manifest_header(&trud_dir)?;
@@ -1601,12 +1577,8 @@ fn write_provenance_json_with_verification(
         schema: crate::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
         trud_release_date: Some(release.release_date.clone()),
         trud_release_sha256: Some(release.archive_file_sha256.clone()),
-        trud_release_sha256_verified: Some(verified),
         trud_release_filesize_bytes: Some(release.archive_file_size),
         trud_schema_version: header.trud_schema_version,
-        tool_version: None,
-        tool_git_sha: None,
-        tool_git_dirty: None,
     };
 
     let json = serde_json::to_string_pretty(&prov)?;

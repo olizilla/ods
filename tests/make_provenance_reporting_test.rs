@@ -4,7 +4,6 @@
 //! - Task 1: Report an unverified source when building from an archive file without
 //!   `_provenance.json` above it: a `!` line after the report block (`make-output.md` holds
 //!   warnings until the block has settled). Directory input keeps existing hard error.
-//!   `ods make release` refuses unverified output.
 //! - Task 2: Name the archive read (`* Source: <path>`) first, as `ods info` names its source,
 //!   and the `_provenance.json` used (`* Provenance: <path>`) only when it isn't the release
 //!   directory's own. Everything `ods make` prints goes to stderr; stdout stays empty.
@@ -64,33 +63,6 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
     // 3. stdout has no warning or provenance line
     assert!(!stdout.contains("! No provenance info found"), "stdout must not contain warning");
     assert!(!stdout.contains("* Provenance:"), "stdout must not claim provenance file exists");
-
-    // 4. Resulting _provenance.json records unverified
-    let prov_content = fs::read_to_string(out_dir.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-    assert!(
-        prov_content.contains(r#""trud_release_sha256_verified": "unverified""#),
-        "_provenance.json must record trud_release_sha256_verified as unverified, got:\n{}",
-        prov_content
-    );
-
-    // 5. ods make release refuses the unverified build
-    let release_output = ods_binary()
-        .current_dir(tmp.path())
-        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"))
-        .arg("make")
-        .arg("release")
-        .arg("-i")
-        .arg(&out_dir)
-        .output()
-        .expect("execute ods make release");
-
-    assert!(!release_output.status.success(), "ods make release must refuse unverified build");
-    let release_stderr = String::from_utf8_lossy(&release_output.stderr);
-    assert!(
-        release_stderr.contains("source was never verified against TRUD") || release_stderr.contains("unverified"),
-        "rejection must name unverified reason, got:\n{}",
-        release_stderr
-    );
 }
 
 #[test]
@@ -146,7 +118,6 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-08-28".to_string()),
         trud_release_sha256: Some(zip_sha256),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         trud_release_filesize_bytes: Some(37_000_000),
         ..Default::default()
     };
@@ -213,7 +184,6 @@ fn test_make_after_trud_pull_prints_no_warning() {
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-08-28".to_string()),
         trud_release_sha256: Some(zip_sha256),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         trud_release_filesize_bytes: Some(37_000_000),
         ..Default::default()
     };

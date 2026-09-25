@@ -13,6 +13,10 @@
 # After a bump it lists lines outside tests/ and worker/test/ that still name the old version.
 # Edit CHANGELOG.md yourself; scripts/release-tool.sh checks it has an entry.
 #
+# The two versions are linked (docs/tests.md D5): a dataset bump needs a tool bump at least as
+# large, and each CHANGELOG entry names the dataset version its tool builds. Each bump prints
+# the half of that rule it is about.
+#
 set -euo pipefail
 
 die() { echo "✖ $*" >&2; exit 1; }
@@ -37,6 +41,17 @@ dataset_version() {
 }
 
 is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+# major, minor or patch: the largest part that differs between two versions
+bump_size() {
+  local from_major from_minor to_major to_minor _
+  IFS=. read -r from_major from_minor _ <<<"$1"
+  IFS=. read -r to_major to_minor _ <<<"$2"
+  if [[ "$from_major" != "$to_major" ]]; then echo major
+  elif [[ "$from_minor" != "$to_minor" ]]; then echo minor
+  else echo patch
+  fi
+}
 
 report_leftovers() {
   local old="$1"
@@ -89,8 +104,8 @@ case "$KIND" in
       [[ "$(tool_version)" == "$NEW" ]] || die "failed to set $CARGO_TOML to $NEW"
       cargo update --workspace --quiet
       ok "tool $OLD → $NEW  $CARGO_TOML, Cargo.lock"
-      update_expected_keys
     fi
+    note "ods $NEW builds dataset $(dataset_version). Name it in CHANGELOG.md's entry for $NEW."
     if ! grep -qE "^## \[v?${NEW//./\\.}\]" CHANGELOG.md; then
       note "CHANGELOG.md has no '## [$NEW]' entry yet. scripts/release-tool.sh needs one."
     fi
@@ -107,6 +122,7 @@ case "$KIND" in
       ok "dataset $OLD → $NEW  $DATASET_RS, $DATAPACKAGE_JSON"
       update_expected_keys
       note "Every manifest built from now on has a new digest: datapackage.json is a layer."
+      note "A dataset bump needs a tool bump at least as large: patch → patch, minor → minor, major → major. This is a $(bump_size "$OLD" "$NEW") bump; run \`scripts/bump-version.sh tool <x.y.z>\` to match it."
     fi
     ;;
   *)

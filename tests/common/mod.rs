@@ -1201,6 +1201,12 @@ pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     outer_zip.finish().unwrap();
 }
 
+/// The ods that built every dataset row `make_v1_index` writes, unless a test sets its own.
+#[allow(dead_code)]
+pub const FIXTURE_TOOL_VERSION: &str = "0.1.0";
+#[allow(dead_code)]
+pub const FIXTURE_TOOL_GIT_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
 pub type DatasetFixture<'a> = (&'a str, &'a str);
 pub type ReleaseEntryFixture<'a> = (&'a str, &'a str, u64, &'a [DatasetFixture<'a>]);
 
@@ -1219,6 +1225,8 @@ pub fn make_v1_index(
                     // A fixture size, same for every dataset this builds. A caller that cares
                     // about the number sets `.dataset_filesize_bytes` on the built index after.
                     dataset_filesize_bytes: 29_700_000,
+                    tool_version: FIXTURE_TOOL_VERSION.to_string(),
+                    tool_git_sha: FIXTURE_TOOL_GIT_SHA.to_string(),
                     dataset_doi: None,
                     withdrawn: None,
                 })
@@ -1264,6 +1272,19 @@ pub fn git_cmd(repo_dir: &Path) -> std::process::Command {
     cmd
 }
 
+/// The identity of an `ods` built from `repo_dir`'s current commit, at the version its tag
+/// names: what `ods make release` would compile in, made explicit so a test doesn't depend on
+/// the binary that happens to be running.
+#[allow(dead_code)]
+pub fn fixture_build_identity(repo_dir: &Path) -> ods::commands::make_release::BuildIdentity {
+    let head_out = git_cmd(repo_dir).args(["rev-parse", "HEAD"]).output().unwrap();
+    ods::commands::make_release::BuildIdentity {
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        git_sha: Some(String::from_utf8_lossy(&head_out.stdout).trim().to_string()),
+        dirty: false,
+    }
+}
+
 #[allow(dead_code)]
 pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
@@ -1305,8 +1326,6 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let _ = git_cmd(tmp.path())
         .args(["commit", "-m", "initial", "--no-gpg-sign"])
         .output();
-    let head_out = git_cmd(tmp.path()).args(["rev-parse", "HEAD"]).output().unwrap();
-    let git_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
     let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
@@ -1314,11 +1333,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
         trud_release_date: Some("2026-07-31".to_string()),
         trud_release_filesize_bytes: Some(37_983_173),
         trud_release_sha256: Some(zip_sha256),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         trud_schema_version: Some("2-0-0".to_string()),
-        tool_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        tool_git_sha: Some(git_sha),
-        tool_git_dirty: Some(false),
         ..Default::default()
     };
 
@@ -1371,10 +1386,6 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
         trud_release_date: Some("2026-08-31".to_string()),
         trud_release_filesize_bytes: Some(37_983_173),
         trud_release_sha256: Some(zip_sha256.clone()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
-        tool_version: Some("0.4.3".to_string()),
-        tool_git_sha: Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string()),
-        tool_git_dirty: Some(false),
         ..Default::default()
     };
 
@@ -1390,6 +1401,9 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
         1_000_000,
         &[("1.0.1", &manifest_digest)],
     )]);
+    // The ods that built this dataset, as its index row records it
+    index.releases[0].datasets[0].tool_version = "0.4.3".to_string();
+    index.releases[0].datasets[0].tool_git_sha = "ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string();
     if let Some(reason) = withdrawn_reason {
         index.releases[0].datasets[0].withdrawn = Some(reason.to_string());
     }

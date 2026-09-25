@@ -196,13 +196,9 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                             input_path.display()
                         );
                     }
-                    let mut prov = crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
+                    crate::provenance::OdsProvenance::try_extract_trud_zip_provenance(
                         &archive_info.archive_path,
-                    );
-                    if let Some(ref mut p) = prov {
-                        p.trud_release_sha256_verified = Some(crate::provenance::TrudVerificationSource::PublishedRelease);
-                    }
-                    prov
+                    )
                 }
                 crate::commands::fetch::ArchiveVerificationOutcome::Mismatch { source_name, expected_sha256, actual_sha256 } => {
                     eprintln!(
@@ -281,9 +277,6 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         if parent.trud_release_sha256.is_some() {
             prov.trud_release_sha256 = parent.trud_release_sha256;
         }
-        if parent.trud_release_sha256_verified.is_some() {
-            prov.trud_release_sha256_verified = parent.trud_release_sha256_verified;
-        }
         if parent.trud_release_filesize_bytes.is_some() {
             prov.trud_release_filesize_bytes = parent.trud_release_filesize_bytes;
         }
@@ -294,8 +287,6 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         }
         if let Ok(hash) = crate::provenance::compute_file_sha256(&archive_info.archive_path) {
             prov.trud_release_sha256 = Some(hash);
-            prov.trud_release_sha256_verified =
-                Some(crate::provenance::TrudVerificationSource::TrudApi);
         }
     }
     let resolved = crate::ods_xml::convert_parsed_orgs(parsed);
@@ -383,7 +374,8 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         }
     }
 
-    // 7. Enrich _provenance.json with tool_* metadata
+    // 7. Complete _provenance.json: check the archive under trud/ against it and take
+    //    trud_schema_version from the XML manifest
     crate::provenance::update_provenance(&output_path)?;
 
     // 8. Ship the datapackage.json alongside the data so the schema and metadata

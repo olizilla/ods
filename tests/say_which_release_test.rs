@@ -36,7 +36,6 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
     let mut active_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_active).unwrap_or_default();
     active_prov.trud_release_date = Some("2026-07-31".to_string());
     active_prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    active_prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(
         rel_active.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&active_prov).unwrap(),
@@ -60,7 +59,6 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
     let mut older_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_older).unwrap_or_default();
     older_prov.trud_release_date = Some("2026-06-26".to_string());
     older_prov.trud_release_sha256 = Some("7151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    older_prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(
         rel_older.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&older_prov).unwrap(),

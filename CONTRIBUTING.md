@@ -90,15 +90,15 @@ Four different claims, bought by four different mechanisms:
 
 | Claim | Meaning | Secured by |
 | :--- | :--- | :--- |
-| **Provenance** | what this derives from | TRUD's hash, `tool_git_sha`, `Cargo.lock` at that sha |
+| **Provenance** | what this derives from | TRUD's hash, the release index row's `tool_git_sha`, `Cargo.lock` at that sha |
 | **Integrity** | bytes unchanged since publication | `manifest.json`, hashes baked into `ods`, mirrors |
 | **Authenticity** | published by this project | the Zenodo record and the git history |
 | **Correctness** | the derivation is faithful | **someone re-running it** |
 
 Hashes prove the bytes you got are the bytes we published. They cannot prove
 we derived them correctly — every copy is served from one build. What proves
-that is rebuilding it: `tool_git_sha` and the TRUD hash in `_provenance.json`
-are there so you can, and `ods trud audit` compares the result. If you do and
+that is rebuilding it: the TRUD hash in `_provenance.json` and the `tool_git_sha`
+in the release index row are there so you can, and `ods trud audit` compares the result. If you do and
 we disagree, please open an issue.
 
 **Correctness depends on TRUD staying reachable.** Rebuilding needs the source

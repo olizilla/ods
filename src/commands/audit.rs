@@ -380,29 +380,11 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
     }
 
-    let is_verified_archive = input_prov
-        .trud_release_sha256_verified
-        .is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified)
-        || workspace_prov
-            .as_ref()
-            .and_then(|p| p.trud_release_sha256_verified)
-            .is_some_and(|v| v != crate::provenance::TrudVerificationSource::Unverified);
-
-    if !is_verified_archive {
-        warnings.push(
-            "Unverified local archive provenance: SHA-256 has not been verified against TRUD API"
-                .to_string(),
-        );
-    }
-
     if let Some(ref prov) = workspace_prov {
         if let Err(e) = prov.validate_baseline() {
             discrepancies.push(format!("_provenance.json baseline invalid: {e}"));
         }
         for pub_warn in prov.validate_publishable() {
-            if pub_warn.contains("unverified") {
-                continue;
-            }
             if !warnings.contains(&pub_warn) {
                 warnings.push(pub_warn);
             }
@@ -510,20 +492,12 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     if !args.json && !quiet_sub_output {
         println!("  1. File integrity:");
-        if matched_release && is_verified_archive {
+        if matched_release {
             if let Some(ref sha) = input_sha256 {
-                println!(
-                    "     ✓ SHA-256 Match: {:<20} # Verified against TRUD API",
-                    sha
-                );
+                println!("     ✓ SHA-256 Match: {}", sha);
             } else {
-                println!(
-                    "     ✓ Data Provenance match: {:<14} # Verified against TRUD API",
-                    input_date
-                );
+                println!("     ✓ Data Provenance match: {}", input_date);
             }
-        } else if !is_verified_archive {
-            println!("     * Archive SHA-256: Unverified local archive provenance");
         } else {
             println!(
                 "     ✖ Data Provenance mismatch: Input {} vs Workspace {}",

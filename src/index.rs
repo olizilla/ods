@@ -68,6 +68,13 @@ pub struct Dataset {
     pub dataset_version: String,
     pub manifest_digest: String,
     pub dataset_filesize_bytes: u64,
+    /// The ods that built this dataset: the version of its tag, without the `v`. Absent from the
+    /// JSON reads as empty, so `validate` names the problem instead of the parser hiding it.
+    #[serde(default)]
+    pub tool_version: String,
+    /// The commit that tag points at, 40 lower-case hex characters.
+    #[serde(default)]
+    pub tool_git_sha: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dataset_doi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,6 +167,7 @@ impl OdsReleaseIndex {
     /// - each trud_release_sha256 is 64 upper-case hex characters, filesize > 0
     /// - each dataset_version parses with parse_semver and is unique, datasets run oldest version first
     /// - each manifest_digest is sha256: plus 64 lower-case hex characters
+    /// - each tool_version parses with parse_semver and each tool_git_sha is 40 lower-case hex characters
     pub fn validate(&self) -> Result<()> {
         if self.schema != RELEASES_SCHEMA_V1_URL {
             bail!(
@@ -300,6 +308,37 @@ impl OdsReleaseIndex {
                 if ds.dataset_filesize_bytes == 0 {
                     bail!("Invalid dataset_filesize_bytes: must be greater than zero, got 0");
                 }
+
+                if ds.tool_version.is_empty() {
+                    bail!(
+                        "Missing tool_version for dataset ({}, {}): each dataset row records the ods that built it",
+                        rel.trud_release_date,
+                        ds.dataset_version
+                    );
+                }
+                parse_semver(&ds.tool_version).with_context(|| {
+                    format!(
+                        "Invalid tool_version '{}' for dataset ({}, {}): expected the tool's tag without its 'v', e.g. 0.2.0",
+                        ds.tool_version, rel.trud_release_date, ds.dataset_version
+                    )
+                })?;
+                if ds.tool_git_sha.is_empty() {
+                    bail!(
+                        "Missing tool_git_sha for dataset ({}, {}): each dataset row records the commit of the ods that built it",
+                        rel.trud_release_date,
+                        ds.dataset_version
+                    );
+                }
+                if ds.tool_git_sha.len() != 40
+                    || !ds.tool_git_sha.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+                {
+                    bail!(
+                        "Invalid tool_git_sha for dataset ({}, {}): expected 40 lower-case hex characters, got '{}'",
+                        rel.trud_release_date,
+                        ds.dataset_version,
+                        ds.tool_git_sha
+                    );
+                }
             }
         }
 
@@ -310,7 +349,7 @@ impl OdsReleaseIndex {
     ///
     /// Rules:
     /// - Release in both: TRUD SHA-256 and filesize must match (SecurityError).
-    /// - Dataset in both: manifest_digest must match (SecurityError). Candidate copy may add withdrawn and dataset_doi.
+    /// - Dataset in both: manifest_digest, tool_version and tool_git_sha must match (SecurityError). Candidate copy may add withdrawn and dataset_doi.
     /// - Additions: candidate index may add releases and datasets.
     /// - Mirrors: replaced by candidate list when non-empty.
     pub fn merge(&self, fetched: &OdsReleaseIndex) -> Result<OdsReleaseIndex> {
@@ -367,6 +406,26 @@ impl OdsReleaseIndex {
                                 baked_ds.dataset_version,
                                 baked_ds.dataset_filesize_bytes,
                                 fetched_ds.dataset_filesize_bytes
+                            ))
+                            .into());
+                        }
+                        if baked_ds.tool_version != fetched_ds.tool_version {
+                            return Err(SecurityError(format!(
+                                "fetched index contradicts baked dataset ({}, {}): baked tool_version {} != fetched tool_version {}",
+                                baked_rel.trud_release_date,
+                                baked_ds.dataset_version,
+                                baked_ds.tool_version,
+                                fetched_ds.tool_version
+                            ))
+                            .into());
+                        }
+                        if baked_ds.tool_git_sha != fetched_ds.tool_git_sha {
+                            return Err(SecurityError(format!(
+                                "fetched index contradicts baked dataset ({}, {}): baked tool_git_sha {} != fetched tool_git_sha {}",
+                                baked_rel.trud_release_date,
+                                baked_ds.dataset_version,
+                                baked_ds.tool_git_sha,
+                                fetched_ds.tool_git_sha
                             ))
                             .into());
                         }
@@ -554,6 +613,8 @@ mod tests {
                                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                                     .to_string(),
                             dataset_filesize_bytes: 29_700_000,
+                            tool_version: "0.1.0".to_string(),
+                            tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
                             dataset_doi: None,
                             withdrawn: None,
                         },
@@ -563,6 +624,8 @@ mod tests {
                                 "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
                                     .to_string(),
                             dataset_filesize_bytes: 29_800_000,
+                            tool_version: "0.1.0".to_string(),
+                            tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
                             dataset_doi: None,
                             withdrawn: None,
                         },
@@ -580,6 +643,8 @@ mod tests {
                             "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
                                 .to_string(),
                         dataset_filesize_bytes: 29_600_000,
+                        tool_version: "0.1.0".to_string(),
+                        tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
                         dataset_doi: None,
                         withdrawn: None,
                     }],
@@ -811,6 +876,68 @@ mod tests {
         assert!(res.unwrap_err().to_string().contains("contradicts baked dataset"));
     }
 
+    // R2: a row's tool_version and tool_git_sha never change once written.
+    #[test]
+    fn test_merge_refuses_a_changed_tool_git_sha() {
+        let baked = valid_test_index();
+        let mut fetched = valid_test_index();
+        fetched.releases[0].datasets[0].tool_git_sha = "f".repeat(40);
+
+        let err = baked.merge(&fetched).unwrap_err();
+        assert!(err.downcast_ref::<SecurityError>().is_some());
+        println!("{err}");
+        assert!(err.to_string().contains("contradicts baked dataset (2026-08-28, 0.1.0): baked tool_git_sha"));
+    }
+
+    #[test]
+    fn test_merge_refuses_a_changed_tool_version() {
+        let baked = valid_test_index();
+        let mut fetched = valid_test_index();
+        fetched.releases[0].datasets[0].tool_version = "0.3.0".to_string();
+
+        let err = baked.merge(&fetched).unwrap_err();
+        assert!(err.downcast_ref::<SecurityError>().is_some());
+        println!("{err}");
+        assert!(err.to_string().contains("baked tool_version 0.1.0 != fetched tool_version 0.3.0"));
+    }
+
+    // R2: each dataset row names the ods that built it, and `validate` says which part is wrong.
+    #[test]
+    fn test_validate_names_a_row_missing_its_tool_version() {
+        let mut json: serde_json::Value = serde_json::to_value(valid_test_index()).unwrap();
+        json["releases"][0]["datasets"][0].as_object_mut().unwrap().remove("tool_version");
+        let index: OdsReleaseIndex = serde_json::from_value(json).expect("a missing field parses, so validate can name it");
+
+        let err = index.validate().unwrap_err().to_string();
+        println!("{err}");
+        assert!(err.contains("Missing tool_version for dataset (2026-08-28, 0.1.0)"));
+    }
+
+    #[test]
+    fn test_validate_names_a_row_missing_its_tool_git_sha() {
+        let mut index = valid_test_index();
+        index.releases[0].datasets[1].tool_git_sha = String::new();
+
+        let err = index.validate().unwrap_err().to_string();
+        assert!(err.contains("Missing tool_git_sha for dataset (2026-08-28, 0.2.0)"));
+    }
+
+    #[test]
+    fn test_validate_rejects_a_malformed_tool_version_and_commit() {
+        for bad_version in ["v0.2.0", "0.2", "latest"] {
+            let mut index = valid_test_index();
+            index.releases[0].datasets[0].tool_version = bad_version.to_string();
+            let err = format!("{:#}", index.validate().unwrap_err());
+            assert!(err.contains(&format!("Invalid tool_version '{bad_version}'")), "{err}");
+        }
+        for bad_sha in ["0123456", &"F".repeat(40), &"g".repeat(40), &"a".repeat(41)] {
+            let mut index = valid_test_index();
+            index.releases[0].datasets[0].tool_git_sha = bad_sha.to_string();
+            let err = index.validate().unwrap_err().to_string();
+            assert!(err.contains("Invalid tool_git_sha") && err.contains("40 lower-case hex"), "{err}");
+        }
+    }
+
     #[test]
     fn test_merge_accepts_changed_signing_key_fingerprint() -> Result<()> {
         let baked = valid_test_index();
@@ -837,6 +964,8 @@ mod tests {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
             dataset_filesize_bytes: 29_900_000,
+            tool_version: "0.1.0".to_string(),
+            tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
             dataset_doi: None,
             withdrawn: None,
         });
@@ -854,6 +983,8 @@ mod tests {
                         "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                             .to_string(),
                     dataset_filesize_bytes: 30_000_000,
+                    tool_version: "0.1.0".to_string(),
+                    tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
                     dataset_doi: None,
                     withdrawn: None,
                 }],

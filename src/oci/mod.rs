@@ -21,8 +21,6 @@ pub const ANNOTATION_VERSION: &str = "org.opencontainers.image.version";
 pub const ANNOTATION_FYI_TRUD_RELEASE_DATE: &str = "fyi.ods.trud-release-date";
 pub const ANNOTATION_FYI_DATASET_VERSION: &str = "fyi.ods.dataset-version";
 pub const ANNOTATION_FYI_TRUD_RELEASE_SHA256: &str = "fyi.ods.trud-release-sha256";
-pub const ANNOTATION_FYI_TOOL_VERSION: &str = "fyi.ods.tool-version";
-pub const ANNOTATION_FYI_TOOL_GIT_SHA: &str = "fyi.ods.tool-git-sha";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciDescriptor {

@@ -16,7 +16,6 @@ fn create_mock_trud_zip_with_provenance(dir: &Path) -> PathBuf {
 
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     std::fs::write(
         dir.join(ods::provenance::PROVENANCE_FILENAME),
         serde_json::to_string_pretty(&prov).unwrap(),

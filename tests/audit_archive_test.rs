@@ -81,7 +81,6 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-07-31".to_string()),
         trud_release_sha256: Some(ods::provenance::compute_file_sha256(&zip).unwrap()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     fs::write(

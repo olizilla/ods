@@ -8,9 +8,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-mod common;
-use common::git_cmd;
-
 /// Sets up a synthetic release directory matching the golden fixture files.
 fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
@@ -36,32 +33,10 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     fs::write(rel_dir.join("orgs.parquet"), vec![b'b'; 9892725]).unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
 
-    fs::write(
-        tmp.path().join("Cargo.toml"),
-        format!("[package]\nname = \"ods\"\nversion = \"{}\"\n", env!("CARGO_PKG_VERSION")),
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join("src")).unwrap();
-    fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
-
-    let _ = git_cmd(tmp.path()).args(["init", "-b", "main"]).output();
-    let _ = git_cmd(tmp.path()).args(["add", "."]).output();
-    let _ = git_cmd(tmp.path())
-        .args(["commit", "-m", "initial", "--no-gpg-sign"])
-        .output();
-    let head_out = git_cmd(tmp.path()).args(["rev-parse", "HEAD"]).output().unwrap();
-    let git_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
-    let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
-
     let mut prov = OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256);
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    prov.tool_git_sha = Some(git_sha);
-    prov.tool_git_dirty = Some(false);
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -101,6 +76,18 @@ fn test_oci_manifest_golden_fixture_structure_and_digest() -> Result<()> {
     sorted_titles.sort();
     assert_eq!(titles, sorted_titles, "Layers must be sorted alphabetically by title");
 
+    // D1: the manifest says nothing about which ods built it, so a dataset's digest is a function
+    // of the archive and the dataset version, whichever ods rebuilds it.
+    let tool_annotations = |m: &OciManifest| -> Vec<String> {
+        m.annotations
+            .iter()
+            .flat_map(|a| a.keys())
+            .filter(|k| k.starts_with("fyi.ods.tool-"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(tool_annotations(&manifest), Vec::<String>::new(), "the golden manifest names a tool build");
+
     // 4. Verify that manifest digest is lowercase sha256 hex
     let digest = manifest.digest()?;
     assert!(digest.starts_with("sha256:"));
@@ -129,6 +116,7 @@ fn test_oci_manifest_golden_fixture_structure_and_digest() -> Result<()> {
     let gen_manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
     assert_eq!(gen_manifest.schema_version, 2);
     assert_eq!(manifest_bytes, gen_manifest.to_canonical_bytes()?);
+    assert_eq!(tool_annotations(&gen_manifest), Vec::<String>::new(), "ods make oci wrote a tool annotation");
 
     Ok(())
 }

@@ -32,7 +32,6 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 

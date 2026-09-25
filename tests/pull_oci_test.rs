@@ -66,7 +66,6 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -184,7 +183,6 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -261,7 +259,6 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -373,7 +370,6 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -448,7 +444,6 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -528,7 +523,6 @@ fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -616,7 +610,6 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     let prov_28 = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-08-28".to_string()),
         trud_release_sha256: Some("ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     std::fs::write(rel_28.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_vec_pretty(&prov_28)?)?;
@@ -632,7 +625,6 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     let prov_31 = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-07-31".to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     std::fs::write(rel_31.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_vec_pretty(&prov_31)?)?;
@@ -704,7 +696,6 @@ fn make_standard_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some(date.to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
@@ -1477,7 +1468,6 @@ fn make_unique_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<S
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some(date.to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;

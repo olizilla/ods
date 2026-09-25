@@ -89,12 +89,6 @@ pub fn build_manifest_from_dir(
     if let Some(ref trud_sha) = prov.trud_release_sha256 {
         annotations.insert(ANNOTATION_FYI_TRUD_RELEASE_SHA256.to_string(), trud_sha.to_uppercase());
     }
-    if let Some(ref tool_ver) = prov.tool_version {
-        annotations.insert(ANNOTATION_FYI_TOOL_VERSION.to_string(), tool_ver.clone());
-    }
-    if let Some(ref tool_sha) = prov.tool_git_sha {
-        annotations.insert(ANNOTATION_FYI_TOOL_GIT_SHA.to_string(), tool_sha.clone());
-    }
 
     let manifest = OciManifest {
         schema_version: 2,

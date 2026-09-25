@@ -36,13 +36,6 @@ fn test_custom_named_workspace_discovery_from_inside_and_release_subdir() {
     assert!(res.status.success());
 
     // Write valid _releases.json and pin current
-    let mut prov = ods::provenance::OdsProvenance::load_from_dir(&rel_dir).unwrap_or_default();
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
-
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
 

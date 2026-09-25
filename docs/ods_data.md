@@ -27,24 +27,19 @@ ods_data/
 
 Every release folder contains a `_provenance.json` file recording the integrity, source parameters, and build tool environment of the dataset.
 
-### Provenance Key Namespaces
+### Provenance keys
 
-`_provenance.json` records metadata across two namespaces:
+`_provenance.json` holds five keys, all describing NHS's archive: `$schema` and the four `trud_*` facts.
 
-#### Source Archive Metadata (`trud_*`)
 - **Origin**: Fetched directly from the **NHS TRUD REST API** (`/items/341/releases`) and extracted from the XML root manifest.
 - **Scope**: Represents the **source archive** published on TRUD.
 - **Fields**:
   - `trud_release_date`: Official release date in `YYYY-MM-DD` format (e.g. `"2026-07-31"`).
   - `trud_release_filesize_bytes`: Archive file size in bytes (`37983173`).
   - `trud_release_sha256`: Published SHA-256 checksum from NHS TRUD.
-  - `trud_release_sha256_verified`: Verification status (`"trud_api"`, `"published_release"`, or `"unverified"`).
   - `trud_schema_version`: ODS XML schema version extracted from the manifest namespace (e.g. `"2-0-0"`).
 
-#### Tool Metadata (`tool_*`)
-- `tool_git_sha`: Git commit SHA of the `ods` binary that generated the projections.
-- `tool_git_dirty`: Boolean present when built from an uncommitted working tree.
-- `tool_version`: Cargo package version of `ods` (`"0.1.0"`).
+Which `ods` built a published dataset is recorded in its release index row (`tool_version`, `tool_git_sha`, see [release-index.md](./release-index.md)) and in the CI attestation, not here. How the archive was checked is printed when the check runs and not stored. See [provenance.md](./provenance.md) for why.
 
 ### Example `_provenance.json`
 
@@ -54,11 +49,7 @@ Every release folder contains a `_provenance.json` file recording the integrity,
   "trud_release_date": "2026-07-31",
   "trud_release_filesize_bytes": 37983173,
   "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-  "trud_release_sha256_verified": "trud_api",
-  "trud_schema_version": "2-0-0",
-  "tool_git_sha": "f0630a986ca87489933bfb528214434329e2c02f",
-  "tool_git_dirty": false,
-  "tool_version": "0.1.0"
+  "trud_schema_version": "2-0-0"
 }
 ```
 
@@ -71,7 +62,7 @@ flowchart TD
     C --> D[Download Archive .zip to ods_data/releases/DATE/trud/]
     D --> E[Compute Local SHA-256 Hash]
     E --> F{Local SHA-256 == Official TRUD SHA-256?}
-    F -- Match --> G[✓ Set trud_release_sha256_verified = trud_api in _provenance.json]
+    F -- Match --> G[✓ Print SHA-256 verified by TRUD API]
     F -- Mismatch --> H[Retry once -> If fail, rename bad file to .zip.bad-sha]
 ```
 

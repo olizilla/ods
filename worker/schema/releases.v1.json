@@ -83,7 +83,9 @@
               "required": [
                 "dataset_version",
                 "manifest_digest",
-                "dataset_filesize_bytes"
+                "dataset_filesize_bytes",
+                "tool_version",
+                "tool_git_sha"
               ],
               "additionalProperties": false,
               "properties": {
@@ -101,6 +103,16 @@
                   "type": "integer",
                   "minimum": 1,
                   "description": "Sum of the layer sizes in this dataset's OCI manifest, in bytes — what `ods pull` downloads and installs. Measured from the published manifest at build time; immutable size that never changes once recorded. Merge refuses contradiction."
+                },
+                "tool_version": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+                  "description": "Semantic version string (SemVer) of the ods tool that built this dataset: the tag without its 'v'. Written by ods make release from its own build; immutable once recorded. Merge refuses contradiction. The convenient, git-reviewed pointer to the build; the CI attestation for the same manifest digest is the signed proof."
+                },
+                "tool_git_sha": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Lower-case 40-character hexadecimal Git commit SHA of the ods tool that built this dataset: the commit its tag v<tool_version> points at. Written by ods make release from its own build; immutable once recorded. Merge refuses contradiction."
                 },
                 "dataset_doi": {
                   "type": "string",

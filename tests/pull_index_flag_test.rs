@@ -129,7 +129,6 @@ fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) 
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some(release_date.to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
@@ -398,7 +397,6 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let prov = ods::provenance::OdsProvenance {
         trud_release_date: Some("2026-07-31".to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;

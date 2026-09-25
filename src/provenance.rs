@@ -17,8 +17,10 @@ pub enum TrudVerificationSource {
     Unverified,
 }
 
-/// Unified dataset and build provenance metadata stored in `_provenance.json`
-/// and saved as `_provenance.json` in workspace release directories.
+/// What `_provenance.json` holds: facts about NHS's archive and nothing about who built the
+/// dataset or how the archive was checked, so a dataset's manifest digest is a function of the
+/// archive and the dataset version. The `ods` that built a published dataset is recorded in the
+/// release index, and the check that vouched for the archive is shown when it runs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OdsProvenance {
     /// JSON Schema URI identifying this provenance document format
@@ -33,24 +35,11 @@ pub struct OdsProvenance {
     pub trud_release_sha256: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256_verified: Option<TrudVerificationSource>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_release_filesize_bytes: Option<u64>,
 
     // --- 2. Inner XML Manifest Metadata (trud_*) ---
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trud_schema_version: Option<String>,
-
-    // --- 3. Tool Build Info (tool_*) ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_version: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_git_sha: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_git_dirty: Option<bool>,
 }
 
 pub const PROVENANCE_FILENAME: &str = "_provenance.json";
@@ -61,12 +50,8 @@ impl Default for OdsProvenance {
             schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
             trud_release_date: None,
             trud_release_sha256: None,
-            trud_release_sha256_verified: None,
             trud_release_filesize_bytes: None,
             trud_schema_version: None,
-            tool_version: None,
-            tool_git_sha: None,
-            tool_git_dirty: None,
         }
     }
 }
@@ -76,8 +61,8 @@ impl OdsProvenance {
     /// - ods.trud_release_date
     /// - ods.trud_release_sha256
     ///
-    /// Tool fields, publication fields, and verification source are excluded so Parquet bytes
-    /// are a function of the source archive and survive a dataset relabel or tool re-tag.
+    /// Nothing else is carried, so Parquet bytes are a function of the source archive and
+    /// survive a dataset relabel or tool re-tag.
     pub fn to_parquet_declared_metadata(&self) -> std::collections::BTreeMap<String, String> {
         let mut meta = std::collections::BTreeMap::new();
         if let Some(ref d) = self.trud_release_date {
@@ -314,7 +299,6 @@ impl OdsProvenance {
         }
         if let Ok(hash) = compute_file_sha256(&zip_path) {
             prov.trud_release_sha256 = Some(hash);
-            prov.trud_release_sha256_verified = Some(TrudVerificationSource::Unverified);
         }
 
         Some(prov)
@@ -342,15 +326,6 @@ impl OdsProvenance {
 
     pub fn validate_publishable(&self) -> Vec<String> {
         let mut failures = Vec::new();
-        match self.trud_release_sha256_verified {
-            Some(TrudVerificationSource::TrudApi) | Some(TrudVerificationSource::PublishedRelease) => {}
-            Some(TrudVerificationSource::Unverified) => {
-                failures.push("source not verified against the TRUD API — recorded in _provenance.json as unverified".to_string());
-            }
-            None => {
-                failures.push("trud_release_sha256_verified is missing in _provenance.json".to_string());
-            }
-        }
 
         if let Some(sz) = self.trud_release_filesize_bytes {
             if sz < 1_000_000 {
@@ -473,9 +448,6 @@ pub fn update_provenance(output_dir: &Path) -> Result<()> {
     }
 
     prov.schema = PROVENANCE_SCHEMA_V1_URL.to_string();
-    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    prov.tool_git_sha = option_env!("ODS_GIT_SHA").map(|s| s.to_string());
-    prov.tool_git_dirty = Some(option_env!("ODS_GIT_DIRTY").is_some());
 
     let updated_json = serde_json::to_string_pretty(&prov)?;
     std::fs::write(&prov_path, updated_json)?;
@@ -514,10 +486,6 @@ mod tests {
         prov.trud_release_date = Some("2026-07-31".to_string());
         prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
         prov.trud_schema_version = Some("2-0-0".to_string());
-        prov.tool_version = Some("0.1.0".to_string());
-        prov.tool_git_sha = Some("abcdef123456".to_string());
-        prov.tool_git_dirty = Some(true);
-        prov.trud_release_sha256_verified = Some(TrudVerificationSource::TrudApi);
 
         // The Parquet files carry two metadata keys: ods.trud_release_date and ods.trud_release_sha256.
         // The rule is nothing that changes when a release is relabelled or the tool is re-tagged.

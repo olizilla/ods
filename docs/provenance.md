@@ -4,26 +4,24 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
 
 ---
 
-## Provenance Key Namespaces
+## What provenance holds
 
-`OdsProvenance` records metadata across two distinct namespaces:
+`_provenance.json` describes NHS's archive and nothing else. It holds five keys:
 
-### A. `trud_*` (Source Archive Metadata)
-- **Origin**: Fetched from the **NHS TRUD REST API** (`/items/341/releases`) and the source XML root `<un:OrganisationManifest>` namespace.
-- **Scope**: Represents the **source archive** published on TRUD.
-- **Fields**:
-  - `trud_release_date`: Official publication date from TRUD API (e.g. `"2026-07-31"`).
-  - `trud_release_sha256`: Published SHA-256 checksum from NHS TRUD.
-  - `trud_release_sha256_verified`: Verification status (`"trud_api"`, `"published_release"`, or `"unverified"`).
-  - `trud_release_filesize_bytes`: Archive file size in bytes (`37983173`).
-  - `trud_schema_version`: ODS XML schema version extracted from the manifest namespace (e.g. `"2-0-0"`).
+- `$schema`: names the format and links to its schema.
+- `trud_release_date`: official publication date from TRUD (e.g. `"2026-07-31"`).
+- `trud_release_sha256`: published SHA-256 checksum from NHS TRUD.
+- `trud_release_filesize_bytes`: archive file size in bytes (`37983173`).
+- `trud_schema_version`: ODS XML schema version extracted from the manifest namespace (e.g. `"2-0-0"`).
 
-### B. `tool_*` (Build Tool Metadata)
-- `tool_version`: Cargo package version of `ods` (`"0.1.0"`).
-- `tool_git_sha`: Git commit SHA of the `ods` binary that generated the projections.
-- `tool_git_dirty`: Boolean flag indicating whether the binary was built from an uncommitted working tree.
+The `trud_*` keys come from the **NHS TRUD REST API** (`/items/341/releases`) and the source XML root `<un:OrganisationManifest>`.
 
----
+Two things are deliberately not here, because either would put the builder's circumstances into the manifest digest:
+
+- **Which `ods` built a published dataset.** Its row in the release index records `tool_version` and `tool_git_sha` (see [release-index.md](./release-index.md)), and the CI attestation for the same manifest digest is the signed proof.
+- **How the archive was checked.** `ods trud pull` and `ods make` print what they found, including a `!` line when nothing could vouch for the archive, and store nothing. What vouches for a published release is its row in the release index, which records TRUD's hash, date and size.
+
+So the manifest digest is a function of the archive and the dataset version. Any `ods` whose `DATASET_VERSION` is that version rebuilds a published dataset byte for byte, however the archive was checked.
 
 ## Complete `_provenance.json` example
 
@@ -32,18 +30,14 @@ This document details dataset provenance tracking, cryptographic SHA-256 checksu
   "$schema": "https://ods.fyi/schema/provenance.v1.json",
   "trud_release_date": "2026-07-31",
   "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-  "trud_release_sha256_verified": "trud_api",
   "trud_release_filesize_bytes": 37983173,
-  "trud_schema_version": "2-0-0",
-  "tool_version": "0.1.0",
-  "tool_git_sha": "f0630a986ca87489933bfb528214434329e2c02f",
-  "tool_git_dirty": false
+  "trud_schema_version": "2-0-0"
 }
 ```
 
 ## The rules
 
-- **Provenance is where the data came from and how it was built.** Source facts (`trud_*`) and build facts (`tool_*`). Nothing else.
+- **Provenance is where the data came from.** Source facts (`trud_*`), and nothing else. Who built the dataset lives in the release index row and the CI attestation, and how the archive was checked is shown when it runs.
 - **The descriptor is what the data is.** `datapackage.json` holds the schema contract, table descriptions, field types, and dataset `version`. If it describes the data rather than its origins, it belongs in the descriptor.
 - **Parquet metadata is what survives a relabel.** Key-value metadata on the parquet files holds only facts that cannot change without rebuilding the parquet bytes. `ods.trud_release_date` and `ods.trud_release_sha256` only.
 - **`$schema` names the format and links to the schema.** The schema at [provenance.v1.json](https://ods.fyi/schema/provenance.v1.json) (or `worker/schema/provenance.v1.json`) is the reference for every field.
@@ -61,6 +55,6 @@ flowchart TD
     C --> D[Download Archive .zip to ods_data/releases/DATE/trud/]
     D --> E[Compute Local SHA-256 Hash]
     E --> F{Local SHA-256 == Official TRUD SHA-256?}
-    F -- Match --> G[✓ Set trud_release_sha256_verified = trud_api in _provenance.json]
+    F -- Match --> G[✓ Print SHA-256 verified by TRUD API]
     F -- Mismatch --> H[Retry once -> If fail, rename file to .zip.bad-sha]
 ```

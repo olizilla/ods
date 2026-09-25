@@ -103,7 +103,6 @@ fn test_cli_cite_output_formatting() {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(rel_dir.join("orgs.parquet"), b"dummy").unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
     fs::write(
@@ -712,7 +711,6 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
     let prov_path = rel1_dir.join(ods::provenance::PROVENANCE_FILENAME);
     let mut prov = ods::provenance::OdsProvenance::load_from_dir(&rel1_dir).unwrap();
     prov.trud_release_date = Some("2026-05-01".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
 
     // Query cite on release 1 explicitly: output should cite 2026-05-01, NOT 2026-07-31

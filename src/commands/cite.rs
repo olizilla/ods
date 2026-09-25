@@ -68,22 +68,12 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).warn_reading();
 
-    // Check whether source archive is unverified
-    let verification_status = prov.as_ref().and_then(|p| p.trud_release_sha256_verified);
-    let is_unverified = !matches!(
-        verification_status,
-        Some(crate::provenance::TrudVerificationSource::TrudApi)
-            | Some(crate::provenance::TrudVerificationSource::PublishedRelease)
-    );
-
     let prov_unwrapped = prov.as_ref().cloned().unwrap_or_default();
     let dataset_version = crate::datapackage::read_dataset_version_from_dir(&input_dir)
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut archive_sha256 = prov_unwrapped.trud_release_sha256.clone()
         .unwrap_or_else(|| "<not verified>".to_string());
-    let tool_version = prov_unwrapped.tool_version.clone()
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     let mut trud_date = prov_unwrapped.trud_release_date.clone()
         .unwrap_or_else(|| "unknown".to_string());
 
@@ -139,6 +129,12 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         }
         dataset_doi = entry.dataset_doi.clone();
     }
+
+    // The tool that built a published dataset is on its index row; a release the index doesn't
+    // know is cited against the ods running now.
+    let tool_version = dataset
+        .map(|d| d.tool_version.clone())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 
     // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
     for f in &files {
@@ -361,13 +357,6 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
     let is_human = args.format == "text";
     crate::workspace::check_and_emit_staleness_nudge(&input_dir, is_human);
-
-    if is_unverified {
-        eprintln!(
-            "! {} ({}) is unverified: its source archive was not checked against a published SHA-256",
-            trud_date, dataset_version
-        );
-    }
 
     if let Some(ref reason) = withdrawal_reason {
         eprintln!(

@@ -36,10 +36,6 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256.clone());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
-    prov.tool_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    prov.tool_git_sha = Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string());
-    prov.tool_git_dirty = Some(false);
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -399,32 +395,6 @@ fn test_refusal_datapackage_resource_hash_disagrees_with_layers() -> Result<()> 
         "Must report datapackage resource hash disagreement: {:?}",
         failures
     );
-    Ok(())
-}
-
-#[test]
-fn test_make_oci_unverified_provenance_succeeds_and_packs() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-
-    // Set provenance to Unverified
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
-    // ods make oci succeeds (exit 0)
-    let result = run(test_args(rel_dir.clone(), false));
-    assert!(result.is_ok(), "ods make oci on unverified provenance must succeed");
-
-    // oci/ written and valid
-    let oci_dir = rel_dir.join("oci");
-    assert!(oci_dir.join("oci-layout").exists());
-    assert!(oci_dir.join("index.json").exists());
-
-    // ods make oci --check also succeeds
-    let check_result = run(test_args(rel_dir.clone(), true));
-    assert!(check_result.is_ok(), "ods make oci --check on unverified provenance must succeed");
-
     Ok(())
 }
 

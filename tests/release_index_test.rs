@@ -116,12 +116,16 @@ fn test_index_rejects_duplicate_version_in_release() {
             {
               "dataset_version": "1.0.0",
               "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000
+              "dataset_filesize_bytes": 29700000,
+              "tool_version": "0.1.0",
+              "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             },
             {
               "dataset_version": "1.0.0",
               "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000
+              "dataset_filesize_bytes": 29700000,
+              "tool_version": "0.1.0",
+              "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             }
           ]
         }
@@ -152,7 +156,9 @@ fn test_index_rejects_uppercase_manifest_digest() {
             {
               "dataset_version": "1.0.0",
               "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000
+              "dataset_filesize_bytes": 29700000,
+              "tool_version": "0.1.0",
+              "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             }
           ]
         }

@@ -330,10 +330,6 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
         trud_release_date: Some("2026-08-31".to_string()),
         trud_release_filesize_bytes: Some(37_983_173),
         trud_release_sha256: Some(zip_sha256.clone()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
-        tool_version: Some("0.4.3".to_string()),
-        tool_git_sha: Some("ab4332f4d75bfdc01814e03458d9dc4db20494cb".to_string()),
-        tool_git_dirty: Some(false),
         ..Default::default()
     };
 
@@ -387,7 +383,6 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
     let prov = OdsProvenance {
         trud_release_date: Some("2026-08-31".to_string()),
         trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        trud_release_sha256_verified: Some(ods::provenance::TrudVerificationSource::TrudApi),
         ..Default::default()
     };
     fs::write(

@@ -1,25 +1,28 @@
 use anyhow::Result;
-use ods::commands::make_release::{perform_all_release_checks, run, Args};
+use ods::commands::make_release::{perform_all_release_checks, run_as, Args, BuildIdentity};
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 mod common;
-use common::setup_synthetic_repo_and_release;
+use common::{fixture_build_identity, setup_synthetic_repo_and_release};
 
+// B6: the row records which ods built the dataset. `ods make release` reads no TRUD key and
+// makes no network call: nothing here provides one.
 #[test]
 fn test_make_release_success_appends_to_releases_json() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let build = fixture_build_identity(tmp.path());
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: None,
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &build)?;
 
     let index_file = tmp.path().join("data").join("releases.json");
     let content = fs::read_to_string(&index_file)?;
@@ -32,47 +35,88 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
     assert_eq!(index.releases[0].datasets[0].dataset_version, expected_ver);
     assert_eq!(index.releases[0].datasets[0].dataset_doi, Some("10.5281/zenodo.12345".to_string()));
     assert!(index.releases[0].datasets[0].manifest_digest.starts_with("sha256:"));
+    assert_eq!(index.releases[0].datasets[0].tool_version, build.tool_version);
+    assert_eq!(Some(index.releases[0].datasets[0].tool_git_sha.clone()), build.git_sha);
 
     Ok(())
 }
 
+// B6: each way an ods can be the wrong one to record a release, through the identity argument.
 #[test]
-fn test_make_release_fails_on_dirty_working_tree() -> Result<()> {
+fn test_make_release_refuses_an_ods_built_from_a_dirty_tree() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
-
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.tool_git_dirty = Some(true);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    let build = BuildIdentity { dirty: true, ..fixture_build_identity(tmp.path()) };
 
     let failures = perform_all_release_checks(
         &rel_dir,
         ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
+        &build,
     )?;
 
-    assert!(failures.iter().any(|f| f.contains("tool_git_dirty is true")));
+    assert!(failures.iter().any(|f| f.contains("this ods was built from a dirty working tree")), "{:?}", failures);
     Ok(())
 }
 
 #[test]
-fn test_make_release_fails_on_tool_git_sha_mismatch() -> Result<()> {
+fn test_make_release_refuses_an_ods_with_no_commit() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
-
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.tool_git_sha = Some("0000000000000000000000000000000000000000".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    let build = BuildIdentity { git_sha: None, ..fixture_build_identity(tmp.path()) };
 
     let failures = perform_all_release_checks(
         &rel_dir,
         ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
+        &build,
     )?;
 
-    assert!(failures.iter().any(|f| f.contains("tool_git_sha")));
+    assert!(failures.iter().any(|f| f.contains("this ods was built without a git commit")), "{:?}", failures);
+    Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_an_ods_that_is_not_the_commit_its_tag_names() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let other_commit = "0000000000000000000000000000000000000000".to_string();
+    let build = BuildIdentity { git_sha: Some(other_commit.clone()), ..fixture_build_identity(tmp.path()) };
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        ods::datapackage::DATASET_VERSION,
+        Some(tmp.path()),
+        None,
+        &build,
+    )?;
+
+    let tag = format!("v{}", build.tool_version);
+    assert!(
+        failures.iter().any(|f| f.contains(&format!("this ods is commit {}, not the commit {} points at", other_commit, tag))),
+        "{:?}",
+        failures
+    );
+    Ok(())
+}
+
+#[test]
+fn test_make_release_refuses_an_ods_whose_tag_does_not_exist() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let build = BuildIdentity { tool_version: "9.9.9".to_string(), ..fixture_build_identity(tmp.path()) };
+
+    let failures = perform_all_release_checks(
+        &rel_dir,
+        ods::datapackage::DATASET_VERSION,
+        Some(tmp.path()),
+        None,
+        &build,
+    )?;
+
+    assert!(
+        failures.iter().any(|f| f.contains("not the commit v9.9.9 points at (tag missing)")),
+        "{:?}",
+        failures
+    );
     Ok(())
 }
 
@@ -96,6 +140,8 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
             dataset_version: ver.to_string(),
             manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
             dataset_filesize_bytes: 29_700_000,
+            tool_version: common::FIXTURE_TOOL_VERSION.to_string(),
+            tool_git_sha: common::FIXTURE_TOOL_GIT_SHA.to_string(),
             dataset_doi: None,
             withdrawn: None,
         }],
@@ -106,6 +152,7 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
         ver,
         Some(tmp.path()),
         Some(&index),
+        &fixture_build_identity(tmp.path()),
     )?;
 
     assert!(failures.iter().any(|f| f.contains("sha256:0f2a000000000000000000000000000000000000000000000000000000000000")
@@ -118,14 +165,14 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
     let dist_dir = tmp.path().join("dist");
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     assert!(dist_dir.exists(), "dist/ directory must exist");
     assert!(!dist_dir.join("releases.json").exists(), "dist/releases.json must NOT exist in dist/");
@@ -197,7 +244,7 @@ fn test_make_release_creates_dist_staging_tree_with_real_files() -> Result<()> {
 
 #[test]
 fn test_make_release_refuses_when_no_repo_found() {
-    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
     let not_repo_tmp = TempDir::new().unwrap();
     let not_a_repo = not_repo_tmp.path().join("not-a-repo");
     fs::create_dir_all(&not_a_repo).unwrap();
@@ -208,18 +255,19 @@ fn test_make_release_refuses_when_no_repo_found() {
         ods::datapackage::DATASET_VERSION,
         None,
         None,
+        &fixture_build_identity(tmp.path()),
     ).unwrap();
     assert!(failures.iter().any(|f| f.contains("cannot locate the ods repository")));
 
     // 2. Full run refusal
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(not_a_repo),
         index: None,
-    });
+    }, &fixture_build_identity(tmp.path()));
 
     assert!(res.is_err(), "Must refuse when tool_repo is not a repo");
     let err = format!("{:#}", res.unwrap_err());
@@ -227,34 +275,8 @@ fn test_make_release_refuses_when_no_repo_found() {
 }
 
 #[test]
-fn test_make_release_refuses_unverified_provenance() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
-
-    // Mutate provenance to Unverified
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
-    let failures = perform_all_release_checks(
-        &rel_dir,
-        ods::datapackage::DATASET_VERSION,
-        None,
-        None,
-    )?;
-
-    assert!(
-        failures.iter().any(|f| f.contains("trud_release_sha256_verified")),
-        "Must refuse unverified provenance, got: {:?}",
-        failures
-    );
-
-    Ok(())
-}
-
-#[test]
 fn test_make_release_refuses_implausible_filesize() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     // Mutate provenance to 16 bytes
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
@@ -267,6 +289,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
         ods::datapackage::DATASET_VERSION,
         None,
         None,
+        &fixture_build_identity(tmp.path()),
     )?;
 
     assert!(
@@ -293,6 +316,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
         "1.0.0",
         Some(tmp.path()),
         None,
+        &fixture_build_identity(tmp.path()),
     )?;
 
     let expected_ver = ods::datapackage::DATASET_VERSION;
@@ -305,14 +329,14 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
     assert!(mismatch_failure.contains("The release was compiled by an older tool. Re-run `ods make`"));
 
     // Full command execution fails
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    });
+    }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
     assert!(err.contains("datapackage.json version (1.0.0) does not match this build of ods"));
@@ -330,14 +354,14 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     dp.as_object_mut().unwrap().remove("version");
     fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
 
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    });
+    }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
     assert!(err.contains("Missing version in datapackage.json"));
@@ -360,6 +384,7 @@ fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
         "invalid-semver",
         Some(tmp.path()),
         None,
+        &fixture_build_identity(tmp.path()),
     )?;
 
     assert!(failures.iter().any(|f| f.contains("is not valid SemVer")));
@@ -375,12 +400,6 @@ fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
         fs::remove_dir_all(&oci_dir)?;
     }
 
-    // Set tool_git_dirty to true
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.tool_git_dirty = Some(true);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
     // Record release directory entries and mtimes
     let before_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
         .filter_map(|e| e.ok())
@@ -388,17 +407,18 @@ fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
         .collect();
 
     let dist_dir = tmp.path().join("dist");
-    let res = run(Args {
+    let dirty = BuildIdentity { dirty: true, ..fixture_build_identity(tmp.path()) };
+    let res = run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    });
-    assert!(res.is_err(), "make release must fail when working tree is dirty");
+    }, &dirty);
+    assert!(res.is_err(), "make release must fail when the recording ods was built from a dirty tree");
     let err = format!("{:#}", res.unwrap_err());
-    assert!(err.contains("tool_git_dirty is true"));
+    assert!(err.contains("this ods was built from a dirty working tree"));
     assert!(!oci_dir.exists(), "oci/ must not be written when checks fail");
     assert!(!dist_dir.exists(), "dist/ must not be written when checks fail");
 
@@ -429,14 +449,14 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
     let dist_dir = tmp.path().join("dist");
 
     // Test programmatic run()
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: Some(non_existent_index.clone()),
-    });
+    }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err(), "make release must fail when index cannot be read");
     let err = res.unwrap_err();
     assert!(
@@ -480,9 +500,26 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
     Ok(())
 }
 
+/// `target` spelled relative to this test's working directory, so a relative `--input` can be
+/// exercised without changing the working directory, which every test in the binary shares.
+fn relative_to_cwd(target: &Path) -> PathBuf {
+    use std::path::Component;
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let target = target.canonicalize().unwrap();
+    let mut path = PathBuf::new();
+    for _ in cwd.components().filter(|c| matches!(c, Component::Normal(_))) {
+        path.push("..");
+    }
+    for c in target.components().filter(|c| matches!(c, Component::Normal(_))) {
+        path.push(c);
+    }
+    path
+}
+
 #[test]
 fn test_make_release_staging_with_relative_input() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let build = fixture_build_identity(tmp.path());
     let dist_relative = tmp.path().join("dist-relative");
     let dist_absolute = tmp.path().join("dist-absolute");
 
@@ -492,41 +529,27 @@ fn test_make_release_staging_with_relative_input() -> Result<()> {
     fs::copy(&index_src, &index_a)?;
     fs::copy(&index_src, &index_b)?;
 
-    // 1. Run ods make release with relative --input and .current_dir(tmp.path())
-    let rel_status = common::ods_cmd()
-        .current_dir(tmp.path())
-        .args([
-            "make",
-            "release",
-            "--input",
-            "releases/2026-07-31",
-            "--tool-repo",
-            tmp.path().to_str().unwrap(),
-            "--index",
-            index_a.to_str().unwrap(),
-            "--output",
-            dist_relative.to_str().unwrap(),
-        ])
-        .status()?;
-    assert!(rel_status.success(), "make release with relative input failed");
+    // 1. Stage from a relative --input
+    let relative_input = relative_to_cwd(&rel_dir);
+    assert!(relative_input.is_relative());
+    run_as(Args {
+        input: Some(relative_input),
+        repository: "ods-data".to_string(),
+        output: Some(dist_relative.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: Some(index_a),
+    }, &build)?;
 
-    // 2. Run ods make release with absolute --input
-    let abs_status = common::ods_cmd()
-        .current_dir(tmp.path())
-        .args([
-            "make",
-            "release",
-            "--input",
-            rel_dir.to_str().unwrap(),
-            "--tool-repo",
-            tmp.path().to_str().unwrap(),
-            "--index",
-            index_b.to_str().unwrap(),
-            "--output",
-            dist_absolute.to_str().unwrap(),
-        ])
-        .status()?;
-    assert!(abs_status.success(), "make release with absolute input failed");
+    // 2. Stage from an absolute --input
+    run_as(Args {
+        input: Some(rel_dir.clone()),
+        repository: "ods-data".to_string(),
+        output: Some(dist_absolute.clone()),
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: Some(index_b),
+    }, &build)?;
 
     // 3. Assert both staging trees hold the exact same relative file paths
     let collect_files = |base: &Path| -> Vec<PathBuf> {
@@ -557,20 +580,19 @@ fn test_make_release_staging_with_relative_input() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn test_make_release_staged_blobs_are_copies_not_hardlinks() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
     let dist_dir = tmp.path().join("dist");
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     // Read initial hash of _provenance.json in release directory
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
@@ -617,14 +639,14 @@ fn test_make_release_staging_failure_leaves_index_identical() -> Result<()> {
         fs::set_permissions(&read_only_parent, fs::Permissions::from_mode(0o444))?;
     }
 
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: Some(dist_dir),
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    });
+    }, &fixture_build_identity(tmp.path()));
 
     #[cfg(unix)]
     {
@@ -683,14 +705,14 @@ fn test_make_release_response_listing_three_dates_adds_all_three() -> Result<()>
     });
     fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     let index_file = tmp.path().join("data").join("releases.json");
     let content = fs::read_to_string(&index_file)?;
@@ -749,14 +771,14 @@ fn test_make_release_date_already_recorded_same_hash_left_byte_for_byte() -> Res
     });
     fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
@@ -812,14 +834,14 @@ fn test_make_release_contradicting_hash_refuses_index_and_output_unchanged() -> 
     fs::write(trud_dir.join("trud-releases-2026-07-31.json"), serde_json::to_string_pretty(&response_json)?)?;
 
     let dist_dir = tmp.path().join("dist");
-    let res = run(Args {
+    let res = run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: Some(dist_dir.clone()),
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    });
+    }, &fixture_build_identity(tmp.path()));
 
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
@@ -852,6 +874,7 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
         ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         Some(&initial_index),
+        &fixture_build_identity(tmp.path()),
     )?;
 
     assert!(failures.iter().any(|f| f.contains("The release row's trud_release_sha256") && f.contains("does not match _provenance.json")));
@@ -876,20 +899,22 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
             dataset_version: "0.0.1".to_string(),
             manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string(),
             dataset_filesize_bytes: 29_700_000,
+            tool_version: common::FIXTURE_TOOL_VERSION.to_string(),
+            tool_git_sha: common::FIXTURE_TOOL_GIT_SHA.to_string(),
             dataset_doi: None,
             withdrawn: None,
         }],
     });
     fs::write(&index_file, initial_index.to_json_pretty()?)?;
 
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
@@ -909,26 +934,26 @@ fn test_make_release_identical_republish_is_noop_leaving_index_byte_identical() 
     let index_file = tmp.path().join("data").join("releases.json");
 
     // First publish
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir.clone()),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     let bytes_after_first = fs::read(&index_file)?;
 
     // Second publish: identical inputs
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     let bytes_after_second = fs::read(&index_file)?;
 
@@ -943,6 +968,39 @@ fn test_make_release_identical_republish_is_noop_leaving_index_byte_identical() 
     assert_eq!(index.releases.len(), 1);
     assert_eq!(index.releases[0].datasets.len(), 1);
 
+    Ok(())
+}
+
+// R2: an identical re-publish leaves the row as the first ods recorded it, so the row keeps
+// naming the ods that built the dataset first, and the index stays byte-identical.
+#[test]
+fn test_make_release_republish_by_another_ods_keeps_the_first_row() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let index_file = tmp.path().join("data").join("releases.json");
+    let first = fixture_build_identity(tmp.path());
+
+    let args = |dir: &Path| Args {
+        input: Some(dir.to_path_buf()),
+        repository: "ods-data".to_string(),
+        output: None,
+        doi: None,
+        tool_repo: Some(tmp.path().to_path_buf()),
+        index: None,
+    };
+    run_as(args(&rel_dir), &first)?;
+    let after_first = fs::read(&index_file)?;
+
+    // A later commit on the same tag's line, at the same dataset version, rebuilds the same
+    // bytes. It is a different ods, and the tag it claims still has to exist.
+    let _ = common::git_cmd(tmp.path()).args(["commit", "--allow-empty", "-m", "later", "--no-gpg-sign"]).output();
+    let later = fixture_build_identity(tmp.path());
+    assert_ne!(first.git_sha, later.git_sha);
+    let _ = common::git_cmd(tmp.path()).args(["tag", "--no-sign", "-f", &format!("v{}", later.tool_version)]).output();
+    run_as(args(&rel_dir), &later)?;
+
+    assert_eq!(after_first, fs::read(&index_file)?, "a re-publish by another ods must not rewrite the row");
+    let index: ods::index::OdsReleaseIndex = serde_json::from_slice(&after_first)?;
+    assert_eq!(Some(index.releases[0].datasets[0].tool_git_sha.clone()), first.git_sha);
     Ok(())
 }
 
@@ -962,6 +1020,7 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
         ods::datapackage::DATASET_VERSION,
         Some(tmp.path()),
         None,
+        &fixture_build_identity(tmp.path()),
     )?;
     assert!(
         failures.is_empty(),
@@ -970,14 +1029,14 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
     );
 
     // Build the release
-    run(Args {
+    run_as(Args {
         input: Some(rel_dir),
         repository: "ods-data".to_string(),
         output: None,
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
-    })?;
+    }, &fixture_build_identity(tmp.path()))?;
 
     assert!(
         index_file.exists(),

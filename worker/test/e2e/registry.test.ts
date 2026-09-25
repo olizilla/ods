@@ -52,7 +52,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
     await mf.dispose();
   });
 
-  it('Acceptance 1: Full round-trip seam test (ods make release -> Miniflare R2 -> ods pull -> byte-identical)', async () => {
+  it('Acceptance 1: Full round-trip seam test (ods make oci -> Miniflare R2 -> ods pull -> byte-identical)', async () => {
     const odsBin = path.resolve(__dirname, '../../../target/debug/ods');
     if (!fs.existsSync(odsBin)) {
       throw new Error(`ods binary not found at ${odsBin}. Run 'cargo build' first.`);
@@ -62,12 +62,10 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
     try {
       const fixtureDir = path.join(tmpDir, 'fixture');
       const trudDir = path.join(fixtureDir, 'trud');
-      const repoDir = path.join(tmpDir, 'repo');
-      const repoDataDir = path.join(repoDir, 'data');
+      const distDir = path.join(tmpDir, 'dist');
       const workspaceDir = path.join(tmpDir, 'workspace');
 
       fs.mkdirSync(trudDir, { recursive: true });
-      fs.mkdirSync(repoDataDir, { recursive: true });
       fs.mkdirSync(workspaceDir, { recursive: true });
 
       // 1. Create source release files
@@ -88,44 +86,64 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       execSync(`zip -j -q "${zipPath}" "${dummyTxt}"`);
       const zipSha256 = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex').toUpperCase();
 
-      // 2. Initialize temporary git repo
-      fs.writeFileSync(path.join(repoDir, 'Cargo.toml'), '[package]\nname = "ods"\nversion = "0.1.0"\n');
-      fs.mkdirSync(path.join(repoDir, 'src'), { recursive: true });
-      fs.writeFileSync(path.join(repoDir, 'src', 'main.rs'), 'fn main() {}\n');
-      fs.writeFileSync(
-        path.join(repoDataDir, 'releases.json'),
-        JSON.stringify({
-          $schema: 'https://ods.fyi/schema/releases.v1.json',
-          trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
-          mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
-          releases: [],
-        })
-      );
-
-      execSync(
-        'git init -b main --quiet && git config user.name "Test" && git config user.email "test@example.com" && git config commit.gpgsign false && git config tag.gpgsign false && git add . && GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z" git commit --no-gpg-sign -m "initial" --quiet && git tag --no-sign "v0.1.0"',
-        { cwd: repoDir }
-      );
-      const gitSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-
       const provenanceObj = {
         $schema: 'https://ods.fyi/schema/provenance.v1.json',
         trud_release_date: '2026-07-31',
         trud_release_sha256: zipSha256,
-        trud_release_sha256_verified: 'trud_api',
         trud_release_filesize_bytes: 37983173,
         trud_schema_version: '2-0-0',
-        tool_version: '0.1.0',
-        tool_git_sha: gitSha,
-        tool_git_dirty: false,
       };
       fs.writeFileSync(path.join(fixtureDir, '_provenance.json'), JSON.stringify(provenanceObj, null, 2));
 
-      // 3. Run ods make release on fixture release to produce dist/
-      const distDir = path.join(repoDir, 'dist');
-      execFileSync(odsBin, ['make', 'release', '--input', fixtureDir, '--tool-repo', repoDir, '--output', distDir], {
-        stdio: 'pipe',
-      });
+      // 2. Pack the release into an OCI layout. `ods make release` records the ods that runs it, and
+      // must be built from a clean, tagged commit, so it can't run under the binary a test just built.
+      // Its staging tree is checked in tests/make_release_test.rs against expected-keys.json. This
+      // stages the same objects: every blob, and the manifest under its three tags.
+      execFileSync(odsBin, ['make', 'oci', '--input', fixtureDir], { stdio: 'pipe' });
+
+      const blobsDir = path.join(fixtureDir, 'oci', 'blobs', 'sha256');
+      const blobNames = fs.readdirSync(blobsDir);
+      // Layers are symlinks into the release directory; the manifest is the one regular file
+      const manifestName = blobNames.find((name) => !fs.lstatSync(path.join(blobsDir, name)).isSymbolicLink());
+      expect(manifestName).toBeDefined();
+      const manifestBytes = fs.readFileSync(path.join(blobsDir, manifestName!));
+      const manifest = JSON.parse(fs.readFileSync(path.join(blobsDir, manifestName!), 'utf-8'));
+      const manifestDigest = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+      const datasetFilesize = manifest.layers.reduce((sum: number, layer: { size: number }) => sum + layer.size, 0);
+
+      for (const name of blobNames) {
+        const dst = path.join(distDir, 'v2', 'ods-data', 'blobs', 'sha256', name);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.writeFileSync(dst, fs.readFileSync(path.join(blobsDir, name)));
+      }
+      const manifestsDir = path.join(distDir, 'v2', 'ods-data', 'manifests');
+      fs.mkdirSync(manifestsDir, { recursive: true });
+      for (const tag of ['2026-07-31_0.1.0', '2026-07-31', 'latest']) {
+        fs.writeFileSync(path.join(manifestsDir, tag), manifestBytes);
+      }
+
+      // 3. The release index row for this dataset, as `ods make release` writes it
+      const releasesJson = {
+        $schema: 'https://ods.fyi/schema/releases.v1.json',
+        trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+        mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
+        releases: [
+          {
+            trud_release_date: '2026-07-31',
+            trud_release_sha256: zipSha256,
+            trud_release_filesize_bytes: 37983173,
+            datasets: [
+              {
+                dataset_version: '0.1.0',
+                manifest_digest: `sha256:${manifestDigest}`,
+                dataset_filesize_bytes: datasetFilesize,
+                tool_version: '0.1.0',
+                tool_git_sha: '0123456789abcdef0123456789abcdef01234567',
+              },
+            ],
+          },
+        ],
+      };
 
       expect(fs.existsSync(distDir)).toBe(true);
 
@@ -140,11 +158,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
         await bucket.put(relKey, fileContent);
       }
 
-      // Load updated data/releases.json with mirror pointing to Miniflare URL
-      const updatedReleasesJson = fs.readFileSync(path.join(repoDataDir, 'releases.json'), 'utf-8');
-      const parsedReleases = JSON.parse(updatedReleasesJson);
-      parsedReleases.mirrors = [{ url: `${serverUrl}/v2/ods-data` }];
-      await bucket.put('releases.json', new TextEncoder().encode(JSON.stringify(parsedReleases, null, 2)));
+      await bucket.put('releases.json', new TextEncoder().encode(JSON.stringify(releasesJson, null, 2)));
 
       // 5. Run ods pull from the Miniflare server
       execFileSync(odsBin, ['pull', '2026-07-31', '--verbose', '--no-progress'], {

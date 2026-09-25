@@ -6,7 +6,7 @@ use ods::commands::fetch::{
     run_local_archive_with_fetchers, Args as FetchArgs, TrudFetcher, TrudReleaseItem,
 };
 use ods::progress::{Progress, ProgressCaps};
-use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+use ods::provenance::{compute_file_sha256, PROVENANCE_FILENAME};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -96,15 +96,10 @@ fn test_make_zip_absent_from_index_is_unverified() {
 
     let prov_file = out_dir.join(PROVENANCE_FILENAME);
     assert!(prov_file.exists());
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    assert_eq!(
-        prov.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::Unverified)
-    );
 }
 
 #[test]
-fn test_trud_pull_local_archive_in_index_records_published_release() {
+fn test_trud_pull_local_archive_in_index_is_verified_by_the_index() {
     let tmp = TempDir::new().unwrap();
     let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let sha256 = compute_file_sha256(&zip_path).unwrap();
@@ -142,15 +137,10 @@ fn test_trud_pull_local_archive_in_index_records_published_release() {
 
     let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
     assert!(prov_file.exists());
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    assert_eq!(
-        prov.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::PublishedRelease)
-    );
 }
 
 #[test]
-fn test_make_zip_in_index_records_published_release() {
+fn test_make_zip_in_index_is_verified_by_the_index() {
     let tmp = TempDir::new().unwrap();
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
@@ -192,15 +182,10 @@ fn test_make_zip_in_index_records_published_release() {
 
     let prov_file = out_dir.join(PROVENANCE_FILENAME);
     assert!(prov_file.exists());
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    assert_eq!(
-        prov.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::PublishedRelease)
-    );
 }
 
 #[test]
-fn test_trud_pull_local_archive_absent_from_index_matching_trud_api_records_trud_api() {
+fn test_trud_pull_local_archive_absent_from_index_matching_trud_api_is_verified_by_trud() {
     let tmp = TempDir::new().unwrap();
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
@@ -270,11 +255,6 @@ fn test_trud_pull_local_archive_absent_from_index_matching_trud_api_records_trud
 
     let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
     assert!(prov_file.exists());
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    assert_eq!(
-        prov.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::TrudApi)
-    );
 }
 
 #[test]
@@ -492,11 +472,6 @@ fn test_trud_pull_local_archive_failing_trud_api_stays_unverified_and_prints_war
 
     let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
     assert!(prov_file.exists());
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file)?)?;
-    assert_eq!(
-        prov.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::Unverified)
-    );
 
     Ok(())
 }

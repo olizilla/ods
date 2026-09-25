@@ -316,27 +316,27 @@ which handle them natively.
 ## Provenance
 
 Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
-archive it came from and its verified SHA-256, the TRUD schema version, and the commit that built it. Hashes are uppercase throughout, matching TRUD.
+archive it came from, its SHA-256 and size, and the TRUD schema version. Hashes are uppercase throughout, matching TRUD.
+`_provenance.json` holds those five keys and nothing about who built the release or how the archive was checked. The `ods` that built a published dataset is recorded in its release index row (`tool_version` and `tool_git_sha`) and, as signed proof, in the CI attestation for the same manifest digest.
 `ods cite` renders it as a citation.
 
 Each Parquet file carries a deliberate subset of provenance in its key-value metadata:
 source identity only (`ods.trud_release_date` and `ods.trud_release_sha256`). The dataset
-version and the builder and tool fields (`ods.tool_version`, `ods.tool_git_sha`,
-`ods.tool_git_dirty`, and `trud_release_sha256_verified`) are excluded, so the Parquet bytes
+version and everything about the builder are excluded, so the Parquet bytes
 depend only on the source archive and how it was derived. Relabelling a release with a new
 dataset version leaves its Parquet files byte-identical.
 
 To verify a release: rebuild from the TRUD archive, using any version of `ods` that builds the same dataset version, and compare
 the SHA-256 of the generated Parquet files against the hashes in the published
-`datapackage.json`. `_provenance.json` records who built it and will differ between
-builders; the data files will match byte for byte.
+`datapackage.json`. The data files will match byte for byte, and so will `_provenance.json` and the
+manifest digest: provenance holds only facts about the archive, so it doesn't differ between builders.
 
 ## Versioning
 
 Three numbers, three jobs:
 - `trud_release_date` — which source? (recorded in `_provenance.json` and every Parquet row).
 - `dataset_version` — which cut, and which attempt at it? (SemVer recorded in `datapackage.json`, the manifest, and release index).
-- `ods` crate version — which tool? (`Cargo.toml`, `tool_version`).
+- `ods` crate version — which tool? (`Cargo.toml`; for a published dataset, the `tool_version` on its release index row).
 
 `dataset_version` is global and monotonic. It identifies a *cut* — the state of the tool and rules at the moment of packing — so once it moves, every release packed afterwards carries the new number.
 

@@ -12,7 +12,6 @@ fn test_provenance_validate_baseline_missing_fields() -> Result<()> {
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     assert!(prov.validate_baseline().is_ok(), "provenance with all baseline fields must pass validation");
     Ok(())
@@ -23,7 +22,6 @@ fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     prov.trud_release_filesize_bytes = Some(16); // 16 bytes is implausible for TRUD zip archive
     assert!(prov.validate_baseline().is_ok(), "16-byte filesize must pass structural baseline validation");
@@ -39,21 +37,14 @@ fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result
 }
 
 #[test]
-fn test_provenance_validate_baseline_allows_unverified_and_publishable_reports_it() -> Result<()> {
+fn test_provenance_validate_publishable_accepts_a_real_sized_archive() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
 
-    assert!(prov.validate_baseline().is_ok(), "unverified provenance must pass baseline validation");
-    let pub_failures = prov.validate_publishable();
-    assert_eq!(pub_failures.len(), 1, "unverified provenance must be reported by validate_publishable");
-    assert!(
-        pub_failures[0].contains("unverified"),
-        "validate_publishable must report unverified status: {}",
-        pub_failures[0]
-    );
+    assert!(prov.validate_baseline().is_ok());
+    assert_eq!(prov.validate_publishable(), Vec::<String>::new(), "how the archive was checked is not provenance");
 
     Ok(())
 }
@@ -63,7 +54,6 @@ fn test_provenance_validate_baseline_rejects_missing_sha256() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     assert!(prov.validate_baseline().is_err(), "missing trud_release_sha256 must be rejected");
 
@@ -113,7 +103,7 @@ fn test_provenance_keys_on_make() -> Result<()> {
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
+    prov.trud_schema_version = Some("2-0-0".to_string());
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
@@ -121,10 +111,22 @@ fn test_provenance_keys_on_make() -> Result<()> {
     // Run update_provenance
     ods::provenance::update_provenance(output_dir)?;
 
+    // D1: provenance is the archive's facts and nothing about who built the dataset or how the
+    // archive was checked, so a manifest digest is a function of the archive and the dataset version.
     let saved_json = fs::read_to_string(output_dir.join(ods::provenance::PROVENANCE_FILENAME))?;
-    assert!(saved_json.contains("tool_version"), "tool_version must be added");
-    assert!(saved_json.contains("tool_git_sha"), "tool_git_sha must be added");
-    assert!(saved_json.contains("tool_git_dirty"), "tool_git_dirty must be added");
+    let saved: serde_json::Value = serde_json::from_str(&saved_json)?;
+    let keys: Vec<&str> = saved.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    let mut expected = vec![
+        "$schema",
+        "trud_release_date",
+        "trud_release_filesize_bytes",
+        "trud_release_sha256",
+        "trud_schema_version",
+    ];
+    let mut actual = keys.clone();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected, "provenance must hold exactly the five archive keys");
     assert!(!saved_json.contains("xml_manifest_created"), "xml_manifest_created must NOT be in JSON");
     assert!(!saved_json.contains("ods_cmd_version"), "ods_cmd_version must NOT be in JSON");
     assert!(!saved_json.contains("tool_parquet_version"), "tool_parquet_version must NOT be in JSON");
@@ -143,7 +145,6 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
@@ -180,7 +181,6 @@ fn test_cite_unverified_release_delivers_citation_and_warns() -> Result<()> {
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::Unverified);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
@@ -224,7 +224,6 @@ fn test_update_provenance_populates_trud_schema_version_from_xml() -> Result<()>
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37_983_173);
     prov.trud_release_sha256 = Some(zip_sha256);
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
@@ -329,7 +328,6 @@ fn test_trud_pull_writes_no_tool_or_dataset_keys() -> Result<()> {
     prov.trud_release_date = Some("2026-07-31".to_string());
     prov.trud_release_filesize_bytes = Some(37983173);
     prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     let raw_val: serde_json::Value = serde_json::from_str(&prov_json)?;

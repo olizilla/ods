@@ -1,8 +1,15 @@
+use ods::commands::fetch::{
+    run_local_archive_with_fetchers, Args as FetchArgs, TrudFetcher, TrudReleaseItem,
+};
 use ods::commands::parquet;
 use ods::commands::pull::OciBlobFetcher;
+use ods::progress::{Progress, ProgressCaps};
 use ods::provenance::compute_file_sha256;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+mod common;
+use common::{create_mock_trud_zip, make_v1_index, ods_binary};
 
 fn find_real_trud_zip() -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("TRUD_XML_PATH") {
@@ -133,8 +140,9 @@ fn test_real_trud_parquet_hash_stability() {
         output: Some(tmp_isolated.path().to_path_buf()), ..Default::default() })
     .expect("context 2 make should succeed");
 
-    // Parquet and datapackage must match across contexts
-    for file_name in all_files.iter().filter(|f| **f != "_provenance.json") {
+    // Every file must match across contexts, provenance included: it holds only the archive's
+    // facts, so a bare archive and a pulled one give the same bytes.
+    for file_name in all_files.iter() {
         let f1 = tmp1.path().join(file_name);
         let f2 = tmp_isolated.path().join(file_name);
         let hash1 = compute_file_sha256(&f1).unwrap();
@@ -142,23 +150,8 @@ fn test_real_trud_parquet_hash_stability() {
         assert_eq!(hash1, hash2, "File {} diverged across contexts", file_name);
     }
 
-    // Provenance verification difference
-    let prov1_file = tmp1.path().join("_provenance.json");
-    let prov2_file = tmp_isolated.path().join("_provenance.json");
     let prov1: ods::provenance::OdsProvenance =
-        serde_json::from_str(&std::fs::read_to_string(&prov1_file).unwrap()).unwrap();
-    let prov2: ods::provenance::OdsProvenance =
-        serde_json::from_str(&std::fs::read_to_string(&prov2_file).unwrap()).unwrap();
-    assert_eq!(
-        prov1.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::TrudApi),
-        "Context 1 provenance must be verified by TRUD API"
-    );
-    assert_eq!(
-        prov2.trud_release_sha256_verified,
-        Some(ods::provenance::TrudVerificationSource::Unverified),
-        "Context 2 provenance must be unverified"
-    );
+        serde_json::from_str(&std::fs::read_to_string(tmp1.path().join("_provenance.json")).unwrap()).unwrap();
 
     // Compare built manifest digest with the digest recorded in data/releases.json
     let date = prov1.trud_release_date.as_deref().unwrap_or("");
@@ -274,7 +267,6 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     // Setup _provenance.json in both directories
     let mut prov = ods::provenance::OdsProvenance::default();
     prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256_verified = Some(ods::provenance::TrudVerificationSource::TrudApi);
 
     std::fs::write(
         tmp1.path().join(ods::provenance::PROVENANCE_FILENAME),
@@ -385,3 +377,137 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     }
 }
 
+
+
+struct MockTrudApiFetcher {
+    releases: Vec<TrudReleaseItem>,
+}
+
+impl TrudFetcher for MockTrudApiFetcher {
+    fn fetch_releases(&self) -> anyhow::Result<Vec<TrudReleaseItem>> {
+        Ok(self.releases.clone())
+    }
+
+    fn download_archive(
+        &self,
+        _url: &str,
+        _dest_path: &Path,
+        _on_bytes: &(dyn Fn(u64) + Send + Sync),
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("download_archive is not used by a local archive");
+    }
+}
+
+struct DiscardWriter;
+impl std::io::Write for DiscardWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Pulls `zip` as a local archive into `ws`, then runs `ods make` on the pulled release, and
+/// returns the release directory. `confirmed_by` says which route vouches for the zip.
+fn pull_and_make(zip: &Path, ws: &Path, confirmed_by: Route) -> PathBuf {
+    let sha256 = compute_file_sha256(zip).unwrap();
+    let file_size = std::fs::metadata(zip).unwrap().len();
+    let dataset = &[("0.1.0", "sha256:0000000000000000000000000000000000000000000000000000000000000000")];
+
+    let progress = Progress::new(
+        ProgressCaps { is_tty: false, no_color: true, quiet: true, verbose: false, width: 80 },
+        Box::new(DiscardWriter),
+    );
+    let oci_fetcher = ods::commands::pull::HttpOciFetcher;
+
+    // The index is handed over as a file. When it holds the zip's row it vouches for the zip;
+    // when it holds only another date, the mock TRUD API has to.
+    let (index_row_date, index_row_sha, trud_fetcher) = match confirmed_by {
+        Route::ReleaseIndex => ("2026-07-31", sha256.as_str(), None),
+        Route::TrudApi => (
+            "2026-06-26",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            Some(MockTrudApiFetcher {
+                releases: vec![TrudReleaseItem {
+                    id: "341".to_string(),
+                    name: Some("Release 7.0.0".to_string()),
+                    release_date: "2026-07-31".to_string(),
+                    archive_file_name: "hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string(),
+                    archive_file_sha256: sha256.clone(),
+                    archive_file_size: file_size,
+                    download_url: "https://example.com/zip".to_string(),
+                    ..Default::default()
+                }],
+            }),
+        ),
+    };
+    let index = make_v1_index(&[(index_row_date, index_row_sha, file_size, dataset)]);
+    let index_file = ws.parent().unwrap().join("index.json");
+    std::fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).unwrap();
+
+    let args = FetchArgs {
+        local_archive: Some(zip.to_path_buf()),
+        workspace: Some(ws.to_path_buf()),
+        index: Some(index_file.to_str().unwrap().to_string()),
+        api_key: trud_fetcher.as_ref().map(|_| "dummy_key".to_string()),
+        ..Default::default()
+    };
+    run_local_archive_with_fetchers(&args, ws, zip, &progress, trud_fetcher.as_ref(), Some(&oci_fetcher))
+        .expect("trud pull --local-archive should succeed");
+
+    let release_dir = ws.join("releases").join("2026-07-31");
+    let output = ods_binary()
+        .current_dir(ws)
+        .arg("make")
+        .arg("--input")
+        .arg(&release_dir)
+        .output()
+        .expect("execute ods make");
+    assert!(output.status.success(), "ods make failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    release_dir
+}
+
+#[derive(Clone, Copy)]
+enum Route {
+    ReleaseIndex,
+    TrudApi,
+}
+
+// D1: a dataset's identity is the archive and the dataset version, not how the builder checked
+// the archive. One zip, confirmed once by the release index and once by the TRUD API, must
+// give the same `_provenance.json` and the same manifest digest.
+#[test]
+fn test_same_zip_gives_same_provenance_and_manifest_however_it_was_checked() {
+    let tmp = TempDir::new().unwrap();
+    let zip_dir = tmp.path().join("zip");
+    std::fs::create_dir_all(&zip_dir).unwrap();
+    let zip = create_mock_trud_zip(&zip_dir, "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
+
+    let via_index = tmp.path().join("via_index");
+    let via_api = tmp.path().join("via_api");
+    std::fs::create_dir_all(&via_index).unwrap();
+    std::fs::create_dir_all(&via_api).unwrap();
+    let dir_index = pull_and_make(&zip, &via_index.join("ods_data"), Route::ReleaseIndex);
+    let dir_api = pull_and_make(&zip, &via_api.join("ods_data"), Route::TrudApi);
+
+    let prov_index = std::fs::read_to_string(dir_index.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+    let prov_api = std::fs::read_to_string(dir_api.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+    assert_eq!(
+        prov_index, prov_api,
+        "_provenance.json depends on how the zip was checked:\n--- index ---\n{}\n--- TRUD API ---\n{}",
+        prov_index, prov_api
+    );
+
+    let version = ods::datapackage::DATASET_VERSION;
+    let digest = |dir: &Path| {
+        let prov = ods::provenance::OdsProvenance::load_from_dir(dir).unwrap();
+        let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(dir, &prov, version).unwrap();
+        manifest.digest().unwrap()
+    };
+    assert_eq!(
+        digest(&dir_index),
+        digest(&dir_api),
+        "the manifest digest depends on how the zip was checked"
+    );
+}

@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ods.fyi/schema/provenance.v1.json",
   "title": "ODS Dataset Provenance",
-  "description": "Unified provenance document identifying the source TRUD archive and tool build identity for an ods dataset release. Provenance records where data came from and what built it; the dataset descriptor (datapackage.json) records what it is and its version. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (validate_publishable and perform_all_release_checks): trud_release_date, trud_release_sha256, trud_release_sha256_verified (not unverified), trud_release_filesize_bytes, tool_version, tool_git_sha, and tool_git_dirty, verified by ods's own checks as the authority; all other fields are optional.",
-  "$comment": "Build-run facts such as runner machine identifiers, execution timestamps, job IDs, and build environment details are intentionally excluded from this document so rebuilds reproduce byte-identical datasets and identical manifest digests. dataset_version belongs in datapackage.json (Frictionless version field) rather than provenance so that relabelling or re-tagging a release produces byte-identical provenance. Build-run facts belong in an external SLSA provenance attestation accompanying the release.",
+  "description": "Provenance document identifying the source TRUD archive for an ods dataset release. Provenance records where the data came from; the dataset descriptor (datapackage.json) records what it is and its version, and the release index records which ods built each published dataset. A published dataset's _provenance.json always carries the fields enforced by ods's publish checks (validate_baseline and perform_all_release_checks): trud_release_date, trud_release_sha256 and trud_release_filesize_bytes; all other fields are optional.",
+  "$comment": "Facts about who built the dataset or how the archive was checked are intentionally excluded from this document, so that any ods at the same dataset version rebuilds a published dataset byte for byte, manifest included: the manifest digest is a function of the source archive and the dataset version only. The ods that built a published dataset is recorded in its row of the release index, and its signed proof is the CI attestation for the same digest. How the archive was checked is shown when the check runs. Build-run facts such as runner machine identifiers, execution timestamps, job IDs, and build environment details are excluded for the same reason. dataset_version belongs in datapackage.json (Frictionless version field) rather than provenance so that relabelling or re-tagging a release produces byte-identical provenance.",
   "type": "object",
   "required": [
     "$schema"
@@ -25,15 +25,6 @@
       "pattern": "^[0-9A-F]{64}$",
       "description": "Upper-case 64-character hexadecimal SHA-256 hash of the TRUD source archive ZIP file. Computed and recorded by ods trud pull."
     },
-    "trud_release_sha256_verified": {
-      "type": "string",
-      "enum": [
-        "trud_api",
-        "published_release",
-        "unverified"
-      ],
-      "description": "Method used to verify the TRUD release archive SHA-256 hash: 'trud_api' if verified directly against NHS England's authenticated TRUD API, 'published_release' if verified against a previously published trusted release, or 'unverified' if the archive was provided locally without API verification. Recorded by ods trud pull."
-    },
     "trud_release_filesize_bytes": {
       "type": "integer",
       "minimum": 1,
@@ -42,20 +33,6 @@
     "trud_schema_version": {
       "type": "string",
       "description": "The schema version declared in the <Version> attribute of the source XML manifest in the TRUD archive (e.g. '2-0-0'). Recorded by ods make."
-    },
-    "tool_version": {
-      "type": "string",
-      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
-      "description": "Semantic version string (SemVer) of the ods CLI tool that built this release. Recorded by ods make."
-    },
-    "tool_git_sha": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$",
-      "description": "Lower-case 40-character hexadecimal Git commit SHA of the ods tool repository at build time. Recorded by ods make."
-    },
-    "tool_git_dirty": {
-      "type": "boolean",
-      "description": "Boolean flag indicating whether uncommitted working tree changes were present when the ods tool binary was compiled. Recorded by ods make."
     }
   }
 }

@@ -35,6 +35,29 @@ pub struct Args {
     pub index: Option<PathBuf>,
 }
 
+/// The `ods` that is recording a release: the build that runs `ods make release`. The index
+/// row names it, so the record says which commit built the dataset. It is an argument to the
+/// checks, not read from the environment, so a test can name the build it wants and no
+/// environment variable can claim a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildIdentity {
+    /// The `version` in `Cargo.toml`, which is the tag without its `v`.
+    pub tool_version: String,
+    pub git_sha: Option<String>,
+    pub dirty: bool,
+}
+
+impl BuildIdentity {
+    /// The identity compiled into this binary by `build.rs`.
+    pub fn compiled() -> Self {
+        Self {
+            tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            git_sha: option_env!("ODS_GIT_SHA").map(|s| s.to_string()),
+            dirty: option_env!("ODS_GIT_DIRTY").is_some(),
+        }
+    }
+}
+
 fn is_tool_repo_dir(dir: &Path) -> bool {
     if !dir.join(".git").exists() || !dir.join("Cargo.toml").exists() {
         return false;
@@ -117,6 +140,10 @@ fn count_files_in_dir(dir: &Path) -> usize {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    run_as(args, &BuildIdentity::compiled())
+}
+
+pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
     let release_dir = match args.input {
         Some(ref p) => p.clone(),
         None => {
@@ -213,6 +240,7 @@ pub fn run(args: Args) -> Result<()> {
         &version,
         tool_repo.as_deref(),
         custom_index.as_ref(),
+        build,
     )?;
 
     if !failures.is_empty() {
@@ -249,19 +277,6 @@ pub fn run(args: Args) -> Result<()> {
     let total_bytes: u64 = manifest.layers.iter().map(|l| l.size).sum();
     let mb = (total_bytes as f64) / (1024.0 * 1024.0);
     eprintln!("* {} layers, {:.1} MB, manifest {}", manifest.layers.len(), mb, manifest_digest);
-
-    let tool_ver = prov.tool_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION"));
-    if let Some(ref tool_sha) = prov.tool_git_sha {
-        let short_sha = if tool_sha.len() >= 7 { &tool_sha[..7] } else { tool_sha };
-        eprintln!("* tool_git_sha {} matches v{}", short_sha, tool_ver);
-    }
-
-    let ver_source = match prov.trud_release_sha256_verified {
-        Some(crate::provenance::TrudVerificationSource::TrudApi) => "trud_api",
-        Some(crate::provenance::TrudVerificationSource::PublishedRelease) => "published_release",
-        _ => "unverified",
-    };
-    eprintln!("* trud_release_sha256 verified via {}", ver_source);
 
     // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
     let dist_dir = args.output.unwrap_or_else(|| {
@@ -352,6 +367,8 @@ pub fn run(args: Args) -> Result<()> {
         dataset_version: version.clone(),
         manifest_digest: manifest_digest.clone(),
         dataset_filesize_bytes: total_bytes,
+        tool_version: build.tool_version.clone(),
+        tool_git_sha: build.git_sha.clone().unwrap_or_default().to_lowercase(),
         dataset_doi: args.doi.clone(),
         withdrawn: None,
     };
@@ -384,6 +401,18 @@ pub fn run(args: Args) -> Result<()> {
 
     index.validate()?;
 
+    // An identical re-publish leaves the row as it was, so the row names the ods that first
+    // recorded it, which may not be this one.
+    let stored_dataset = index
+        .releases
+        .iter()
+        .find(|r| r.trud_release_date == date)
+        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version))
+        .cloned()
+        .expect("the dataset row was just written");
+    let short_sha = stored_dataset.tool_git_sha.get(..7).unwrap_or(&stored_dataset.tool_git_sha);
+    eprintln!("* recorded as built by ods {} ({})", stored_dataset.tool_version, short_sha);
+
     if let Some(parent) = target_index_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -391,8 +420,8 @@ pub fn run(args: Args) -> Result<()> {
     fs::write(&target_index_path, &updated)?;
     eprintln!("✓ data/releases.json updated — review with `git diff data/releases.json`");
 
-    // 7. Print new dataset to stdout (compact 1-line JSON)
-    println!("{}", serde_json::to_string(&new_dataset)?);
+    // 7. Print the recorded dataset to stdout (compact 1-line JSON)
+    println!("{}", serde_json::to_string(&stored_dataset)?);
 
     Ok(())
 }
@@ -402,6 +431,7 @@ pub fn perform_all_release_checks(
     expected_version: &str,
     tool_repo: Option<&Path>,
     custom_index: Option<&OdsReleaseIndex>,
+    build: &BuildIdentity,
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
@@ -410,9 +440,14 @@ pub fn perform_all_release_checks(
         None => return Ok(vec!["Missing _provenance.json in release directory".to_string()]),
     };
 
-    // Check 10: tool_git_dirty == false
-    if prov.tool_git_dirty == Some(true) {
-        failures.push("tool_git_dirty is true: dataset built from a dirty working tree".to_string());
+    let tag_name = format!("v{}", build.tool_version);
+
+    // Check 10: the recording ods was built from a clean tree
+    if build.dirty {
+        failures.push(format!(
+            "this ods was built from a dirty working tree\n  A release records the ods that built it, so `cargo install --git … --tag {}` must reproduce it.",
+            tag_name
+        ));
     }
 
     if tool_repo.is_none() {
@@ -422,49 +457,47 @@ pub fn perform_all_release_checks(
     let repo_dir = tool_repo.unwrap_or(release_dir);
     let repo_dir_str = repo_dir.to_string_lossy();
 
-    // Check 11: tool_git_sha == commit v<tool_version> points at
-    let tool_ver = prov.tool_version.as_deref().unwrap_or(env!("CARGO_PKG_VERSION"));
-    if let Some(ref tool_sha) = prov.tool_git_sha {
-        let tag_name = format!("v{}", tool_ver);
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &repo_dir_str,
-                "rev-parse",
-                "-q",
-                "--verify",
-                &format!("refs/tags/{}^{{commit}}", tag_name),
-            ])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let tag_sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !tag_sha.starts_with(tool_sha.as_str()) && !tool_sha.starts_with(tag_sha.as_str()) {
+    // Check 11: it has a commit, and that commit is the one v<tool_version> points at
+    match build.git_sha {
+        None => {
+            failures.push(format!(
+                "this ods was built without a git commit, so it can't say which commit built the dataset\n  Data must be recorded by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
+                tag_name
+            ));
+        }
+        Some(ref tool_sha) => {
+            let output = Command::new("git")
+                .args([
+                    "-C",
+                    &repo_dir_str,
+                    "rev-parse",
+                    "-q",
+                    "--verify",
+                    &format!("refs/tags/{}^{{commit}}", tag_name),
+                ])
+                .output();
+            if let Ok(out) = output {
+                if out.status.success() {
+                    let tag_sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !tag_sha.starts_with(tool_sha.as_str()) && !tool_sha.starts_with(tag_sha.as_str()) {
+                        failures.push(format!(
+                            "this ods is commit {}, not the commit {} points at ({})\n  Data must be recorded by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
+                            tool_sha, tag_name, tag_sha, tag_name
+                        ));
+                    }
+                } else {
                     failures.push(format!(
-                        "tool_git_sha {} is not the commit {} points at ({})\n  Data must be built by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
-                        tool_sha, tag_name, tag_sha, tag_name
+                        "this ods is commit {}, not the commit {} points at (tag missing)\n  Data must be recorded by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
+                        tool_sha, tag_name, tag_name
                     ));
                 }
-            } else {
-                failures.push(format!(
-                    "tool_git_sha {} is not the commit {} points at (tag missing)\n  Data must be built by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
-                    tool_sha, tag_name, tag_name
-                ));
             }
         }
     }
 
-    // Check 12: trud_release_sha256_verified == "trud_api" or "published_release" and plausible filesize (>= 1 MB)
-    match prov.trud_release_sha256_verified {
-        Some(crate::provenance::TrudVerificationSource::TrudApi)
-        | Some(crate::provenance::TrudVerificationSource::PublishedRelease) => {}
-        _ => {
-            failures.push(
-                "trud_release_sha256_verified is not trud_api: source was never verified against TRUD".to_string(),
-            );
-        }
-    }
-
+    // Check 12: the archive's size is present and plausible, so a synthetic or fixture zip is
+    // never recorded as a real release. Real archives are about 38 MB. This reads a source
+    // fact from provenance; it asks nobody whether TRUD published the archive.
     match prov.trud_release_filesize_bytes {
         Some(sz) if sz < 1_000_000 => {
             failures.push(format!(
@@ -613,6 +646,8 @@ pub fn perform_all_release_checks(
                 dataset_version: expected_version.to_string(),
                 manifest_digest: candidate_manifest_digest,
                 dataset_filesize_bytes: candidate_filesize_bytes,
+                tool_version: build.tool_version.clone(),
+                tool_git_sha: build.git_sha.clone().unwrap_or_default().to_lowercase(),
                 dataset_doi: None,
                 withdrawn: None,
             });
