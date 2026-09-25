@@ -458,8 +458,8 @@ fn test_explicit_input_to_non_current_release_prints_bare_date_without_current()
     );
     let cite_stderr = String::from_utf8_lossy(&cite_output.stderr);
     assert!(
-        !cite_stderr.contains("2026-06-26"),
-        "stderr should not report release date, got:\n{}",
+        !cite_stderr.contains("  2026-06-26"),
+        "stderr should not report release date banner, got:\n{}",
         cite_stderr
     );
 

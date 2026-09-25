@@ -20,6 +20,7 @@ Data availability
   ods-data/2026-08-31_1.0.1 is available from https://ods.fyi. This OCI manifest
   digest identifies its exact files:
     sha256:6984347d7a279a22e27b0ff66c9c2692b7556e6514ba07d45892dee48ec8fab5
+
   ods/v0.4.3 built it from nhs-ods-xml/2026-08-31, the TRUD archive with SHA-256:
     665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2
   Rebuild and verify with `ods trud pull 2026-08-31 && ods make`.
@@ -131,3 +132,135 @@ $ ods cite -f csljson
     "version": "0.4.3"
   }
 ]
+
+$ ods cite
+* Source: releases/2026-08-28 (0.1.0)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-28
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-28 (Version 0.1.0) [Data set].
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.1.0) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-28_0.1.0 isn't in the release index this ods read, so where to get
+  it is unknown. This OCI manifest digest identifies its exact files:
+    sha256:c9056e64082522546cdc92992bee80b389aee4c5c1870483df90ac0d66ba30c9
+
+  It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
+    ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
+  Rebuild and verify with `ods trud pull 2026-08-28 && ods make`.
+--- stderr
+! 2026-08-28 isn't in the cached release index from (ods_data/_releases.json)
+  To update the release index run: ods pull
+
+$ ods cite
+* Source: releases/2026-08-28 (0.1.0)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-28
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-28 (Version 0.1.0) [Data set].
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.1.0) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-28_0.1.0 was built from a different TRUD archive than the one
+  published for 2026-08-28, so it isn't the published dataset. This OCI manifest digest
+  identifies its exact files:
+    sha256:ce237015df5351e645a45fda82db55e10bf7062ed74e03aa6dbe8e36390db1d9
+
+  It was built from the TRUD archive with SHA-256:
+    1111111111111111111111111111111111111111111111111111111111111111
+--- stderr
+✖ releases/2026-08-28 was built from a different TRUD archive than the published 2026-08-28
+  this build  sha256 1111111111111111111111111111111111111111111111111111111111111111
+  published   sha256 ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
+  Cite the published release: ods pull 2026-08-28
+--- exit 1
+
+$ ods cite
+* Source: releases/2026-08-28 (0.3.0)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-28
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-28 (Version 0.3.0) [Data set].
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.1.0) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-28_0.3.0 hasn't been published. The published release for
+  2026-08-28 is ods-data/2026-08-28_0.1.0. This OCI manifest digest identifies its
+  exact files:
+    sha256:39b5f5ae4907592b85c46c36ffa2fb3661154b6822156b42607bafa707f7bfba
+
+  It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
+    ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
+--- stderr
+! dataset 0.3.0 was never published for 2026-08-28. Published: 0.1.0
+
+$ ods cite
+--- stderr
+✖ releases/2026-08-28 has changed since it was built
+  orgs.parquet's SHA-256 isn't the one its datapackage.json records.
+  Pull it again: ods pull --force 2026-08-28
+--- exit 1
+
+$ ods cite
+* Source: releases/2026-08-28 (0.1.0)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-28
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-28 (Version 0.1.0) [Data set].
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.1.0) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-28_0.1.0 as built here differs from the published dataset of that
+  name. This OCI manifest digest identifies the files here:
+    sha256:ae66bb22b9030b7cc8308ece03a7b00c9981ed955c41943620ea01bd5813a132
+
+  It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
+    ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
+--- stderr
+✖ releases/2026-08-28 doesn't match the published ods-data/2026-08-28_0.1.0
+  published   sha256:c9056e64082522546cdc92992bee80b389aee4c5c1870483df90ac0d66ba30c9
+  this build  sha256:ae66bb22b9030b7cc8308ece03a7b00c9981ed955c41943620ea01bd5813a132
+  Its files match its own datapackage.json, so it was built by an ods that doesn't
+  reproduce dataset 0.1.0. Cite the published release: ods pull 2026-08-28
+--- exit 1

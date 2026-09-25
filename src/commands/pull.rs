@@ -100,7 +100,7 @@ impl IndexOrigin {
             Self::Flag(v) => v.clone(),
             Self::Fetched(url) if Self::DEFAULT_FETCH_URLS.contains(&url.as_str()) => "releases.json".to_string(),
             Self::Fetched(url) => url.clone(),
-            Self::WorkspaceCache(p) => p.display().to_string(),
+            Self::WorkspaceCache(p) => crate::workspace::relative_to_cwd(p).display().to_string(),
             Self::BuiltIn => "the index built into ods".to_string(),
         };
         format!("sha256 from {}", source)
@@ -112,7 +112,7 @@ impl std::fmt::Display for IndexOrigin {
         match self {
             Self::Flag(v) => write!(f, "--index {}", v),
             Self::Fetched(url) => write!(f, "{}", url),
-            Self::WorkspaceCache(p) => write!(f, "{}", p.display()),
+            Self::WorkspaceCache(p) => write!(f, "{}", crate::workspace::relative_to_cwd(p).display()),
             Self::BuiltIn => write!(f, "built-in"),
         }
     }

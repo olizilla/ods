@@ -1,6 +1,6 @@
 mod common;
 
-use common::{make_v1_index, setup_find_test_workspace, setup_test_release_for_cite};
+use common::{make_v1_index, setup_cite_case_workspace, setup_find_test_workspace, setup_test_release_for_cite};
 use sha2::Digest;
 use std::fs;
 use std::io::{Read, Write};
@@ -834,7 +834,6 @@ fn snapshot_make() {
 
     check_snapshot("make.txt", &actual_cases, &case_names);
 }
-
 #[test]
 fn snapshot_cite() {
     let (_tmp, rel_dir) = setup_test_release_for_cite(None);
@@ -864,13 +863,63 @@ fn snapshot_cite() {
             args: vec!["cite", "-f", "csljson"],
             use_input: true,
         },
+        // Case A: Date unknown
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
+        // Case B: Different archive
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
+        // Case C: Version unpublished
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
+        // Case D: Changed since built
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
+        // Case F: Different bytes
+        TestCase {
+            cmd_str: "ods cite",
+            columns: None,
+            args: vec!["cite"],
+            use_input: true,
+        },
     ];
 
     let case_names: Vec<&str> = cases.iter().map(|c| c.cmd_str).collect();
-    let actual_cases: Vec<String> = cases
+    let mut actual_cases: Vec<String> = cases[..4]
         .iter()
         .map(|c| run_case(c, Some(&rel_dir)))
         .collect();
+
+    let (_tmp_a, dir_a) = setup_cite_case_workspace("A");
+    actual_cases.push(run_case_full(&cases[4], Some(&dir_a), Some(_tmp_a.path()), &[]));
+
+    let (_tmp_b, dir_b) = setup_cite_case_workspace("B");
+    actual_cases.push(run_case_full(&cases[5], Some(&dir_b), Some(_tmp_b.path()), &[]));
+
+    let (_tmp_c, dir_c) = setup_cite_case_workspace("C");
+    actual_cases.push(run_case_full(&cases[6], Some(&dir_c), Some(_tmp_c.path()), &[]));
+
+    let (_tmp_d, dir_d) = setup_cite_case_workspace("D");
+    actual_cases.push(run_case_full(&cases[7], Some(&dir_d), Some(_tmp_d.path()), &[]));
+
+    let (_tmp_f, dir_f) = setup_cite_case_workspace("F");
+    actual_cases.push(run_case_full(&cases[8], Some(&dir_f), Some(_tmp_f.path()), &[]));
 
     check_snapshot("cite.txt", &actual_cases, &case_names);
 }

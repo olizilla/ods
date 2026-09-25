@@ -1,6 +1,6 @@
 mod common;
 
-use common::{make_v1_index, setup_test_release_for_cite};
+use common::{make_v1_index, setup_cite_case_workspace, setup_test_release_for_cite};
 use anyhow::Result;
 use ods::commands::cite::Args as CiteArgs;
 use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
@@ -419,4 +419,145 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
         expected_notice,
         stderr
     );
+}
+
+#[test]
+fn test_cite_case_a_bibtex_omits_howpublished_and_url() -> Result<()> {
+    let (tmp, rel_dir) = setup_cite_case_workspace("A");
+    let fetcher = MockCiteFetcher { remote_index: None };
+
+    let mut buf = Vec::new();
+    let res = ods::commands::cite::run_with_writer_and_fetcher(
+        CiteArgs {
+            format: "bibtex".to_string(),
+            input: Some(rel_dir),
+        },
+        &mut buf,
+        &fetcher,
+        tmp.path(),
+    );
+
+    assert!(res.is_ok(), "case A cite must succeed with exit 0");
+
+    let out = String::from_utf8(buf)?;
+    assert!(out.contains("@misc{ods-data/2026-08-28_0.1.0,"));
+    assert!(out.contains("title = {ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-28}"));
+    assert!(out.contains("version = {0.1.0}"));
+
+    // Extract the data entry block
+    let data_block = out
+        .split("@misc{ods-data/2026-08-28_0.1.0,")
+        .nth(1)
+        .expect("data block exists")
+        .split("}\n")
+        .next()
+        .expect("data block close");
+
+    assert!(
+        !data_block.contains("howpublished"),
+        "unpublished data entry in bibtex must not contain howpublished, got:\n{}",
+        data_block
+    );
+    assert!(
+        !data_block.contains("url ="),
+        "unpublished data entry in bibtex must not contain url, got:\n{}",
+        data_block
+    );
+
+    // Upstream source still has howpublished and url
+    assert!(out.contains("howpublished = {NHS TRUD}"));
+    assert!(out.contains("url = {https://isd.digital.nhs.uk/trud}"));
+
+    // Tool still has howpublished and url
+    assert!(out.contains("howpublished = {Computer software}"));
+    assert!(out.contains("url = {https://github.com/olizilla/ods}"));
+
+    Ok(())
+}
+
+#[test]
+fn test_cite_exit_codes_and_warnings_for_all_cases() {
+    // Case A: exit 0
+    let (tmp_a, dir_a) = setup_cite_case_workspace("A");
+    let out_a = common::ods_cmd()
+        .current_dir(tmp_a.path())
+        .args(["cite", "-i", dir_a.to_str().unwrap()])
+        .output()
+        .expect("run ods cite case A");
+    assert_eq!(out_a.status.code(), Some(0), "Case A must exit 0");
+    let err_a = String::from_utf8_lossy(&out_a.stderr);
+    assert!(err_a.contains("! 2026-08-28 isn't in the cached release index from (ods_data/_releases.json)"));
+    assert!(err_a.contains("To update the release index run: ods pull"));
+
+    // Case B: exit 1
+    let (tmp_b, dir_b) = setup_cite_case_workspace("B");
+    let out_b = common::ods_cmd()
+        .current_dir(tmp_b.path())
+        .args(["cite", "-i", dir_b.to_str().unwrap()])
+        .output()
+        .expect("run ods cite case B");
+    assert_eq!(out_b.status.code(), Some(1), "Case B must exit 1");
+    let stdout_b = String::from_utf8_lossy(&out_b.stdout);
+    assert!(stdout_b.contains("How to Cite"), "Case B must deliver citation");
+    let err_b = String::from_utf8_lossy(&out_b.stderr);
+    assert!(err_b.contains("✖ releases/2026-08-28 was built from a different TRUD archive than the published 2026-08-28"));
+    assert!(err_b.contains("this build  sha256 1111111111111111111111111111111111111111111111111111111111111111"));
+    assert!(err_b.contains("published   sha256 ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801"));
+    assert!(err_b.contains("Cite the published release: ods pull 2026-08-28"));
+
+    // Case C: exit 0
+    let (tmp_c, dir_c) = setup_cite_case_workspace("C");
+    let out_c = common::ods_cmd()
+        .current_dir(tmp_c.path())
+        .args(["cite", "-i", dir_c.to_str().unwrap()])
+        .output()
+        .expect("run ods cite case C");
+    assert_eq!(out_c.status.code(), Some(0), "Case C must exit 0");
+    let stdout_c = String::from_utf8_lossy(&out_c.stdout);
+    assert!(stdout_c.contains("How to Cite"), "Case C must deliver citation");
+    let err_c = String::from_utf8_lossy(&out_c.stderr);
+    assert!(err_c.contains("! dataset 0.3.0 was never published for 2026-08-28. Published: 0.1.0"));
+
+    // Case D: exit 1
+    let (tmp_d, dir_d) = setup_cite_case_workspace("D");
+    let out_d = common::ods_cmd()
+        .current_dir(tmp_d.path())
+        .args(["cite", "-i", dir_d.to_str().unwrap()])
+        .output()
+        .expect("run ods cite case D");
+    assert_eq!(out_d.status.code(), Some(1), "Case D must exit 1");
+    let stdout_d = String::from_utf8_lossy(&out_d.stdout);
+    assert!(!stdout_d.contains("How to Cite"), "Case D must refuse citation");
+    let err_d = String::from_utf8_lossy(&out_d.stderr);
+    assert!(err_d.contains("✖ releases/2026-08-28 has changed since it was built"));
+    assert!(err_d.contains("orgs.parquet's SHA-256 isn't the one its datapackage.json records."));
+    assert!(err_d.contains("Pull it again: ods pull --force 2026-08-28"));
+
+    // Case F: exit 1
+    let (tmp_f, dir_f) = setup_cite_case_workspace("F");
+    let out_f = common::ods_cmd()
+        .current_dir(tmp_f.path())
+        .args(["cite", "-i", dir_f.to_str().unwrap()])
+        .output()
+        .expect("run ods cite case F");
+    assert_eq!(out_f.status.code(), Some(1), "Case F must exit 1");
+    let stdout_f = String::from_utf8_lossy(&out_f.stdout);
+    assert!(stdout_f.contains("How to Cite"), "Case F must deliver citation");
+    let err_f = String::from_utf8_lossy(&out_f.stderr);
+    assert!(err_f.contains("✖ releases/2026-08-28 doesn't match the published ods-data/2026-08-28_0.1.0"));
+    assert!(err_f.contains("Cite the published release: ods pull 2026-08-28"));
+
+    // No provenance: exit 1
+    let (tmp_np, dir_np) = setup_cite_case_workspace("no_prov");
+    let out_np = common::ods_cmd()
+        .current_dir(tmp_np.path())
+        .args(["cite", "-i", dir_np.to_str().unwrap()])
+        .output()
+        .expect("run ods cite no provenance");
+    assert_eq!(out_np.status.code(), Some(1), "No provenance must exit 1");
+    let stdout_np = String::from_utf8_lossy(&out_np.stdout);
+    assert!(!stdout_np.contains("How to Cite"), "No provenance must refuse citation");
+    let err_np = String::from_utf8_lossy(&out_np.stderr);
+    assert!(err_np.contains("has no provenance: it was built from an archive ods couldn't match to a TRUD release"));
+    assert!(err_np.contains("To cite or publish it, get the archive through ods trud pull."));
 }

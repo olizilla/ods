@@ -59,6 +59,21 @@ pub fn reset_cache_notices() {
     }
 }
 
+/// Returns `path` relativized against the current working directory, canonicalizing
+/// both so differences like macOS's `/var/folders` vs `/private/var/folders` resolve cleanly.
+pub fn relative_to_cwd(path: &Path) -> PathBuf {
+    if let Ok(cwd) = std::env::current_dir() {
+        let canon_cwd = cwd.canonicalize().unwrap_or(cwd);
+        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        canon_path
+            .strip_prefix(&canon_cwd)
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Checks whether `dir/releases/` contains at least one date-shaped directory
 /// (`\d{4}-\d{2}-\d{2}`) holding a readable `_provenance.json`.
 ///
@@ -867,27 +882,52 @@ pub enum VerificationOutcome {
         version: String,
         digest: String,
     },
-    VerifiedUnpublished {
+    DateUnknown {
         date: String,
         version: String,
         digest: String,
     },
-    Mismatch {
+    DifferentArchive {
         date: String,
         version: String,
-        expected_digest: String,
+        digest: String,
+        this_archive_sha256: String,
+        published_archive_sha256: String,
+        published_digest: Option<String>,
+    },
+    VersionUnpublished {
+        date: String,
+        version: String,
+        digest: String,
+        published_versions: Vec<String>,
+    },
+    DifferentBytes {
+        date: String,
+        version: String,
+        published_digest: String,
         reconstructed_digest: String,
     },
+    ChangedSinceBuilt {
+        file: String,
+    },
+    NoProvenance,
     Corrupted(String),
 }
 
 impl VerificationOutcome {
     pub fn is_verified(&self) -> bool {
-        matches!(
-            self,
+        match self {
             VerificationOutcome::VerifiedPublished { .. }
-                | VerificationOutcome::VerifiedUnpublished { .. }
-        )
+            | VerificationOutcome::DateUnknown { .. }
+            | VerificationOutcome::VersionUnpublished { .. } => true,
+            VerificationOutcome::DifferentArchive { published_digest, .. } => {
+                published_digest.is_none()
+            }
+            VerificationOutcome::DifferentBytes { .. }
+            | VerificationOutcome::ChangedSinceBuilt { .. }
+            | VerificationOutcome::NoProvenance
+            | VerificationOutcome::Corrupted(_) => false,
+        }
     }
 
     pub fn is_verified_published(&self) -> bool {
@@ -899,9 +939,21 @@ pub fn verify_release_dir(
     release_dir: &Path,
     index: &crate::index::OdsReleaseIndex,
 ) -> VerificationOutcome {
-    let prov = match crate::provenance::OdsProvenance::load_from_dir(release_dir).ok() {
-        Some(p) => p,
-        None => return VerificationOutcome::Corrupted("Missing or unreadable _provenance.json".to_string()),
+    let prov_file = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
+    if !prov_file.exists() {
+        return VerificationOutcome::NoProvenance;
+    }
+
+    let prov = match crate::provenance::OdsProvenance::load_from_file(&prov_file) {
+        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
+        crate::provenance::ProvenanceLoad::Absent => {
+            return VerificationOutcome::NoProvenance;
+        }
+        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
+            return VerificationOutcome::Corrupted(
+                crate::provenance::format_unreadable_provenance_error(&path, &date),
+            );
+        }
     };
 
     let date = match prov.trud_release_date.as_deref() {
@@ -935,6 +987,7 @@ pub fn verify_release_dir(
                             let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
                             let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
                             let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                            let file_id = if !res_name.is_empty() { res_name } else { res_path };
                             let found_layer = manifest.layers.iter().find(|l| {
                                 l.annotations
                                     .as_ref()
@@ -946,16 +999,15 @@ pub fn verify_release_dir(
                                 Some(l) => {
                                     let l_hash = l.digest.trim_start_matches("sha256:").to_lowercase();
                                     if clean_hash != l_hash {
-                                        return VerificationOutcome::Corrupted(format!(
-                                            "datapackage resource {} hash mismatch",
-                                            res_name
-                                        ));
+                                        return VerificationOutcome::ChangedSinceBuilt {
+                                            file: file_id.to_string(),
+                                        };
                                     }
                                 }
                                 None => {
                                     return VerificationOutcome::Corrupted(format!(
                                         "datapackage resource {} not found in manifest layers",
-                                        res_name
+                                        file_id
                                     ));
                                 }
                             }
@@ -966,33 +1018,66 @@ pub fn verify_release_dir(
         }
     }
 
-    let dataset = index
-        .releases
-        .iter()
-        .find(|r| r.trud_release_date == date)
-        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
-
-    if let Some(entry) = dataset {
-        if entry.manifest_digest == reconstructed_digest {
-            return VerificationOutcome::VerifiedPublished {
+    let release_entry = index.releases.iter().find(|r| r.trud_release_date == date);
+    let release_row = match release_entry {
+        Some(r) => r,
+        None => {
+            return VerificationOutcome::DateUnknown {
                 date,
                 version,
                 digest: reconstructed_digest,
             };
-        } else {
-            return VerificationOutcome::Mismatch {
+        }
+    };
+
+    if let Some(ref this_archive_sha256) = prov.trud_release_sha256 {
+        if !this_archive_sha256.is_empty()
+            && !this_archive_sha256.eq_ignore_ascii_case(&release_row.trud_release_sha256)
+        {
+            let published_digest = release_row
+                .datasets
+                .iter()
+                .find(|d| d.dataset_version == version)
+                .map(|d| d.manifest_digest.clone());
+
+            return VerificationOutcome::DifferentArchive {
                 date,
                 version,
-                expected_digest: entry.manifest_digest.clone(),
-                reconstructed_digest,
+                digest: reconstructed_digest,
+                this_archive_sha256: this_archive_sha256.clone(),
+                published_archive_sha256: release_row.trud_release_sha256.clone(),
+                published_digest,
             };
         }
     }
 
-    VerificationOutcome::VerifiedUnpublished {
-        date,
-        version,
-        digest: reconstructed_digest,
+    let dataset_entry = release_row.datasets.iter().find(|d| d.dataset_version == version);
+    match dataset_entry {
+        Some(entry) => {
+            if entry.manifest_digest == reconstructed_digest {
+                VerificationOutcome::VerifiedPublished {
+                    date,
+                    version,
+                    digest: reconstructed_digest,
+                }
+            } else {
+                VerificationOutcome::DifferentBytes {
+                    date,
+                    version,
+                    published_digest: entry.manifest_digest.clone(),
+                    reconstructed_digest,
+                }
+            }
+        }
+        None => {
+            let published_versions = release_row.datasets.iter().map(|d| d.dataset_version.clone()).collect();
+            VerificationOutcome::VersionUnpublished {
+                date,
+                version,
+                digest: reconstructed_digest,
+                published_versions,
+            }
+        }
     }
 }
 
@@ -1043,6 +1128,232 @@ mod tests {
                 "case '{}' failed",
                 case.name
             );
+        }
+    }
+
+    #[test]
+    fn test_verify_release_dir_cases() {
+        let base_tmp = tempfile::tempdir().unwrap();
+
+        let make_prov_json = |date: &str, sha: &str| -> String {
+            serde_json::to_string_pretty(&crate::provenance::OdsProvenance {
+                schema: crate::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
+                trud_release_date: Some(date.to_string()),
+                trud_release_sha256: Some(sha.to_string()),
+                trud_release_filesize_bytes: Some(38064419),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+
+        let setup_fixture_dir = |dir: &Path, prov_content: Option<&str>, dp_version: Option<&str>, corrupt_resource: bool, extra_file: bool| {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
+            if extra_file {
+                fs::write(dir.join("roles.parquet"), b"dummy roles content").unwrap();
+            }
+
+            let orgs_hash = crate::provenance::compute_file_sha256(&dir.join("orgs.parquet")).unwrap();
+
+            if let Some(prov_str) = prov_content {
+                fs::write(dir.join(crate::provenance::PROVENANCE_FILENAME), prov_str).unwrap();
+            }
+
+            if let Some(version) = dp_version {
+                let res_hash = if corrupt_resource {
+                    "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+                } else {
+                    orgs_hash.to_lowercase()
+                };
+                let mut resources = vec![
+                    serde_json::json!({
+                        "name": "orgs.parquet",
+                        "path": "orgs.parquet",
+                        "hash": format!("sha256:{}", res_hash)
+                    })
+                ];
+                if extra_file {
+                    let roles_hash = crate::provenance::compute_file_sha256(&dir.join("roles.parquet")).unwrap();
+                    resources.push(serde_json::json!({
+                        "name": "roles.parquet",
+                        "path": "roles.parquet",
+                        "hash": format!("sha256:{}", roles_hash.to_lowercase())
+                    }));
+                }
+                let dp = serde_json::json!({
+                    "name": "ods",
+                    "version": version,
+                    "resources": resources
+                });
+                fs::write(dir.join("datapackage.json"), serde_json::to_vec(&dp).unwrap()).unwrap();
+            }
+        };
+
+        // Reference published directory to get published manifest digest
+        let ref_dir = base_tmp.path().join("ref_published");
+        let published_prov = make_prov_json(
+            "2026-08-28",
+            "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801",
+        );
+        setup_fixture_dir(&ref_dir, Some(&published_prov), Some("0.1.0"), false, false);
+        let ref_prov: crate::provenance::OdsProvenance = serde_json::from_str(&published_prov).unwrap();
+        let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&ref_dir, &ref_prov, "0.1.0").unwrap();
+        let published_digest = manifest.digest().unwrap();
+
+        let index = crate::index::OdsReleaseIndex {
+            schema: crate::index::RELEASES_SCHEMA_V1_URL.to_string(),
+            trud_signing_key_fingerprints: vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()],
+            mirrors: vec![],
+            releases: vec![
+                crate::index::Release {
+                    trud_release_date: "2026-08-28".to_string(),
+                    trud_release_sha256: "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801".to_string(),
+                    trud_release_filesize_bytes: 38064419,
+                    datasets: vec![
+                        crate::index::Dataset {
+                            dataset_version: "0.1.0".to_string(),
+                            manifest_digest: published_digest.clone(),
+                            dataset_filesize_bytes: 1000,
+                            tool_version: "0.2.0".to_string(),
+                            tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                            dataset_doi: None,
+                            withdrawn: None,
+                        }
+                    ],
+                }
+            ],
+        };
+
+        struct TableCase {
+            #[allow(dead_code)]
+            name: &'static str,
+            dir_name: &'static str,
+            prov: Option<String>,
+            version: Option<&'static str>,
+            corrupt_resource: bool,
+            extra_file: bool,
+            check: Box<dyn Fn(&VerificationOutcome)>,
+        }
+
+        let cases: Vec<TableCase> = vec![
+            TableCase {
+                name: "published",
+                dir_name: "case_published",
+                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::VerifiedPublished { date, version, .. } if date == "2026-08-28" && version == "0.1.0"));
+                }),
+            },
+            TableCase {
+                name: "A. date unknown",
+                dir_name: "case_date_unknown",
+                prov: Some(make_prov_json("2026-07-31", "8151248D1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::DateUnknown { date, version, .. } if date == "2026-07-31" && version == "0.1.0"));
+                }),
+            },
+            TableCase {
+                name: "B. different archive (version published)",
+                dir_name: "case_diff_archive_published",
+                prov: Some(make_prov_json("2026-08-28", "1111111111111111111111111111111111111111111111111111111111111111")),
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::DifferentArchive { date, version, this_archive_sha256, published_archive_sha256, published_digest, .. }
+                        if date == "2026-08-28" && version == "0.1.0"
+                        && this_archive_sha256 == "1111111111111111111111111111111111111111111111111111111111111111"
+                        && published_archive_sha256 == "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801"
+                        && published_digest.is_some()));
+                    assert!(!outcome.is_verified());
+                }),
+            },
+            TableCase {
+                name: "B. different archive (version unpublished)",
+                dir_name: "case_diff_archive_unpublished",
+                prov: Some(make_prov_json("2026-08-28", "1111111111111111111111111111111111111111111111111111111111111111")),
+                version: Some("0.3.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::DifferentArchive { date, version, this_archive_sha256, published_archive_sha256, published_digest, .. }
+                        if date == "2026-08-28" && version == "0.3.0"
+                        && this_archive_sha256 == "1111111111111111111111111111111111111111111111111111111111111111"
+                        && published_archive_sha256 == "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801"
+                        && published_digest.is_none()));
+                    assert!(outcome.is_verified());
+                }),
+            },
+            TableCase {
+                name: "C. version unpublished",
+                dir_name: "case_version_unpub",
+                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
+                version: Some("0.3.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::VersionUnpublished { date, version, published_versions, .. }
+                        if date == "2026-08-28" && version == "0.3.0" && published_versions == &["0.1.0"]));
+                }),
+            },
+            TableCase {
+                name: "F. different bytes",
+                dir_name: "case_diff_bytes",
+                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: true,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::DifferentBytes { date, version, .. }
+                        if date == "2026-08-28" && version == "0.1.0"));
+                }),
+            },
+            TableCase {
+                name: "D. changed since built",
+                dir_name: "case_changed_since_built",
+                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
+                version: Some("0.1.0"),
+                corrupt_resource: true,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::ChangedSinceBuilt { file } if file == "orgs.parquet"));
+                }),
+            },
+            TableCase {
+                name: "no provenance",
+                dir_name: "case_no_provenance",
+                prov: None,
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::NoProvenance));
+                }),
+            },
+            TableCase {
+                name: "corrupted (unreadable provenance)",
+                dir_name: "case_corrupted_prov",
+                prov: Some("not valid json at all".to_string()),
+                version: Some("0.1.0"),
+                corrupt_resource: false,
+                extra_file: false,
+                check: Box::new(|outcome| {
+                    assert!(matches!(outcome, VerificationOutcome::Corrupted(err) if err.contains("isn't provenance this ods can read")));
+                }),
+            },
+        ];
+
+        for case in cases {
+            let dir = base_tmp.path().join(case.dir_name);
+            setup_fixture_dir(&dir, case.prov.as_deref(), case.version, case.corrupt_resource, case.extra_file);
+            let outcome = verify_release_dir(&dir, &index);
+            (case.check)(&outcome);
         }
     }
 }

@@ -77,65 +77,6 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let mut trud_date = prov_unwrapped.trud_release_date.clone()
         .unwrap_or_else(|| "unknown".to_string());
 
-    // 1. Reconstruct manifest in memory
-    let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&input_dir, &prov_unwrapped, &dataset_version)
-        .context("reconstructing manifest in memory for citation")?;
-    let manifest_digest = manifest.digest()?;
-
-    // 2. Discover workspace and load/cache index
-    let workspace_root = match crate::workspace::find_workspace_root_from(&input_dir, None)? {
-        Some(ws) => Some(ws),
-        None => crate::workspace::find_workspace_root_from(cwd, None)?,
-    };
-
-    let (index, _) = crate::commands::pull::resolve_index(
-        workspace_root.as_deref().unwrap_or(cwd),
-        None,
-        false,
-        false,
-        _fetcher,
-    )?;
-
-    // 3. Verify directory against index
-    let outcome = crate::workspace::verify_release_dir(&input_dir, &index);
-    match outcome {
-        crate::workspace::VerificationOutcome::Mismatch { expected_digest, reconstructed_digest, .. } => {
-            anyhow::bail!(
-                "✖ Refusing to cite corrupted release in {}\n  Reconstructed manifest {} != expected {}",
-                input_dir.display(),
-                reconstructed_digest,
-                expected_digest
-            );
-        }
-        crate::workspace::VerificationOutcome::Corrupted(err) => {
-            anyhow::bail!("✖ Refusing to cite corrupted release in {}: {}", input_dir.display(), err);
-        }
-        _ => {}
-    }
-
-    // 4. Check for withdrawal in index
-    let mut dataset_doi: Option<String> = None;
-    let mut withdrawal_reason: Option<String> = None;
-    let d_ref = &trud_date;
-    let dataset = index
-        .releases
-        .iter()
-        .find(|r| r.trud_release_date == *d_ref)
-        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == dataset_version));
-
-    if let Some(entry) = dataset {
-        if let Some(ref reason) = entry.withdrawn {
-            withdrawal_reason = Some(reason.clone());
-        }
-        dataset_doi = entry.dataset_doi.clone();
-    }
-
-    // The tool that built a published dataset is on its index row; a release the index doesn't
-    // know is cited against the ods running now.
-    let tool_version = dataset
-        .map(|d| d.tool_version.clone())
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
-
     // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
     for f in &files {
         let path = input_dir.join(f);
@@ -168,6 +109,82 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             }
         }
     }
+
+    // 1. Discover workspace and load/cache index
+    let workspace_root = match crate::workspace::find_workspace_root_from(&input_dir, None)? {
+        Some(ws) => Some(ws),
+        None => crate::workspace::find_workspace_root_from(cwd, None)?,
+    };
+
+    let (index, origin) = crate::commands::pull::resolve_index(
+        workspace_root.as_deref().unwrap_or(cwd),
+        None,
+        false,
+        false,
+        _fetcher,
+    )?;
+
+    // 2. Verify directory against index
+    let outcome = crate::workspace::verify_release_dir(&input_dir, &index);
+    match &outcome {
+        crate::workspace::VerificationOutcome::ChangedSinceBuilt { file } => {
+            eprintln!("✖ releases/{} has changed since it was built", trud_date);
+            eprintln!("  {}'s SHA-256 isn't the one its datapackage.json records.", file);
+            eprintln!("  Pull it again: ods pull --force {}", trud_date);
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+        crate::workspace::VerificationOutcome::NoProvenance => {
+            let dir_display = crate::workspace::relative_to_cwd(&input_dir);
+            eprintln!(
+                "✖ {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
+                dir_display.display()
+            );
+            eprintln!("  To cite or publish it, get the archive through ods trud pull.");
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+        crate::workspace::VerificationOutcome::Corrupted(err) => {
+            eprintln!("✖ Refusing to cite corrupted release in {}: {}", input_dir.display(), err);
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+        _ => {}
+    }
+
+    // 3. Reconstruct manifest in memory
+    let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&input_dir, &prov_unwrapped, &dataset_version)
+        .context("reconstructing manifest in memory for citation")?;
+    let manifest_digest = manifest.digest()?;
+
+    let is_published = matches!(outcome, crate::workspace::VerificationOutcome::VerifiedPublished { .. });
+
+    // 4. Check for withdrawal in index
+    let mut dataset_doi: Option<String> = None;
+    let mut withdrawal_reason: Option<String> = None;
+    let d_ref = &trud_date;
+    let dataset = index
+        .releases
+        .iter()
+        .find(|r| r.trud_release_date == *d_ref)
+        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == dataset_version));
+
+    if let Some(entry) = dataset {
+        if let Some(ref reason) = entry.withdrawn {
+            withdrawal_reason = Some(reason.clone());
+        }
+        if is_published {
+            dataset_doi = entry.dataset_doi.clone();
+        }
+    }
+
+    // The tool that built a published dataset is on its index row; a release the index doesn't
+    // know is cited against the ods running now.
+    let tool_version = if is_published {
+        dataset
+            .as_ref()
+            .map(|d| d.tool_version.clone())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+    } else {
+        env!("CARGO_PKG_VERSION").to_string()
+    };
 
     let parsed_date = chrono::NaiveDate::parse_from_str(&trud_date, "%Y-%m-%d")
         .context("parsing release date")?;
@@ -224,10 +241,12 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             writeln!(writer, "  year = {{{}}},", year)?;
             writeln!(writer, "  month = {{{}}},", d_month)?;
             writeln!(writer, "  version = {{{}}},", dataset_version)?;
-            writeln!(writer, "  howpublished = {{ods.fyi}},")?;
-            writeln!(writer, "  url = {{https://ods.fyi}},")?;
-            if let Some(ref doi) = dataset_doi {
-                writeln!(writer, "  doi = {{{}}},", doi)?;
+            if is_published {
+                writeln!(writer, "  howpublished = {{ods.fyi}},")?;
+                writeln!(writer, "  url = {{{}}},", data_url)?;
+                if let Some(ref doi) = dataset_doi {
+                    writeln!(writer, "  doi = {{{}}},", doi)?;
+                }
             }
             writeln!(
                 writer,
@@ -259,20 +278,35 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "note": format!("Release {}, SHA-256 {}.", d_tag, archive_sha256)
             });
 
-            let mut data_obj = json!({
-                "type": "dataset",
-                "id": data_key,
-                "title": format!("ods: NHS Organisation Data as verifiable Parquet files, release {}", d_tag),
-                "author": [{ "family": "Evans", "given": "Oli" }],
-                "issued": { "date-parts": [[d_y, d_m, d_d]] },
-                "publisher": "ods.fyi",
-                "URL": "https://ods.fyi",
-                "version": dataset_version,
-                "note": format!("Manifest: {}. {}", manifest_digest, crate::terms::ATTRIBUTION)
-            });
-            if let Some(ref doi) = dataset_doi {
-                data_obj["DOI"] = json!(doi);
+            let mut data_map = serde_json::Map::new();
+            data_map.insert("type".to_string(), json!("dataset"));
+            data_map.insert("id".to_string(), json!(data_key));
+            data_map.insert(
+                "title".to_string(),
+                json!(format!(
+                    "ods: NHS Organisation Data as verifiable Parquet files, release {}",
+                    d_tag
+                )),
+            );
+            data_map.insert("author".to_string(), json!([{ "family": "Evans", "given": "Oli" }]));
+            data_map.insert("issued".to_string(), json!({ "date-parts": [[d_y, d_m, d_d]] }));
+            if is_published {
+                data_map.insert("publisher".to_string(), json!("ods.fyi"));
+                data_map.insert("URL".to_string(), json!(data_url));
+                if let Some(ref doi) = dataset_doi {
+                    data_map.insert("DOI".to_string(), json!(doi));
+                }
             }
+            data_map.insert("version".to_string(), json!(dataset_version));
+            data_map.insert(
+                "note".to_string(),
+                json!(format!(
+                    "Manifest: {}. {}",
+                    manifest_digest,
+                    crate::terms::ATTRIBUTION
+                )),
+            );
+            let data_obj = serde_json::Value::Object(data_map);
 
             let tool_obj = json!({
                 "type": "software",
@@ -293,11 +327,19 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "NHS England. ({}). NHS Organisation Data Service XML Data, release {} [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n",
                 year, d_tag
             )?;
-            writeln!(
-                writer,
-                "Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files, release {} (Version {}) [Data set]. ods.fyi. {}\n",
-                year, d_tag, dataset_version, data_url
-            )?;
+            if is_published {
+                writeln!(
+                    writer,
+                    "Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files, release {} (Version {}) [Data set]. ods.fyi. {}\n",
+                    year, d_tag, dataset_version, data_url
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files, release {} (Version {}) [Data set].\n",
+                    year, d_tag, dataset_version
+                )?;
+            }
             writeln!(
                 writer,
                 "Evans, O. ({}). ods (Version {}) [Computer software]. https://github.com/olizilla/ods",
@@ -324,11 +366,19 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             )?;
             writeln!(writer)?;
             writeln!(writer, "  The data:")?;
-            writeln!(
-                writer,
-                "    Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files,\n    release {} (Version {}) [Data set]. ods.fyi. {}",
-                year, d_tag, dataset_version, data_url
-            )?;
+            if is_published {
+                writeln!(
+                    writer,
+                    "    Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files,\n    release {} (Version {}) [Data set]. ods.fyi. {}",
+                    year, d_tag, dataset_version, data_url
+                )?;
+            } else {
+                writeln!(
+                    writer,
+                    "    Evans, O. ({}). ods: NHS Organisation Data as verifiable Parquet files,\n    release {} (Version {}) [Data set].",
+                    year, d_tag, dataset_version
+                )?;
+            }
             writeln!(writer)?;
             writeln!(writer, "  The tool:")?;
             writeln!(
@@ -340,22 +390,153 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
 
             // Data availability
             writeln!(writer, "Data availability")?;
-            writeln!(
-                writer,
-                "  {} is available from {}. This OCI manifest\n  digest identifies its exact files:\n    {}",
-                data_key, data_url, manifest_digest
-            )?;
-            writeln!(
-                writer,
-                "  {} built it from {}, the TRUD archive with SHA-256:\n    {}",
-                tool_key, src_key, archive_sha256
-            )?;
-            writeln!(
-                writer,
-                "  Rebuild and verify with `ods trud pull {} && ods make`.",
-                d_tag
-            )?;
+            match &outcome {
+                crate::workspace::VerificationOutcome::VerifiedPublished { .. } => {
+                    writeln!(
+                        writer,
+                        "  {} is available from {}. This OCI manifest\n  digest identifies its exact files:\n    {}",
+                        data_key, data_url, manifest_digest
+                    )?;
+                    writeln!(writer)?;
+                    writeln!(
+                        writer,
+                        "  {} built it from {}, the TRUD archive with SHA-256:\n    {}",
+                        tool_key, src_key, archive_sha256
+                    )?;
+                    writeln!(
+                        writer,
+                        "  Rebuild and verify with `ods trud pull {} && ods make`.",
+                        d_tag
+                    )?;
+                }
+                crate::workspace::VerificationOutcome::DateUnknown { .. } => {
+                    writeln!(
+                        writer,
+                        "  {} isn't in the release index this ods read, so where to get\n  it is unknown. This OCI manifest digest identifies its exact files:\n    {}",
+                        data_key, manifest_digest
+                    )?;
+                    writeln!(writer)?;
+                    writeln!(
+                        writer,
+                        "  It was built from {}, the TRUD archive with SHA-256:\n    {}",
+                        src_key, archive_sha256
+                    )?;
+                    writeln!(
+                        writer,
+                        "  Rebuild and verify with `ods trud pull {} && ods make`.",
+                        d_tag
+                    )?;
+                }
+                crate::workspace::VerificationOutcome::DifferentArchive { this_archive_sha256, .. } => {
+                    writeln!(
+                        writer,
+                        "  {} was built from a different TRUD archive than the one\n  published for {}, so it isn't the published dataset. This OCI manifest digest\n  identifies its exact files:\n    {}",
+                        data_key, d_tag, manifest_digest
+                    )?;
+                    writeln!(writer)?;
+                    writeln!(
+                        writer,
+                        "  It was built from the TRUD archive with SHA-256:\n    {}",
+                        this_archive_sha256
+                    )?;
+                }
+                crate::workspace::VerificationOutcome::VersionUnpublished { published_versions, .. } => {
+                    let pub_list = published_versions
+                        .iter()
+                        .map(|v| format!("ods-data/{}_{}", d_tag, v))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        writer,
+                        "  {} hasn't been published. The published release for\n  {} is {}. This OCI manifest digest identifies its\n  exact files:\n    {}",
+                        data_key, d_tag, pub_list, manifest_digest
+                    )?;
+                    writeln!(writer)?;
+                    writeln!(
+                        writer,
+                        "  It was built from {}, the TRUD archive with SHA-256:\n    {}",
+                        src_key, archive_sha256
+                    )?;
+                }
+                crate::workspace::VerificationOutcome::DifferentBytes { reconstructed_digest, .. } => {
+                    writeln!(
+                        writer,
+                        "  {} as built here differs from the published dataset of that\n  name. This OCI manifest digest identifies the files here:\n    {}",
+                        data_key, reconstructed_digest
+                    )?;
+                    writeln!(writer)?;
+                    writeln!(
+                        writer,
+                        "  It was built from {}, the TRUD archive with SHA-256:\n    {}",
+                        src_key, archive_sha256
+                    )?;
+                }
+                _ => {}
+            }
         }
+    }
+
+    // Stderr warnings for cases A, B, C, F
+    match &outcome {
+        crate::workspace::VerificationOutcome::DateUnknown { date, .. } => {
+            eprintln!("! {} isn't in the cached release index from ({})", date, origin);
+            eprintln!("  To update the release index run: ods pull");
+        }
+        crate::workspace::VerificationOutcome::DifferentArchive {
+            date,
+            this_archive_sha256,
+            published_archive_sha256,
+            ..
+        } => {
+            eprintln!(
+                "✖ releases/{} was built from a different TRUD archive than the published {}",
+                date, date
+            );
+            eprintln!("  {:<10}  sha256 {}", "this build", this_archive_sha256);
+            eprintln!("  {:<10}  sha256 {}", "published", published_archive_sha256);
+            eprintln!("  Cite the published release: ods pull {}", date);
+        }
+        crate::workspace::VerificationOutcome::VersionUnpublished {
+            date,
+            version,
+            published_versions,
+            ..
+        } => {
+            eprintln!(
+                "! dataset {} was never published for {}. Published: {}",
+                version,
+                date,
+                published_versions.join(", ")
+            );
+        }
+        crate::workspace::VerificationOutcome::DifferentBytes {
+            date,
+            version,
+            published_digest,
+            reconstructed_digest,
+        } => {
+            let pub_d = if published_digest.starts_with("sha256:") {
+                published_digest.clone()
+            } else {
+                format!("sha256:{}", published_digest)
+            };
+            let recon_d = if reconstructed_digest.starts_with("sha256:") {
+                reconstructed_digest.clone()
+            } else {
+                format!("sha256:{}", reconstructed_digest)
+            };
+            eprintln!(
+                "✖ releases/{} doesn't match the published ods-data/{}_{}",
+                date, date, version
+            );
+            eprintln!("  {:<10}  {}", "published", pub_d);
+            eprintln!("  {:<10}  {}", "this build", recon_d);
+            eprintln!(
+                "  Its files match its own datapackage.json, so it was built by an ods that doesn't\n  reproduce dataset {}. Cite the published release: ods pull {}",
+                version, date
+            );
+        }
+        _ => {}
     }
 
     let is_human = args.format == "text";
@@ -366,6 +547,14 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
             trud_date, dataset_version, reason
         );
+        return Err(crate::commands::pull::AlreadyReported.into());
+    }
+
+    if matches!(
+        outcome,
+        crate::workspace::VerificationOutcome::DifferentArchive { .. }
+            | crate::workspace::VerificationOutcome::DifferentBytes { .. }
+    ) {
         return Err(crate::commands::pull::AlreadyReported.into());
     }
 

@@ -198,3 +198,58 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_use_different_archive_warns_when_version_published_and_verifies_when_not() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("1111111111111111111111111111111111111111111111111111111111111111".to_string()),
+        ..Default::default()
+    };
+    fs::write(
+        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    )
+    .unwrap();
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+
+    // Cache an index with a published version 1.0.1 for 2026-07-31
+    let index = make_v1_index(&[(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37983173,
+        &[("1.0.1", "sha256:0000000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &workspace).unwrap();
+
+    // 1. Version 1.0.1 is published: ods use must warn mismatch
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+    let output1 = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use");
+    assert!(output1.status.success());
+    let stderr1 = String::from_utf8_lossy(&output1.stderr);
+    assert!(stderr1.contains("! releases/2026-07-31 does not match the published 2026-07-31 (1.0.1)"), "got:\n{}", stderr1);
+    assert!(stderr1.contains("  expected manifest sha256:0000000000000000000000000000000000000000000000000000000000000000"), "got:\n{}", stderr1);
+    assert!(stderr1.contains("  Repair it: ods pull --force 2026-07-31"), "got:\n{}", stderr1);
+
+    // 2. Version 0.9.0 is NOT published: ods use reports verified unpublished local release without warning
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.9.0\"}").unwrap();
+    let output2 = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use with unpublished version");
+    assert!(output2.status.success());
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
+    assert!(stderr2.contains("* reconstructed manifest") && stderr2.contains("verified (unpublished local release)"), "got:\n{}", stderr2);
+    assert!(!stderr2.contains("! releases/2026-07-31 does not match"), "got:\n{}", stderr2);
+}

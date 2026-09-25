@@ -54,18 +54,57 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
         crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
             writeln!(err_writer, "✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version)?;
         }
-        crate::workspace::VerificationOutcome::VerifiedUnpublished { digest, .. } => {
-            writeln!(err_writer, "* reconstructed manifest {} verified (unpublished local release)", digest)?;
+        crate::workspace::VerificationOutcome::DateUnknown { digest, .. }
+        | crate::workspace::VerificationOutcome::VersionUnpublished { digest, .. }
+        | crate::workspace::VerificationOutcome::DifferentArchive {
+            published_digest: None,
+            digest,
+            ..
+        } => {
+            writeln!(
+                err_writer,
+                "* reconstructed manifest {} verified (unpublished local release)",
+                digest
+            )?;
         }
-        crate::workspace::VerificationOutcome::Mismatch { date, version, expected_digest, reconstructed_digest } => {
+        crate::workspace::VerificationOutcome::DifferentBytes {
+            date,
+            version,
+            published_digest,
+            reconstructed_digest,
+        }
+        | crate::workspace::VerificationOutcome::DifferentArchive {
+            date,
+            version,
+            published_digest: Some(published_digest),
+            digest: reconstructed_digest,
+            ..
+        } => {
             writeln!(
                 err_writer,
                 "! releases/{} does not match the published {} ({})\n  expected manifest {}\n  got      {}\n  Repair it: ods pull --force {}",
                 args.release_date,
                 date,
                 version,
-                expected_digest,
+                published_digest,
                 reconstructed_digest,
+                args.release_date
+            )?;
+        }
+        crate::workspace::VerificationOutcome::ChangedSinceBuilt { file } => {
+            writeln!(
+                err_writer,
+                "! releases/{} can't be checked: datapackage resource {} hash mismatch\n  Repair it: ods pull --force {}",
+                args.release_date,
+                file,
+                args.release_date
+            )?;
+        }
+        crate::workspace::VerificationOutcome::NoProvenance => {
+            writeln!(
+                err_writer,
+                "! releases/{} can't be checked: Missing or unreadable _provenance.json\n  Repair it: ods pull --force {}",
+                args.release_date,
                 args.release_date
             )?;
         }

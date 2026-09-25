@@ -1470,3 +1470,123 @@ pub fn create_source_release_stamped(workspace: &Path, date: &str, stamp: &str) 
     .unwrap();
     release_dir
 }
+
+#[allow(dead_code)]
+pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = tmp.path().join("ods_data");
+    let rel_dir = ws_root.join("releases").join("2026-08-28");
+    std::fs::create_dir_all(&rel_dir).unwrap();
+
+    // Prevent day-count staleness notice
+    let future_rel = ws_root.join("releases").join("2099-01-01");
+    std::fs::create_dir_all(&future_rel).unwrap();
+
+    let pub_archive_sha = "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801";
+
+    let orgs_bytes = match case_variant {
+        "F" => b"different orgs content for F".to_vec(),
+        _ => b"dummy orgs content".to_vec(),
+    };
+    std::fs::write(rel_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
+    let orgs_sha256 = ods::provenance::compute_file_sha256(&rel_dir.join("orgs.parquet")).unwrap();
+
+    let this_archive_sha = match case_variant {
+        "B" => "1111111111111111111111111111111111111111111111111111111111111111",
+        _ => pub_archive_sha,
+    };
+
+    let this_dataset_version = match case_variant {
+        "C" => "0.3.0",
+        _ => "0.1.0",
+    };
+
+    if case_variant != "no_prov" {
+        let prov = ods::provenance::OdsProvenance {
+            schema: ods::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
+            trud_release_date: Some("2026-08-28".to_string()),
+            trud_release_filesize_bytes: Some(38064419),
+            trud_release_sha256: Some(this_archive_sha.to_string()),
+            ..Default::default()
+        };
+        std::fs::write(
+            rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
+            serde_json::to_string_pretty(&prov).unwrap(),
+        )
+        .unwrap();
+    }
+
+    let dp_resource_hash = match case_variant {
+        "D" => "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        _ => orgs_sha256.to_lowercase(),
+    };
+
+    let dp = serde_json::json!({
+        "name": "ods",
+        "version": this_dataset_version,
+        "resources": [
+            {
+                "name": "orgs.parquet",
+                "path": "orgs.parquet",
+                "hash": format!("sha256:{}", dp_resource_hash)
+            }
+        ]
+    });
+    std::fs::write(
+        rel_dir.join(ods::datapackage::DATAPACKAGE_FILENAME),
+        serde_json::to_vec_pretty(&dp).unwrap(),
+    )
+    .unwrap();
+
+    // Reference published directory to compute published manifest digest
+    let ref_dir = tmp.path().join("ref_dir");
+    std::fs::create_dir_all(&ref_dir).unwrap();
+    std::fs::write(ref_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
+    let ref_prov = ods::provenance::OdsProvenance {
+        schema: ods::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
+        trud_release_date: Some("2026-08-28".to_string()),
+        trud_release_filesize_bytes: Some(38064419),
+        trud_release_sha256: Some(pub_archive_sha.to_string()),
+        ..Default::default()
+    };
+    let ref_dp = serde_json::json!({
+        "name": "ods",
+        "version": "0.1.0",
+        "resources": [
+            {
+                "name": "orgs.parquet",
+                "path": "orgs.parquet",
+                "hash": format!("sha256:{}", ods::provenance::compute_file_sha256(&ref_dir.join("orgs.parquet")).unwrap().to_lowercase())
+            }
+        ]
+    });
+    std::fs::write(
+        ref_dir.join(ods::datapackage::DATAPACKAGE_FILENAME),
+        serde_json::to_vec_pretty(&ref_dp).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        ref_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&ref_prov).unwrap(),
+    )
+    .unwrap();
+    let (ref_manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&ref_dir, &ref_prov, "0.1.0").unwrap();
+    let published_manifest_digest = ref_manifest.digest().unwrap();
+
+    let mut index = make_v1_index(&[(
+        "2026-08-28",
+        pub_archive_sha,
+        1_000_000,
+        &[("0.1.0", &published_manifest_digest)],
+    )]);
+    index.releases[0].datasets[0].tool_version = "0.2.0".to_string();
+
+    if case_variant == "A" {
+        index.releases.clear();
+    }
+
+    let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &ws_root).unwrap();
+
+    (tmp, rel_dir)
+}
