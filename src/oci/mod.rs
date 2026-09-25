@@ -1,3 +1,5 @@
+pub mod source;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

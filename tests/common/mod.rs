@@ -1352,7 +1352,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     // Generate OCI layout first via make oci
     ods::commands::make_oci::run(ods::commands::make_oci::Args {
         input: Some(rel_dir.clone()),
-        check: false,
+        ..Default::default()
     })
     .unwrap();
 
@@ -1416,4 +1416,57 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
     std::fs::create_dir_all(&future_rel).unwrap();
 
     (tmp, rel_dir)
+}
+
+/// A release directory holding NHS's four files for `date`, in the shape `ods trud pull` leaves
+/// them, with a `_provenance.json` that agrees with the zip: everything a source bundle checks.
+/// The bytes are fixed by `date`, so two calls for one date give the same files.
+#[allow(dead_code)]
+pub fn create_source_release(workspace: &Path, date: &str) -> PathBuf {
+    create_source_release_stamped(workspace, date, &date.replace('-', ""))
+}
+
+/// As `create_source_release`, but the zip's filename carries `stamp` (`YYYYMMDD`) where TRUD's
+/// release date is `date`: NHS's filename date and TRUD's release date don't always agree.
+#[allow(dead_code)]
+pub fn create_source_release_stamped(workspace: &Path, date: &str, stamp: &str) -> PathBuf {
+    use base64::Engine;
+    use sha1::Digest as _;
+
+    let release_dir = workspace.join("releases").join(date);
+    let trud_dir = release_dir.join("trud");
+    std::fs::create_dir_all(&trud_dir).unwrap();
+
+    let compact = stamp;
+    let zip_name = format!("hscorgrefdataxml_data_7.0.0_{compact}000001.zip");
+    let zip_bytes = format!("zip bytes for {date}").into_bytes();
+    std::fs::write(trud_dir.join(&zip_name), &zip_bytes).unwrap();
+
+    let sha1 = base64::engine::general_purpose::STANDARD.encode(sha1::Sha1::digest(&zip_bytes));
+    std::fs::write(
+        trud_dir.join(format!("trud_hscorgrefdataxml_data_7.0.0_{compact}000001.xml")),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<FCIV>\n<FILE_ENTRY><name>{zip_name}</name><SHA1>{sha1}</SHA1></FILE_ENTRY></FCIV>"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        trud_dir.join(format!("trud_hscorgrefdataxml_data_7.0.0_{compact}000001.xml.asc")),
+        format!("signature bytes for {date}"),
+    )
+    .unwrap();
+    std::fs::write(trud_dir.join("trud-public-key-2013-04-01.pgp"), b"NHS's public key bytes").unwrap();
+
+    let prov = OdsProvenance {
+        trud_release_date: Some(date.to_string()),
+        trud_release_sha256: Some(ods::provenance::compute_file_sha256(&trud_dir.join(&zip_name)).unwrap()),
+        trud_release_filesize_bytes: Some(zip_bytes.len() as u64),
+        ..Default::default()
+    };
+    std::fs::write(
+        release_dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    )
+    .unwrap();
+    release_dir
 }

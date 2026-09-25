@@ -27,7 +27,8 @@ pub struct Args {
     #[arg(long, hide = true)]
     pub all: bool,
 
-    /// Force re-download or re-pull of specified release
+    /// Re-fetch NHS's checksum, signature and key, and download the archive again only if it's
+    /// missing or doesn't match TRUD's hash
     #[arg(long, short = 'f')]
     pub force: bool,
 
@@ -362,23 +363,31 @@ fn pull_single_release<F: TrudFetcher>(
 
     let link_target = format!("releases/{}", target_release.release_date);
 
-    if dest_path.exists() && !args.force {
+    if dest_path.exists() {
         let local_sha256 = compute_file_sha256(&dest_path)?;
         if local_sha256.eq_ignore_ascii_case(&target_release.archive_file_sha256) {
-            write_provenance_json(&dest_dir, &target_release, false)?;
+            // The zip is the expensive part, and the one thing TRUD vouches for: keep it, and
+            // make the rest of the directory whole from it.
+            let healed = match heal_release_dir(&dest_dir, &trud_dir, &target_release, fetcher, args.force) {
+                Ok(healed) => healed,
+                Err(e) => {
+                    if args.format.as_deref() == Some("ndjson") {
+                        emit_ndjson_outcome(&held_zip_outcome(
+                            &target_release,
+                            &dest_dir,
+                            &HashMap::new(),
+                            &[(target_release.release_date.clone(), e.to_string())],
+                        ));
+                    }
+                    return Err(e);
+                }
+            };
             let mut pin_moved = false;
             if is_workspace {
                 pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
             }
 
-            let att_result = capture_attestations(
-                &trud_dir,
-                &target_release,
-                fetcher,
-                fetcher.releases_raw_json().as_deref(),
-                args.api_key.as_deref(),
-            );
-            let file_count = 2 + att_result.captured.len();
+            let file_count = 2 + healed.attestations.captured.len();
             let link = if is_workspace {
                 Some(ReleaseBlockLink {
                     target: &link_target,
@@ -392,11 +401,15 @@ fn pull_single_release<F: TrudFetcher>(
             } else {
                 None
             };
+            let state = match healed.describe(args.force) {
+                Some(what) => ReleaseBlockState::Healed { what },
+                None => ReleaseBlockState::Cached,
+            };
             let lines = render_release_block(&ReleaseBlockParams {
                 date: &target_release.release_date,
                 archive_size: target_release.archive_file_size,
                 file_count,
-                state: &ReleaseBlockState::Cached,
+                state: &state,
                 dataset: None,
                 verified: "sha256 from TRUD API",
                 linked: link,
@@ -407,7 +420,8 @@ fn pull_single_release<F: TrudFetcher>(
             });
             progress.finish_block(&lines);
 
-            let failed_reasons: Vec<_> = att_result
+            let failed_reasons: Vec<_> = healed
+                .attestations
                 .missing_reasons
                 .iter()
                 .filter(|r| r.contains("download failed"))
@@ -423,14 +437,25 @@ fn pull_single_release<F: TrudFetcher>(
                     trud_release_filesize_bytes: Some(target_release.archive_file_size),
                     trud_release_sha256: Some(target_release.archive_file_sha256.clone()),
                     trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
-                    status: "cached".to_string(),
+                    status: healed.status(args.force).to_string(),
                     path: Some(dest_dir.display().to_string()),
                     error: None,
                 });
             }
 
             return Ok(());
+        } else if !args.force {
+            progress.error(
+                &format!("SHA-256 mismatch for {}", target_release.release_date),
+                &[
+                    &format!("The archive held: {}", local_sha256),
+                    &format!("TRUD's hash:      {}", target_release.archive_file_sha256),
+                    &format!("Download it again with: ods trud pull {} --force", target_release.release_date),
+                ],
+            );
+            return Err(crate::commands::pull::AlreadyReported.into());
         } else {
+            // `--force`: the zip is downloaded again below, and this one is kept aside.
             let bad_path = mark_bad_sha_file(&dest_path);
             if progress.caps().verbose {
                 eprintln!("✖ SHA-256 Checksum Mismatch on cached file! Renamed to {}", bad_path.display());
@@ -540,13 +565,7 @@ fn pull_single_release<F: TrudFetcher>(
     }
 
     let elapsed = start_time.elapsed();
-    let att_result = capture_attestations(
-        &trud_dir,
-        &target_release,
-        fetcher,
-        fetcher.releases_raw_json().as_deref(),
-        args.api_key.as_deref(),
-    );
+    let att_result = capture_attestations(&trud_dir, &target_release, fetcher, args.force);
     let final_file_count = 2 + att_result.captured.len();
     let state = ReleaseBlockState::Done { elapsed };
     let link = if is_workspace {
@@ -620,9 +639,17 @@ fn pull_all_trud_releases<F: TrudFetcher>(
 
     releases.sort_by(|a, b| b.release_date.cmp(&a.release_date)); // newest to oldest
 
-    // Plan Phase: check cached releases with parallel hashing
+    // Plan Phase: what each release directory already holds, checked with parallel hashing
+    enum Held {
+        Absent,
+        Matches,
+        Differs(String),
+    }
+
     let mut to_download: Vec<TrudReleaseItem> = Vec::new();
     let mut cached_releases: Vec<TrudReleaseItem> = Vec::new();
+    // A zip that isn't TRUD's, without `--force`: named at the end, and the batch carries on
+    let mut refused: Vec<(String, String)> = Vec::new();
     let checked_count = Arc::new(AtomicU64::new(0));
 
     use rayon::prelude::*;
@@ -632,36 +659,81 @@ fn pull_all_trud_releases<F: TrudFetcher>(
 
     progress.bar("Checking local archives…", 0, total_count as u64, None, None);
 
-    let check_results: Vec<(TrudReleaseItem, bool)> = releases
+    let check_results: Vec<(TrudReleaseItem, Held)> = releases
         .par_iter()
         .map(|release| {
             let rel_dir = ws_root.join("releases").join(&release.release_date);
             let dest_path = rel_dir.join("trud").join(&release.archive_file_name);
-            let is_cached = if dest_path.exists() && !args.force {
-                if let Ok(hash) = compute_file_sha256(&dest_path) {
-                    hash.eq_ignore_ascii_case(&release.archive_file_sha256)
-                } else {
-                    false
+            let held = if dest_path.exists() {
+                match compute_file_sha256(&dest_path) {
+                    Ok(hash) if hash.eq_ignore_ascii_case(&release.archive_file_sha256) => Held::Matches,
+                    Ok(hash) => Held::Differs(hash),
+                    Err(e) => Held::Differs(format!("unreadable ({e})")),
                 }
             } else {
-                false
+                Held::Absent
             };
             let cur = checked.fetch_add(1, Ordering::Relaxed) + 1;
             p_clone.bar("Checking local archives…", cur, total_count as u64, None, None);
-            (release.clone(), is_cached)
+            (release.clone(), held)
         })
         .collect();
 
-    for (rel, is_cached) in check_results {
-        if is_cached {
-            cached_releases.push(rel);
-        } else {
-            to_download.push(rel);
+    for (rel, held) in check_results {
+        match held {
+            Held::Matches => cached_releases.push(rel),
+            Held::Absent => to_download.push(rel),
+            // `--force` downloads the zip again
+            Held::Differs(_) if args.force => to_download.push(rel),
+            Held::Differs(local) => {
+                let message = format!(
+                    "SHA-256 mismatch: the archive held is {}, TRUD's is {}",
+                    local, rel.archive_file_sha256
+                );
+                refused.push((rel.release_date.clone(), message));
+            }
+        }
+    }
+
+    let num_jobs = args.jobs.clamp(1, 8);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_jobs)
+        .build()
+        .context("Failed to build rayon thread pool")?;
+
+    // Repair Phase: every zip already held is kept. What's missing beside it is fetched from
+    // NHS, and `--force` fetches NHS's files again. A zip is never downloaded here.
+    let heal_results: Vec<(String, Result<Healed>)> = pool.install(|| {
+        cached_releases
+            .par_iter()
+            .map(|release| {
+                let release_dir = workspace_root.join("releases").join(&release.release_date);
+                let trud_dir = release_dir.join("trud");
+                (
+                    release.release_date.clone(),
+                    heal_release_dir(&release_dir, &trud_dir, release, fetcher, args.force),
+                )
+            })
+            .collect()
+    });
+    let mut heal_failures: Vec<(String, String)> = Vec::new();
+    let mut heal_status: HashMap<String, &'static str> = HashMap::new();
+    progress.clear_live();
+    for (date, result) in heal_results {
+        match result {
+            Ok(healed) => {
+                heal_status.insert(date.clone(), healed.status(args.force));
+                if let Some(what) = healed.describe(args.force) {
+                    progress.settle(&format!("✓ {}  {}", date, what));
+                }
+            }
+            Err(e) => heal_failures.push((date, e.to_string())),
         }
     }
 
     let to_download_bytes: u64 = to_download.iter().map(|r| r.archive_file_size).sum();
-    let cached_count = cached_releases.len();
+    // A release whose repair failed isn't counted as cached
+    let cached_count = cached_releases.len() - heal_failures.len();
     let to_download_count = to_download.len();
 
     if to_download_count == 0 {
@@ -671,19 +743,14 @@ fn pull_all_trud_releases<F: TrudFetcher>(
             cached_count
         ));
         if args.format.as_deref() == Some("ndjson") {
-            for r in cached_releases {
-                emit_ndjson_outcome(&ReleaseOutcome {
-                    trud_release_date: Some(r.release_date.clone()),
-                    trud_release_filesize_bytes: Some(r.archive_file_size),
-                    trud_release_sha256: Some(r.archive_file_sha256.clone()),
-                    trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
-                    status: "cached".to_string(),
-                    path: Some(workspace_root.join("releases").join(&r.release_date).display().to_string()),
-                    error: None,
-                });
+            for r in &cached_releases {
+                emit_ndjson_outcome(&held_zip_outcome(r, &workspace_root.join("releases").join(&r.release_date), &heal_status, &heal_failures));
             }
         }
-        return Ok(());
+        if refused.is_empty() && heal_failures.is_empty() {
+            return Ok(());
+        }
+        return report_batch_failures(progress, Vec::new(), &refused, &heal_failures);
     }
 
     progress.clear_live();
@@ -695,12 +762,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
     ));
 
     // Execute Phase: download missing releases
-    let num_jobs = args.jobs.clamp(1, 8);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(num_jobs)
-        .build()
-        .context("Failed to build rayon thread pool")?;
-
     let downloaded_count = Arc::new(AtomicU64::new(0));
     let failed_count = Arc::new(AtomicU64::new(0));
     let downloaded_bytes = Arc::new(AtomicU64::new(0));
@@ -713,7 +774,11 @@ fn pull_all_trud_releases<F: TrudFetcher>(
         .and_then(|ws| ws.active_release().ok())
         .map(|(d, _)| d);
     let newest_downloaded_date = Arc::new(std::sync::Mutex::new(None));
-    let cached_bytes: u64 = cached_releases.iter().map(|r| r.archive_file_size).sum();
+    let cached_bytes: u64 = cached_releases
+        .iter()
+        .filter(|r| !heal_failures.iter().any(|(date, _)| *date == r.release_date))
+        .map(|r| r.archive_file_size)
+        .sum();
 
     // Show initial batch progress bar at the bottom immediately
     progress.batch_bar(1, to_download_count, 0, to_download_bytes, None, None);
@@ -752,8 +817,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
         buffered: HashMap::new(),
     }));
 
-    let raw_json = Arc::new(fetcher.releases_raw_json());
-
     pool.scope(|s| {
         for _ in 0..num_jobs {
             let next_idx = next_idx.clone();
@@ -767,7 +830,6 @@ fn pull_all_trud_releases<F: TrudFetcher>(
             let outcomes = outcomes.clone();
             let newest_downloaded_date = newest_downloaded_date.clone();
             let coordinator = coordinator.clone();
-            let raw_json = raw_json.clone();
 
             s.spawn(move |_| {
                 loop {
@@ -922,13 +984,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                             } else {
                                 let _ = std::fs::rename(&part_path, &dest_path);
                                 let _ = write_provenance_json(&release_dir, release, true);
-                                capture_attestations(
-                                    &trud_dir,
-                                    release,
-                                    fetcher,
-                                    raw_json.as_ref().as_deref(),
-                                    args.api_key.as_deref(),
-                                );
+                                capture_attestations(&trud_dir, release, fetcher, args.force);
 
                                 downloaded_count.fetch_add(1, Ordering::Relaxed);
                                 progress.remove_in_flight(&release.release_date);
@@ -977,20 +1033,12 @@ fn pull_all_trud_releases<F: TrudFetcher>(
     // Also emit cached ndjson if requested
     if args.format.as_deref() == Some("ndjson") {
         for r in &cached_releases {
-            emit_ndjson_outcome(&ReleaseOutcome {
-                trud_release_date: Some(r.release_date.clone()),
-                trud_release_filesize_bytes: Some(r.archive_file_size),
-                trud_release_sha256: Some(r.archive_file_sha256.clone()),
-                trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
-                status: "cached".to_string(),
-                path: Some(workspace_root.join("releases").join(&r.release_date).display().to_string()),
-                error: None,
-            });
+            emit_ndjson_outcome(&held_zip_outcome(r, &workspace_root.join("releases").join(&r.release_date), &heal_status, &heal_failures));
         }
     }
 
     let d_count = downloaded_count.load(Ordering::Relaxed);
-    let f_count = failed_count.load(Ordering::Relaxed);
+    let f_count = failed_count.load(Ordering::Relaxed) + (refused.len() + heal_failures.len()) as u64;
     let elapsed = batch_start.elapsed();
 
     // Total size landed (cached bytes + downloaded bytes)
@@ -1039,14 +1087,51 @@ fn pull_all_trud_releases<F: TrudFetcher>(
     }
 
     let failure_list = failures.lock().unwrap().clone();
-    if !failure_list.is_empty() {
-        for (f_date, f_err) in failure_list {
-            progress.error(&format!("{}  {}", f_date, f_err), &[&format!("Retry with: ods trud pull {}", f_date)]);
-        }
-        return Err(crate::commands::pull::AlreadyReported.into());
+    if !failure_list.is_empty() || !refused.is_empty() || !heal_failures.is_empty() {
+        return report_batch_failures(progress, failure_list, &refused, &heal_failures);
     }
 
     Ok(())
+}
+
+/// Prints each failure of a batch as a block with its retry command, and exits 1.
+fn report_batch_failures(
+    progress: &Progress,
+    download_failures: Vec<(String, String)>,
+    refused: &[(String, String)],
+    heal_failures: &[(String, String)],
+) -> Result<()> {
+    for (date, err) in download_failures.iter().chain(heal_failures.iter()) {
+        progress.error(&format!("{}  {}", date, err), &[&format!("Retry with: ods trud pull {}", date)]);
+    }
+    for (date, err) in refused {
+        progress.error(&format!("{}  {}", date, err), &[&format!("Retry with: ods trud pull {} --force", date)]);
+    }
+    Err(crate::commands::pull::AlreadyReported.into())
+}
+
+/// The ndjson outcome of a release whose zip was already held: what its repair did (`cached`,
+/// `repaired` or `refreshed`), or `failed` with the error, as a failed download reports.
+fn held_zip_outcome(
+    release: &TrudReleaseItem,
+    release_dir: &Path,
+    heal_status: &HashMap<String, &'static str>,
+    heal_failures: &[(String, String)],
+) -> ReleaseOutcome {
+    let failure = heal_failures.iter().find(|(date, _)| *date == release.release_date);
+    ReleaseOutcome {
+        trud_release_date: Some(release.release_date.clone()),
+        trud_release_filesize_bytes: Some(release.archive_file_size),
+        trud_release_sha256: Some(release.archive_file_sha256.clone()),
+        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
+        status: match failure {
+            Some(_) => "failed",
+            None => heal_status.get(&release.release_date).copied().unwrap_or("cached"),
+        }
+        .to_string(),
+        path: Some(release_dir.display().to_string()),
+        error: failure.map(|(_, e)| e.clone()),
+    }
 }
 
 fn emit_ndjson_outcome(outcome: &ReleaseOutcome) {
@@ -1061,12 +1146,21 @@ fn mark_bad_sha_file(path: &Path) -> PathBuf {
     bad_path
 }
 
-fn write_provenance_json(release_dir: &Path, release: &TrudReleaseItem, force: bool) -> Result<()> {
+/// Writes `_provenance.json` when it is missing, unreadable (an older format, say) or `force`d.
+/// Returns whether it wrote one.
+fn write_provenance_json(release_dir: &Path, release: &TrudReleaseItem, force: bool) -> Result<bool> {
     let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
-    if prov_path.exists() && !force {
-        return Ok(());
+    if prov_path.exists()
+        && !force
+        && matches!(
+            crate::provenance::OdsProvenance::load_from_file(&prov_path),
+            crate::provenance::ProvenanceLoad::Read(..)
+        )
+    {
+        return Ok(false);
     }
-    write_provenance_file(release_dir, release)
+    write_provenance_file(release_dir, release)?;
+    Ok(true)
 }
 
 fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &str) -> Result<bool> {
@@ -1597,7 +1691,10 @@ pub fn run_local_archive_with_progress(
 
 #[derive(Debug, Clone)]
 pub struct AttestationCaptureResult {
+    /// NHS's files the release directory holds now.
     pub captured: Vec<&'static str>,
+    /// The subset of `captured` this call downloaded: the others were already on disk.
+    pub fetched: Vec<&'static str>,
     pub missing_reasons: Vec<&'static str>,
 }
 
@@ -1607,63 +1704,84 @@ impl AttestationCaptureResult {
     }
 }
 
+/// Downloads `url` to `dest` by way of a `.part` file, so a failed refresh never leaves a
+/// good file half overwritten.
+fn download_file_atomically<F: TrudFetcher>(fetcher: &F, url: &str, dest: &Path) -> Result<()> {
+    let mut part_name = dest.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    part_name.push(".part");
+    let part = dest.with_file_name(part_name);
+    if let Err(e) = fetcher.download_file(url, &part) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    std::fs::rename(&part, dest)?;
+    Ok(())
+}
+
+/// What an older `ods trud pull` saved beside the archive: TRUD's whole listing on the day of
+/// the pull, named `<prefix>-<date>.json`. Nothing writes it now.
+const LEGACY_LISTING_PREFIX: &str = "trud-releases";
+
+/// Removes a listing an older pull left in a release's `trud/`.
+fn remove_legacy_listing(trud_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(trud_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(LEGACY_LISTING_PREFIX) && name.ends_with(".json") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Makes sure the release's `trud/` holds NHS's checksum, signature and public key, and
+/// removes the TRUD listing an older `ods trud pull` saved there: it was the one file in the
+/// directory that isn't NHS's bytes, and it differed between pulls. Files already on disk
+/// are left alone unless `force`, which fetches all three again.
 pub fn capture_attestations<F: TrudFetcher>(
     trud_dir: &Path,
     release: &TrudReleaseItem,
     fetcher: &F,
-    raw_json: Option<&str>,
-    api_key: Option<&str>,
+    force: bool,
 ) -> AttestationCaptureResult {
     let _ = std::fs::create_dir_all(trud_dir);
+    remove_legacy_listing(trud_dir);
 
-    // 1. Write trud-releases-<release_date>.json
-    let releases_json_path = trud_dir.join(format!("trud-releases-{}.json", release.release_date));
-    let json_content = if let Some(raw) = raw_json {
-        crate::provenance::sanitize_trud_url(raw, api_key)
-    } else {
-        let mut safe_release = release.clone();
-        safe_release.download_url = crate::provenance::sanitize_trud_url(&safe_release.download_url, api_key);
-        if let Some(ref u) = safe_release.checksum_file_url {
-            safe_release.checksum_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
+    // Fetches one of NHS's files unless it is already held (and not `force`d)
+    fn take<F: TrudFetcher>(
+        fetcher: &F,
+        force: bool,
+        name: &'static str,
+        url: &str,
+        dest: &Path,
+        failed: &'static str,
+        out: &mut (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>),
+    ) {
+        let need = force || !dest.exists();
+        if !need || download_file_atomically(fetcher, url, dest).is_ok() {
+            out.0.push(name);
+            if need {
+                out.1.push(name);
+            }
+        } else {
+            out.2.push(failed);
         }
-        if let Some(ref u) = safe_release.signature_file_url {
-            safe_release.signature_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
-        }
-        if let Some(ref u) = safe_release.public_key_file_url {
-            safe_release.public_key_file_url = Some(crate::provenance::sanitize_trud_url(u, api_key));
-        }
-        let fallback_obj = serde_json::json!({
-            "apiVersion": "1",
-            "releases": [safe_release]
-        });
-        serde_json::to_string_pretty(&fallback_obj).unwrap_or_default()
-    };
-    let _ = std::fs::write(&releases_json_path, json_content);
+    }
+    let mut out = (Vec::new(), Vec::new(), Vec::new());
 
-    let mut captured = Vec::new();
-    let mut missing_reasons = Vec::new();
-
-    // 2. Checksum file
+    // 1. Checksum file
     if let Some(ref url) = release.checksum_file_url {
         let filename = release.checksum_file_name.as_deref().unwrap_or_else(|| {
             url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("checksum.xml")
         });
-        let dest = trud_dir.join(filename);
-        let res = if dest.exists() {
-            Ok(())
-        } else {
-            fetcher.download_file(url, &dest)
-        };
-        if res.is_ok() {
-            captured.push("checksum");
-        } else {
-            missing_reasons.push("checksum download failed");
-        }
+        take(fetcher, force, "checksum", url, &trud_dir.join(filename), "checksum download failed", &mut out);
     } else {
-        missing_reasons.push("checksum not offered for this release");
+        out.2.push("checksum not offered for this release");
     }
 
-    // 3. Signature file (stored as .xml.asc)
+    // 2. Signature file (stored as .xml.asc)
     if let Some(ref url) = release.signature_file_url {
         let url_fname = url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("");
         let filename = if url_fname.ends_with(".asc") {
@@ -1677,45 +1795,76 @@ pub fn capture_attestations<F: TrudFetcher>(
         } else {
             format!("{}.asc", release.checksum_file_name.as_deref().unwrap_or("checksum.xml"))
         };
-        let dest = trud_dir.join(filename);
-        let res = if dest.exists() {
-            Ok(())
-        } else {
-            fetcher.download_file(url, &dest)
-        };
-        if res.is_ok() {
-            captured.push("signature");
-        } else {
-            missing_reasons.push("signature download failed");
-        }
+        take(fetcher, force, "signature", url, &trud_dir.join(filename), "signature download failed", &mut out);
     } else {
-        missing_reasons.push("signature not offered for this release");
+        out.2.push("signature not offered for this release");
     }
 
-    // 4. Public key file
+    // 3. Public key file
     if let Some(ref url) = release.public_key_file_url {
         let filename = release.public_key_file_name.as_deref().unwrap_or_else(|| {
             url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("trud-public-key.pgp")
         });
-        let dest = trud_dir.join(filename);
-        let res = if dest.exists() {
-            Ok(())
-        } else {
-            fetcher.download_file(url, &dest)
-        };
-        if res.is_ok() {
-            captured.push("public key");
-        } else {
-            missing_reasons.push("public key download failed");
-        }
+        take(fetcher, force, "public key", url, &trud_dir.join(filename), "public key download failed", &mut out);
     } else {
-        missing_reasons.push("public key not offered for this release");
+        out.2.push("public key not offered for this release");
     }
 
+    let (captured, fetched, missing_reasons) = out;
     AttestationCaptureResult {
         captured,
+        fetched,
         missing_reasons,
     }
+}
+
+/// What a pull did to a release directory whose zip it already held.
+struct Healed {
+    /// What was fetched or rewritten, in the words the release block uses.
+    done: Vec<&'static str>,
+    attestations: AttestationCaptureResult,
+}
+
+impl Healed {
+    /// `repaired: checksum, signature, key`, or `refreshed: …` under `--force`. `None` when the
+    /// directory was already whole.
+    fn describe(&self, force: bool) -> Option<String> {
+        if self.done.is_empty() {
+            return None;
+        }
+        let verb = if force { "refreshed" } else { "repaired" };
+        let names: Vec<&str> = self.done.iter().map(|n| if *n == "public key" { "key" } else { *n }).collect();
+        Some(format!("{}: {}", verb, names.join(", ")))
+    }
+
+    /// The `--format ndjson` status: `repaired`, `refreshed` under `--force`, or `cached` when
+    /// the directory was already whole.
+    fn status(&self, force: bool) -> &'static str {
+        match (self.done.is_empty(), force) {
+            (true, _) => "cached",
+            (false, true) => "refreshed",
+            (false, false) => "repaired",
+        }
+    }
+}
+
+/// Makes a release directory whole from the zip it holds, never downloading the zip: fetches
+/// whichever of NHS's three files are missing (all three under `force`), writes
+/// `_provenance.json` if it is missing or unreadable (always under `force`), and removes a
+/// leftover TRUD listing.
+fn heal_release_dir<F: TrudFetcher>(
+    release_dir: &Path,
+    trud_dir: &Path,
+    release: &TrudReleaseItem,
+    fetcher: &F,
+    force: bool,
+) -> Result<Healed> {
+    let attestations = capture_attestations(trud_dir, release, fetcher, force);
+    let mut done = attestations.fetched.clone();
+    if write_provenance_json(release_dir, release, force)? {
+        done.push("provenance");
+    }
+    Ok(Healed { done, attestations })
 }
 
 pub fn format_attestations_line(captured: &[&str], missing_reasons: &[&str]) -> String {

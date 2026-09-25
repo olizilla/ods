@@ -1645,6 +1645,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "base64",
  "chrono",
  "clap",
  "comfy-table",
@@ -1655,6 +1656,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tempfile",
  "unicode-width",

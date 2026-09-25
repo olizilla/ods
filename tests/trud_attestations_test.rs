@@ -149,7 +149,21 @@ fn test_trud_pull_captures_all_attestations_offline() {
     assert!(trud_dir.join("trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml").exists());
     assert!(trud_dir.join("trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml.asc").exists());
     assert!(trud_dir.join("trud-public-key-2013-04-01.pgp").exists());
-    assert!(trud_dir.join("trud-releases-2026-07-31.json").exists());
+    // R4: `trud/` holds only what NHS published and the zip, never a listing saved from the pull
+    let mut names: Vec<String> = fs::read_dir(&trud_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+            "trud-public-key-2013-04-01.pgp",
+            "trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml",
+            "trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml.asc",
+        ]
+    );
 
     let out = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     assert!(out.contains("5 files"), "Output was: {}", out);
@@ -206,70 +220,6 @@ fn test_trud_pull_handles_missing_signature_gracefully() {
 
     let out = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     assert!(out.contains("4 files"), "Output was: {}", out);
-}
-
-#[test]
-fn test_trud_releases_json_redacts_api_key_completely() {
-    let tmp = TempDir::new().unwrap();
-    let ws = tmp.path().join("ods_data");
-
-    let fake_key = "VERY_SECRET_KEY_12345";
-    let raw_with_secret = format!(
-        "{{\"releases\":[{{\"archiveFileUrl\":\"https://isd.digital.nhs.uk/download/api/v1/keys/{}/content/items/341/test.zip\"}}]}}",
-        fake_key
-    );
-
-    let dummy_zip_path = tmp.path().join("dummy.zip");
-    create_test_zip(&dummy_zip_path, "2026-07-31");
-    let real_sha = ods::provenance::compute_file_sha256(&dummy_zip_path).unwrap();
-    let real_size = fs::metadata(&dummy_zip_path).unwrap().len();
-
-    let release = TrudReleaseItem {
-        id: "341".to_string(),
-        name: Some("Release 7.0.0".to_string()),
-        release_date: "2026-07-31".to_string(),
-        archive_file_name: "hscorgrefdataxml_data_7.0.0_20260731000001.zip".to_string(),
-        archive_file_sha256: real_sha,
-        archive_file_size: real_size,
-        download_url: "https://example.com/test.zip".to_string(),
-        checksum_file_url: None,
-        checksum_file_name: None,
-        signature_file_url: None,
-        signature_file_name: None,
-        public_key_file_url: None,
-        public_key_file_name: None,
-    };
-
-    let fetcher = MockAttestationFetcher {
-        releases: vec![release],
-        raw_json: Some(raw_with_secret),
-    };
-
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let caps = ProgressCaps {
-        is_tty: false,
-        no_color: true,
-        quiet: false,
-        verbose: false,
-        width: 80,
-    };
-    let progress = Progress::new(caps, Box::new(BufferWriter(buffer.clone())));
-
-    let args = Args {
-        release_date: Some("2026-07-31".to_string()),
-        api_key: Some(fake_key.to_string()),
-        ..Default::default()
-    };
-
-    let res = run_with_fetcher(args, &ws, &fetcher, &progress);
-    assert!(res.is_ok());
-
-    let saved_json_path = ws.join("releases/2026-07-31/trud/trud-releases-2026-07-31.json");
-    assert!(saved_json_path.exists());
-    let saved_content = fs::read_to_string(saved_json_path).unwrap();
-
-    assert!(!saved_content.contains(fake_key), "API key must be redacted!");
-    assert!(saved_content.contains("<REDACTED_API_KEY>"), "Must contain <REDACTED_API_KEY>");
 }
 
 #[test]

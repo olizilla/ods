@@ -12,6 +12,7 @@ pub mod index;
 pub mod oci;
 pub mod ods_xml;
 pub mod roles;
+pub mod terms;
 pub mod workspace;
 
 

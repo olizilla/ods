@@ -67,6 +67,7 @@ ods trud pull [OPTIONS]
 | `--api-key <KEY>` | | `TRUD_API_KEY` | | Your TRUD API key. Required unless set in environment or passed via 1Password (`op run`). |
 | `--release <DATE>` | | | Latest available | Target release date in `YYYY-MM-DD` format (e.g. `2026-07-31`). |
 | `--output <DIR>` | `-o` | | `./ods_data/releases/<date>/` | Custom destination directory for archive and provenance files. |
+| `--force` | `-f` | | `false` | Re-fetch NHS's checksum, signature and key, and download the archive again only if it's missing or doesn't match TRUD's hash. |
 | `--verify-only <FILE>` | | | | Compute local SHA-256 for `<FILE>` and verify against TRUD API without downloading. |
 | `--verbose` | `-v` | | `false` | Print API request URL and raw HTTP response payload before deserialization. |
 
@@ -110,10 +111,10 @@ NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) upda
 `ods trud pull` executes the following sequence:
 1. Queries TRUD REST API (`GET /trud/api/v1/keys/{api_key}/items/341/releases`).
 2. Identifies the target release (defaults to the latest available release date).
-3. Checks for cached local archives in `./ods_data/releases/<date>/raw/`.
-4. Downloads the archive ZIP if not cached.
+3. Checks for a cached local archive in `./ods_data/releases/<date>/trud/`.
+4. Downloads the archive ZIP if it isn't there. A ZIP that is there is never downloaded again while it matches TRUD's hash: the release directory is repaired from it instead (below).
 5. Computes local SHA-256 hash and verifies cryptographic match against TRUD's published `archiveFileSha256`.
-6. Generates or updates `provenance.json`.
+6. Writes `_provenance.json` if it is missing or unreadable.
 7. Updates the workspace active release symlink (`./ods_data/current -> releases/<date>`).
 
 ```mermaid
@@ -126,9 +127,15 @@ flowchart TD
     F --> E
     E --> G{SHA-256 == Official TRUD Hash?}
     G -- Match --> H[✓ Write provenance.json & update current symlink]
-    G -- Mismatch (Local) --> I[Rename bad file to .zip.bad-sha -> Re-download]
+    G -- Mismatch (Local) --> I[Refuse, naming both hashes -> --force renames the bad file to .zip.bad-sha and downloads again]
     G -- Mismatch (Remote) --> J[Retry download once -> Fail if 2nd mismatch]
 ```
+
+### Repairing a release directory
+
+The ZIP is the expensive part, and the one thing TRUD vouches for. When a release directory already holds it and its SHA-256 matches TRUD's listing, `ods trud pull <date>` keeps the ZIP and makes the rest whole from it: it fetches whichever of NHS's checksum, signature and public key are missing, writes `_provenance.json` if it is missing or in an older format, and removes a TRUD listing an older pull saved in `trud/`. The release block names what it did (`repaired: checksum, signature, key`). `--all` does the same for every release the workspace holds.
+
+`--force` fetches NHS's three files again and rewrites `_provenance.json`, and still leaves a matching ZIP alone. A ZIP that doesn't match TRUD's hash is refused without `--force`, with both hashes named; with it, the ZIP is downloaded again.
 
 ### API Key Security & Redaction
 TRUD download URLs embed user API keys directly in their path parameters (`/keys/{api_key}/...`). `ods trud pull` automatically redacts secret API keys from:

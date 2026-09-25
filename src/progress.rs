@@ -86,6 +86,11 @@ pub enum ReleaseBlockState {
         elapsed: Duration,
     },
     Cached,
+    /// The zip was already held and the rest of the directory was repaired or refreshed.
+    /// `what` names it, for example `repaired: checksum, signature, key`.
+    Healed {
+        what: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,6 +176,14 @@ pub fn render_release_block(params: &ReleaseBlockParams) -> Vec<String> {
                 format!("{} files", params.file_count)
             };
             (20, 0, params.archive_size, format!("{}  cached", files_str))
+        }
+        ReleaseBlockState::Healed { what } => {
+            let files_str = if params.file_count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{} files", params.file_count)
+            };
+            (20, 0, params.archive_size, format!("{}  {}", files_str, what))
         }
     };
 

@@ -136,10 +136,10 @@ pub fn generate_datapackage() -> Value {
         "version": DATASET_VERSION,
         "licenses": [
             {
-                "name": "OGL-UK-3.0",
+                "name": crate::terms::LICENSE,
                 "path": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
                 "title": "Open Government Licence v3.0",
-                "attribution": "Contains information from NHS England, licensed under the current version of the Open Government Licence."
+                "attribution": crate::terms::ATTRIBUTION
             }
         ],
         "sources": [

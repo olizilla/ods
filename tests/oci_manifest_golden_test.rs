@@ -99,7 +99,7 @@ fn test_oci_manifest_golden_fixture_structure_and_digest() -> Result<()> {
     let (_tmp, rel_dir) = setup_golden_release_dir();
     run(Args {
         input: Some(rel_dir.clone()),
-        check: false,
+        ..Default::default()
     })?;
 
     let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");

@@ -247,15 +247,27 @@ fn test_batch_all_cached_outputs_four_lines() {
     };
     let progress = Progress::new(caps, Box::new(BufferWriter(buffer.clone())));
 
-    let args = Args {
-        all: true,
-        ..Default::default()
-    };
-
     // Set an initial pin to an older release
     let initial_rel = &releases[0];
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active(&initial_rel.release_date).unwrap();
 
+    // A directory holding only a zip is repaired by the first pull (R4); once every directory is
+    // whole, a batch has nothing to do, and that's what's reported.
+    let repair_buffer = Arc::new(Mutex::new(Vec::new()));
+    let repair_progress = Progress::new(
+        ProgressCaps { is_tty: false, no_color: true, quiet: false, verbose: false, width: 80 },
+        Box::new(BufferWriter(repair_buffer.clone())),
+    );
+    let repaired = run_with_fetcher(Args { all: true, ..Default::default() }, &ws, &fetcher, &repair_progress);
+    assert!(repaired.is_ok());
+    let repair_output = String::from_utf8(repair_buffer.lock().unwrap().clone()).unwrap();
+    assert_eq!(repair_output.matches("repaired:").count(), 4, "each zip-only directory is repaired: {repair_output}");
+    assert!(!repair_output.contains("current →"), "repairing moves no pin");
+
+    let args = Args {
+        all: true,
+        ..Default::default()
+    };
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
 

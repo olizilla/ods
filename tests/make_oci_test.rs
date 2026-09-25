@@ -47,6 +47,7 @@ fn test_args(input: PathBuf, check: bool) -> Args {
     Args {
         input: Some(input),
         check,
+        ..Default::default()
     }
 }
 

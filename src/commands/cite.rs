@@ -231,8 +231,9 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             }
             writeln!(
                 writer,
-                "  note = {{Manifest: {}. Contains information from NHS England, licensed under the current version of the Open Government Licence.}}",
-                manifest_digest
+                "  note = {{Manifest: {}. {}}}",
+                manifest_digest,
+                crate::terms::ATTRIBUTION
             )?;
             writeln!(writer, "}}\n")?;
 
@@ -267,7 +268,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "publisher": "ods.fyi",
                 "URL": "https://ods.fyi",
                 "version": dataset_version,
-                "note": format!("Manifest: {}. Contains information from NHS England, licensed under the current version of the Open Government Licence.", manifest_digest)
+                "note": format!("Manifest: {}. {}", manifest_digest, crate::terms::ATTRIBUTION)
             });
             if let Some(ref doi) = dataset_doi {
                 data_obj["DOI"] = json!(doi);
@@ -316,8 +317,10 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             writeln!(writer, "  The source:")?;
             writeln!(
                 writer,
-                "    NHS England. ({}). NHS Organisation Data Service XML Data, release {}\n    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n    Contains information from NHS England, licensed under the current version of the\n    Open Government Licence.",
-                year, d_tag
+                "    NHS England. ({}). NHS Organisation Data Service XML Data, release {}\n    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n    {}",
+                year,
+                d_tag,
+                wrap_words(crate::terms::ATTRIBUTION, 80).join("\n    ")
             )?;
             writeln!(writer)?;
             writeln!(writer, "  The data:")?;
@@ -367,4 +370,19 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     }
 
     Ok(())
+}
+
+/// Breaks `text` at spaces into lines of at most `width` characters.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(line) if line.len() + 1 + word.len() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
 }

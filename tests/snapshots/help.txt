@@ -64,7 +64,7 @@ Arguments:
   [RELEASE_DATE]  Target TRUD release date in YYYY-MM-DD format (defaults to latest available)
 
 Options:
-  -f, --force                          Force re-download or re-pull of specified release
+  -f, --force                          Re-fetch NHS's checksum, signature and key, and download the archive again only if it's missing or doesn't match TRUD's hash
       --jobs <JOBS>                    Number of concurrent download workers (max: 8) [default: 4]
   -q, --quiet                          Show errors and summary only
       --no-progress                    Disable interactive live progress animations

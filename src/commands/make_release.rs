@@ -255,7 +255,7 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
     // 3. All checks passed: run ods make oci to generate oci/ wholesale
     crate::commands::make_oci::run(crate::commands::make_oci::Args {
         input: Some(release_dir.clone()),
-        check: false,
+        ..Default::default()
     })?;
 
     // 4. Read back manifest from oci/
@@ -345,24 +345,7 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
         });
     }
 
-    // Step 1: Record TRUD's releases
-    let trud_resp_path = release_dir.join("trud").join(format!("trud-releases-{}.json", date));
-    if trud_resp_path.exists() {
-        let bytes = fs::read(&trud_resp_path)?;
-        let resp: crate::commands::fetch::TrudApiResponse = serde_json::from_slice(&bytes)?;
-        for item in resp.releases {
-            if !index.releases.iter().any(|r| r.trud_release_date == item.release_date) {
-                index.releases.push(Release {
-                    trud_release_date: item.release_date,
-                    trud_release_sha256: item.archive_file_sha256.to_uppercase(),
-                    trud_release_filesize_bytes: item.archive_file_size,
-                    datasets: Vec::new(),
-                });
-            }
-        }
-    }
-
-    // Step 3: Add dataset (or preserve existing on identical re-publish)
+    // Add the dataset (or preserve the existing row on an identical re-publish)
     let new_dataset = Dataset {
         dataset_version: version.clone(),
         manifest_digest: manifest_digest.clone(),
@@ -575,43 +558,7 @@ pub fn perform_all_release_checks(
         });
     }
 
-    let trud_resp_path = release_dir.join("trud").join(format!("trud-releases-{}.json", date));
-
-    // Step 1: Record TRUD's releases
-    if trud_resp_path.exists() {
-        if let Ok(bytes) = fs::read(&trud_resp_path) {
-            if let Ok(resp) = serde_json::from_slice::<crate::commands::fetch::TrudApiResponse>(&bytes) {
-                for item in &resp.releases {
-                    let item_sha = item.archive_file_sha256.to_uppercase();
-                    if let Some(existing) = candidate_index.releases.iter().find(|r| r.trud_release_date == item.release_date) {
-                        let existing_sha = existing.trud_release_sha256.to_uppercase();
-                        if existing_sha != item_sha {
-                            let ex_short = if existing_sha.len() >= 8 { &existing_sha[..8] } else { &existing_sha };
-                            let item_short = if item_sha.len() >= 8 { &item_sha[..8] } else { &item_sha };
-                            failures.push(format!(
-                                "The index records TRUD release {} with SHA-256 {}…, but trud/trud-releases-{}.json says {}…\n  TRUD may have reissued it. Nothing was written.",
-                                item.release_date, ex_short, date, item_short
-                            ));
-                        } else if existing.trud_release_filesize_bytes != item.archive_file_size {
-                            failures.push(format!(
-                                "The index records TRUD release {} with size {} bytes, but trud/trud-releases-{}.json says {} bytes\n  TRUD may have reissued it. Nothing was written.",
-                                item.release_date, existing.trud_release_filesize_bytes, date, item.archive_file_size
-                            ));
-                        }
-                    } else {
-                        candidate_index.releases.push(Release {
-                            trud_release_date: item.release_date.clone(),
-                            trud_release_sha256: item_sha,
-                            trud_release_filesize_bytes: item.archive_file_size,
-                            datasets: Vec::new(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Step 2: Check this release's source
+    // Check this release's source: the row this release will land on holds the archive's own hash
     if let Some(rel_row) = candidate_index.releases.iter().find(|r| r.trud_release_date == date) {
         if !prov_sha.is_empty() && rel_row.trud_release_sha256.to_uppercase() != prov_sha {
             failures.push(format!(
@@ -621,7 +568,7 @@ pub fn perform_all_release_checks(
         }
     }
 
-    // Step 3 (Check 14): Append-only check via previous.merge(&candidate)
+    // Check 14: the append-only rule, via previous.merge(&candidate)
     let (candidate_manifest_digest, candidate_filesize_bytes) =
         match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, expected_version) {
             Ok((m, _)) => match m.digest() {

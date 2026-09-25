@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::oci::*;
 use crate::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 pub struct Args {
     /// Path to compiled release directory (defaults to active release)
     #[arg(long, short)]
@@ -17,6 +17,20 @@ pub struct Args {
     /// Verify existing OCI layout without rebuilding
     #[arg(long)]
     pub check: bool,
+
+    /// Pack the release's source archive (`trud/`: NHS's zip, checksum, signature and key) into
+    /// `trud/oci/`, instead of the dataset
+    #[arg(long)]
+    pub source: bool,
+
+    /// With --source, pack every release in the workspace that holds a zip, skipping any whose
+    /// `trud/oci/` already verifies
+    #[arg(long, requires = "source")]
+    pub all: bool,
+
+    /// Workspace to pack with --all
+    #[arg(long, short = 'w', requires = "all")]
+    pub workspace: Option<PathBuf>,
 }
 
 /// Builds an OCI manifest directly by scanning the release directory files and computing digests.
@@ -75,7 +89,7 @@ pub fn build_manifest_from_dir(
     }
     annotations.insert(
         ANNOTATION_LICENSES.to_string(),
-        "OGL-UK-3.0".to_string(),
+        crate::terms::LICENSE.to_string(),
     );
     annotations.insert(
         ANNOTATION_SOURCE.to_string(),
@@ -103,7 +117,92 @@ pub fn build_manifest_from_dir(
     Ok((manifest, manifest_bytes))
 }
 
+/// `ods make oci --source`: packs a release's `trud/` as an OCI bundle of NHS's files.
+fn run_source(args: Args) -> Result<()> {
+    use crate::oci::source;
+    use crate::progress::{format_duration, format_size};
+
+    let report = |refusal: &source::Refusal| eprintln!("{}", refusal.block());
+
+    if args.all {
+        let started = std::time::Instant::now();
+        let ws = crate::workspace::Workspace::open(args.workspace.as_deref())?;
+        let mut dirs: Vec<PathBuf> = fs::read_dir(ws.root().join("releases"))
+            .map(|entries| entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        dirs.sort();
+        dirs.reverse(); // newest first
+        let holds_a_zip = |dir: &Path| {
+            fs::read_dir(dir.join("trud"))
+                .map(|entries| entries.flatten().any(|e| e.path().extension().is_some_and(|x| x == "zip")))
+                .unwrap_or(false)
+        };
+        let (mut packed, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+        for dir in dirs.iter().filter(|d| holds_a_zip(d)) {
+            if source::verify(dir).is_ok() {
+                skipped += 1;
+                continue;
+            }
+            match source::pack(dir) {
+                Ok(bundle) => {
+                    packed += 1;
+                    println!("✓ {}  {}  zip, checksum, signature, key", bundle.date, format_size(bundle.zip_size));
+                }
+                Err(refusal) => {
+                    failed += 1;
+                    report(&refusal);
+                }
+            }
+        }
+        let symbol = if failed > 0 { "✖" } else { "✓" };
+        println!(
+            "{} {} packed · {} skipped · {} failed  in {}",
+            symbol,
+            packed,
+            skipped,
+            failed,
+            format_duration(started.elapsed())
+        );
+        if failed > 0 {
+            return Err(crate::commands::pull::AlreadyReported.into());
+        }
+        return Ok(());
+    }
+
+    let release_dir = match args.input {
+        Some(ref p) => p.clone(),
+        None => {
+            let ws = crate::workspace::Workspace::open(None)?;
+            let (date, active_path) = ws.active_release()?;
+            crate::workspace::report_inferred_release_write(&date, &active_path);
+            active_path
+        }
+    };
+    if !release_dir.exists() {
+        bail!("Release directory does not exist: {}", release_dir.display());
+    }
+    let result = if args.check { source::verify(&release_dir) } else { source::pack(&release_dir) };
+    match result {
+        Ok(bundle) => {
+            if args.check {
+                println!("✓ {}  trud/oci verified", bundle.date);
+            } else {
+                println!("✓ {}  {}  zip, checksum, signature, key", bundle.date, format_size(bundle.zip_size));
+            }
+            println!("  manifest {}", bundle.manifest_digest);
+            Ok(())
+        }
+        Err(refusal) => {
+            report(&refusal);
+            Err(crate::commands::pull::AlreadyReported.into())
+        }
+    }
+}
+
 pub fn run(args: Args) -> Result<()> {
+    if args.source {
+        return run_source(args);
+    }
     let (release_dir, inferred_date) = match args.input {
         Some(ref p) => (p.clone(), None),
         None => {
