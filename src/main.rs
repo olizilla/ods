@@ -53,12 +53,6 @@ enum Command {
 
     /// Pin an active dataset release
     Use(commands::use_cmd::Args),
-
-    /// Audit release data against TRUD source XML
-    Audit(commands::audit::Args),
-
-    /// Compare two dataset releases
-    Diff(commands::diff::Args),
 }
 
 fn main() {
@@ -72,8 +66,6 @@ fn main() {
         Command::Trud(args) => commands::trud::run(args),
         Command::Make(args) => commands::make::run(args),
         Command::Use(args) => commands::use_cmd::run(args),
-        Command::Audit(args) => commands::audit::run(args),
-        Command::Diff(args) => commands::diff::run(args),
     };
 
     // Release XML is unpacked to scratch space (~660 MB) for the duration of

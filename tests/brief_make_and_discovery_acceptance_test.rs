@@ -158,7 +158,7 @@ fn test_make_into_new_release_does_not_move_active_current_pointer() {
     );
 }
 
-/// Task 6 Acceptance: `ods audit --workspace <path> --full` against an unpinned external workspace succeeds.
+/// Task 6 Acceptance: `ods trud audit --workspace <path> --full` against an unpinned external workspace succeeds.
 #[test]
 fn test_audit_workspace_flag_authoritative_on_unpinned_workspace() {
     let tmp = TempDir::new().unwrap();
@@ -195,13 +195,14 @@ fn test_audit_workspace_flag_authoritative_on_unpinned_workspace() {
 
     let out_audit = ods_binary()
         .current_dir(&isolated_cwd)
+        .arg("trud")
         .arg("audit")
         .arg("--workspace")
         .arg(&external_ws)
         .arg("--all")
         .arg("--full")
         .output()
-        .expect("execute ods audit --workspace <path> --all --full");
+        .expect("execute ods trud audit --workspace <path> --all --full");
 
     let stdout_audit = String::from_utf8_lossy(&out_audit.stdout);
     let stderr_audit = String::from_utf8_lossy(&out_audit.stderr);

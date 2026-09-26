@@ -387,8 +387,8 @@ fn test_read_commands_refuse_when_no_workspace_and_write_nothing() {
         &["find", "sedbergh"],
         &["info", "RAE01"],
         &["role", "RO177"],
-        &["audit"],
-        &["diff"],
+        &["trud", "audit"],
+        &["trud", "diff"],
     ];
 
     for cmd_args in read_commands {

@@ -855,7 +855,7 @@ fn generate_workspace_readme(
          ## CLI Commands\n\n\
          - `ods find <query>`: Fast terminal lookup\n\
          - `ods cite`: Output APA and BibTeX academic citations\n\
-         - `ods diff`: Diff active release against previous release\n"
+         - `ods trud diff`: Diff active release against previous release\n"
     );
 
     fs::write(readme_path, content).context("Failed to write workspace README.md")?;

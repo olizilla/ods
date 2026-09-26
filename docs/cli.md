@@ -35,8 +35,6 @@ Commands:
   trud   Build from official NHS source data (requires TRUD API key)
   make   Compile TRUD XML into Parquet tables
   use    Pin an active dataset release
-  audit  Audit release data against TRUD source XML
-  diff   Compare two dataset releases
   help   Print this message or the help of the given subcommand(s)
 
 Options:
