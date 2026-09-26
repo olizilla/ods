@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -7,6 +8,13 @@ use std::path::{Path, PathBuf};
 
 use crate::oci::*;
 use crate::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
 
 #[derive(Parser, Debug, Clone, Default)]
 pub struct Args {
@@ -31,6 +39,28 @@ pub struct Args {
     /// Workspace to pack with --all
     #[arg(long, short = 'w', requires = "all")]
     pub workspace: Option<PathBuf>,
+
+    /// Output format: text or json. json prints one release's manifest digest to stdout, with
+    /// human lines on stderr; refused with --all, which packs many releases
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+}
+
+/// `--format json`'s only stdout line for a dataset: the minimum CI and scripts need to record a
+/// build without re-deriving it from the OCI layout on disk.
+#[derive(Serialize)]
+struct DigestReport {
+    manifest_digest: String,
+    trud_release_date: String,
+    dataset_version: String,
+}
+
+/// `--format json`'s only stdout line for `--source` (an archive image): no `dataset_version`,
+/// since an archive image isn't a dataset and has none.
+#[derive(Serialize)]
+struct SourceDigestReport {
+    manifest_digest: String,
+    trud_release_date: String,
 }
 
 /// Builds an OCI manifest directly by scanning the release directory files and computing digests.
@@ -124,6 +154,11 @@ fn run_source(args: Args) -> Result<()> {
 
     let report = |refusal: &source::Refusal| eprintln!("{}", refusal.block());
 
+    if args.all && args.format == OutputFormat::Json {
+        eprintln!("✖ --format json is per release: drop --all, or run without --format json");
+        return Err(crate::commands::pull::AlreadyReported.into());
+    }
+
     if args.all {
         let started = std::time::Instant::now();
         let ws = crate::workspace::Workspace::open(args.workspace.as_deref())?;
@@ -184,12 +219,29 @@ fn run_source(args: Args) -> Result<()> {
     let result = if args.check { source::verify(&release_dir) } else { source::pack(&release_dir) };
     match result {
         Ok(bundle) => {
+            // Text: the human report on stdout, as before. Json: the same lines move to
+            // stderr, and stdout carries only the digest report a script needs.
+            let print = |line: String| {
+                if args.format == OutputFormat::Json {
+                    eprintln!("{}", line);
+                } else {
+                    println!("{}", line);
+                }
+            };
             if args.check {
-                println!("✓ {}  trud/oci verified", bundle.date);
+                print(format!("✓ {}  trud/oci verified", bundle.date));
             } else {
-                println!("✓ {}  {}  zip, checksum, signature, key", bundle.date, format_size(bundle.zip_size));
+                print(format!("✓ {}  {}  zip, checksum, signature, key", bundle.date, format_size(bundle.zip_size)));
             }
-            println!("  manifest {}", bundle.manifest_digest);
+            print(format!("  manifest {}", bundle.manifest_digest));
+
+            if args.format == OutputFormat::Json {
+                let report = SourceDigestReport {
+                    manifest_digest: bundle.manifest_digest.clone(),
+                    trud_release_date: bundle.date.clone(),
+                };
+                println!("{}", serde_json::to_string(&report)?);
+            }
             Ok(())
         }
         Err(refusal) => {
@@ -351,25 +403,37 @@ pub fn run(args: Args) -> Result<()> {
 
     let pub_warnings = prov.validate_publishable();
 
-    if args.check {
-        println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
-        println!("✓ oci/ verified");
-        if !pub_warnings.is_empty() {
-            for warn in &pub_warnings {
-                println!("  {}", warn);
-            }
-            println!("  this layout is structurally valid; `ods make release` will refuse it");
+    // Text: the human report on stdout, as before, now naming the manifest digest on its own
+    // line after the verified/written line, the way --source already does. Json: the same
+    // lines move to stderr, and stdout carries only the digest report a script needs.
+    let print = |line: String| {
+        if args.format == OutputFormat::Json {
+            eprintln!("{}", line);
+        } else {
+            println!("{}", line);
         }
-    } else {
-        println!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb);
-        println!("✓ oci/ written, manifest {}", manifest_digest);
-        if !pub_warnings.is_empty() {
-            for warn in &pub_warnings {
-                println!("  {}", warn);
-            }
-            println!("  this layout is structurally valid; `ods make release` will refuse it");
+    };
+
+    print(format!("* {} layers, {:.1} MB", manifest.layers.len(), size_mb));
+    print(if args.check { "✓ oci/ verified".to_string() } else { "✓ oci/ written".to_string() });
+    print(format!("  manifest {}", manifest_digest));
+    if !pub_warnings.is_empty() {
+        for warn in &pub_warnings {
+            print(format!("  {}", warn));
         }
-        println!("✓ tags {}, {}_{}", date, date, version);
+        print("  this layout is structurally valid; `ods make release` will refuse it".to_string());
+    }
+    if !args.check {
+        print(format!("✓ tags {}, {}_{}", date, date, version));
+    }
+
+    if args.format == OutputFormat::Json {
+        let report = DigestReport {
+            manifest_digest: manifest_digest.clone(),
+            trud_release_date: date.clone(),
+            dataset_version: version.clone(),
+        };
+        println!("{}", serde_json::to_string(&report)?);
     }
 
     Ok(())

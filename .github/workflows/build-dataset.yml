@@ -1,243 +1,369 @@
 name: Build dataset
 
-# The only place anything is built, gated, pushed to a dataset package, or attested. Called by
-# monthly-dataset.yml (a new TRUD release) and rebuild-datasets.yml (the back catalogue, or a
-# schema change), which differ only in where the archive comes from. Every attestation names this
-# file as its signer, so a reader verifies one workflow.
+# Builds and verifies and attsets our dataset releases.
 #
-# build (ubuntu-latest) and witness (macos-latest) are each a matrix, one job instance per date
-# in the plan, so every date's artifact is independent: push, and a rebuild of the back
-# catalogue, only ever download the one date they need, never every date in the run. gate
-# compares each date's manifest digest between the two runners and refuses to go on if any
-# differ; push publishes only build's (ubuntu's) bytes, once gate has passed, and attests each
-# pushed digest; candidate then tries the result the way `ods pull --index` would.
+# - archive: Be kind to NHS bandwidth. Cache archives we fetch in ghcr.io/olizilla/nhs-ods-xml
+# For every release date, check if we already have the archive in the repo. if not we fetch
+# it once, verify it, and push it there so rebuilds and tests pull it from our verfied cache.
+#
+# - witness (macos): Ensure `ods make` gives reproducible outout across different architectures.
+# Builds the parquet for each release date and records the expected manifest hash.
+# output: An object mapping release date to manifest digest.
+#
+# - primary (ubuntu): Builds the release. Checks the output hash matches the one created by witness.
+# Pushes the parquet image to ghcr.io/olizilla/ods-data. Verifies the digest with `ods pull`.
+# Attests that digest it pushed and re-verified with actions/attest.
+#
+# - candidate: creates a proposed update to our published official releases.json for review.  
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
+      dates:
+        description: "latest, all, or space-separated YYYY-MM-DD dates"
+        required: true
+        default: latest
       repository:
-        description: ods-data or ods-data-rehearsal
+        description: The dataset package to build for
         required: true
-        type: string
-      plan-artifact:
-        description: Artifact holding plan.json ({date, bundle_digest}) and index.json
-        required: true
-        type: string
-      trud-listing-status:
-        description: "checked, or 'not checked: <reason>' — shown in the Source table"
-        required: true
-        type: string
+        type: choice
+        default: ods-data-rehearsal
+        options:
+          - ods-data-rehearsal
+          - ods-data
 
 permissions:
   contents: read
   packages: write
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  read-plan:
-    name: Read the plan
+  archive:
+    name: Ensure every date's archive image exists
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.read.outputs.matrix }}
+      matrix: ${{ steps.fetch.outputs.matrix }}
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/download-artifact@v6
-        with:
-          name: ${{ inputs.plan-artifact }}
-          path: plan
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - id: read
-        run: echo "matrix=$(jq -c '.' plan/plan.json)" >>"$GITHUB_OUTPUT"
-
-  build:
-    name: Build ${{ matrix.date }} (ubuntu-latest)
-    needs: read-plan
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.read-plan.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/build-release
-        with:
-          date: ${{ matrix.date }}
-          bundle-digest: ${{ matrix.bundle_digest }}
-          plan-artifact: ${{ inputs.plan-artifact }}
-          trud-listing-status: ${{ inputs.trud-listing-status }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  witness:
-    name: Witness ${{ matrix.date }} (macos-latest)
-    needs: read-plan
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.read-plan.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/build-release
-        with:
-          date: ${{ matrix.date }}
-          bundle-digest: ${{ matrix.bundle_digest }}
-          plan-artifact: ${{ inputs.plan-artifact }}
-          trud-listing-status: ${{ inputs.trud-listing-status }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  gate:
-    name: Gate (ubuntu-latest == macos-latest)
-    needs: [read-plan, build, witness]
-    runs-on: ubuntu-latest
-    outputs:
-      # A JSON array of {date, digest}, one entry per date, gated equal on both runners.
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v7
-
-      # Every date's artifact, one per runner, merged into one directory per runner: gate is the
-      # one job that legitimately needs every date's bytes, to diff them.
-      - uses: actions/download-artifact@v6
-        with:
-          pattern: release-dir-Linux-*
-          path: linux
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v6
-        with:
-          pattern: release-dir-macOS-*
-          path: macos
-          merge-multiple: true
-
-      - name: Collect each runner's manifest digests
+      - &check_the_tag
+        name: Check the tag
+        id: check_the_tag
         run: |
-          scripts/ci-collect-digests.sh linux digests-linux.txt
-          scripts/ci-collect-digests.sh macos digests-macos.txt
+          version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+          if [[ "${GITHUB_REF_TYPE:-}" != "tag" || "${GITHUB_REF_NAME:-}" != "v$version" ]]; then
+            echo "✖ this workflow only runs from the tag v$version (Cargo.toml's version), workflow_dispatch only" >&2
+            echo "  it ran from ${GITHUB_REF_TYPE:-<unset>} '${GITHUB_REF_NAME:-<unset>}'" >&2
+            exit 1
+          fi
+          echo "✓ running from tag v$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
 
-      - name: Compare manifest digests
-        run: scripts/compare-digests.sh digests-linux.txt digests-macos.txt
-
-      - id: matrix
+      - &install_rust_toolchain
+        name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: |
-          matrix="$(jq -R -s -c '
-            split("\n") | map(select(length > 0) | split(" ") | {date: .[0], digest: .[1]})
-          ' digests-linux.txt)"
+          rustup toolchain install
+          rustc --version
+
+      - &cache_rust_build
+        name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: build-dataset-${{ runner.os }}
+
+      - &cargo_build
+        name: Build and install ods
+        run: |
+          cargo install --locked --path .
+          ods --version
+
+      - &install_oras
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+
+      - &login_to_ghcr
+        name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Query TRUD's listing
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+        run: ods trud list --all --format json >listing.json
+
+      - name: Resolve the dates to build
+        env:
+          DATES_INPUT: ${{ inputs.dates }}
+        run: |
+          if [[ "$DATES_INPUT" == "latest" ]]; then
+            jq -r '.[0].date' listing.json >dates.txt
+          elif [[ "$DATES_INPUT" == "all" ]]; then
+            oras repo tags ghcr.io/olizilla/nhs-ods-xml | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' | sort >dates.txt
+          else
+            tr ' ' '\n' <<<"$DATES_INPUT" >dates.txt
+          fi
+          echo "* building: $(tr '\n' ' ' <dates.txt)"
+
+      - name: Find archives to fetch from TRUD
+        run: |
+          # `oras repo tags` decides which dates already exist; a failing call is a failure,
+          # never read as "none of them exist".
+          existing_tags="$(oras repo tags ghcr.io/olizilla/nhs-ods-xml)" || {
+            echo "✖ listing tags for ghcr.io/olizilla/nhs-ods-xml failed" >&2
+            exit 1
+          }
+
+          : >cached.jsonl
+          : >to_fetch.txt
+          while read -r date; do
+            if grep -qx "$date" <<<"$existing_tags"; then
+              digest="$(oras resolve "ghcr.io/olizilla/nhs-ods-xml:$date")"
+              echo "✓ $date  already in ghcr.io/olizilla/nhs-ods-xml:$date  $digest"
+              jq -n --arg d "$date" --arg dig "$digest" '{date: $d, bundle_digest: $dig}' >>cached.jsonl
+            else
+              echo "* $date  not cached yet: fetch it from TRUD"
+              echo "$date" >>to_fetch.txt
+            fi
+          done <dates.txt
+
+      - name: Fetch and cache archives from TRUD
+        id: fetch
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+        run: |
+          : >fetched.jsonl
+          # Dates come in on fd 3, so nothing in the loop can read them from stdin
+          while read -r date <&3; do
+            echo "::group::$date"
+            ods trud pull "$date" -w "$RUNNER_TEMP/ws"
+            scripts/verify-trud-bundle.sh "$RUNNER_TEMP/ws/releases/$date/trud" data/releases.json
+            ods make oci --source -i "$RUNNER_TEMP/ws/releases/$date"
+            scripts/push-source-bundles.sh -w "$RUNNER_TEMP/ws" --push
+            digest="$(jq -r '.manifests[0].digest' "$RUNNER_TEMP/ws/releases/$date/trud/oci/index.json")"
+
+            # Check the tags. Fetch the image back, re-verify the files match.
+            resolved="$(oras resolve "ghcr.io/olizilla/nhs-ods-xml:$date")"
+            if [[ "$resolved" != "$digest" ]]; then
+              echo "✖ ghcr.io/olizilla/nhs-ods-xml:$date resolves to $resolved, not the digest just packed $digest" >&2
+              exit 1
+            fi
+            rm -rf "$RUNNER_TEMP/archive-reverify"
+            oras pull "ghcr.io/olizilla/nhs-ods-xml@$digest" -o "$RUNNER_TEMP/archive-reverify" >/dev/null
+            scripts/verify-trud-bundle.sh "$RUNNER_TEMP/archive-reverify" data/releases.json
+            echo "✓ $date  pushed and re-verified  $digest"
+
+            jq -n --arg d "$date" --arg dig "$digest" '{date: $d, bundle_digest: $dig}' >>fetched.jsonl
+            echo "::endgroup::"
+          done 3<to_fetch.txt
+
+          # Every date to build: the ones already cached, and the ones just fetched
+          matrix="$(jq -s -c '. | sort_by(.date)' cached.jsonl fetched.jsonl)"
           echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
 
-  push:
-    name: Push and attest ${{ matrix.date }}
-    needs: gate
+  witness:
+    name: Witness every date (macos-latest)
+    needs: archive
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      digests: ${{ steps.build.outputs.digests }}
+    steps:
+      - *checkout
+
+      - *check_the_tag
+
+      - *install_rust_toolchain
+
+      - *cache_rust_build
+
+      - *cargo_build
+
+      - *install_oras
+
+      - name: Install gnupg (gpgv)
+        run: brew install gnupg
+
+      - *login_to_ghcr
+
+      - name: Build every date
+        id: build
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+          MATRIX: ${{ needs.archive.outputs.matrix }}
+        run: |
+          : >digests.json.tmp
+          echo "$MATRIX" | jq -c '.[]' | while read -r row; do
+            date="$(jq -r '.date' <<<"$row")"
+            bundle_digest="$(jq -r '.bundle_digest' <<<"$row")"
+
+            scripts/ci-build-date.sh "$date" "$bundle_digest" "release/$date" | tee build.log
+            digest="$(tail -n1 build.log)"
+            echo "✓ $date  built  $digest"
+
+            jq -n --arg d "$date" --arg dig "$digest" '{($d): $dig}' >>digests.json.tmp
+          done
+
+          digests="$(jq -s -c 'add // {}' digests.json.tmp)"
+          echo "digests=$digests" >>"$GITHUB_OUTPUT"
+
+  primary:
+    name: Primary ${{ matrix.date }} (ubuntu-latest)
+    needs: [archive, witness]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include: ${{ fromJSON(needs.gate.outputs.matrix) }}
+        include: ${{ fromJSON(needs.archive.outputs.matrix) }}
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v7
-      - run: scripts/check-tool-tag.sh
+      - *checkout
 
-      - id: version
-        run: echo "version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)" >>"$GITHUB_OUTPUT"
+      - *check_the_tag
 
-      - uses: oras-project/setup-oras@v1
+      - *install_rust_toolchain
 
-      # Exactly this date's artifact — never the whole run's.
-      - uses: actions/download-artifact@v6
-        with:
-          name: release-dir-Linux-${{ matrix.date }}
-          path: pushed
+      - *cache_rust_build
 
-      - run: tar -xf "pushed/${{ matrix.date }}.tar" -C pushed
+      - *cargo_build
 
-      - name: Log in to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - *install_oras
 
-      - name: Push ${{ matrix.date }}
+      - *login_to_ghcr
+
+      - name: Pull, verify and build ${{ matrix.date }}
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+          DATE: ${{ matrix.date }}
+          BUNDLE_DIGEST: ${{ matrix.bundle_digest }}
+        run: |
+          scripts/ci-build-date.sh "$DATE" "$BUNDLE_DIGEST" "release/$DATE" | tee build.log
+          tail -n1 build.log >digest.txt
+
+      - name: Compare with the witness
+        env:
+          DATE: ${{ matrix.date }}
+          WITNESS_DIGEST: ${{ fromJSON(needs.witness.outputs.digests)[matrix.date] }}
+        run: |
+          primary_digest="$(cat digest.txt)"
+          if [[ "$primary_digest" != "$WITNESS_DIGEST" ]]; then
+            echo "✖ $DATE  ubuntu-latest and macos-latest disagree" >&2
+            echo "  ubuntu-latest (primary)  $primary_digest" >&2
+            echo "  macos-latest (witness)   $WITNESS_DIGEST" >&2
+            exit 1
+          fi
+          echo "✓ $DATE  ubuntu-latest and macos-latest agree: $primary_digest"
+
+      - name: Push
         id: push
         env:
           REPOSITORY: ${{ inputs.repository }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.check_the_tag.outputs.version }}
           DATE: ${{ matrix.date }}
-          GATED_DIGEST: ${{ matrix.digest }}
         run: |
-          scripts/ci-push-dataset.sh "$REPOSITORY" "$VERSION" "$DATE" "$GATED_DIGEST" \
-            "pushed/$DATE/release/oci" digest.txt
-          echo "digest=$(cat digest.txt)" >>"$GITHUB_OUTPUT"
+          gated_digest="$(cat digest.txt)"
+          scripts/ci-push-dataset.sh "$REPOSITORY" "$VERSION" "$DATE" "$gated_digest" "release/$DATE/oci" pushed-digest.txt
+          echo "digest=$(cat pushed-digest.txt)" >>"$GITHUB_OUTPUT"
 
-      - name: Attest the pushed digest
-        uses: actions/attest-build-provenance@v3
+      - name: Record
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          DATE: ${{ matrix.date }}
+        run: |
+          jq --arg a "https://ods.fyi/v2/$REPOSITORY" --arg b "https://ghcr.io/v2/olizilla/$REPOSITORY" \
+            '.mirrors = [{url: $a}, {url: $b}]' \
+            data/releases.json >candidate-full.json
+          ods make release --input "release/$DATE" --index candidate-full.json
+          jq --arg d "$DATE" '[.releases[] | select(.trud_release_date == $d)][0]' candidate-full.json >"candidate-$DATE.json"
+
+      - name: Re-verify with ods pull
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          DATE: ${{ matrix.date }}
+        run: |
+          # Reads ghcr.io only — the copy just pushed, not whichever mirror answers first.
+          jq --arg g "https://ghcr.io/v2/olizilla/$REPOSITORY" '.mirrors = [{url: $g}]' \
+            candidate-full.json >candidate-ghcr-only.json
+
+          rm -rf "$RUNNER_TEMP/reverify"
+          mkdir -p "$RUNNER_TEMP/reverify"
+          cp candidate-ghcr-only.json "$RUNNER_TEMP/reverify/candidate-ghcr-only.json"
+          (cd "$RUNNER_TEMP/reverify" && ods pull "$DATE" --index candidate-ghcr-only.json)
+
+      - name: Attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/olizilla/${{ inputs.repository }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: candidate-${{ matrix.date }}
+          path: candidate-${{ matrix.date }}.json
+          if-no-files-found: error
+
   candidate:
-    name: Try the candidate
-    needs: [gate, push]
+    name: Merge the candidate index
+    needs: [archive, primary]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - run: scripts/check-tool-tag.sh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - run: cargo build --release --locked
-
-      # Every date's artifact — candidate.json gets a row for each.
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
-          pattern: release-dir-Linux-*
-          path: pushed
+          pattern: candidate-*
+          path: rows
           merge-multiple: true
 
-      - name: Extract every date
+      - name: Merge every date's row
         run: |
-          for f in pushed/*.tar; do
-            tar -xf "$f" -C pushed
-          done
+          rows_json="$(jq -s '.' rows/*.json)"
+          dup="$(jq -r '[.[].trud_release_date] | group_by(.) | map(select(length > 1)) | flatten | unique | .[]' <<<"$rows_json")"
+          if [[ -n "$dup" ]]; then
+            echo "✖ more than one primary recorded the same date:" >&2
+            while IFS= read -r date; do echo "  $date" >&2; done <<<"$dup"
+            exit 1
+          fi
+          jq --argjson rows "$rows_json" '
+            ($rows | map(.trud_release_date)) as $recorded_dates
+            | .releases = ([.releases[] | select(.trud_release_date as $d | ($recorded_dates | index($d)) == null)] + $rows
+                           | sort_by(.trud_release_date) | reverse)
+          ' data/releases.json >"$RUNNER_TEMP/candidate.json"
 
-      - id: version
-        run: echo "version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)" >>"$GITHUB_OUTPUT"
-
-      - name: Start candidate.json from the tag's data/releases.json
+      - name: Write the job summary
         env:
-          REPOSITORY: ${{ inputs.repository }}
-        run: |
-          jq --arg a "https://ods.fyi/v2/$REPOSITORY" --arg b "https://ghcr.io/v2/olizilla/$REPOSITORY" \
-            '.mirrors = [{url: $a}, {url: $b}]' \
-            data/releases.json >"$RUNNER_TEMP/candidate.json"
-
-      - name: Record every date, and write the job summary
-        env:
-          REPOSITORY: ${{ inputs.repository }}
-          VERSION: ${{ steps.version.outputs.version }}
-          MATRIX: ${{ needs.gate.outputs.matrix }}
+          MATRIX: ${{ needs.archive.outputs.matrix }}
         run: |
           {
             echo "### Candidate"
-            echo "| date | manifest | ubuntu-latest | macos-latest | pushed | attested |"
-            echo "| :--- | :--- | :--- | :--- | :--- | :--- |"
+            echo "| date | manifest |"
+            echo "| :--- | :--- |"
           } >>"$GITHUB_STEP_SUMMARY"
 
-          echo "$MATRIX" | jq -c '.[]' | while read -r entry; do
-            date="$(jq -r '.date' <<<"$entry")"
-            digest="$(jq -r '.digest' <<<"$entry")"
-            ./target/release/ods make release --input "pushed/$date/release" --index "$RUNNER_TEMP/candidate.json"
-            echo "| $date | \`$digest\` | ✓ | ✓ | ${date}_${VERSION}, $date | ✓ |" >>"$GITHUB_STEP_SUMMARY"
+          echo "$MATRIX" | jq -r '.[].date' | while read -r date; do
+            digest="$(jq -r --arg d "$date" '[.releases[] | select(.trud_release_date == $d) | .datasets[]][0].manifest_digest' "$RUNNER_TEMP/candidate.json")"
+            echo "| $date | \`$digest\` |" >>"$GITHUB_STEP_SUMMARY"
           done
 
-      - name: Upload candidate.json
-        uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: candidate
           path: ${{ runner.temp }}/candidate.json

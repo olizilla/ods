@@ -78,7 +78,7 @@ fn make_writes_one_orgs_table_with_archived_organisations_sorted_active_first() 
     let zip_path = write_release_zip(tmp.path(), &full, &archive);
 
     let out_dir = tmp.path().join("parquet_out");
-    parquet::run(parquet::Args { input: Some(zip_path), output: Some(out_dir.clone()), ..Default::default() })
+    parquet::run(parquet::Args { input: Some(zip_path), output: Some(out_dir.clone()), force: true, ..Default::default() })
         .expect("make on a release holding fullfile.zip and archive.zip should succeed");
 
     assert_eq!(parquet_files(&out_dir), ["orgs", "relationships", "roles", "successions"], "one orgs table, and three supporting tables");
@@ -100,7 +100,7 @@ fn make_fails_when_a_manifest_record_count_disagrees_with_records_read() {
     let archive = manifest_xml(5, &[("ARCH1", "CLOSED LONG AGO", "Inactive")]);
     let zip_path = write_release_zip(tmp.path(), &full, &archive);
 
-    let err = parquet::run(parquet::Args { input: Some(zip_path), output: Some(tmp.path().join("out")), ..Default::default() })
+    let err = parquet::run(parquet::Args { input: Some(zip_path), output: Some(tmp.path().join("out")), force: true, ..Default::default() })
         .expect_err("a manifest that declares more records than the file holds must fail the build");
 
     let msg = format!("{err:#}");
@@ -120,7 +120,7 @@ fn a_failing_export_names_its_table() {
     // A directory where the file should go: creating relationships.parquet fails, the rest succeed.
     fs::create_dir_all(out_dir.join("relationships.parquet")).unwrap();
 
-    let err = parquet::run(parquet::Args { input: Some(zip_path), output: Some(out_dir.clone()), ..Default::default() })
+    let err = parquet::run(parquet::Args { input: Some(zip_path), output: Some(out_dir.clone()), force: true, ..Default::default() })
         .expect_err("a table that can't be written must fail the build");
 
     let msg = format!("{err:#}");
@@ -177,7 +177,7 @@ fn malformed_date_stays_null_in_every_table() {
     let zip_path = odd_dates_release(tmp.path());
     let out = tmp.path().join("out");
 
-    parquet::run(parquet::Args { input: Some(zip_path), output: Some(out.clone()), ..Default::default() }).unwrap();
+    parquet::run(parquet::Args { input: Some(zip_path), output: Some(out.clone()), force: true, ..Default::default() }).unwrap();
 
     // orgs sort active first, so D2 is row 0 and D1 is row 1.
     assert_eq!(date_column(&out.join("orgs.parquet"), "operational_start"), [None, None]);
@@ -217,13 +217,16 @@ fn manifest_of(orgs: &[String]) -> String {
     )
 }
 
-/// Runs `ods make parquet` on a zip and returns its stderr. The build must succeed.
+/// Runs `ods make parquet` on a zip and returns its stderr. The build must succeed. These zips
+/// are synthetic fixtures with no matching release-index row, so `--force` is needed to build
+/// them at all; the report and warnings under test are unaffected by it.
 fn make_stderr(zip: &std::path::Path, out: &std::path::Path, extra: &[&str]) -> String {
     let output = common::ods_cmd()
         .args(["make", "parquet", "--input"])
         .arg(zip)
         .arg("--output")
         .arg(out)
+        .arg("--force")
         .args(extra)
         .output()
         .unwrap();
@@ -385,14 +388,14 @@ fn same_name_same_length_zips_do_not_collide_in_xml_cache() {
 
     let run1 = common::ods_cmd()
         .env("ODS_CACHE_DIR", cache_dir.path())
-        .args(["make", "-i", zip1.to_str().unwrap(), "-o", out1.to_str().unwrap()])
+        .args(["make", "-i", zip1.to_str().unwrap(), "-o", out1.to_str().unwrap(), "--force"])
         .output()
         .unwrap();
     assert!(run1.status.success(), "first make failed: {}", String::from_utf8_lossy(&run1.stderr));
 
     let run2 = common::ods_cmd()
         .env("ODS_CACHE_DIR", cache_dir.path())
-        .args(["make", "-i", zip2.to_str().unwrap(), "-o", out2.to_str().unwrap()])
+        .args(["make", "-i", zip2.to_str().unwrap(), "-o", out2.to_str().unwrap(), "--force"])
         .output()
         .unwrap();
     assert!(run2.status.success(), "second make failed: {}", String::from_utf8_lossy(&run2.stderr));

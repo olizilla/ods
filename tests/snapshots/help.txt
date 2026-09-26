@@ -37,6 +37,7 @@ Options:
   -q, --quiet            Show errors and the settled report only
       --no-progress      Disable interactive live progress animations
   -v, --verbose          Show how many stubs the merge set aside
+  -f, --force            Build an archive ods can't match to a TRUD release, without provenance (needs -o <dir>)
   -h, --help             Print help
 
 $ ods trud --help

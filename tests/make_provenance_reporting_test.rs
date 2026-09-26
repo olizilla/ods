@@ -35,6 +35,7 @@ fn test_task1_unverified_archive_prints_warning_and_builds_successfully() {
         .arg(&zip_path)
         .arg("-o")
         .arg(&out_dir)
+        .arg("--force")
         .output()
         .expect("execute ods make");
 

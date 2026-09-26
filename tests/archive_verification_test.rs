@@ -86,6 +86,7 @@ fn test_make_zip_absent_from_index_is_unverified() {
         .arg(&zip_path)
         .arg("-o")
         .arg(&out_dir)
+        .arg("--force")
         .output()
         .expect("execute ods make");
 
@@ -808,6 +809,7 @@ fn test_make_release_refuses_unprovenanced_build() {
         .arg(&zip_path)
         .arg("-o")
         .arg(&out_dir)
+        .arg("--force")
         .output()
         .unwrap();
     assert!(make_out.status.success());

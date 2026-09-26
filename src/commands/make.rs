@@ -30,6 +30,10 @@ pub struct MakeArgs {
     /// Read the release index from this path or URL instead of the network
     #[arg(long, hide = true)]
     pub index: Option<String>,
+
+    /// Build an archive ods can't match to a TRUD release, without provenance (needs -o <dir>)
+    #[arg(long, short = 'f')]
+    pub force: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -56,6 +60,7 @@ pub fn run(args: MakeArgs) -> Result<()> {
             no_progress: args.no_progress,
             verbose: args.verbose,
             index: args.index,
+            force: args.force,
         })
         .map(|_| ()),
     }

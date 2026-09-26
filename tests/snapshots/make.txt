@@ -1,5 +1,18 @@
 $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out
 --- stderr
+✖ hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 1FB785C4…AD80)
+  Get it through ods trud pull, or run ods pull for a newer release index.
+  To build it anyway, without provenance: ods make -i hscorgrefdataxml_data_7.0.0_20260731000001.zip -o <dir> --force
+--- exit 1
+
+$ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --force
+--- stderr
+✖ --force builds outside the workspace only
+  Add -o <dir>: a workspace holds only releases with provenance.
+--- exit 1
+
+$ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force
+--- stderr
 * Source: hscorgrefdataxml_data_7.0.0_20260731000001.zip
   reading xml   ████████████████████                      2KB
   writing       ████████████████████  4 parquet files    15KB
@@ -10,7 +23,7 @@ $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --
 ! hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 1FB785C4…AD80)
   Built without provenance. You can explore it with find, info and role, but not cite or publish it.
 
-$ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --verbose
+$ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force --verbose
 --- stderr
 * Source: hscorgrefdataxml_data_7.0.0_20260731000001.zip
 * unpacking the release…

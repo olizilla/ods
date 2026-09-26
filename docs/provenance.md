@@ -41,17 +41,27 @@ So the manifest digest is a function of the archive and the dataset version. Any
 
 When an archive supplied to `ods` cannot be matched by SHA-256 against any row in the release index (or TRUD's API when `TRUD_API_KEY` is provided):
 
-- **`ods make <zip> -o <dir>` builds it without provenance.** No `_provenance.json` is written. The Parquet column `trud_release_date` holds the date parsed from the filename pattern. The Parquet key-value metadata carries neither `ods.trud_release_date` nor `ods.trud_release_sha256`. After the build block, it warns:
+- **`ods make <zip>` refuses it, unless you pass `--force`.** Building an unvouched archive is a
+  deliberate act:
+  ```console
+  ✖ hscorgrefdataxml_data_8.0.0_20260828000001.zip isn't a TRUD release ods knows (SHA-256 ...)
+    Get it through ods trud pull, or run ods pull for a newer release index.
+    To build it anyway, without provenance: ods make -i hscorgrefdataxml_data_8.0.0_20260828000001.zip -o <dir> --force
+  ```
+- **`--force` builds it only outside the workspace, with `-o <dir>`.** `--force` alone, without
+  `-o`, refuses too:
+  ```console
+  ✖ --force builds outside the workspace only
+    Add -o <dir>: a workspace holds only releases with provenance.
+  ```
+- **`ods make <zip> -o <dir> --force` builds it without provenance.** No `_provenance.json` is written. The Parquet column `trud_release_date` holds the date parsed from the filename pattern. The Parquet key-value metadata carries neither `ods.trud_release_date` nor `ods.trud_release_sha256`. After the build block, it warns:
   ```console
   ! hscorgrefdataxml_data_8.0.0_20260828000001.zip isn't a TRUD release ods knows (SHA-256 ...)
     Built without provenance. You can explore it with find, info and role, but not cite or publish it.
   ```
-- **`ods make <zip>` without `-o` refuses** to put an unprovenanced release into a workspace:
-  ```console
-  ✖ hscorgrefdataxml_data_8.0.0_20260828000001.zip isn't a TRUD release ods knows (SHA-256 ...)
-    Build it outside the workspace with -o <dir>, or run ods pull for a newer release index.
-  ```
-- **`ods trud pull --local-archive <zip>` refuses it** with the same two lines.
+- **`ods trud pull --local-archive <zip>` refuses it,** with the plain two-line refusal — `Build
+  it outside the workspace with -o <dir>, or run ods pull for a newer release index.` That command
+  has no `--force` of its own.
 - **`find`, `info` and `role` read it,** printing one warning on stderr:
   `! <dir> has no provenance: it was built from an archive ods couldn't match to a TRUD release`
 - **`cite`, `make oci`, `make release` and `trud audit` refuse it:**

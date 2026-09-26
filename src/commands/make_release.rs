@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -233,19 +233,37 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
         ..Default::default()
     })?;
 
-    // 4. Read back manifest from oci/
+    let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
+
+    // 4. Read the manifest digest from oci/index.json: the entry whose ref name is
+    // `<date>_<version>` names the manifest `ods make oci` just wrote, so there's no need to
+    // pick out the one blob in oci/blobs/sha256/ that isn't a symlink.
     let oci_dir = release_dir.join("oci");
     let blobs_dir = oci_dir.join("blobs").join("sha256");
-    let manifest_path = fs::read_dir(&blobs_dir)?
-        .flatten()
-        .find(|e| e.path().is_file() && !e.path().is_symlink())
-        .ok_or_else(|| anyhow::anyhow!("No manifest blob found in oci/blobs/sha256/"))?
-        .path();
-    let manifest_bytes = fs::read(&manifest_path)?;
+    let index_bytes = fs::read(oci_dir.join("index.json")).context("reading oci/index.json")?;
+    let oci_index: OciIndex =
+        serde_json::from_slice(&index_bytes).context("parsing oci/index.json")?;
+    let ref_versioned = format!("{}_{}", date, version);
+    let manifest_digest = oci_index
+        .manifests
+        .iter()
+        .find(|m| {
+            m.annotations
+                .as_ref()
+                .and_then(|a| a.get(ANNOTATION_REF_NAME))
+                .map(|r| r == &ref_versioned)
+                .unwrap_or(false)
+        })
+        .map(|m| m.digest.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "oci/index.json missing manifest entry with ref name '{}'",
+                ref_versioned
+            )
+        })?;
+    let manifest_bytes = fs::read(blobs_dir.join(manifest_digest.trim_start_matches("sha256:")))
+        .with_context(|| format!("reading manifest blob {}", manifest_digest))?;
     let manifest: OciManifest = serde_json::from_slice(&manifest_bytes)?;
-    let manifest_digest = manifest.digest()?;
-
-    let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
 
     // Summary lines on progress
     let total_bytes: u64 = manifest.layers.iter().map(|l| l.size).sum();

@@ -167,6 +167,22 @@ pub fn format_unmatched_archive_refusal(filename: &str, sha: &str) -> String {
     )
 }
 
+/// `ods make` on an unmatched archive, without `--force`: refused whether or not `-o <dir>` was
+/// given, since building it without provenance is now a deliberate act.
+pub fn format_make_unmatched_refusal(filename: &str, sha: &str) -> String {
+    let trunc_sha = truncate_sha256_for_display(sha);
+    format!(
+        "✖ {} isn't a TRUD release ods knows (SHA-256 {})\n  Get it through ods trud pull, or run ods pull for a newer release index.\n  To build it anyway, without provenance: ods make -i {} -o <dir> --force",
+        filename, trunc_sha, filename
+    )
+}
+
+/// `ods make --force` without `-o <dir>`: `--force` alone doesn't put an unprovenanced release
+/// into a workspace.
+pub fn format_make_force_needs_output() -> String {
+    "✖ --force builds outside the workspace only\n  Add -o <dir>: a workspace holds only releases with provenance.".to_string()
+}
+
 impl ProvenanceLoad {
     pub fn ok(self) -> Option<OdsProvenance> {
         match self {

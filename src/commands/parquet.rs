@@ -43,6 +43,10 @@ pub struct Args {
     /// Read the release index from this path or URL instead of the network
     #[arg(long, hide = true)]
     pub index: Option<String>,
+
+    /// Build an archive ods can't match to a TRUD release, without provenance (needs -o <dir>)
+    #[arg(long, short = 'f')]
+    pub force: bool,
 }
 
 fn embed_metadata(
@@ -288,27 +292,45 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             built_from_bare_zip = false;
             provenance = None;
 
-            if let Some(out_dir) = args.output {
-                output_path = out_dir;
-                let (_, _, file_date) =
-                    match crate::archive::parse_trud_archive_filename(&file_name) {
-                        Some(parsed) => parsed,
-                        None => anyhow::bail!(
+            match args.output {
+                Some(out_dir) => {
+                    // A name ods can't parse as a TRUD archive can't be built at all, with or
+                    // without --force: there's no release date to derive it from.
+                    let (_, _, file_date) =
+                        match crate::archive::parse_trud_archive_filename(&file_name) {
+                            Some(parsed) => parsed,
+                            None => anyhow::bail!(
+                                "{}",
+                                crate::archive::format_not_a_trud_archive_error(&file_name)
+                            ),
+                        };
+
+                    if !args.force {
+                        eprintln!(
                             "{}",
-                            crate::archive::format_not_a_trud_archive_error(&file_name)
-                        ),
-                    };
-                release_date = file_date;
-                held_warnings.push(crate::provenance::format_unmatched_archive_warning(
-                    &file_name,
-                    &local_sha256,
-                ));
-            } else {
-                eprintln!(
-                    "{}",
-                    crate::provenance::format_unmatched_archive_refusal(&file_name, &local_sha256)
-                );
-                return Err(crate::commands::pull::AlreadyReported.into());
+                            crate::provenance::format_make_unmatched_refusal(&file_name, &local_sha256)
+                        );
+                        return Err(crate::commands::pull::AlreadyReported.into());
+                    }
+
+                    output_path = out_dir;
+                    release_date = file_date;
+                    held_warnings.push(crate::provenance::format_unmatched_archive_warning(
+                        &file_name,
+                        &local_sha256,
+                    ));
+                }
+                None => {
+                    if args.force {
+                        eprintln!("{}", crate::provenance::format_make_force_needs_output());
+                    } else {
+                        eprintln!(
+                            "{}",
+                            crate::provenance::format_make_unmatched_refusal(&file_name, &local_sha256)
+                        );
+                    }
+                    return Err(crate::commands::pull::AlreadyReported.into());
+                }
             }
         }
     }

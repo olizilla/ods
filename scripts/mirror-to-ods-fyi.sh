@@ -13,11 +13,13 @@
 #        v2/<repository>/blobs/sha256/<hex>
 #        v2/<repository>/manifests/{<date>_<version>, <date>, latest}
 #   4. with --publish, upload with `op run --env-file=.r2.env -- rclone copy`: blobs first, then
-#      manifests.
+#      manifests, then re-verify every key from https://ods.fyi/v2/<repository>/…: each blob's
+#      own SHA-256 against its name, and each manifest tag's bytes against the manifest digest. A
+#      digest is only a promise until it's been fetched back.
 #
-# A dry run by default: it always prints the keys, in upload order, and only uploads with
-# --publish. It never uploads releases.json — that stays a deliberate, separate step, and this
-# script ends by printing the command that does it.
+# A dry run by default: it always prints the keys, in upload order, and only uploads (and
+# re-verifies) with --publish. It never uploads releases.json — that stays a deliberate, separate
+# step, and this script ends by printing the command that does it.
 #
 set -euo pipefail
 
@@ -121,8 +123,32 @@ if [[ "$PUBLISH" == true ]]; then
   echo "* uploading manifests…"
   op run --env-file=.r2.env -- rclone copy "$BUCKET/v2/$REPOSITORY/manifests" "r2:ods-fyi/v2/$REPOSITORY/manifests"
   echo "✓ published $TAGGED to ods.fyi"
+
+  command -v curl >/dev/null 2>&1 || { echo "✖ curl is needed and isn't installed" >&2; exit 2; }
+  echo "* re-verifying every key from https://ods.fyi/…"
+  reverify_ok=true
+  while IFS= read -r key; do
+    url="https://ods.fyi/$key"
+    actual="$(curl -fsSL "$url" | shasum -a 256 | cut -d' ' -f1)"
+    if [[ "$key" == */manifests/* ]]; then
+      expected="$manifest_hex"
+    else
+      expected="${key##*/}"
+    fi
+    if [[ "$actual" == "$expected" ]]; then
+      echo "✓ $key"
+    else
+      echo "✖ $key" >&2
+      echo "  expected  $expected" >&2
+      echo "  got       $actual" >&2
+      reverify_ok=false
+    fi
+  done <"$WORK/upload-order.txt"
+  [[ "$reverify_ok" == true ]] || exit 1
 else
   echo "* a dry run: pass --publish to upload"
+  echo "* --publish would then re-verify every key above from https://ods.fyi/…: each blob's own"
+  echo "  SHA-256 against its name, and each manifest tag's bytes against $digest"
 fi
 
 echo "* releases.json is never uploaded here. To bless this release, run:"

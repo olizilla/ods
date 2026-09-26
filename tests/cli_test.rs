@@ -566,6 +566,7 @@ fn test_find_with_loose_parquet_dir() {
         .arg(&mock_zip)
         .arg("-o")
         .arg(&staging)
+        .arg("--force")
         .output()
         .expect("execute ods make");
     assert!(make_output.status.success());
@@ -766,6 +767,7 @@ fn test_ods_make_explicit_output_writes_no_releases_json() {
         .arg(&mock_zip)
         .arg("-o")
         .arg(&rel_dir)
+        .arg("--force")
         .output()
         .expect("ods make -o custom_ws/releases/2026-07-31");
 

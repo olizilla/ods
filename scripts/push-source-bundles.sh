@@ -11,10 +11,10 @@
 #   - a tag that names a different digest is refused, and nothing is pushed for that date: if NHS
 #     ever republishes a date, that is news to report, not a tag to overwrite.
 #
-# A dry run by default; --push pushes. Logs in with `gh auth token`, which needs the
+# A dry run by default; --push pushes. On a laptop, logs in with `gh auth token`, which needs the
 # write:packages scope (`gh auth refresh -s write:packages`). In GitHub Actions
-# (GITHUB_ACTIONS=true), it logs in with the job's own GITHUB_TOKEN instead, and skips the gh
-# scope check (a workflow's token isn't a gh session).
+# (GITHUB_ACTIONS=true), the caller logs in first with `docker/login-action`, which `oras` reads
+# the same credentials from; this script does nothing extra there.
 #
 # Each bundle's manifest carries the annotation fyi.ods.trud-release-sha256: a convenience copy of
 # the zip layer's digest, in upper case, in the same form as the dataset manifests' annotation, so
@@ -58,12 +58,8 @@ for tool in oras jq; do
 done
 [[ -d "$WORKSPACE/releases" ]] || { echo "✖ $WORKSPACE has no releases/ directory" >&2; exit 2; }
 
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  # Actions: the job's own token, scoped by its `permissions:`. No gh session to check.
-  [[ -n "${GITHUB_TOKEN:-}" ]] || { echo "✖ GITHUB_TOKEN is unset" >&2; exit 2; }
-  [[ -n "${GITHUB_ACTOR:-}" ]] || { echo "✖ GITHUB_ACTOR is unset" >&2; exit 2; }
-  echo "$GITHUB_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-else
+# In Actions, the caller already logged in with docker/login-action; oras reads its credentials.
+if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
   command -v gh >/dev/null 2>&1 || { echo "✖ gh is needed and isn't installed" >&2; exit 2; }
   # Log in with the token gh holds, and say what to run when it lacks the scope
   if ! gh auth status 2>&1 | grep -q 'write:packages'; then
@@ -84,6 +80,13 @@ pushed=0
 skipped=0
 refused=0
 failed=0
+
+# `oras repo tags` decides which dates already exist; a failing call is a failure, never read as
+# "none of them exist".
+existing_tags="$(oras repo tags "ghcr.io/$OWNER/$REPOSITORY")" || {
+  echo "✖ listing tags for ghcr.io/$OWNER/$REPOSITORY failed" >&2
+  exit 1
+}
 
 # Newest first, one release at a time
 for release_dir in $(find "$WORKSPACE/releases" -mindepth 1 -maxdepth 1 -type d | sort -r); do
@@ -110,22 +113,15 @@ for release_dir in $(find "$WORKSPACE/releases" -mindepth 1 -maxdepth 1 -type d 
 
   local_digest="$(jq -r '.manifests[0].digest' "$bundle/index.json")"
 
-  # Only oras's not-found error means the tag is absent. Any other failure (auth, network, a rate
-  # limit) fails this date, and nothing is pushed for it.
-  lookup_error="$(mktemp)"
-  if remote_digest="$(oras resolve "$ref" 2>"$lookup_error")"; then
-    :
-  elif grep -Eq ': not found[[:space:]]*$' "$lookup_error"; then
-    remote_digest=""
-  else
-    echo "✖ $date  looking up $ref failed, so whether the tag exists is unknown" >&2
-    sed 's/^/  /' "$lookup_error" >&2
-    echo "  Nothing is pushed for $date." >&2
-    rm -f "$lookup_error"
-    failed=$((failed + 1))
-    continue
+  remote_digest=""
+  if grep -qx "$date" <<<"$existing_tags"; then
+    if ! remote_digest="$(oras resolve "$ref")"; then
+      echo "✖ $date  looking up $ref failed, so whether the tag exists is unknown" >&2
+      echo "  Nothing is pushed for $date." >&2
+      failed=$((failed + 1))
+      continue
+    fi
   fi
-  rm -f "$lookup_error"
 
   if [[ "$remote_digest" == "$local_digest" ]]; then
     echo "✓ $date  already in $ref  $(short_digest "$local_digest")"

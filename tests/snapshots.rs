@@ -845,7 +845,8 @@ fn snapshot_make() {
     let zip = "hscorgrefdataxml_data_7.0.0_20260731000001.zip";
     common::create_mock_trud_zip(tmp.path(), zip);
 
-    // Piped, so the report prints once, settled, and the warnings follow it.
+    // Piped, so the report prints once, settled, and the warnings follow it. This zip matches no
+    // release index row, so building it at all takes --force.
     let cases = [
         TestCase {
             cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out",
@@ -854,9 +855,21 @@ fn snapshot_make() {
             use_input: false,
         },
         TestCase {
-            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --verbose",
+            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --force",
             columns: Some(100),
-            args: vec!["make", "--input", zip, "--output", "out", "--verbose"],
+            args: vec!["make", "--input", zip, "--force"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force",
+            columns: Some(100),
+            args: vec!["make", "--input", zip, "--output", "out", "--force"],
+            use_input: false,
+        },
+        TestCase {
+            cmd_str: "COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force --verbose",
+            columns: Some(100),
+            args: vec!["make", "--input", zip, "--output", "out", "--force", "--verbose"],
             use_input: false,
         },
     ];

@@ -125,6 +125,7 @@ fn test_make_into_new_release_does_not_move_active_current_pointer() {
         .arg(&zip_a)
         .arg("-o")
         .arg(&rel_a)
+        .arg("--force")
         .output()
         .expect("make A");
 
@@ -142,6 +143,7 @@ fn test_make_into_new_release_does_not_move_active_current_pointer() {
         .arg(&zip_b)
         .arg("-o")
         .arg(&rel_b)
+        .arg("--force")
         .output()
         .expect("make B");
     assert!(res_make_b.status.success(), "make B must succeed");

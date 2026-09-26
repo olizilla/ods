@@ -239,7 +239,7 @@ fn parquet_projection_populates_date_columns() {
 
     parquet::run(parquet::Args {
         input: Some(zip_path),
-        output: Some(out_dir.clone()), ..Default::default() })
+        output: Some(out_dir.clone()), force: true, ..Default::default() })
     .expect("parquet::run should succeed");
 
     assert!(
