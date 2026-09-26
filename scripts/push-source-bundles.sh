@@ -102,7 +102,7 @@ for release_dir in $(find "$WORKSPACE/releases" -mindepth 1 -maxdepth 1 -type d 
     continue
   fi
 
-  if ! verified="$("$REPO_ROOT/scripts/verify-trud-bundle.sh" "$trud_dir" "$REPO_ROOT/data/releases.json" 2>&1)"; then
+  if ! verified="$("$REPO_ROOT/scripts/verify-trud-bundle.sh" "$trud_dir" 2>&1)"; then
     echo "$verified" >&2
     echo "  Nothing is pushed for $date." >&2
     failed=$((failed + 1))

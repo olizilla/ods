@@ -257,7 +257,7 @@ reproduce() {
     return 1
   fi
 
-  if ! scripts/verify-trud-bundle.sh "$work/trud" data/releases.json; then
+  if ! scripts/verify-trud-bundle.sh "$work/trud"; then
     rm -rf "$work"
     return 1
   fi
@@ -446,7 +446,11 @@ add_row total "$total_status" "$total" ""
 echo "saved $summary"
 
 if [ "$in_ci" != true ] && [ -z "$compare_old" ]; then
-  prev=$(ls -1 target/ci-runs/*.tsv 2>/dev/null | grep -v -x -F "$summary" | sort | tail -n 1)
+  # The newest earlier summary: globs expand sorted, and summaries are named by timestamp
+  prev=""
+  for f in target/ci-runs/*.tsv; do
+    [ -e "$f" ] && [ "$f" != "$summary" ] && prev="$f"
+  done
   if [ -n "$prev" ]; then
     echo
     echo "compared with $prev:"

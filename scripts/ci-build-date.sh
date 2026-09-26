@@ -50,7 +50,7 @@ oras pull "ghcr.io/olizilla/nhs-ods-xml@$BUNDLE_DIGEST" -o "$TRUD_DIR" >/dev/nul
 endgroup
 
 group "Verify source: nhs-ods-xml $DATE"
-scripts/verify-trud-bundle.sh "$TRUD_DIR" data/releases.json
+scripts/verify-trud-bundle.sh "$TRUD_DIR"
 endgroup
 
 zip_path="$(find "$TRUD_DIR" -maxdepth 1 -name '*.zip' | head -n 1)"
