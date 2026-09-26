@@ -82,7 +82,7 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
         .set_compression(parquet::basic::Compression::ZSTD(
             parquet::basic::ZstdLevel::try_new(3).expect("valid zstd level 3"),
         ))
-        .set_max_row_group_size(64_000)
+        .set_max_row_group_row_count(Some(64_000))
         .build()
 }
 
