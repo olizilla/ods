@@ -1121,8 +1121,10 @@ pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
         });
     }
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
 
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);

@@ -104,6 +104,12 @@ skip() { add_row "$1" skipped "" "$2"; }
 
 compile() { cargo test --no-fail-fast --no-run; }
 
+# `-D warnings` turns every clippy warning into a hard error, so a clean run exits 0 and a
+# dirty one fails the build; the count comes from the diagnostic lines it printed, not the
+# exit code, since cargo's own "could not compile ... due to N previous errors" summary line
+# repeats once per target (lib, lib test, each integration test binary) and would overcount.
+clippy_check() { cargo clippy --all-targets -- -D warnings; }
+
 rust_tests() {
   local leaks
   leaks=$(grep -rn 'CARGO_BIN_EXE_ods' tests/ | grep -v '^tests/common/mod\.rs:' || true)
@@ -340,6 +346,14 @@ else
   record ""
 fi
 compiled=$STATUS
+
+run "clippy" clippy_check
+if [ "$STATUS" -eq 0 ]; then
+  record "ok"
+else
+  warnings=$(awk '/^error: could not compile/{c++} /^error: /{t++} END{print t-c}' "$LOG")
+  record "$warnings warnings"
+fi
 
 if [ "$compiled" -ne 0 ]; then
   skip "rust tests" "compile failed"

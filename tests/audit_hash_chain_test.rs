@@ -356,7 +356,7 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     // Export with empty closures when XML has a predecessor edge
     ods::commands::parquet::export_orgs(
         &active_dir,
-        &[record.clone()],
+        std::slice::from_ref(&record),
         &empty_closures,
         &empty_closures,
         prov.as_ref(),

@@ -1024,7 +1024,7 @@ pub fn build_sql_query(
         }
     }
 
-    if let Some(ref pr) = parsed_roles {
+    if let Some(pr) = parsed_roles {
         if !pr.codes.is_empty() {
             let list_elements: Vec<String> = pr
                 .codes
@@ -1334,7 +1334,7 @@ pub fn run_with_writer_color_width(
                 }
 
                 for (q_idx, q) in parsed_locations.iter().enumerate() {
-                    let matches_pc = q.postcode_value.as_ref().map_or(false, |pv| {
+                    let matches_pc = q.postcode_value.as_ref().is_some_and(|pv| {
                         crate::postcode::matches_postcode(row_postcode_str, pv)
                     });
                     if let Some(crate::postcode::PostcodeValue::District(ref d)) = q.postcode_value {
@@ -1922,8 +1922,10 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
 
-        let mut prov = crate::provenance::OdsProvenance::default();
-        prov.trud_release_date = Some("2026-07-31".to_string());
+        let prov = crate::provenance::OdsProvenance {
+            trud_release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        };
 
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
         crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
@@ -2175,8 +2177,10 @@ mod tests {
 
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
-        let mut prov = crate::provenance::OdsProvenance::default();
-        prov.trud_release_date = Some("2026-07-31".to_string());
+        let prov = crate::provenance::OdsProvenance {
+            trud_release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        };
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
 
         let mut out = Vec::new();
@@ -2253,8 +2257,10 @@ mod tests {
 
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
-        let mut prov = crate::provenance::OdsProvenance::default();
-        prov.trud_release_date = Some(release_date.to_string());
+        let prov = crate::provenance::OdsProvenance {
+            trud_release_date: Some(release_date.to_string()),
+            ..Default::default()
+        };
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
 
         let run = |query: &str, all: bool| -> String {

@@ -33,10 +33,12 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     fs::write(rel_dir.join("orgs.parquet"), vec![b'b'; 9892725]).unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256);
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some(zip_sha256),
+        ..Default::default()
+    };
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();

@@ -100,9 +100,11 @@ fn test_cli_cite_output_formatting() {
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     fs::write(rel_dir.join("orgs.parquet"), b"dummy").unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
     fs::write(
@@ -156,8 +158,10 @@ fn test_cli_pull_local_release_output() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let mut prov1 = ods::provenance::OdsProvenance::default();
-    prov1.trud_release_date = Some("2026-05-29".to_string());
+    let prov1 = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-05-29".to_string()),
+        ..Default::default()
+    };
     let rel1 = ws.join("releases").join("2026-05-29");
     fs::create_dir_all(&rel1).unwrap();
     fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov1).unwrap()).unwrap();
@@ -167,8 +171,10 @@ fn test_cli_pull_local_release_output() {
     let (m1, _) = ods::commands::make_oci::build_manifest_from_dir(&rel1, &prov1, "1.0.1").unwrap();
     let d1 = m1.digest().unwrap();
 
-    let mut prov2 = ods::provenance::OdsProvenance::default();
-    prov2.trud_release_date = Some("2026-06-26".to_string());
+    let prov2 = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-06-26".to_string()),
+        ..Default::default()
+    };
     let rel2 = ws.join("releases").join("2026-06-26");
     fs::create_dir_all(&rel2).unwrap();
     fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov2).unwrap()).unwrap();

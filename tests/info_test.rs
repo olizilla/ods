@@ -466,8 +466,10 @@ fn setup_test_workspace() -> (TempDir, PathBuf) {
         successors: vec![],
     });
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
 
     let edges = ods::commands::parquet::build_succession_edges(&records);
     let (succ_closures, pred_closures) =

@@ -312,7 +312,7 @@ pub fn format_number_with_commas(n: usize) -> String {
     let bytes = s.as_bytes();
     let len = bytes.len();
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(b as char);

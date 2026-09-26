@@ -32,10 +32,12 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
     fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some(zip_sha256.clone());
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some(zip_sha256.clone()),
+        ..Default::default()
+    };
 
     let prov_path = rel_dir.join(PROVENANCE_FILENAME);
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
@@ -263,8 +265,10 @@ fn test_refusal_baseline_invalid_before_disk_mutations() {
     fs::create_dir_all(&rel_dir).unwrap();
 
     // Create an invalid baseline provenance (missing publication fields, tool version, etc.)
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
     fs::write(rel_dir.join(PROVENANCE_FILENAME), serde_json::to_string(&prov).unwrap()).unwrap();
 
     let res = run(test_args(rel_dir.clone(), false));

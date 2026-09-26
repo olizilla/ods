@@ -827,10 +827,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
                     if !layer_titles.contains(name) {
                         unaccounted_files.push(name.to_string());
                     }
-                } else if path.is_dir() {
-                    if name != "oci" && name != "trud" {
-                        unaccounted_files.push(format!("{}/", name));
-                    }
+                } else if path.is_dir() && name != "oci" && name != "trud" {
+                    unaccounted_files.push(format!("{}/", name));
                 }
             }
         }
@@ -1459,10 +1457,10 @@ fn scan_raw_xml_invariants(xml_paths: &[PathBuf], max_samples: usize) -> Result<
                                             if current_record.operational_start.is_none() {
                                                 current_record.operational_start = Some(val_str);
                                             }
-                                        } else if current_date_type.as_deref() == Some("legal") {
-                                            if current_record.legal_start.is_none() {
-                                                current_record.legal_start = Some(val_str);
-                                            }
+                                        } else if current_date_type.as_deref() == Some("legal")
+                                            && current_record.legal_start.is_none()
+                                        {
+                                            current_record.legal_start = Some(val_str);
                                         }
                                     }
                                 }
@@ -1532,19 +1530,16 @@ fn scan_raw_xml_invariants(xml_paths: &[PathBuf], max_samples: usize) -> Result<
 
                         if !role_id.is_empty() {
                             role_concept_ids.push(role_id.clone());
-                            if !role_status.eq_ignore_ascii_case("inactive")
-                                || current_record.status.eq_ignore_ascii_case("inactive")
+                            if (!role_status.eq_ignore_ascii_case("inactive")
+                                || current_record.status.eq_ignore_ascii_case("inactive"))
+                                && !current_record.role_codes.contains(&role_id)
                             {
-                                if !current_record.role_codes.contains(&role_id) {
-                                    current_record.role_codes.push(role_id.clone());
-                                }
+                                current_record.role_codes.push(role_id.clone());
                             }
                         }
 
-                        if !unique_role_id.is_empty() {
-                            if !seen_role_ids.insert(unique_role_id.clone()) {
-                                inv.invariants.duplicate_role_ids += 1;
-                            }
+                        if !unique_role_id.is_empty() && !seen_role_ids.insert(unique_role_id.clone()) {
+                            inv.invariants.duplicate_role_ids += 1;
                         }
                         if is_primary && !role_id.is_empty() {
                             current_record.primary_role_code = role_id.clone();
@@ -1673,15 +1668,13 @@ fn scan_raw_xml_invariants(xml_paths: &[PathBuf], max_samples: usize) -> Result<
                             if !current_target_code.is_empty() {
                                 succ_target_codes.push(current_target_code.clone());
                             }
-                        } else if in_rel {
-                            if !current_target_code.is_empty() {
-                                rel_target_codes.push(current_target_code.clone());
-                                if !current_target_primary_role.is_empty() {
-                                    rel_primary_role_targets.push((
-                                        current_target_code.clone(),
-                                        current_target_primary_role.clone(),
-                                    ));
-                                }
+                        } else if in_rel && !current_target_code.is_empty() {
+                            rel_target_codes.push(current_target_code.clone());
+                            if !current_target_primary_role.is_empty() {
+                                rel_primary_role_targets.push((
+                                    current_target_code.clone(),
+                                    current_target_primary_role.clone(),
+                                ));
                             }
                         }
                         in_target = false;
@@ -1796,7 +1789,7 @@ fn audit_referential_integrity(
 
     let file_res = File::open(orgs_parquet).and_then(|f| {
         ParquetRecordBatchReaderBuilder::try_new(f)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     });
     match file_res {
         Ok(builder) => match builder.build() {

@@ -250,7 +250,7 @@ fn test_trud_pull_local_archive_states_no_attestations() {
         ..Default::default()
     };
 
-    let res = ods::commands::fetch::run_local_archive_with_progress(&args, &args.workspace.as_ref().unwrap(), args.local_archive.as_ref().unwrap(), &progress);
+    let res = ods::commands::fetch::run_local_archive_with_progress(&args, args.workspace.as_ref().unwrap(), args.local_archive.as_ref().unwrap(), &progress);
     assert!(res.is_ok(), "{:?}", res.err());
 
     let out = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();

@@ -27,7 +27,7 @@ pub fn classify(value: &str) -> Option<PostcodeValue> {
     let n = bytes.len();
 
     // Must have at least 2 chars (e.g. N1, M1) and at most 8 chars
-    if n < 2 || n > 8 {
+    if !(2..=8).contains(&n) {
         return None;
     }
 
@@ -90,18 +90,11 @@ pub fn classify(value: &str) -> Option<PostcodeValue> {
 
             let out_len = outward.len();
             let out_bytes = outward.as_bytes();
-            let is_valid_out = if out_len == alpha_prefix_len + 1 {
-                true
-            } else if out_len == alpha_prefix_len + 2 && out_bytes[alpha_prefix_len + 1].is_ascii_alphanumeric() {
-                true
-            } else if out_len == alpha_prefix_len + 3
-                && out_bytes[alpha_prefix_len + 1].is_ascii_digit()
-                && out_bytes[alpha_prefix_len + 2].is_ascii_alphabetic()
-            {
-                true
-            } else {
-                false
-            };
+            let is_valid_out = out_len == alpha_prefix_len + 1
+                || (out_len == alpha_prefix_len + 2 && out_bytes[alpha_prefix_len + 1].is_ascii_alphanumeric())
+                || (out_len == alpha_prefix_len + 3
+                    && out_bytes[alpha_prefix_len + 1].is_ascii_digit()
+                    && out_bytes[alpha_prefix_len + 2].is_ascii_alphabetic());
 
             if is_valid_out {
                 return Some(PostcodeValue::Full(format!("{outward} {inward}")));

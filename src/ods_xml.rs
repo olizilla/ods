@@ -542,10 +542,10 @@ pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
     for entry in walkdir::WalkDir::new(input_path) {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            if path.extension().is_some_and(|ext| ext == "zip") || path.extension().is_some_and(|ext| ext == "xml") {
-                candidates.push(path.to_path_buf());
-            }
+        if path.is_file()
+            && (path.extension().is_some_and(|ext| ext == "zip") || path.extension().is_some_and(|ext| ext == "xml"))
+        {
+            candidates.push(path.to_path_buf());
         }
     }
 

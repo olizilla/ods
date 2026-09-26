@@ -2012,8 +2012,10 @@ mod tests {
             ..Default::default()
         };
 
-        let mut prov = crate::provenance::OdsProvenance::default();
-        prov.trud_release_date = Some("2026-07-31".to_string());
+        let prov = crate::provenance::OdsProvenance {
+            trud_release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        };
 
         let temp_dir = tempfile::tempdir().unwrap();
         export_relationships(temp_dir.path(), &[record], Some(&prov)).unwrap();

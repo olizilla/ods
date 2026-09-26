@@ -265,8 +265,10 @@ fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
     let zip2 = create_mock_trud_zip_from_xml(tmp2.path(), &xml_path);
 
     // Setup _provenance.json in both directories
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
 
     std::fs::write(
         tmp1.path().join(ods::provenance::PROVENANCE_FILENAME),

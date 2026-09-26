@@ -306,16 +306,10 @@ pub struct DiffStats {
     pub other_changes: usize,
 }
 
-fn compute_diff(
-    old_records: &HashMap<String, OdsRecord>,
-    new_records: &HashMap<String, OdsRecord>,
-    args: &Args,
-) -> Result<(
-    Vec<OdsRecord>,
-    Vec<OdsRecord>,
-    Vec<EntityDiff>,
-    DiffStats,
-)> {
+/// (added, removed, modified, stats)
+type DiffResult = (Vec<OdsRecord>, Vec<OdsRecord>, Vec<EntityDiff>, DiffStats);
+
+fn compute_diff(old_records: &HashMap<String, OdsRecord>, new_records: &HashMap<String, OdsRecord>, args: &Args) -> Result<DiffResult> {
     let mut stats = DiffStats::default();
     let old_keys: HashSet<_> = old_records.keys().cloned().collect();
     let new_keys: HashSet<_> = new_records.keys().cloned().collect();
@@ -452,6 +446,12 @@ fn matches_filter(rec: &OdsRecord, args: &Args) -> bool {
     true
 }
 
+// Ten flat, unrelated-in-type parameters (a writer, the run's args, both releases' provenance,
+// both totals, three record slices and the stats). Bundling them into a params struct would just
+// move the same ten values one level down and touch every line of this and render_markdown's
+// body for no clarity gain, so this stays as a single call site with its inputs named at the
+// call, not grouped.
+#[allow(clippy::too_many_arguments)]
 fn render_summary_tui(
     w: &mut dyn Write,
     args: &Args,
@@ -684,6 +684,8 @@ fn render_csv(
     Ok(())
 }
 
+// Same shape as render_summary_tui above, and for the same reason: see that function's comment.
+#[allow(clippy::too_many_arguments)]
 fn render_markdown(
     w: &mut dyn Write,
     _args: &Args,

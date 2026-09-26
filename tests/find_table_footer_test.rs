@@ -5,7 +5,7 @@
 //! - Task 2: Two `*` lines above table (`Search:` and `Source:`).
 //! - Task 3: The disagreement notice becomes a `!` line between `* Source:` and the table.
 //! - Task 4: Footer content (`{n} active records` vs `{n} records` / `{a} active · {i} inactive`),
-//!           parsed data row count verification, singularisation, and zero-result search.
+//!   parsed data row count verification, singularisation, and zero-result search.
 //! - Task 5: Narrow terminal rendering (`COLUMNS=40`) with right-hint overflow to `*` line.
 //! - Task 6: Staleness nudge with `!` sigil as final output.
 

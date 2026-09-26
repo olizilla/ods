@@ -19,11 +19,12 @@ fn test_provenance_validate_baseline_missing_fields() -> Result<()> {
 
 #[test]
 fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result<()> {
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-
-    prov.trud_release_filesize_bytes = Some(16); // 16 bytes is implausible for TRUD zip archive
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        trud_release_filesize_bytes: Some(16), // 16 bytes is implausible for TRUD zip archive
+        ..Default::default()
+    };
     assert!(prov.validate_baseline().is_ok(), "16-byte filesize must pass structural baseline validation");
     let pub_failures = prov.validate_publishable();
     assert_eq!(pub_failures.len(), 1, "implausible filesize must be reported by validate_publishable");
@@ -38,10 +39,12 @@ fn test_provenance_validate_publishable_rejects_implausible_filesize() -> Result
 
 #[test]
 fn test_provenance_validate_publishable_accepts_a_real_sized_archive() -> Result<()> {
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
 
     assert!(prov.validate_baseline().is_ok());
     assert_eq!(prov.validate_publishable(), Vec::<String>::new(), "how the archive was checked is not provenance");
@@ -51,9 +54,11 @@ fn test_provenance_validate_publishable_accepts_a_real_sized_archive() -> Result
 
 #[test]
 fn test_provenance_validate_baseline_rejects_missing_sha256() -> Result<()> {
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_filesize_bytes = Some(37_983_173);
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_filesize_bytes: Some(37_983_173),
+        ..Default::default()
+    };
 
     assert!(prov.validate_baseline().is_err(), "missing trud_release_sha256 must be rejected");
 
@@ -67,8 +72,10 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     fs::create_dir_all(&input_dir)?;
 
     // Write an invalid _provenance.json with missing sha256
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
     fs::write(input_dir.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov)?)?;
 
     let zip_path = input_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
@@ -157,9 +164,11 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;
@@ -193,9 +202,11 @@ fn test_cite_unverified_release_delivers_citation_and_warns() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
 
     let prov_json = serde_json::to_string_pretty(&prov)?;
     fs::write(output_dir.join(ods::provenance::PROVENANCE_FILENAME), prov_json)?;

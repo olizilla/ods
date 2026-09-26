@@ -63,9 +63,11 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -180,9 +182,11 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -256,9 +260,11 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -367,9 +373,11 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -441,9 +449,11 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -520,9 +530,11 @@ fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let mut prov = ods::provenance::OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
-    prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
+    let prov = ods::provenance::OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
+        ..Default::default()
+    };
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 

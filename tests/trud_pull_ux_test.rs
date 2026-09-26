@@ -169,7 +169,7 @@ impl TrudFetcher for MockTrudFetcher {
                 anyhow::bail!("HTTP 503 from TRUD");
             }
         }
-        let date = url.split('/').last().unwrap_or("2026-07-31");
+        let date = url.split('/').next_back().unwrap_or("2026-07-31");
         let bytes = create_test_zip_bytes(date);
         fs::write(dest_path, &bytes)?;
         on_bytes(bytes.len() as u64);

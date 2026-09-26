@@ -1080,7 +1080,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
             };
 
             if let Some(ref target) = target_pin {
-                let pin_moved = update_active_release_link_if_changed(&workspace_root, target)?;
+                let pin_moved = update_active_release_link_if_changed(workspace_root, target)?;
                 if pin_moved {
                     progress.settle_detail(&format!("current → releases/{}", target));
                 }

@@ -5,9 +5,9 @@
 //! - Task 2: role_name is completely absent from src/commands/find.rs (grep -c 'role_name\b' is 0).
 //! - Task 3: JSON output has 25 keys (23 schema in order + predecessors + successors); role_name absent from JSON and CSV.
 //! - Task 4: Transitive closures in predecessor_codes/successor_codes match orgs.parquet column;
-//!           predecessors/successors decorated lists match codes in order; ods info output unchanged.
+//!   predecessors/successors decorated lists match codes in order; ods info output unchanged.
 //! - Task 5: CSV headers derived from record, quoted commas in address parsed by CSV reader,
-//!           CSV columns equal JSON keys minus object arrays, no duplicate column values in A101.
+//!   CSV columns equal JSON keys minus object arrays, no duplicate column values in A101.
 //! - Task 6: Zero copies in find.rs (grep -c 'ods_code,record_class' is 0).
 
 mod common;
@@ -381,8 +381,10 @@ fn setup_two_hop_chain_workspace() -> (TempDir, PathBuf) {
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
 
-    let mut prov = OdsProvenance::default();
-    prov.trud_release_date = Some("2026-07-31".to_string());
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
 
     export_orgs(
         &parquet_dir,
