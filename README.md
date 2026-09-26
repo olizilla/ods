@@ -86,7 +86,7 @@ Local queries on static parquet files are _fast_! Each dataset is published as a
 
 The `ods` CLI manages a local workspace directory called `ods_data` to keep a local copy of each release you use, so you can always access it and refer back to it later.
 
-The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and each month's release is built and attested in CI, from `monthly-dataset.yml`, a workflow the maintainer dispatches by hand.
+The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and each month's release is built and attested in CI, by [`build-dataset.yml`](.github/workflows/build-dataset.yml).
 
 `ods pull` fetches the parquet files and `_provenance.json` metadata and verifies the data integrity. 
 
@@ -98,13 +98,12 @@ ods_data/
 ├── current -> releases/2026-07-31/     # Active release pin (symlink)
 └── releases/
     └── 2026-07-31/                    # Release directory
-        ├── _provenance.json           # Source TRUD metadata & SHA-256 derived hashes
-        ├── orgs.parquet               # Every org & site, active first: filter on status (Primary analytical table)
+        ├── _provenance.json           # Source metadata from the NHS TRUD API
+        ├── datapackage.json           # The schema in https://datapackage.org/standard/data-package/
+        ├── orgs.parquet               # Every org & site, active first (Primary analytical table)
         ├── relationships.parquet      # Target relationship links (ICB, Trust, PCN)
         ├── roles.parquet              # Primary & secondary roles (Holdings table)
-        ├── successions.parquet        # Entity successor chains
-        ├── datapackage.json           # Frictionless Data Package descriptor
-        └── trud/                      # TRUD zip archives (gitignored)
+        └── successions.parquet        # Entity successor chains
 ```
 
 See [docs/ods_data.md](./docs/ods_data.md) for full workspace specification details.

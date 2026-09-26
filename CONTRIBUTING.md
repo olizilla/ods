@@ -155,14 +155,16 @@ When shipping a new version of the `ods` binary:
 ### Dataset releases
 When publishing a monthly dataset cut, or rebuilding the back catalogue after a schema change:
 
-1. Dispatch `monthly-dataset.yml` (a new TRUD release) or `rebuild-datasets.yml` (archives
-   already pushed to `nhs-ods-xml`) from the tool tag `v<version>` — both refuse to run from
-   anywhere else (`scripts/check-tool-tag.sh`). `repository` defaults to `ods-data-rehearsal`;
-   dispatch there first to try the whole run, then again with `ods-data` to publish for real.
-2. `build-dataset.yml` builds each date on `ubuntu-latest` and `macos-latest`, refuses to go on
-   if their manifest digests disagree, pushes the dataset to `ghcr.io` and attests it, then
-   writes a `candidate` artifact: `candidate.json`, which is `data/releases.json` with this run's
-   rows appended.
+1. Dispatch `build-dataset.yml` from the tool tag `v<version>`; it refuses to run from anywhere
+   else. Set `dates` to `latest` for a new TRUD release, to one or more `YYYY-MM-DD` dates, or to
+   `all` to rebuild the back catalogue. `repository` defaults to `ods-data-rehearsal`: dispatch
+   there first to try the whole run, then again with `ods-data` to publish for real.
+2. The workflow fetches any archive not yet cached in `ghcr.io/olizilla/nhs-ods-xml` from TRUD,
+   checks NHS's signature, and caches it there. It then builds each date on `macos-latest` and
+   `ubuntu-latest`, and refuses to go on if their manifest digests disagree. The Ubuntu build
+   pushes the dataset to `ghcr.io`, pulls it back to re-verify it, and attests it. The run ends
+   with a `candidate` artifact: `candidate.json`, which is `data/releases.json` with this run's
+   rows added.
 3. Download the `candidate` artifact and try it before publishing anything to `ods.fyi`:
    ```console
    $ ods pull --index candidate.json
