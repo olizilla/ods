@@ -26,7 +26,7 @@ rayon = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 sha1 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 ureq = { version = "2.9", features = ["json"] }
 crossterm = "0.29"
 comfy-table = { version = "8.0", features = ["custom_styling"] }
@@ -34,7 +34,7 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile = "3.9"
-jsonschema = "0.28"
+jsonschema = "0.58"
 
 [profile.release]
 opt-level = 3
