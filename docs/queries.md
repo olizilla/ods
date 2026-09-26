@@ -273,11 +273,10 @@ trust that has since closed is still the operator ODS recorded — see
 [the trap below](#traps) for how filtering a join's far side silently drops rows.
 
 
-## Differences between `org` and `site` (IS OPEATED BY)
+## Differences between `org` and `site` (IS OPERATED BY)
 
 - **Almost 100% of sites (63,048 out of 63,066)** have an `IS OPERATED BY` relationship pointing to their parent organisation (e.g. an NHS Trust or Foundation Trust).
 - While some `org` records also have this (e.g., branches or managed services, ~41%), it is effectively mandatory/universal for `site`.
-
 
 Sites are physical operational locations, not legal contracting entities. As a result, **no site has any of the legal, commissioning, or governance relationships**:
 
@@ -288,7 +287,6 @@ Sites are physical operational locations, not legal contracting entities. As a r
 | **`IS DIRECTED BY`** | **0** | 4,048 | Governance directing bodies only apply to orgs. |
 | **`IS CONSTITUENT OF`** | **0** | 1,945 | Membership (e.g. practices constituent of PCNs). |
 | **`IS COVID NOMINATED PAYEE FOR`** | **0** | 897 | Financial payee nominations are legal orgs only. |
-
 
 A `site` is **never the `target_code`** in any relationship (0 occurrences across all relationships). In ODS, relationships flow outward from a site to its operating org or geography (`Site -> IS OPERATED BY -> Org`), but other entities never link back to a site as their target.
 

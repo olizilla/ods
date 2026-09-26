@@ -1,10 +1,8 @@
-# NHS TRUD ODS XML Structure & Gotchas
+# NHS TRUD ODS XML structure and gotchas
 
 This document details the internal structure, quirks, quality edge-cases, and parser gotchas of the official NHS Organisation Data Service (ODS) XML data distributions downloaded from TRUD (Technology Reference data Update Distribution).
 
----
-
-## Distribution & Archive Packaging
+## Distribution and archive packaging
 
 The NHS ODS data is published monthly on TRUD as a single root `.zip` archive (e.g., `hscorgrefdataxml_data_5.0.0_YYYYMMDD000001.zip`).
 
@@ -17,11 +15,9 @@ Inside this ZIP container are two core XML archives:
 2. **`archive.zip`** (`HSCOrgRefData_Archive_*.xml`):
    - Everything with an operational close date on or before the published cut-off (currently 31 March 2017): organisations closed decades ago, with their roles, relationships and successions.
    - Read by `ods make` alongside `fullfile.zip`. See [nhs.md](./nhs.md#the-archive-product).
-   - Ingested by `ods parquet` to populate `successors.parquet` with complete historical successor chains (89,445 records total).
+   - Merged with `fullfile.zip`'s successions into `successions.parquet` — see [parquet.md](./parquet.md#successionsparquet) for its row count.
 
----
-
-## Core XML Element Hierarchy
+## Core XML element hierarchy
 
 The XML root element `<MANIFEST>` contains publication metadata (`PublicationDate`), followed by a flat stream of `<Organisation>` elements:
 
@@ -69,98 +65,40 @@ The XML root element `<MANIFEST>` contains publication metadata (`PublicationDat
 </MANIFEST>
 ```
 
----
+## Structural quirks and parser gotchas
 
-## Structural Quirks & Parser Gotchas
+During the development of `ods`, we identified several non-obvious structural quirks in NHS TRUD XML files. Any parser or auditing tool built for NHS ODS XML needs to account for these behaviours:
 
-During the development of `ods`, we identified several non-obvious structural quirks in NHS TRUD XML files. Any parser or auditing tool built for NHS ODS XML **must** account for these behaviors:
+### Missing top-level `<Status>` tags (NHS Region offices)
+Active NHS administrative bodies (such as NHS Region offices `Y58`, `Y59`, `Y60`, etc.) omit top-level `<Status value="Active">` elements in raw TRUD XML. A parser checking only the top-level `<Status>` tag will treat active NHS Region offices as inactive, dropping them from active analytical queries (`orgs.parquet`). When the top-level `<Status>` is missing, `ods` falls back to the primary role's status: if `primary_role.status == "Active"`, the entity is treated as active.
 
-### Gotcha 1: Missing Top-Level `<Status>` Tags (NHS Region Offices)
-- **The Issue**: Active NHS administrative bodies (such as NHS Region offices `Y58`, `Y59`, `Y60`, etc.) omit top-level `<Status value="Active">` elements in raw TRUD XML.
-- **Why it matters**: A naive parser checking only top-level `<Status>` tags will categorize active NHS Region offices as inactive, dropping them from active analytical queries (`orgs.parquet`).
-- **Resolution**: If top-level `<Status>` is missing, `ods` checks whether the primary role has `status="Active"`. If `primary_role.status == "Active"`, the entity is correctly treated as active.
+### Tag naming variations (`<Rel>` vs `<Relationship>`, `<Succ>` vs `<Successor>`)
+Element tag names vary between full names and abbreviations across `fullfile.zip`, `archive.zip`, and historical release versions: `<Rel>` vs `<Relationship>`, `<Succ>` vs `<Successor>`. All XML parsing logic in `ods` uses pattern matching to accept both forms:
+```rust
+b"Relationship" | b"Rel" => ...
+b"Successor" | b"Succ" => ...
+```
 
----
+### Expected non-100% commissioning linkage (specialised GP practices)
+Active GP Practices link to commissioners via relationship `RE4` (`is commissioned by`). Out of ~12,700 GP practice entries in TRUD XML, ~60 specialised practices (e.g. Armed Forces medical units, overseas practices, prison health services) don't have a commissioning link assigned in official NHS data. Rather than synthesising or guessing missing parent links into flattened hierarchy columns, `ods` publishes the raw relationships in `relationships.parquet` as stated by NHS TRUD.
 
-### Gotcha 2: Scope Leakage from Nested `<Target><Organisation>` Nodes
-- **The Issue**: Within relationship (`<Rel>`) and successor (`<Succ>`) tags, the XML embeds target organisation elements:
-  ```xml
-  <Rel id="RE4">
-    <Target>
-      <Organisation>
-        <OrgId extension="5HN06" />
-        <Name>SETT VALLEY MEDICAL CENTRE</Name> <!-- Target Name -->
-      </Organisation>
-    </Target>
-  </Rel>
-  ```
-- **Why it matters**: 
-  1. **SAX Scope Pollution**: A SAX XML parser reading `<Name>` without tracking nesting depth (`org_depth == 1`) or target context (`!in_target`) will overwrite the top-level organisation's primary name with the name of a target link inside a relationship!
-  2. **Entity Expansion**: Target nodes reference ~9,050 additional organisation entities not declared as top-level records in `fullfile.zip`.
-- **Resolution**:
-  - `ods` SAX parsers strictly enforce `depth == 1 && !in_target` when scanning top-level entity properties.
-  - `ods parquet` collects and resolves embedded target organisation nodes so that zero target references are orphaned.
+## Summary of XML file variants
 
----
-
-### Gotcha 3: Tag Naming Variations (`<Rel>` vs `<Relationship>` & `<Succ>` vs `<Successor>`)
-- **The Issue**: Element tag names vary between full names and abbreviations across `fullfile.zip`, `archive.zip`, and historical release versions:
-  - `<Rel>` vs `<Relationship>`
-  - `<Succ>` vs `<Successor>`
-- **Resolution**: All XML parsing logic in `ods` uses pattern matching to accept both forms:
-  ```rust
-  b"Relationship" | b"Rel" => ...
-  b"Successor" | b"Succ" => ...
-  ```
-
----
-
-### Gotcha 4: Missing `uniqueSuccId` in Archive ZIP Successors
-- **The Issue**: Many `<Succ>` elements inside `archive.zip` omit explicit `uniqueSuccId` XML attributes.
-- **Why it matters**: If a parser uses `uniqueSuccId` as a mandatory primary key for `successors.parquet`, ingestion will fail or drop historical successor links.
-- **Resolution**: `ods` generates deterministic fallback primary keys (`succ_{index}`) whenever `uniqueSuccId` is missing from an XML element.
-
----
-
-### Gotcha 5: Similar & Near-Identical Entity Names
-- **The Issue**: Distinct organisations in NHS ODS XML often have near-identical names:
-  - **`5HN16`**: `FAIRFIELD SURESTART CENTRE` *(No space)*
-  - **`RY8NN`**: `FAIRFIELD SURE START CENTRE` *(With space)*
-- **Resolution**: Never assume organisation name uniqueness. All join, indexing, and diffing operations in `ods` are keyed strictly by `ods_code`.
-
----
-
-### Gotcha 6: Expected Non-100% Commissioning Linkage (Specialized GP Practices)
-- **The Issue**: Active GP Practices link to commissioners via relationship `RE4` (`is commissioned by`).
-- **Why it matters**: Out of ~12,700 GP practice entries in TRUD XML, ~60 specialized practices (e.g. Armed Forces medical units, overseas practices, prison health services) do not have a commissioning link assigned in official NHS data.
-- **Resolution**: Rather than synthesizing or guessing missing parent links into flattened hierarchy columns, ODS publishes the raw relationships in `relationships.parquet` as stated by NHS TRUD.
-
----
-
-## Summary Matrix of XML File Variants
-
-| Feature / Artifact | `fullfile.zip` (`HSCOrgRefData_Full_*.xml`) | `archive.zip` (`HSCOrgRefData_Archive_*.xml`) |
+| Feature / artefact | `fullfile.zip` (`HSCOrgRefData_Full_*.xml`) | `archive.zip` (`HSCOrgRefData_Archive_*.xml`) |
 | :--- | :--- | :--- |
-| **Primary Scope** | Current & active/retired top-level entities | Closed legacy entities & historical successor maps |
+| **Primary scope** | Current & active/retired top-level entities | Closed legacy entities & historical successor maps |
 | **Organisations** (2026-08-28) | 306,201, of which 10,249 are `refOnly` stubs | 86,705, of which 11,740 are `refOnly` stubs |
-| **Parquet Output** | Both files merge into `orgs.parquet`, `roles.parquet`, `relationships.parquet` and `successions.parquet` | (same tables) |
+| **Parquet output** | Both files merge into `orgs.parquet`, `roles.parquet`, `relationships.parquet` and `successions.parquet` | (same tables) |
 
----
+## Structural challenges and data shape gotchas
 
-## Structural Challenges & Data Shape Gotchas
+### Significant roles relegated to secondary roles (`RO261` vs `RO318`)
+In raw NHS TRUD XML, the 42 Statutory Integrated Care Boards (ICBs) are assigned primary role code `RO261` (`"strategic partnership"`), while their defining statutory role `RO318` (`"integrated care board"`) is relegated to a secondary `<Role>` element. Querying on primary role code alone misses ICBs — use `list_contains(role_codes, 'RO318')` or `list_contains(role_names, 'Integrated Care Board')` on `orgs.parquet`.
 
-### Significant Roles Relegated to Secondary Roles (`RO261` vs `RO318`)
-- **The Challenge**: In raw NHS TRUD XML, the 42 Statutory Integrated Care Boards (ICBs) are assigned primary role code `RO261` (`"strategic partnership"`), while their defining statutory role `RO318` (`"integrated care board"`) is relegated to a secondary `<Role>` element.
-- **Impact**: Querying on primary role code alone misses ICBs. Use `list_contains(role_codes, 'RO318')` or `list_contains(role_names, 'Integrated Care Board')` on `orgs.parquet`.
+### Regional assignment gaps and unmapped entities
+Out of ~371,000 total entities in `orgs.parquet`, over 200,000 (e.g., local clinic sites, independent sector providers, optical/dental practices) don't have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy. `RE5 IS LOCATED IN THE GEOGRAPHY OF` is marked legacy by NHS ODS and only links a subset of entities.
 
-### Regional Assignment Gaps & Unmapped Entities
-- **The Challenge**: Out of ~371,000 total entities in `orgs.parquet`, over 200,000 entities (e.g., local clinic sites, independent sector providers, optical/dental practices) do not have a direct regional link (`RE5`) assigned in the TRUD XML hierarchy.
-- **Impact**: `RE5 IS LOCATED IN THE GEOGRAPHY OF` is marked legacy by NHS ODS and only links a subset of entities.
+### Reporting sub-ICB locations vs statutory ICB boards
+In TRUD XML, primary care practices are linked via `RE4` to Sub-ICB Locations (`RO319` / former CCG reporting codes — 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`). Grouping raw `RE4` target codes yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Finding the Statutory ICBs requires traversing relationships in `relationships.parquet`.
 
-### Reporting Sub-ICB Locations vs Statutory ICB Boards
-- **The Challenge**: In TRUD XML, primary care practices are linked via `RE4` to Sub-ICB Locations (`RO319` / former CCG reporting codes - 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`).
-- **Impact**: Grouping raw `RE4` target codes yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Finding the Statutory ICBs requires traversing relationships in `relationships.parquet`.
-
----
-
-For a complete breakdown of the organisational hierarchies across England, Scotland, Wales, Northern Ireland, and Crown Dependencies, see [docs/nhs.md](file:///Users/oli/Code/olizilla/ods/docs/nhs.md).
+For a complete breakdown of the organisational hierarchies across England, Scotland, Wales, Northern Ireland, and Crown Dependencies, see [docs/nhs.md](./nhs.md).

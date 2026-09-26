@@ -50,17 +50,11 @@ $ ods find --in sedbergh
 
 Three audiences, wanting different things:
 
-| Audience | Wants | Path |
-| :--- | :--- | :--- |
-| **Query** | zero setup, something citable | `ods pull`, `ods find`, `ods cite` |
-| **Verify** | to rebuild it and check | `ods trud pull`, `ods make`, `ods trud audit` |
-| **Publish** | the monthly release to go out right | CI, `ods make`, release workflow |
+1. Most folks will want a low friction path to query the data.
+2. Some folks will verify our claims by recreating the parquet files from the source XML.
+3. Us, to publish the artefacts. Folks can fetch them from multiple sources: the published hashes means `ods` can verify the output is identical.
 
 Most trade-offs come down to those three. 
-
-We assume most folks will want a low friction path to query the data.
-Some folks will verify out claims by recreating the parquet files from the source XML.
-We will publish the artifacts. Folks can fetch them from multiple sources: the published hashes means `ods` can verify the output is identical.
 
 ## What we're building
 
@@ -104,7 +98,7 @@ we disagree, please open an issue.
 **Correctness depends on TRUD staying reachable.** Rebuilding needs the source
 archive, and only NHS England distributes it. If TRUD is withdrawn, nobody can
 re-run the derivation and our source hashes become claims you'd have to take on
-trust. We keep a copy of every source archive to garud against that possibility.
+trust. We keep a copy of every source archive to guard against that possibility.
 
 ## How to decide things
 
@@ -145,52 +139,46 @@ A change to a guarantee in [docs/tests.md](./docs/tests.md) needs a test that
 fails when that guarantee breaks, and the page gains or updates the guarantee
 first. Tests run offline.
 
-## Release Process
+## Release process
 
 We separate **tool releases** from **dataset releases**:
 
-### 1. Tool Releases (`scripts/release-tool.sh`)
+### Tool releases (`scripts/release-tool.sh`)
 When shipping a new version of the `ods` binary:
-- Bump `version` in `Cargo.toml`.
-- Run `scripts/release-tool.sh`. It verifies the working tree is clean, runs `cargo test`, tags `v<version>`, and pushes to origin.
-- GitHub Actions builds binaries for all targets and attaches them to the GitHub release.
+- Bump `version` in `Cargo.toml`, with a matching entry in `CHANGELOG.md`.
+- Run `scripts/release-tool.sh`. It refuses on a dirty tree, a branch other than `main`, a
+  missing changelog entry, or a failing `cargo test`.
+- Run `scripts/release-tool.sh --publish` to tag `v<version>`, push the tag, and create the
+  GitHub release from that changelog entry. It doesn't build or attach binaries — there's no
+  workflow for that yet.
 
-### 2. Dataset Releases (`scripts/release-data.sh <date> <version>`)
-When publishing a monthly dataset cut or republishing a fix:
-1. Pull and compile the release:
-   ```console
-   $ ods trud pull <date>
-   $ ods make
-   ```
-2. Build and verify the OCI bundle, checking preconditions:
-   ```console
-   $ ods make release
-   ```
-   This performs structural checks, verifies git tags, stages the release's objects into `dist/`, and appends the release row to `data/releases.json`.
+### Dataset releases
+When publishing a monthly dataset cut, or rebuilding the back catalogue after a schema change:
 
-   > `dist/` contains this release's objects. `releases.json` is not a release object: it is the index, it lives in git, and it is published from there as the commit point.
-
-3. Rehearse the release before announcing:
+1. Dispatch `monthly-dataset.yml` (a new TRUD release) or `rebuild-datasets.yml` (archives
+   already pushed to `nhs-ods-xml`) from the tool tag `v<version>` — both refuse to run from
+   anywhere else (`scripts/check-tool-tag.sh`). `repository` defaults to `ods-data-rehearsal`;
+   dispatch there first to try the whole run, then again with `ods-data` to publish for real.
+2. `build-dataset.yml` builds each date on `ubuntu-latest` and `macos-latest`, refuses to go on
+   if their manifest digests disagree, pushes the dataset to `ghcr.io` and attests it, then
+   writes a `candidate` artifact: `candidate.json`, which is `data/releases.json` with this run's
+   rows appended.
+3. Download the `candidate` artifact and try it before publishing anything to `ods.fyi`:
    ```console
-   $ rclone copy dist/ r2:ods-fyi/
-   $ ods pull --index ./rehearsal.json --force
+   $ ods pull --index candidate.json
    $ ods find sedbergh
    ```
-   where `rehearsal.json` names the manifest digest just pushed. Blobs on ods.fyi are inert until `releases.json` names them, which is what makes this safe to run before announcing anything.
+4. Copy each date's blobs to `ods.fyi`'s R2 bucket:
+   ```console
+   $ scripts/mirror-to-ods-fyi.sh <date> <version> --index candidate.json --publish
+   ```
+5. Commit `candidate.json` as the new `data/releases.json`, then bless it:
+   ```console
+   $ op run --env-file=.r2.env -- rclone copyto data/releases.json r2:ods-fyi/releases.json
+   ```
 
-4. If an earlier release for `<date>` had errors, mark the old row `withdrawn` in `data/releases.json`.
-5. Announce via pull request:
-   - Generate the release notes markdown summary:
-     ```console
-     $ ods trud diff --format markdown
-     ```
-   - Commit the updated `data/releases.json` row on a release branch (e.g. `release/<date>`).
-   - Open a pull request against `main` with the `data/releases.json` row diff and the `trud diff` summary in the PR body.
-   - Merging the pull request **is** the announce event — a reviewable decision rather than a direct push to `main`. Once merged:
-     ```console
-     $ op run --env-file=.r2.env -- rclone copyto data/releases.json ods-fyi:ods-fyi/releases.json
-     $ gh release create data/<date>_<version> --notes-file <release-dir>/NOTES.md
-     ```
+If an earlier release for a date had errors, mark its row `withdrawn` by editing
+`data/releases.json` directly — no command writes that field yet.
 
 ## Conventions
 
@@ -211,15 +199,15 @@ only for work actually done. Data to stdout, progress to stderr, so `ods pull --
 
 ## Gotchas
 
-- **Parquet columns are resolved by name at runtime** If you rename a column The code
+- **Parquet columns are resolved by name at runtime.** If you rename a column, the code
   will compile but fail at runtime. You gotta grep for the string.
-- **nullable columns is declared explicitly rather than determined from the current data** 
+- **Nullable columns are declared explicitly, rather than determined from the current data.**
   A mostly-null column will fail at write time, not compile time.
 - The primary role describes the register rather than the organisation
 - Successions are many-to-many
 - Legal dates are mostly empty, prefer operational dates
 - The most recent release is not a superset of all previous releases. Some orgs have
-  been removed from teh dataset over time, and info about previous years gets updated.
+  been removed from the dataset over time, and info about previous years gets updated.
 
 [docs/queries.md] has the full list, with the queries that show each one.
 

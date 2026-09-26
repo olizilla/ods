@@ -15,7 +15,7 @@ You can use the data in multiple ways:
 | _**Find** NHS orgs_           | Local-first search     | `ods pull` & `ods find`|
 | _**Verify** the provenance_   | Reproducible builds    | `ods trud pull` & `ods make` |
 | _**Cite** the data_           | Academic citation info | `ods cite` |
-| _See What changed_            | Diff trud ods releases | `ods trud diff` |
+| _See what changed_            | Diff trud ods releases | `ods trud diff` |
 | _Know how it works_           | See the SQL queries    | `ods find --sql` |
 
 - **Open formats**: https://ods.fyi republishes it as Parquet files you can query with standard SQL. The tables can be queried over https via `duckdb`, or Python without installing `ods` at all.
@@ -82,11 +82,11 @@ ods find --gp --in SW9
 
 Local queries on static parquet files are _fast_! Each dataset is published as an [OCI Image](https://opencontainers.org/faq/), and `ods pull` verifies the file integrity for you.
 
-## ODS Data directory
+## ODS data directory
 
 The `ods` CLI manages a local workspace directory called `ods_data` to keep a local copy of each release you use, so you can always access it and refer back to it later.
 
-The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and are published automatically from CI each month.
+The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and each month's release is built and attested in CI, from `monthly-dataset.yml`, a workflow the maintainer dispatches by hand.
 
 `ods pull` fetches the parquet files and `_provenance.json` metadata and verifies the data integrity. 
 
@@ -206,7 +206,7 @@ Considerate PRs welcome! The priorities for this project are:
     - Speed affects user experience. The tool must be fast.
     - Availability is vital. The data must be available to use offline and refetchable from multiple sources, and not require a log in.
 
-## Useful Links
+## Useful links
 
 - ODS Data Model: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 - NHS TRUD ODS info: https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5

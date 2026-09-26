@@ -2,17 +2,15 @@
 
 Publisher namespace for TRUD API interactions: list releases (`list`), download (`pull`), compare releases (`diff`), verify checksums (`verify`), and audit workspace projections (`audit`).
 
-## Subcommands Overview
+## Subcommands overview
 
 | Subcommand | Description |
 | :--- | :--- |
 | **`ods trud list`** | List TRUD release archives, newest first, and show which are held in the workspace. |
-| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, generate `provenance.json`, and set the active workspace release. |
+| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, generate `_provenance.json`, and set the active workspace release. |
 | **`ods trud diff`** | Compare two TRUD ODS releases (or workspace versions) and print a structured diff report of entity changes. |
 | **`ods trud audit`** | Audit workspace Parquet projections against ground-truth TRUD XML/ZIP releases to detect data drift or compilation anomalies. |
 | **`ods trud verify`** | Check a TRUD archive you already have against the ods release index, then the TRUD API, without downloading it. |
-
----
 
 ## `ods trud list`
 
@@ -44,36 +42,40 @@ ods trud list
 * To pull: ods trud pull 2026-06-26
 ```
 
-Pass `--all` to list every release without truncating:
-
----
+Pass `--all` to list every release without truncating.
 
 ## `ods trud pull`
 
-Query, download, and verify official NHS England TRUD ODS XML release archives, generate cryptographic provenance metadata, and manage workspace active release symlinks.
+Query, download, and verify official NHS England TRUD ODS XML release archives, generate provenance metadata, and manage workspace active release symlinks.
 
 Pulling every release is `--all`, hidden from the idle curious because it downloads the whole archive from TRUD. Use it if you need it.
 
 ### Usage
 
 ```bash
-ods trud pull [OPTIONS]
+ods trud pull [RELEASE_DATE] [OPTIONS]
 ```
 
 ### Options
 
-| Option | Short | Environment Variable | Default | Description |
+| Option | Short | Environment variable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `[RELEASE_DATE]` | | | Latest available | Positional target release date, `YYYY-MM-DD` (e.g. `2026-07-31`). |
 | `--api-key <KEY>` | | `TRUD_API_KEY` | | Your TRUD API key. Required unless set in environment or passed via 1Password (`op run`). |
-| `--release <DATE>` | | | Latest available | Target release date in `YYYY-MM-DD` format (e.g. `2026-07-31`). |
 | `--output <DIR>` | `-o` | | `./ods_data/releases/<date>/` | Custom destination directory for archive and provenance files. |
 | `--force` | `-f` | | `false` | Re-fetch NHS's checksum, signature and key, and download the archive again only if it's missing or doesn't match TRUD's hash. |
 | `--verify-only <FILE>` | | | | Compute local SHA-256 for `<FILE>` and verify against TRUD API without downloading. |
-| `--verbose` | `-v` | | `false` | Print API request URL and raw HTTP response payload before deserialization. |
+| `--jobs <N>` | | | `4` | Concurrent download workers (max 8). |
+| `--local-archive <PATH>` | | | | Local archive or directory holding a canned TRUD `response.json` and ZIP, for offline testing. |
+| `--workspace <DIR>` | `-w` | | found from the current directory | Workspace directory. |
+| `--quiet` | `-q` | | `false` | Show errors and summary only. |
+| `--no-progress` | | | `false` | Disable interactive live progress animations. |
+| `--format <FORMAT>` | | | | Output format (`ndjson` for pull outcomes). |
+| `--verbose` | `-v` | | `false` | Print API request URL and raw HTTP response payload before deserialisation. |
 
 ### Examples
 
-#### Pull Latest Release
+Pull the latest release:
 ```console
 $ ods trud pull
   2026-07-31    ████████████████████  36MB   5 files  in 3.1s
@@ -89,22 +91,22 @@ $ ods trud pull
   linked        current → releases/2026-07-31 (unchanged)
 ```
 
-#### Pull Latest Release (via 1Password)
+With the key read from 1Password:
 ```bash
 op run --env-file=.env -- ods trud pull
 ```
 
-#### Target Specific Release Date with Verbose Logging
+A specific release date, with verbose logging:
 ```bash
-ods trud pull --api-key $TRUD_API_KEY --release 2026-07-31 --verbose
+ods trud pull 2026-07-31 --api-key $TRUD_API_KEY --verbose
 ```
 
-#### Save to Custom Directory
+Saved to a custom directory:
 ```bash
 ods trud pull --api-key $TRUD_API_KEY -o ./custom_downloads/
 ```
 
-### How It Works
+### How it works
 
 NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) updates on TRUD under Item Pack ID `341` (*NHS Organisation Data Service XML Data*).
 
@@ -113,7 +115,7 @@ NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) upda
 2. Identifies the target release (defaults to the latest available release date).
 3. Checks for a cached local archive in `./ods_data/releases/<date>/trud/`.
 4. Downloads the archive ZIP if it isn't there. A ZIP that is there is never downloaded again while it matches TRUD's hash: the release directory is repaired from it instead (below).
-5. Computes local SHA-256 hash and verifies cryptographic match against TRUD's published `archiveFileSha256`.
+5. Computes the local SHA-256 hash and checks it against TRUD's published `archiveFileSha256`.
 6. Writes `_provenance.json` if it is missing or unreadable.
 7. Updates the workspace active release symlink (`./ods_data/current -> releases/<date>`).
 
@@ -137,36 +139,32 @@ The ZIP is the expensive part, and the one thing TRUD vouches for. When a releas
 
 `--force` fetches NHS's three files again and rewrites `_provenance.json`, and still leaves a matching ZIP alone. A ZIP that doesn't match TRUD's hash is refused without `--force`, with both hashes named; with it, the ZIP is downloaded again.
 
-### API Key Security & Redaction
+### API key security and redaction
 TRUD download URLs embed user API keys directly in their path parameters (`/keys/{api_key}/...`). `ods trud pull` automatically redacts secret API keys from:
 - `--verbose` CLI log messages
 - Error tracebacks and log files
 
 The key is replaced with `<REDACTED_API_KEY>` before logging or printing.
 
----
-
 ## `ods trud diff`
 
-Compare entity changes across two TRUD releases.
+Compare entity changes across two TRUD releases:
 
 ```bash
-ods trud diff --baseline 2026-06-30 --target 2026-07-31
+ods trud diff 2026-06-30 2026-07-31
 ```
-
----
 
 ## `ods trud audit`
 
 Verify that derived workspace artefacts are a faithful, complete, and unmodified projection of the source TRUD archive:
 
-> **The Audit Contract**: Every check must have an expected value derivable from the release's own source archive, or be a fixed structural invariant such as zero.
+> **The audit contract**: Every check must have an expected value derivable from the release's own source archive, or be a fixed structural invariant such as zero.
 
-- **File & Provenance Integrity**: Verifies SHA-256 checksums, `_provenance.json` artifact map, and `datapackage.json` hashes.
-- **Source Invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
-- **Record Parity**: Checks 100% count equality between the release's XML files and `orgs.parquet` (every organisation, and the active count), `roles.parquet`, `relationships.parquet`, and `successions.parquet`. It reads both XML files as `ods make` does, sets aside each stub that repeats a complete record from the other file, and names the record count it compared.
-- **Field & Derived Column Parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, role names & codes, normalized addresses).
-- **Workspace Batch Audit (`--all`)**: Audits all release directories in the workspace, skipping unmade releases without failure.
+- **File and provenance integrity**: Verifies SHA-256 checksums, `_provenance.json`'s artefact map, and `datapackage.json` hashes.
+- **Source invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
+- **Record parity**: Checks 100% count equality between the release's XML files and `orgs.parquet` (every organisation, and the active count), `roles.parquet`, `relationships.parquet`, and `successions.parquet`. It reads both XML files as `ods make` does, sets aside each stub that repeats a complete record from the other file, and names the record count it compared.
+- **Field and derived column parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, role names and codes, normalised addresses).
+- **Workspace batch audit (`--all`)**: Audits all release directories in the workspace, skipping unmade releases without failure.
 
 ```bash
 ods trud audit                  # Audit active release in workspace
@@ -174,8 +172,6 @@ ods trud audit --all            # Audit all releases in workspace
 ods trud audit --full           # Run 100% row-by-row field comparison
 ods trud audit --json           # Output machine-readable audit report for CI
 ```
-
----
 
 ## `ods trud verify`
 

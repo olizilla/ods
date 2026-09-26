@@ -25,20 +25,23 @@ ods find [QUERY] [OPTIONS]
 | `-s, --sort <SORT>` | Explicit sort order: `code`, `name`, or `postcode` (overrides default relevance ranking) |
 | `-f, --format <FORMAT>` | Output format: `table` (default), `markdown`, `csv`, `json`, or `tsv` |
 | `-i, --input <DIR>` | Directory containing Parquet files (defaults to active release) |
+| `--plain` | Disable ANSI coloured output |
+| `--sql` | Print the DuckDB query for these filters instead of running them |
+| `-h, --help` | Print help |
 
-## Search Model & Ranking
+## Search model and ranking
 
-### Positional Name Matching & Relevance Ranking
-The positional argument matches the organisation `name` column exclusively. When a query is provided without an explicit `--sort` flag, results are ranked in 4 tiers:
+### Name matching and ranking
+The positional argument matches the organisation `name` column. Matching ignores spacing,
+hyphens and punctuation, so `st marys` finds `ST MARY'S` and `healthcare` finds `HEALTH CARE`.
 
-1. **Exact Match**: Normalised name equals query.
-2. **Prefix Match**: Normalised name starts with query.
-3. **Word Boundary Match**: A word in normalised name starts with query.
-4. **Substring Match**: Normalised name contains query.
+Without `--sort`, rows whose name contains the query exactly as typed — before that
+normalising strips it — sort first; the rest, matched only once punctuation and case are
+stripped, follow. Within each group, rows sort by `ods_code`.
 
-If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes precedence over ranking.
+`--sort <field>` (e.g. `--sort name`) replaces this ranking with an explicit sort.
 
-### Location Filtering (`--in <place>`)
+### Location filtering (`--in <place>`)
 `--in` checks every value against four columns at once: `town`, `county`, `country` and `postcode`.
 
 - **Places match whole.** Town, county and country must equal the value, ignoring case, apostrophes and punctuation. `--in "kings lynn"` finds KING'S LYNN, and `--in london` does not find LONDONDERRY.
@@ -55,7 +58,7 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 - **County is recorded unevenly.** Records with post town HARROW give MIDDLESEX, GREATER LONDON or no county at all, so `--in "greater london"` finds only the records that say so.
 - **Malformed postcodes stay as recorded.** 250 inactive records have postcodes that aren't in the standard full shape, such as `HR1 3` or `WA16 OED` (a letter O for a zero), all of them closed by 2017-03-31. A whole-postcode search doesn't find them; `--in HR1` and `--in WA16` do.
 
-### Role Filtering (`--role <roles>`)
+### Role filtering (`--role <roles>`)
 `--role` accepts both `RO\d+` codes and curated role names. Multiple roles repeat with OR semantics. Unknown role names fail with suggestions and code shortcuts:
 
 ```text
@@ -66,12 +69,12 @@ If `--sort <field>` is specified (e.g. `--sort name`), the explicit sort takes p
 
 Discover role codes and holder counts using `ods role [QUERY]`. Holders are open organisations; `ods role --all` counts closed and inactive ones too.
 
-### Role Shortcuts (`--gp`, `--dentist`)
+### Role shortcuts (`--gp`, `--dentist`)
 Convenience flags expand directly into `--role` with OR semantics:
 - `--gp`: Expands to England, Scotland, and Northern Ireland GP registers (`RO76,RO227,RO315`).
 - `--dentist`: Expands to general and private dental practices (`RO110,RO65`).
 
-### Role Set Display & De-emphasis
+### Role set display and de-emphasis
 In tabular output, `find` displays descriptive roles first and tucks low-signal container/regulatory roles (`Prescribing Cost Centre`, `Social Care Site`, `Registered under Care Standards Act 2000`, `ePACT System`, `Foundation Trust`) behind a `+N` count:
 
 ```text
@@ -85,7 +88,7 @@ Pass `-v, --verbose` to view the full role set in stored order. `--format json` 
 ### Normalisation
 `ods` uppercases what you type. Stored values are already in capitals and are compared as written. Matching strips apostrophes, replaces symbols with spaces and collapses whitespace. Tables, JSON and CSV show each value as the source wrote it.
 
-### Pipe Workflows (`--format tsv`)
+### Pipe workflows (`--format tsv`)
 `--format tsv` outputs the same five columns as the table (six with `--all`) separated by tabs, with **no header row** and no borders. This makes it pipe directly into fuzzy finders and standard Unix tools (`fzf`, `sk`, `cut`, `awk`, `xargs`):
 
 ```bash

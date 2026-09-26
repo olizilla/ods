@@ -1,10 +1,8 @@
-# UK Health Systems & Organisation Structures
+# UK health systems and organisation structures
 
 This document defines the organisational hierarchies and structures of the health systems across the United Kingdom and Crown Dependencies as revealed by the NHS Organisation Data Service (ODS) TRUD datasets.
 
----
-
-## Overview: Sovereign UK Health Systems
+## Overview: sovereign UK health systems
 
 The NHS Organisation Data Service (ODS) dataset is not exclusive to England; it encompasses all four sovereign health systems of the United Kingdom, alongside the Crown Dependencies. Each jurisdiction operates its own distinct administrative and operational hierarchy:
 
@@ -12,18 +10,16 @@ The NHS Organisation Data Service (ODS) dataset is not exclusive to England; it 
 | :--- | :--- | :--- | :--- |
 | **England** | 7 NHS England Regions & 42 Statutory Integrated Care Boards (ICBs) | ~13,000 Practices / ~38,000 Sites | `RO209`, `RO318`, `RO197`, `RO177` |
 | **Scotland** | 14 Territorial NHS Scottish Health Boards | 1,242 Scottish GP Practices | `RO190` |
-| **Wales** | 7 Local Health Boards (Bddau Iechyd Lleol) | 7 Welsh Regions & LHB Sites | `RO272`, `RO328` |
+| **Wales** | 7 Local Health Boards (Byrddau Iechyd Lleol) | 7 Welsh Regions & LHB Sites | `RO272`, `RO328` |
 | **Northern Ireland** | 5 Health and Social Care (HSC) Trusts & LCGs | 321 NI GP Practices | `RO197` (HSC Trust), `RO190` |
 | **Isle of Man** | Manx Care & Health Directorates | 30 Practices & Manx Facilities | `RO138`, `RO140` |
 | **Channel Islands** | States of Jersey, Guernsey & Alderney Health Services | 46 Medical Sites & Providers | `RO126` |
 
----
-
-## NHS England Hierarchy Architecture
+## NHS England hierarchy architecture
 
 In England, health service delivery is structured under the Health and Care Act 2022 into 4 distinct operational hierarchy archetypes that cover over 95% of active organisations:
 
-### Archetype 1: Primary Care Architecture (GP Surgeries, PCNs & ICBs) — *~13,000 Practices*
+### Primary care architecture (GP surgeries, PCNs and ICBs) — *~13,000 practices*
 ```text
 NHS England Region (RO209 — e.g. Y56 London Region)
   └── Integrated Care Board (RO318 / RO261 — e.g. QMJ NHS North Central London ICB)
@@ -33,7 +29,7 @@ NHS England Region (RO209 — e.g. Y56 London Region)
         └── Community Pharmacy & Dental Practice (RO181 / RO110) [RE4 commissioned by link]
 ```
 
-### Archetype 2: Secondary & Tertiary Care Architecture (Hospitals & NHS Trusts) — *~38,000 Hospital Sites*
+### Secondary and tertiary care architecture (hospitals and NHS trusts) — *~38,000 hospital sites*
 ```text
 NHS England Region (RO209 — e.g. Y56 London Region)
   └── NHS Foundation Trust / Acute Trust (RO197 — e.g. RAL Royal Free London NHS FT)
@@ -43,29 +39,27 @@ NHS England Region (RO209 — e.g. Y56 London Region)
         └── Health Centre / Outpatient Clinic (RO198 site)
 ```
 
-### Archetype 3: Commercial Healthcare Architecture (Retail Pharmacies, Opticians, Private Hospitals) — *~35,000 Sites*
+### Commercial healthcare architecture (retail pharmacies, opticians, private hospitals) — *~35,000 sites*
 ```text
 Commercial Provider HQ (RO157 / RO104 — e.g. Boots UK Limited / Specsavers)
   └── High Street Branch / Private Clinic Site (RO181 / RO176) [RE6 operated by link]
         └── Commissioning Link ──► Local Integrated Care Board (ICB) [RE4 commissioned by link]
 ```
 
-### Archetype 4: Public Health & Social Care Architecture (Care Homes & Schools) — *~55,000 Sites*
+### Public health and social care architecture (care homes and schools) — *~55,000 sites*
 ```text
 Local Authority / County Council (RO141 — e.g. Camden Council)
   ├── Social Care Provider (RO104) ──► Care Home / Nursing Site (RO101) [RE6 operated by link]
   └── School / Academy Trust (RO221) ──► Primary & Secondary School Site [RE5 geography link]
 ```
 
-### Key Relationship Edges in England:
+### Key relationship edges in England
 - **`RE4` (`is commissioned by`)**: 148,000+ links connecting GP practices, PCNs, pharmacies, and dentists to their Statutory ICB.
 - **`RE6` (`is operated by`)**: 202,000+ links connecting hospital sites, clinics, care units, and commercial branches to their parent Trust, HQ, or Practice.
 - **`RE8` (`is partner to`)**: 8,300+ links connecting GP practices into Primary Care Networks (PCNs).
 - **`RE5` (`is located in the geography of`)**: 292,000+ links connecting entities to Government Office Regions, Local Authorities, or Local Health Districts.
 
----
-
-## NHS Scotland (NHS Alba) Hierarchy Architecture
+## NHS Scotland (NHS Alba) hierarchy architecture
 
 In Scotland, healthcare delivery is unified under 14 territorial NHS Scottish Health Boards (`RO190`) that integrate primary, secondary, and community care within defined geographic regions:
 
@@ -91,14 +85,12 @@ NHS Scotland (National Strategic Level)
               └── Scottish Optical & Dental Services
 ```
 
-### Key Characteristics in Scotland:
+### Key characteristics in Scotland
 - **Single-Tier Territorial Integration**: Unlike England's split between ICBs and NHS Trusts, Scottish Health Boards directly manage both GP primary care commissioning and hospital operations within their region.
 
----
+## NHS Wales (GIG Cymru) hierarchy architecture
 
-## NHS Wales (GIG Cymru) Hierarchy Architecture
-
-In Wales, healthcare is delivered through 7 integrated Local Health Boards (`RO272`) and 3 NHS Trusts, organized geographically across 7 Welsh Regions (`RO328`):
+In Wales, healthcare is delivered through 7 integrated Local Health Boards (`RO272`) and 3 NHS Trusts, organised geographically across 7 Welsh Regions (`RO328`):
 
 ```text
 Welsh Government Health & Social Services Group
@@ -112,15 +104,13 @@ Welsh Government Health & Social Services Group
         └── Swansea Bay University Health Board (7A7)
               ├── Welsh Primary Care & GP Practices
               ├── Welsh Acute Hospitals & Community Health Centres
-              └── Specialized Welsh NHS Trusts (Velindre NHS Trust, Welsh Ambulance Services)
+              └── Specialised Welsh NHS Trusts (Velindre NHS Trust, Welsh Ambulance Services)
 ```
 
-### Key Characteristics in Wales:
+### Key characteristics in Wales
 - **Unified Health Boards**: Local Health Boards in Wales own and operate hospital facilities while directly commissioning primary care services for their resident populations.
 
----
-
-## Health and Social Care Northern Ireland (HSC NI) Hierarchy Architecture
+## Health and Social Care Northern Ireland (HSC NI) hierarchy architecture
 
 In Northern Ireland, health and social care services are integrated under the Department of Health NI and delivered via 5 regional Health and Social Care (HSC) Trusts:
 
@@ -137,12 +127,10 @@ Department of Health Northern Ireland (DoH NI)
                           └── Northern Ireland GP Practices (321 active prescribing cost centres)
 ```
 
-### Key Characteristics in Northern Ireland:
+### Key characteristics in Northern Ireland
 - **Health + Social Care Integration**: HSC NI structurally merges social care services and healthcare delivery within the same HSC Trusts.
 
----
-
-## Crown Dependencies (Isle of Man & Channel Islands)
+## Crown Dependencies (Isle of Man and Channel Islands)
 
 The Crown Dependencies maintain autonomous health administrations represented in ODS data:
 
@@ -150,15 +138,13 @@ The Crown Dependencies maintain autonomous health administrations represented in
 - **Governing Body**: `YJ1` *Isle of Man Statutory Board Manx Care* (`RO138`) & `YAC` *Department of Health*.
 - **Facilities**: Nobles Hospital (`YK301`), Ramsey Cottage Hospital (`YK101`), 30 GP prescribing centres, 36 pharmacies, and 20 dental practices.
 
-### Channel Islands (States of Jersey, Guernsey & Alderney)
+### Channel Islands (States of Jersey, Guernsey and Alderney)
 - **Governing Bodies**: `YAD` *States of Jersey Health & Social Services*, `YAE` *States of Guernsey Health & Social Services*, `YAF` *States of Alderney*.
 - **Facilities**: 46 medical prescribing centres, pathology facilities, and independent sector healthcare providers.
 
----
+## Specialised and cross-jurisdictional facilities
 
-## Specialized & Cross-Jurisdictional Facilities
-
-Across all jurisdictions, a set of specialized healthcare settings and infrastructure nodes exist outside standard regional commissioning models:
+Across all jurisdictions, a set of specialised healthcare settings and infrastructure nodes exist outside standard regional commissioning models:
 
 1. **Custodial & Secure Healthcare Settings**:
    - **Police Custody Suites** (357 sites), **Courts** (96 sites), and **Prisons** (96 sites): Facilities where primary care providers deliver healthcare under secure commissioning contracts.
@@ -170,20 +156,18 @@ Across all jurisdictions, a set of specialized healthcare settings and infrastru
    - **Application Service Providers** (366) & **NHS Support Agencies** (151): IT infrastructure points (Spine, e-Prescribing hubs).
    - **Executive Agencies & Special Health Authorities** (174): Arms-length bodies such as *UK Health Security Agency (UKHSA)*, *NHS Blood and Transplant (NHSBT)*, and *NHS Resolution*.
 
----
-
-## Regional Resolution Coverage & Unmapped Entity Breakdown
+## Regional resolution coverage and unmapped entity breakdown
 
 Through multi-hop transitive relationship resolution (`GP Practice ➔ Sub-ICB ➔ Statutory ICB ➔ NHS Region`), `ods` resolves regional assignments for **85.0% of all active entities** (183,864 orgs out of 216,886).
 
-### Resolved Categories (98%+ Coverage):
+### Resolved categories (98%+ coverage)
 - **GP Practices (`prescribing cost centre`)**: 98.7% resolved (12,672 out of 12,841 practices).
 - **General Dental Practices**: 98.9% resolved (9,683 out of 9,789 clinics).
 - **Community Pharmacies**: 93.5% resolved (10,454 out of 11,177 branches).
 - **Optical Clinics**: 98.3% resolved (6,795 out of 6,910 sites).
 - **Acute Trust Hospitals**: 95.4% resolved (36,470 out of 38,254 sites).
 
-### Unmapped Categories (The Remaining 15.0%):
+### Unmapped categories (the remaining 15.0%)
 The 33,022 active entities without an NHS England Region link represent non-commissioned private providers, corporate headquarters, or non-English entities:
 1. **Private CQC Social Care Providers** (18,681 orgs): Independent residential care home providers registered with CQC without an NHS commissioning link.
 2. **Corporate Headquarters** (8,262 orgs): Corporate headquarters of pharmacy companies (4,872 HQs) and optical chains (3,390 HQs).

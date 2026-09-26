@@ -2,11 +2,11 @@
 
 I imagine 3 types of user for `ods`:
 
-1. I want to do run some queries. i just want ods find to work. at some point i come to rely on this tool, and i want to cite it in my work and i am greatful that it makes the provenance clear (and i'm unaware that it's fully hash stable projections from a trusted upstream NHS provided source, but ok that sounds great!)
+1. I want to do run some queries. i just want ods find to work. at some point i come to rely on this tool, and i want to cite it in my work and i am grateful that it makes the provenance clear (and i'm unaware that it's fully hash stable projections from a trusted upstream NHS provided source, but ok that sounds great!)
 2. I want to run queries, and i really care about offline first and verifying data provenance. I will get a TRUD api key and want to be able to create my own copies. Oh cool, they hash to the same hash as the published ones. My sceptical self is mildly reassured and a little impressed, so few bother with these details.
-3. Me, the "official" publisher of these derived artefacts to the github repo. I want to produce the artefacts with the same commands i would inflict on users (dogfooding) even tho they will end up as lines in a CI workflow soon. I want every months data to be published as a release on github on the same day as the NHS TRUD publishes new (unweildy) source xml files.
+3. Me, the "official" publisher of these derived artefacts to the github repo. I want to produce the artefacts with the same commands i would inflict on users (dogfooding) even tho they will end up as lines in a CI workflow soon. I want every months data to be published as a release on github on the same day as the NHS TRUD publishes new (unwieldy) source xml files.
 
-My thinking for splitting `ods trud` cmds out is so that user 1 (by far the most numerous) doesn't have to think about them. and also that `ods pull` fetching derived parquet from github is different enough from "fetch the official xml from the NHS with an api key". Once we had that split it made sense to push other dataset ops to the trud namespace. For `diff` i imagine us publishing a change log or similar so folks can check it without having to run `ods` themsevlves, but the trustless crew can run it if they want.
+My thinking for splitting `ods trud` cmds out is so that user 1 (by far the most numerous) doesn't have to think about them. and also that `ods pull` fetching derived parquet from github is different enough from "fetch the official xml from the NHS with an api key". Once we had that split it made sense to push other dataset ops to the trud namespace. For `diff` i imagine us publishing a change log or similar so folks can check it without having to run `ods` themselves, but the trustless crew can run it if they want.
 
 The CLI serves three distinct users:
 
@@ -14,12 +14,11 @@ The CLI serves three distinct users:
 |---|---|---|
 | **Query** — "I just want to search NHS orgs" | Zero-setup search, citable provenance | `find`, `info`, `role`, `pull`, `cite` |
 | **Verify** — "I want to build from source and check hashes" | TRUD API access, reproducible builds | `trud list`, `trud pull`, `make`, `trud audit`, `trud verify` |
-| **Publish** — "I produce the monthly release artifacts" | Full pipeline, changelogs, CI integration | `trud list`, `trud pull`, `make`, `trud diff`, `trud audit` |
+| **Publish** — "I produce the monthly release artefacts" | Full pipeline, changelogs, CI integration | `trud list`, `trud pull`, `make`, `trud diff`, `trud audit` |
 
+## Usage
 
-# Usage
-
-Pull the latest parquet files with `ods pull`. Find NHS legal orgs and phyiscla sites with `ods find`. Pass their ods code to `ods info <code>` to see all the details.
+Pull the latest parquet files with `ods pull`. Find NHS legal orgs and physical sites with `ods find`. Pass their ods code to `ods info <code>` to see all the details.
 
 ```
 Fetch, query, cite and reproduce NHS ODS data as verifiable Parquet
@@ -67,7 +66,7 @@ stderr:
 A release pinned older on purpose with `ods use` gets no notice, and neither do
 machine formats such as `--format json`.
 
-### Reproducibility Guarantee
+### Reproducibility guarantee
 
 `ods make` builds byte-identical Parquet files from the same TRUD zip, on any
 machine. This is guarantee D1 in [tests.md](./tests.md#the-data), and a test

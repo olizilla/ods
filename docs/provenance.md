@@ -1,8 +1,6 @@
-# ODS Data Provenance & Cryptographic SHA-256 Verification
+# ODS data provenance and SHA-256 verification
 
-This document details dataset provenance tracking, cryptographic SHA-256 checksum verification against official NHS TRUD API releases, and field definitions in `OdsProvenance`.
-
----
+This document details dataset provenance tracking, SHA-256 checksum verification against official NHS TRUD API releases, and field definitions in `OdsProvenance`.
 
 ## What provenance holds
 
@@ -79,9 +77,7 @@ When an archive supplied to `ods` cannot be matched by SHA-256 against any row i
 - **The schema version moves with the media type.** The manifest types this blob `application/vnd.fyi.ods.provenance.v1+json`. Any change to provenance's fields means a new schema file and a new media type version together. A published schema file never changes.
 - **Build-run facts live in the attestation, never in the file.** Machine names, runner IDs, and timestamps belong in the signed SLSA attestation outside the dataset. Inside provenance, they would prevent rebuilds reproducing identical layer digests.
 
----
-
-## Automated Release Download & Verification Flow
+## Release download and verification flow
 
 ```mermaid
 flowchart TD

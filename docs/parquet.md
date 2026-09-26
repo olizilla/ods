@@ -35,9 +35,9 @@ Parquet tables.
 Adopt these schemas freely. If you publish ODS data, or anything shaped like it, use
 them as they are — every tool that shares a schema can read every file written to it.
 
-Worked examples live in [queries.md]; Note that the ODS records every entity that works with the NHS;
-schools and care homes outnumber GP Practice rows. Other suprises in the data are listed in the
-[Know This](#know-this) section.
+Worked examples live in [queries.md]. Note that the ODS records every entity that works with the NHS;
+schools and care homes outnumber GP Practice rows. Other surprises in the data are listed in the
+[Know this](#know-this) section.
 
 ## The tables
 
@@ -379,9 +379,9 @@ changed.
 **A patch bump means "prefer this", not "the derivation changed."** After a one-off bad build is republished at 1.0.1, every subsequent month is byte-identically derived to the 1.0.0 months before it and still carries 1.0.1.
 
 
-## Know This
+## Know this
 
-There are suprises lurking in the data...
+There are surprises lurking in the data...
 
 **`RE5` is being retired upstream.** It's 44% of `relationships.parquet` today,
 and NHS ODS has marked it legacy: *"not part of the formal documentation or
@@ -397,7 +397,7 @@ organisations already have a closure date scheduled. Treating a null end date as
 
 **`1900-01-01` is filler, not a date.** It appears as `operational_start` on
 12,470 rows, mostly schools. Anything taking a `min()` or measuring an age needs
-to handle it. [Docuemtned here](./queries.md#other-things-to-check-before-you-trust-a-result).
+to handle it. [Documented here](./queries.md#other-things-to-check-before-you-trust-a-result).
 
 **Names aren't identifiers.** 1,680 organisations are called `DENTAL SURGERY`.
 Join on `ods_code`, always — [worked through here](./queries.md#names-are-not-identifiers).
