@@ -98,8 +98,9 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       // 2. Pack the release into an OCI layout. `ods make release` records the ods that runs it, and
       // must be built from a clean, tagged commit, so it can't run under the binary a test just built.
-      // Its staging tree is checked in tests/make_release_test.rs against expected-keys.json. This
-      // stages the same objects: every blob, and the manifest under its three tags.
+      // scripts/mirror-to-ods-fyi.sh lays out these same bucket keys from a pushed OCI image, and
+      // tests/mirror_to_ods_fyi_test.rs checks its keys against expected-keys.json. This stages the
+      // same objects by hand: every blob, and the manifest under its three tags.
       execFileSync(odsBin, ['make', 'oci', '--input', fixtureDir], { stdio: 'pipe' });
 
       const blobsDir = path.join(fixtureDir, 'oci', 'blobs', 'sha256');

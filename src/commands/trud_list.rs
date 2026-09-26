@@ -73,6 +73,7 @@ pub fn run_with_writer<W: Write>(args: Args, writer: &mut W, color: bool) -> Res
                 let is_pulled = held_dates.contains(&r.release_date);
                 ReleaseListItemJson {
                     date: r.release_date.clone(),
+                    sha256: r.archive_file_sha256.clone(),
                     size_bytes: r.archive_file_size,
                     status: if is_pulled {
                         "pulled".to_string()
@@ -371,6 +372,29 @@ mod tests {
         held.insert("2026-05-29".to_string());
         let out_all_held = render_trud_releases(&releases, &held, false, false);
         assert!(!out_all_held.contains("* To pull:"));
+    }
+
+    #[test]
+    fn test_json_items_carry_sha256() {
+        let releases = [mock_release("2026-07-31", 37_983_173)];
+        let held_dates: HashSet<String> = HashSet::new();
+        let json_items: Vec<ReleaseListItemJson> = releases
+            .iter()
+            .map(|r| {
+                let is_pulled = held_dates.contains(&r.release_date);
+                ReleaseListItemJson {
+                    date: r.release_date.clone(),
+                    sha256: r.archive_file_sha256.clone(),
+                    size_bytes: r.archive_file_size,
+                    status: if is_pulled { "pulled".to_string() } else { "remote".to_string() },
+                }
+            })
+            .collect();
+        let json = serde_json::to_string(&json_items).unwrap();
+        assert_eq!(
+            json,
+            r#"[{"date":"2026-07-31","sha256":"dummy_sha","size_bytes":37983173,"status":"remote"}]"#
+        );
     }
 
     #[test]

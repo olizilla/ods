@@ -199,6 +199,96 @@ EOF
   return $status
 }
 
+# Rebuilds the newest dataset published at this build's DATASET_VERSION from its kept archive
+# (nhs-ods-xml), and compares the manifest digest with the one recorded for it, so a change to the
+# bytes without a dataset version bump fails here instead of at the pull request that caused it
+# (docs/tests.md D5). CI_REPRODUCE_INDEX reads another index in place of data/releases.json — this
+# brief's acceptance points it at a candidate.json from a rehearsal run.
+#
+# Prints one "RESULT:<skip|ok|fail>:<detail>" line; the caller below turns that into the row.
+# Skips, naming why, without oras or a working registry credential (a laptop gh token without
+# read:packages, or — until the maintainer sets up CI's own credential — any run at all); the pull
+# request that changed the bytes is still caught once this runs on main after merge. `ods make` is
+# measured with the debug build already compiled by the "rust compile" step; it took under a
+# minute on a full release when this was written, so there's no --release fallback (yet) — if a
+# future release makes that too slow, build --release for this step alone and report both times.
+reproduce() {
+  local index="${CI_REPRODUCE_INDEX:-data/releases.json}"
+  local dataset_version
+  dataset_version=$(sed -n 's/^pub const DATASET_VERSION: &str = "\([^"]*\)";/\1/p' src/datapackage.rs | head -1)
+
+  local date row_digest
+  date=$(jq -r --arg v "$dataset_version" '
+    [.releases[] | select(.datasets[]? | .dataset_version == $v)] | sort_by(.trud_release_date) | last | .trud_release_date // empty
+  ' "$index" 2>/dev/null)
+  if [ -z "$date" ]; then
+    echo "RESULT:skip:no release published at dataset $dataset_version yet"
+    return 0
+  fi
+  row_digest=$(jq -r --arg v "$dataset_version" --arg d "$date" '
+    .releases[] | select(.trud_release_date == $d) | .datasets[] | select(.dataset_version == $v) | .manifest_digest
+  ' "$index")
+
+  # This step needs no credential of its own: it logs in only if one is already sitting there,
+  # and a missing or under-scoped one turns into a skip when the pull below is refused.
+  if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_ACTOR:-}" ]; then
+      echo "$GITHUB_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null 2>&1
+    fi
+  elif has gh && gh auth status 2>&1 | grep -qE 'read:packages|write:packages'; then
+    gh auth token 2>/dev/null | oras login ghcr.io -u "$(gh api user -q .login 2>/dev/null)" --password-stdin >/dev/null 2>&1
+  else
+    echo "RESULT:skip:gh auth token without read:packages"
+    return 0
+  fi
+
+  local work pull_err
+  work=$(mktemp -d)
+  pull_err="$work/pull.err"
+  if ! oras pull "ghcr.io/olizilla/nhs-ods-xml:$date" -o "$work/trud" >/dev/null 2>"$pull_err"; then
+    if grep -qiE 'unauthorized|denied|forbidden|401|403' "$pull_err"; then
+      echo "RESULT:skip:registry refused the pull for $date"
+      rm -rf "$work"
+      return 0
+    fi
+    echo "reproduce: oras pull failed for $date:" >&2
+    cat "$pull_err" >&2
+    rm -rf "$work"
+    return 1
+  fi
+
+  if ! scripts/verify-trud-bundle.sh "$work/trud" data/releases.json; then
+    rm -rf "$work"
+    return 1
+  fi
+
+  local zip start elapsed
+  zip=$(find "$work/trud" -maxdepth 1 -name '*.zip' | head -n 1)
+  start=$(now)
+  if ! ./target/debug/ods make -i "$zip" -o "$work/rebuilt" --index "$index" >/dev/null \
+    || ! ./target/debug/ods make oci -i "$work/rebuilt" >/dev/null; then
+    rm -rf "$work"
+    return 1
+  fi
+  elapsed=$(awk -v a="$start" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }')
+
+  local manifest_path rebuilt_digest
+  manifest_path=$(find "$work/rebuilt/oci/blobs/sha256" -type f ! -type l | head -n 1)
+  rebuilt_digest="sha256:$(basename "$manifest_path")"
+  rm -rf "$work"
+
+  if [ "$rebuilt_digest" = "$row_digest" ]; then
+    echo "RESULT:ok:$date rebuilt to $rebuilt_digest (debug build, ${elapsed}s)"
+    return 0
+  fi
+
+  echo "✖ The bytes changed without a dataset version bump. Bump the dataset version, or find the unintended change." >&2
+  echo "  the index  $row_digest" >&2
+  echo "  rebuilt    $rebuilt_digest" >&2
+  echo "RESULT:fail:$date rebuilt to $rebuilt_digest, the index has $row_digest"
+  return 1
+}
+
 lock_sha() { shasum -a 256 worker/package-lock.json | cut -d' ' -f1; }
 
 worker_install() {
@@ -253,6 +343,7 @@ compiled=$STATUS
 
 if [ "$compiled" -ne 0 ]; then
   skip "rust tests" "compile failed"
+  skip "reproduce" "compile failed"
   skip "smoke make/audit" "compile failed"
 else
   if [ "$release_data" = 1 ] && [ -z "${TRUD_XML_PATH:-}" ]; then
@@ -268,6 +359,18 @@ else
   stray_detail=$(grep -h '^left behind in the repo root' "$LOG")
   [ -n "$stray_detail" ] && detail="$detail; $stray_detail"
   record "$detail"
+
+  if has oras; then
+    run "reproduce" reproduce
+    result_line=$(grep -h '^RESULT:' "$LOG" | tail -n 1)
+    detail=${result_line#RESULT:*:}
+    case "$result_line" in
+      RESULT:skip:*) add_row "reproduce" skipped "$SECS" "$detail" ;;
+      *) record "$detail" ;;
+    esac
+  else
+    skip "reproduce" "oras not installed"
+  fi
 
   if has zip; then
     run "smoke make/audit" smoke

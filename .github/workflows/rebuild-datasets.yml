@@ -1,0 +1,89 @@
+name: Rebuild datasets
+
+# Builds datasets from archive images already in nhs-ods-xml — the back catalogue, or after a
+# schema change — with no download from TRUD. Tries TRUD's listing so index.json can gain rows
+# for dates it doesn't have yet; if TRUD is unreachable, it builds only the dates the tag's
+# data/releases.json already has a row for, and says so.
+#
+# workflow_dispatch, from a tool tag only (scripts/check-tool-tag.sh).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "all, or space-separated YYYY-MM-DD dates"
+        required: true
+        default: all
+      repository:
+        description: The dataset package to build for
+        required: true
+        type: choice
+        default: ods-data-rehearsal
+        options:
+          - ods-data-rehearsal
+          - ods-data
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan from nhs-ods-xml
+    runs-on: ubuntu-latest
+    outputs:
+      trud-listing-status: ${{ steps.plan.outputs.status }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-tool-tag.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release --locked
+
+      - uses: oras-project/setup-oras@v1
+
+      # nhs-ods-xml is private: every oras call below (repo tags, resolve) needs this.
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - id: plan
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+          DATES_INPUT: ${{ inputs.dates }}
+        run: |
+          dates=()
+          if [[ "$DATES_INPUT" != "all" ]]; then
+            read -ra dates <<<"$DATES_INPUT"
+          fi
+          status_line="$(scripts/ci-rebuild-plan.sh data/releases.json plan.json index.json "${dates[@]}")"
+          echo "$status_line"
+          echo "status=${status_line#TRUD listing: }" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: rebuild-plan
+          path: |
+            plan.json
+            index.json
+          if-no-files-found: error
+
+  build:
+    name: Build the dataset
+    needs: plan
+    uses: ./.github/workflows/build-dataset.yml
+    with:
+      repository: ${{ inputs.repository }}
+      plan-artifact: rebuild-plan
+      trud-listing-status: ${{ needs.plan.outputs.trud-listing-status }}
+    secrets: inherit

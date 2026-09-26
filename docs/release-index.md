@@ -63,3 +63,20 @@ diff <(curl -s https://ods.fyi/releases.json) <(curl -s https://raw.githubuserco
 ```
 
 The GitHub raw URL works once the repository is public.
+
+## Verifying a dataset's attestation
+
+Every dataset was pushed and attested by `.github/workflows/build-dataset.yml` (R9), so a reader
+can check that directly, without trusting this index:
+
+```bash
+gh attestation verify oci://ghcr.io/olizilla/ods-data@<manifest_digest> \
+  -R olizilla/ods --signer-workflow olizilla/ods/.github/workflows/build-dataset.yml
+```
+
+This checks GitHub's signature on the digest and prints the SLSA predicate: the workflow, the
+ref (the tag `v<tool_version>`) and the commit it ran at. Reading `build-dataset.yml` at that
+commit shows the rest: the `push` job needs `gate`, and `gate` fails the run before anything is
+pushed unless the two runners' manifest digests already matched. So one attestation, on the
+digest `push` names, is enough — a reader verifies the digest was pushed by that workflow at that
+commit, then reads the file to see that pushing only happens after the runners agreed (`docs/tests.md` R9).

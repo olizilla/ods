@@ -500,6 +500,41 @@ fn snapshot_trud_list() {
     check_snapshot("trud-list.txt", &actual_cases, &case_names);
 }
 
+/// `ods trud list --all --format json` is a machine format (O2): each item carries TRUD's
+/// `sha256` (Task 1 of ci-builds-datasets.md), so a run's own listing can be turned into a
+/// release-index row without a second call.
+#[test]
+fn trud_list_json_carries_sha256() {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/trud_releases_response.json");
+    let fixture_bytes = fs::read(&fixture_path).expect("read trud_releases_response.json");
+    let mut routes = std::collections::HashMap::new();
+    routes.insert("/keys/test/items/341/releases".to_string(), fixture_bytes);
+    let (api_url, stop_server) = run_mock_trud_server(routes);
+
+    let tmp = tempfile::TempDir::new().expect("create tempdir");
+
+    let mut cmd = common::ods_cmd();
+    cmd.current_dir(tmp.path());
+    cmd.env("TRUD_API_KEY", "test");
+    cmd.env("ODS_TRUD_API_URL", &api_url);
+    cmd.args(["trud", "list", "--all", "--format", "json"]);
+    let output = cmd.output().expect("execute ods trud list --all --format json");
+    let _ = stop_server.send(());
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let first = &items[0];
+    assert_eq!(first["date"], "2026-07-31");
+    assert_eq!(first["sha256"], "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933");
+    assert_eq!(first["size_bytes"], 37983173);
+    assert_eq!(first["status"], "remote");
+    // Field order: date, sha256, size_bytes, status
+    let keys: Vec<&str> = first.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+    assert_eq!(keys, vec!["date", "sha256", "size_bytes", "status"]);
+}
+
 fn create_padded_zip(date_str: &str, target_size: usize) -> Vec<u8> {
     let xml_content = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>

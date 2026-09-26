@@ -21,6 +21,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# packages: read lets the "reproduce" step in scripts/ci.sh pull the private nhs-ods-xml archive
+# it rebuilds the newest published dataset from. A pull request from a fork gets a token without
+# that access regardless of this declaration; the step skips there and runs for real on main
+# after merge.
+permissions:
+  contents: read
+  packages: read
+
 # GitHub's default shell for `run:` is `bash -e` — WITHOUT pipefail, so any
 # piped command reports only the exit status of the last stage. Naming bash
 # explicitly gets `bash --noprofile --norc -eo pipefail`, which is the only

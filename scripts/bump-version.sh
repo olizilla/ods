@@ -72,8 +72,8 @@ report_leftovers() {
 update_expected_keys() {
   local before after
   before=$(shasum -a 256 "$EXPECTED_KEYS" 2>/dev/null | cut -d' ' -f1)
-  UPDATE_EXPECTED_KEYS=1 cargo test --quiet --test make_release_test \
-    test_make_release_creates_dist_staging_tree_with_real_files >/dev/null
+  UPDATE_EXPECTED_KEYS=1 cargo test --quiet --test mirror_to_ods_fyi_test \
+    mirror_dry_run_keys_match_expected_keys_json >/dev/null
   after=$(shasum -a 256 "$EXPECTED_KEYS" 2>/dev/null | cut -d' ' -f1)
   if [[ "$before" != "$after" ]]; then
     ok "$EXPECTED_KEYS regenerated"

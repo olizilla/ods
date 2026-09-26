@@ -1,0 +1,105 @@
+name: Build one date (build or witness)
+description: >
+  Builds one date's OCI dataset layout from its nhs-ods-xml source bundle, after checking NHS's
+  signature and this run's TRUD listing. Used identically by build-dataset.yml's build
+  (ubuntu-latest) and witness (macos-latest) jobs, each a matrix over every date in the plan — so
+  the two builders are byte-for-byte comparable, date by date, and each date's artifact is
+  independent (no push job downloads bytes for a date it isn't pushing). Neither pushes or
+  attests anything; build-dataset.yml's push job does that, from build's own artifact only.
+
+inputs:
+  date:
+    description: The date this job instance builds
+    required: true
+  bundle-digest:
+    description: The nhs-ods-xml manifest digest to pull for this date
+    required: true
+  plan-artifact:
+    description: Artifact holding plan.json and index.json (only index.json is read here)
+    required: true
+  trud-listing-status:
+    description: "checked, or 'not checked: <reason>' — shown in the Source table"
+    required: true
+  github-token:
+    description: Token to log in to ghcr.io with — nhs-ods-xml is private
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the tag
+      shell: bash
+      run: scripts/check-tool-tag.sh
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: build-dataset-${{ runner.os }}
+
+    - name: Build ods --release
+      shell: bash
+      run: cargo build --release --locked
+
+    - name: Install oras
+      uses: oras-project/setup-oras@v1
+
+    - name: Install gnupg (gpgv)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install gnupg
+
+    # nhs-ods-xml is private: every pull below needs this.
+    - name: Log in to ghcr.io
+      shell: bash
+      run: echo "${{ inputs.github-token }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+    - name: Download plan and index
+      uses: actions/download-artifact@v6
+      with:
+        name: ${{ inputs.plan-artifact }}
+        path: plan
+
+    - name: Write this date's plan
+      shell: bash
+      env:
+        DATE: ${{ inputs.date }}
+        BUNDLE_DIGEST: ${{ inputs.bundle-digest }}
+      run: |
+        jq -n --arg d "$DATE" --arg dig "$BUNDLE_DIGEST" '[{date: $d, bundle_digest: $dig}]' >plan/plan.json
+
+    # Named per the brief (Task 4): every date's signature and index check finishes — and the
+    # Source table row is written — before "Build every date" builds anything.
+    - name: 'Verify source: nhs-ods-xml'
+      shell: bash
+      env:
+        TRUD_LISTING_STATUS: ${{ inputs.trud-listing-status }}
+      run: scripts/ci-verify-sources.sh data/releases.json plan/index.json plan/plan.json
+
+    - name: Build every date
+      shell: bash
+      env:
+        ODS_BIN: ./target/release/ods
+      run: scripts/ci-build-datasets.sh plan/index.json plan/plan.json
+
+    # oci/blobs/sha256/ holds its layers as relative symlinks; upload-artifact stores a symlink
+    # as a copy of its target, which would make the manifest blob indistinguishable from a layer
+    # blob on the far end. A tar keeps the symlinks as symlinks. Named by date, so it can be
+    # uploaded as this date's own artifact (below) and downloaded — by push, one date at a time —
+    # without ever pulling bytes for a date that isn't wanted.
+    - name: Tar this date's release directory
+      shell: bash
+      env:
+        DATE: ${{ inputs.date }}
+      run: |
+        cd work
+        tar -cf "../$DATE.tar" -- "$DATE/release"
+
+    - name: Upload this date's release directory
+      uses: actions/upload-artifact@v5
+      with:
+        name: release-dir-${{ runner.os }}-${{ inputs.date }}
+        path: ${{ inputs.date }}.tar
+        if-no-files-found: error

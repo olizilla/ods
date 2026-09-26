@@ -14,14 +14,6 @@ pub struct Args {
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// OCI repository name for staging keys (defaults to ods-data)
-    #[arg(long, default_value = "ods-data")]
-    pub repository: String,
-
-    /// Output path for the staging directory (defaults to dist/)
-    #[arg(long, short)]
-    pub output: Option<PathBuf>,
-
     /// Optional Zenodo DOI for the dataset release
     #[arg(long)]
     pub doi: Option<String>,
@@ -108,35 +100,6 @@ pub fn find_tool_repo(release_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn copy_blob(src: &Path, dst: &Path) -> Result<()> {
-    if let Some(parent) = dst.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            let err_str = e.to_string();
-            let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
-            eprintln!("✖ Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
-            bail!("Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
-        }
-    }
-    if dst.exists() {
-        let _ = fs::remove_file(dst);
-    }
-    if let Err(e) = fs::copy(src, dst) {
-        let err_str = e.to_string();
-        let clean_err = err_str.split(" (os error").next().unwrap_or(&err_str);
-        eprintln!("✖ Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
-        bail!("Cannot stage blob {} → {}: {}", src.display(), dst.display(), clean_err);
-    }
-    Ok(())
-}
-
-fn count_files_in_dir(dir: &Path) -> usize {
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .count()
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -283,63 +246,15 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
     let manifest_digest = manifest.digest()?;
 
     let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
-    let versioned_tag = format!("{}_{}", date, version);
 
     // Summary lines on progress
     let total_bytes: u64 = manifest.layers.iter().map(|l| l.size).sum();
     let mb = (total_bytes as f64) / (1024.0 * 1024.0);
     eprintln!("* {} layers, {:.1} MB, manifest {}", manifest.layers.len(), mb, manifest_digest);
 
-    // 5. Generate dist/ staging directory (holds only release objects, no releases.json)
-    let dist_dir = args.output.unwrap_or_else(|| {
-        tool_repo
-            .as_ref()
-            .map(|tr| tr.join("dist"))
-            .unwrap_or_else(|| PathBuf::from("dist"))
-    });
-
-    if dist_dir.exists() {
-        fs::remove_dir_all(&dist_dir)?;
-    }
-    fs::create_dir_all(&dist_dir)?;
-
-    // 5a. dist/v2/{repository}/blobs/sha256/{hex} (for every blob in oci/blobs/sha256/)
-    let repo_name = &args.repository;
-    for entry in fs::read_dir(&blobs_dir)? {
-        let entry = entry?;
-        let p = entry.path();
-        let file_name = entry.file_name();
-        let dst_blob = dist_dir
-            .join("v2")
-            .join(repo_name)
-            .join("blobs")
-            .join("sha256")
-            .join(&file_name);
-
-        let canonical_source = if p.is_symlink() {
-            let target = fs::read_link(&p)?;
-            if target.is_relative() {
-                p.parent().unwrap().join(target)
-            } else {
-                target
-            }
-        } else {
-            p.clone()
-        };
-        copy_blob(&canonical_source, &dst_blob)?;
-    }
-
-    // 5c. Manifest tags: versioned, bare date, latest
-    let manifests_dir = dist_dir.join("v2").join(repo_name).join("manifests");
-    fs::create_dir_all(&manifests_dir)?;
-    fs::write(manifests_dir.join(&versioned_tag), &manifest_bytes)?;
-    fs::write(manifests_dir.join(date), &manifest_bytes)?;
-    fs::write(manifests_dir.join("latest"), &manifest_bytes)?;
-
-    let object_count = count_files_in_dir(&dist_dir);
-    eprintln!("✓ dist/ written, {} objects", object_count);
-
-    // 6. Update data/releases.json (strictly after staging succeeds)
+    // 5. Update data/releases.json (strictly after the checks and the oci build succeed).
+    // Publishing the bytes and laying out ods.fyi's bucket keys is scripts/mirror-to-ods-fyi.sh's
+    // job, from the pushed OCI image, not this command's.
     let mut index: OdsReleaseIndex = if target_index_path.exists() {
         let content = fs::read_to_string(&target_index_path)?;
         serde_json::from_str(&content)?

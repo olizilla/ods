@@ -146,6 +146,8 @@ pub struct ReleaseOutcome {
 #[derive(Debug, Serialize)]
 pub struct ReleaseListItemJson {
     pub date: String,
+    /// TRUD's `archiveFileSha256`, upper case, as TRUD writes it.
+    pub sha256: String,
     pub size_bytes: u64,
     pub status: String,
 }

@@ -1,0 +1,244 @@
+name: Build dataset
+
+# The only place anything is built, gated, pushed to a dataset package, or attested. Called by
+# monthly-dataset.yml (a new TRUD release) and rebuild-datasets.yml (the back catalogue, or a
+# schema change), which differ only in where the archive comes from. Every attestation names this
+# file as its signer, so a reader verifies one workflow.
+#
+# build (ubuntu-latest) and witness (macos-latest) are each a matrix, one job instance per date
+# in the plan, so every date's artifact is independent: push, and a rebuild of the back
+# catalogue, only ever download the one date they need, never every date in the run. gate
+# compares each date's manifest digest between the two runners and refuses to go on if any
+# differ; push publishes only build's (ubuntu's) bytes, once gate has passed, and attests each
+# pushed digest; candidate then tries the result the way `ods pull --index` would.
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: ods-data or ods-data-rehearsal
+        required: true
+        type: string
+      plan-artifact:
+        description: Artifact holding plan.json ({date, bundle_digest}) and index.json
+        required: true
+        type: string
+      trud-listing-status:
+        description: "checked, or 'not checked: <reason>' — shown in the Source table"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  read-plan:
+    name: Read the plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.plan-artifact }}
+          path: plan
+
+      - id: read
+        run: echo "matrix=$(jq -c '.' plan/plan.json)" >>"$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.date }} (ubuntu-latest)
+    needs: read-plan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.read-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-release
+        with:
+          date: ${{ matrix.date }}
+          bundle-digest: ${{ matrix.bundle_digest }}
+          plan-artifact: ${{ inputs.plan-artifact }}
+          trud-listing-status: ${{ inputs.trud-listing-status }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  witness:
+    name: Witness ${{ matrix.date }} (macos-latest)
+    needs: read-plan
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.read-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-release
+        with:
+          date: ${{ matrix.date }}
+          bundle-digest: ${{ matrix.bundle_digest }}
+          plan-artifact: ${{ inputs.plan-artifact }}
+          trud-listing-status: ${{ inputs.trud-listing-status }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  gate:
+    name: Gate (ubuntu-latest == macos-latest)
+    needs: [read-plan, build, witness]
+    runs-on: ubuntu-latest
+    outputs:
+      # A JSON array of {date, digest}, one entry per date, gated equal on both runners.
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Every date's artifact, one per runner, merged into one directory per runner: gate is the
+      # one job that legitimately needs every date's bytes, to diff them.
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-dir-Linux-*
+          path: linux
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-dir-macOS-*
+          path: macos
+          merge-multiple: true
+
+      - name: Collect each runner's manifest digests
+        run: |
+          scripts/ci-collect-digests.sh linux digests-linux.txt
+          scripts/ci-collect-digests.sh macos digests-macos.txt
+
+      - name: Compare manifest digests
+        run: scripts/compare-digests.sh digests-linux.txt digests-macos.txt
+
+      - id: matrix
+        run: |
+          matrix="$(jq -R -s -c '
+            split("\n") | map(select(length > 0) | split(" ") | {date: .[0], digest: .[1]})
+          ' digests-linux.txt)"
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+
+  push:
+    name: Push and attest ${{ matrix.date }}
+    needs: gate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.gate.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-tool-tag.sh
+
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)" >>"$GITHUB_OUTPUT"
+
+      - uses: oras-project/setup-oras@v1
+
+      # Exactly this date's artifact — never the whole run's.
+      - uses: actions/download-artifact@v6
+        with:
+          name: release-dir-Linux-${{ matrix.date }}
+          path: pushed
+
+      - run: tar -xf "pushed/${{ matrix.date }}.tar" -C pushed
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push ${{ matrix.date }}
+        id: push
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DATE: ${{ matrix.date }}
+          GATED_DIGEST: ${{ matrix.digest }}
+        run: |
+          scripts/ci-push-dataset.sh "$REPOSITORY" "$VERSION" "$DATE" "$GATED_DIGEST" \
+            "pushed/$DATE/release/oci" digest.txt
+          echo "digest=$(cat digest.txt)" >>"$GITHUB_OUTPUT"
+
+      - name: Attest the pushed digest
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/olizilla/${{ inputs.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  candidate:
+    name: Try the candidate
+    needs: [gate, push]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-tool-tag.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release --locked
+
+      # Every date's artifact — candidate.json gets a row for each.
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-dir-Linux-*
+          path: pushed
+          merge-multiple: true
+
+      - name: Extract every date
+        run: |
+          for f in pushed/*.tar; do
+            tar -xf "$f" -C pushed
+          done
+
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)" >>"$GITHUB_OUTPUT"
+
+      - name: Start candidate.json from the tag's data/releases.json
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          jq --arg a "https://ods.fyi/v2/$REPOSITORY" --arg b "https://ghcr.io/v2/olizilla/$REPOSITORY" \
+            '.mirrors = [{url: $a}, {url: $b}]' \
+            data/releases.json >"$RUNNER_TEMP/candidate.json"
+
+      - name: Record every date, and write the job summary
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          MATRIX: ${{ needs.gate.outputs.matrix }}
+        run: |
+          {
+            echo "### Candidate"
+            echo "| date | manifest | ubuntu-latest | macos-latest | pushed | attested |"
+            echo "| :--- | :--- | :--- | :--- | :--- | :--- |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          echo "$MATRIX" | jq -c '.[]' | while read -r entry; do
+            date="$(jq -r '.date' <<<"$entry")"
+            digest="$(jq -r '.digest' <<<"$entry")"
+            ./target/release/ods make release --input "pushed/$date/release" --index "$RUNNER_TEMP/candidate.json"
+            echo "| $date | \`$digest\` | ✓ | ✓ | ${date}_${VERSION}, $date | ✓ |" >>"$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload candidate.json
+        uses: actions/upload-artifact@v5
+        with:
+          name: candidate
+          path: ${{ runner.temp }}/candidate.json
+          if-no-files-found: error

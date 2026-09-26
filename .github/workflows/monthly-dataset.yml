@@ -1,0 +1,133 @@
+name: Monthly dataset
+
+# Takes a new TRUD release from TRUD's API once: downloads the archive and NHS's checksum,
+# signature and key, checks NHS's signature, packs them as the archive image and pushes it to
+# the private ghcr.io/olizilla/nhs-ods-xml:<date> (never moved once pushed), then calls
+# build-dataset.yml to build, gate, push and attest the dataset. TRUD_API_KEY is read here only;
+# build-dataset.yml never touches it.
+#
+# workflow_dispatch, from a tool tag only (scripts/check-tool-tag.sh), so the index row
+# (tool_git_sha) and the attestation record a known commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: TRUD release date (YYYY-MM-DD), or "latest"
+        required: true
+        default: latest
+      repository:
+        description: The dataset package to build for
+        required: true
+        type: choice
+        default: ods-data-rehearsal
+        options:
+          - ods-data-rehearsal
+          - ods-data
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fetch:
+    name: Fetch from TRUD, and pack the archive
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/check-tool-tag.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release --locked
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Query TRUD's listing
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+        run: ./target/release/ods trud list --all --format json >listing.json
+
+      - id: date
+        env:
+          DATE_INPUT: ${{ inputs.date }}
+        run: |
+          if [[ "$DATE_INPUT" == "latest" ]]; then
+            date="$(jq -r '.[0].date' listing.json)"
+          else
+            date="$DATE_INPUT"
+          fi
+          echo "date=$date" >>"$GITHUB_OUTPUT"
+
+      - name: Stop if this date's dataset is already published
+        id: check
+        env:
+          DATE: ${{ steps.date.outputs.date }}
+        run: |
+          version="$(jq -r .version data/datapackage.json)"
+          already="$(jq -r --arg d "$DATE" --arg v "$version" \
+            '[.releases[] | select(.trud_release_date == $d) | .datasets[] | select(.dataset_version == $v)] | length' \
+            data/releases.json)"
+          if [[ "$already" -gt 0 ]]; then
+            echo "✓ $DATE is already published at dataset $version: nothing to do"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull the release from TRUD's API
+        if: steps.check.outputs.skip == 'false'
+        env:
+          TRUD_API_KEY: ${{ secrets.TRUD_API_KEY }}
+          DATE: ${{ steps.date.outputs.date }}
+        run: ./target/release/ods trud pull "$DATE" -w "$RUNNER_TEMP/ws"
+
+      - name: Pack and push the source bundle to nhs-ods-xml
+        if: steps.check.outputs.skip == 'false'
+        env:
+          DATE: ${{ steps.date.outputs.date }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./target/release/ods make oci --source -i "$RUNNER_TEMP/ws/releases/$DATE"
+          scripts/push-source-bundles.sh -w "$RUNNER_TEMP/ws" --push
+
+      - name: Write plan.json and index.json
+        if: steps.check.outputs.skip == 'false'
+        env:
+          DATE: ${{ steps.date.outputs.date }}
+        run: |
+          digest="$(jq -r '.manifests[0].digest' "$RUNNER_TEMP/ws/releases/$DATE/trud/oci/index.json")"
+          jq -n --arg d "$DATE" --arg dig "$digest" '[{date: $d, bundle_digest: $dig}]' >plan.json
+          scripts/trud-index.sh data/releases.json listing.json "$DATE" >index.json
+
+      - uses: actions/upload-artifact@v5
+        if: steps.check.outputs.skip == 'false'
+        with:
+          name: monthly-plan
+          path: |
+            plan.json
+            index.json
+          if-no-files-found: error
+
+  build:
+    name: Build the dataset
+    needs: fetch
+    if: needs.fetch.outputs.skip != 'true'
+    uses: ./.github/workflows/build-dataset.yml
+    with:
+      repository: ${{ inputs.repository }}
+      plan-artifact: monthly-plan
+      trud-listing-status: checked
+    secrets: inherit
