@@ -6,7 +6,7 @@ This document details the internal structure, quirks, quality edge-cases, and pa
 
 The NHS ODS data is published monthly on TRUD as a single root `.zip` archive (e.g., `hscorgrefdataxml_data_5.0.0_YYYYMMDD000001.zip`).
 
-Inside this ZIP container are two core XML archives:
+Inside this ZIP container are two zipped XML files:
 
 1. **`fullfile.zip`** (`HSCOrgRefData_Full_*.xml`):
    - NHS England's live product: the active organisations and those that closed after the archive cut-off, with their role assignments and relationships.
@@ -16,6 +16,16 @@ Inside this ZIP container are two core XML archives:
    - Everything with an operational close date on or before the published cut-off (currently 31 March 2017): organisations closed decades ago, with their roles, relationships and successions.
    - Read by `ods make` alongside `fullfile.zip`. See [nhs.md](./nhs.md#the-archive-product).
    - Merged with `fullfile.zip`'s successions into `successions.parquet` — see [parquet.md](./parquet.md#successionsparquet) for its row count.
+
+The two files have the same shape. Each `<Manifest>` declares schema `Version` `2-0-0` and
+`PublicationType` `Full`. They differ in `PublicationSeqNum` (4748 and 4749 on 2026-08-28), in
+`ContentDescription` (`HSCOrgRefData_Full_20260827`, `HSCOrgRefData_Archive_20260827`), and in
+`RecordCount`. Neither is a delta: each release is complete on its own.
+
+The split follows NHS England's cut-off date, and the cut-off moves. [nhs.md](./nhs.md#the-archive-product)
+has the rule, the `refOnly` stubs that keep each file self-consistent, and what moving the
+cut-off did in April 2023. One more fact from the 2026-08-28 release: an organisation found only
+in the archive is the target of no active relationship.
 
 ## Core XML element hierarchy
 

@@ -313,7 +313,18 @@ table's columns and types, the join keys between tables, and each file's size an
 four list columns in `orgs` are declared as Table Schema's `array` type. Its `list` type, with
 `itemType: string`, is the closer fit for a Parquet `LIST<VARCHAR>`, but it's a delimited string
 in the spec's lexical form, and the published v2 profile (`datapackage.org/profiles/2.0`) has no
-`list` type, so a descriptor that used it would fail that profile.
+`list` type, so a descriptor that used it would fail that profile. The fix is merged upstream,
+to be published as v2.1 ([datapackage#1089][dp-1089]). When a v2.1 profile is published, the four
+columns become `list` with `itemType: string`, `$schema` moves to 2.1, and the dataset version
+bumps.
+
+The file is in every release because `ods` depends on it, not because Frictionless tools read
+it. It's where a release directory records its dataset version (`_provenance.json` holds only
+TRUD's facts), and it holds each file's hash. `ods cite`, `ods use`, `ods make oci`, `ods make
+release` and `ods trud audit` all read it. [Croissant] was considered as a replacement or an
+addition and not adopted: it could carry the same fields, but today only in `mlcroissant`'s
+dialect rather than the spec's, so the descriptor's bytes, and every manifest digest, would
+change as the library caught up.
 
 `frictionless validate` can't check a release yet. frictionless-py reads Parquet through pandas,
 which hands list cells over as NumPy arrays, so every list column reads as a type error. It also
@@ -406,5 +417,7 @@ Join on `ods_code`, always — [worked through here](./queries.md#names-are-not-
 [datapackage]: https://datapackage.org/
 [fl-1773]: https://github.com/frictionlessdata/frictionless-py/issues/1773
 [fl-1203]: https://github.com/frictionlessdata/frictionless-py/issues/1203
+[dp-1089]: https://github.com/frictionlessdata/datapackage/issues/1089
+[Croissant]: https://docs.mlcommons.org/croissant/
 [ods-model]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 [ods-relationships]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Relationships_571324965.html

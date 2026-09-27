@@ -52,6 +52,42 @@ Formats we own that travel alone carry `$schema` as their identifier. Facts carr
 
 A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes` — named identically to `_provenance.json`, so one fact has one name everywhere. Datasets carry `dataset_version`, `manifest_digest`, `dataset_filesize_bytes` (the sum of the manifest's layer sizes — what `ods pull` downloads), `tool_version` and `tool_git_sha` (the `ods` that built it), and optional `dataset_doi` and `withdrawn`.
 
+## How a dataset gets into the index
+
+**CI is the hash oracle.** `.github/workflows/build-dataset.yml` builds each date twice, on
+`macos-latest` and `ubuntu-latest`, from the same NHS archive cached in
+`ghcr.io/olizilla/nhs-ods-xml`. Only a date whose two manifest digests agree is pushed, re-pulled
+from ghcr.io and checked, and attested. The run ends with a candidate `releases.json`. The
+maintainer tries it with `ods pull --index`, mirrors it to ods.fyi, and commits it as
+`data/releases.json`. That commit is what blesses a dataset. The steps are in
+[CONTRIBUTING.md](../CONTRIBUTING.md#dataset-releases).
+
+**Each fact has one home.**
+
+| Where | What it holds |
+| :--- | :--- |
+| Blobs, by digest | the bytes |
+| The manifest's annotations | the TRUD release date and SHA-256, the dataset version, the licence and the source |
+| The index row | that the dataset is blessed, whether it's withdrawn, its DOI, and the `ods` that built it |
+| The index's `mirrors` | where to fetch it |
+| Registry tags | a name for the dataset on that registry, for OCI tools |
+
+**Tags are the same on ghcr.io and ods.fyi.**
+
+- `<date>_<version>` names one dataset and never moves. A push that would move it is refused.
+- `<date>` names the newest dataset built for that date, and moves.
+- `latest` names the newest release on ods.fyi, and moves.
+
+A tag doesn't bless anything. CI tags a dataset on ghcr.io when it pushes it, and the mirror
+script tags it on ods.fyi, both before its index row is committed. `ods` finds datasets only
+through the index, and never reads a registry tag (`docs/tests.md` R3). The tags are there for
+`oras`, `docker` and other OCI tools.
+
+**Credentials stay split.** GitHub holds the TRUD API key and the workflow's `GITHUB_TOKEN`, which
+can push to ghcr.io. Cloudflare holds nothing from GitHub. The token that writes to ods.fyi's R2
+bucket exists only on the maintainer's laptop. So CI can't publish to ods.fyi, and ods.fyi can't
+publish to ghcr.io.
+
 ## Checking the index
 
 The copy in the GitHub repository (`data/releases.json`) is canonical. `https://ods.fyi/releases.json` serves a copy of it and is tried first because it's faster.
@@ -76,7 +112,7 @@ gh attestation verify oci://ghcr.io/olizilla/ods-data@<manifest_digest> \
 
 This checks GitHub's signature on the digest and prints the SLSA predicate: the workflow, the
 ref (the tag `v<tool_version>`) and the commit it ran at. Reading `build-dataset.yml` at that
-commit shows the rest: the `push` job needs `gate`, and `gate` fails the run before anything is
-pushed unless the two runners' manifest digests already matched. So one attestation, on the
-digest `push` names, is enough — a reader verifies the digest was pushed by that workflow at that
+commit shows the rest: the `primary` job's *Compare with the witness* step fails before *Push*
+unless the Ubuntu build's manifest digest equals the macOS witness's. So one attestation, on the
+digest *Push* names, is enough. A reader verifies the digest was pushed by that workflow at that
 commit, then reads the file to see that pushing only happens after the runners agreed (`docs/tests.md` R9).

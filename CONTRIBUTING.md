@@ -182,6 +182,9 @@ When publishing a monthly dataset cut, or rebuilding the back catalogue after a 
 If an earlier release for a date had errors, mark its row `withdrawn` by editing
 `data/releases.json` directly — no command writes that field yet.
 
+Why it works this way is in [docs/release-index.md](./docs/release-index.md#how-a-dataset-gets-into-the-index): the
+two runners, where each fact lives, the tag rules and the credentials split.
+
 ## Conventions
 
 **Pre-1.0, so rename cleanly.** No compatibility shims, no legacy aliases, no
@@ -198,6 +201,26 @@ practitioner would say out loud.
 
 **CLI output** `✓` success, `*` info, `✖` error, progress lines, and status lines 
 only for work actually done. Data to stdout, progress to stderr, so `ods pull --list > file` is useful. Always exit non-zero when the command couldn't do its job.
+
+## Updating dependencies
+
+**An `arrow`, `parquet` or `zstd` change is a dataset change.** It gets its own branch and review,
+and bumps the dataset version (and so the tool version, [D5]), even when the data comes out
+identical.
+
+Moving `parquet` from 53 to 60 wrote the same rows but different bytes, in every file. Holding
+`created_by` at 53's value didn't help. There were four causes, and only the first can be pinned:
+
+- Two `WriterProperties` defaults changed: page-header statistics went from always written to
+  off, and statistics truncation from none to 64 bytes.
+- `parquet` 60 needs a newer native `zstd` (1.5.6 → 1.5.7), which compresses the same pages
+  differently.
+- A newer `flatbuffers` serialises the `ARROW:schema` metadata differently.
+- Footers and dictionaries changed in ways no setting reaches.
+
+If one of these three changes through `Cargo.lock`, or any other crate changes the bytes,
+`scripts/ci.sh`'s reproduce step fails. It rebuilds the newest dataset published at the current
+dataset version and compares manifest digests.
 
 ## Gotchas
 
@@ -245,5 +268,6 @@ Our per release `_provenance.json` covers the second point, for every artefact `
 
 [docs/parquet.md]: ./docs/parquet.md
 [docs/queries.md]: ./docs/queries.md
+[D5]: ./docs/tests.md#the-data
 [role_names.json]: ./data/role_names.json
 [open government licence]: https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/licence/26

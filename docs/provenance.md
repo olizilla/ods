@@ -68,6 +68,22 @@ When an archive supplied to `ods` cannot be matched by SHA-256 against any row i
     To cite or publish it, get the archive through ods trud pull.
   ```
 
+## NHS's signature
+
+Alongside each archive, TRUD serves a checksum file naming the zip and its SHA-1, NHS England's
+PGP signature of that file, and NHS's public key. `ods trud pull` downloads all three.
+`scripts/verify-trud-bundle.sh` checks them: the key's fingerprint is pinned in the release
+index (`trud_signing_key_fingerprints`), the signature is good, and the signed SHA-1 is the zip's.
+`build-dataset.yml` runs it before caching an archive and before building from one. `ods` doesn't
+check the signature itself yet.
+
+**The signature vouches for the bytes, not the date.** In 13 of the 98 releases from 2018-06-29
+to 2026-09-25, the signature is dated differently from the TRUD release, from a day early
+(2026-06-26 was signed on 2026-06-25) to more than five months late (2018-09-28 was signed on
+2019-03-08). So a release's date always comes from TRUD. It comes from TRUD's API or listing, or
+from a record written once from TRUD's word: an index row, or an archive image's tag and
+`fyi.ods.trud-release-date` annotation in `nhs-ods-xml`.
+
 ## The rules
 
 - **Provenance is TRUD's word.** Source facts (`trud_*`), licence, and attribution, taken from TRUD or the release index. `ods` never computes provenance from a file.
