@@ -36,5 +36,12 @@ unicode-width = "0.2"
 tempfile = "3.9"
 jsonschema = { version = "0.58", default-features = false }
 
+[profile.dev]
+# Full DWARF debug info takes target/ from 2.3G to 3.5G (measured): every test binary statically
+# links the whole dependency graph, with debug info duplicated in each one. That's what filled
+# the CI runner's disk. A panic's file:line comes from #[track_caller], not DWARF, so assertion
+# failures are unaffected; only a RUST_BACKTRACE stack trace loses line numbers.
+debug = false
+
 [profile.release]
 opt-level = 3

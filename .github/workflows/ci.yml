@@ -45,6 +45,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # The runner's disk filled mid-job (the arrow 60 upgrade made every test binary bigger:
+      # each one statically links the whole dependency graph). None of this job's steps touch
+      # .NET, the Android SDK or GHC, so their preinstalled toolchains are dead weight here;
+      # removing them buys headroom cheaply. `|| true` on each: a path this runner image
+      # doesn't have is not a failure.
+      - name: Free disk space
+        run: |
+          before=$(df --output=avail -B1 / | tail -1)
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          after=$(df --output=avail -B1 / | tail -1)
+          echo "freed $(( (after - before) / 1024 / 1024 )) MiB, $(( after / 1024 / 1024 )) MiB now free"
+
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: |
           rustup toolchain install
