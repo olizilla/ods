@@ -6,7 +6,6 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,13 +65,7 @@ pub struct RoleEntry {
 pub fn run(args: Args) -> Result<()> {
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     let color = crate::ansi::stdout_color_enabled(args.plain);
-    let explicit_width = if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
-        Some(col_env)
-    } else if std::io::stdout().is_terminal() {
-        crossterm::terminal::size().ok().map(|(cols, _)| cols)
-    } else {
-        None
-    };
+    let explicit_width = crate::ansi::resolve_display_width();
     run_with_writer_color_width(args, &mut std::io::stdout(), &resolved_input, color, explicit_width)
 }
 
@@ -178,55 +171,7 @@ pub fn run_with_writer_color_width(
                 writeln!(writer)?;
             }
 
-            let mut table = Table::new();
-
-            if args.format == OutputFormat::Markdown {
-                table.load_style(presets::ASCII_MARKDOWN);
-                table.set_content_arrangement(ContentArrangement::Disabled);
-            } else {
-                table.load_style(presets::UTF8_FULL_CONDENSED);
-                table.set_truncation_indicator("…");
-                table.set_content_arrangement(ContentArrangement::Dynamic);
-                table.set_width(explicit_width.unwrap_or(120));
-            }
-
-            table.set_header(vec!["Code", "Name", "Holders"]);
-
-            for e in &entries {
-                let (code_str, name_str, holders_str) = if color && is_table {
-                    if e.holders > 0 {
-                        (
-                            format!("{}{}{}", crate::ansi::ANSI_YELLOW, e.role_code, crate::ansi::ANSI_RESET),
-                            e.role_name.clone(),
-                            format_number_with_commas(e.holders),
-                        )
-                    } else {
-                        (
-                            format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_code, crate::ansi::ANSI_RESET),
-                            format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_name, crate::ansi::ANSI_RESET),
-                            format!("{}{}{}", crate::ansi::ANSI_MUTED, format_number_with_commas(e.holders), crate::ansi::ANSI_RESET),
-                        )
-                    }
-                } else {
-                    (
-                        e.role_code.clone(),
-                        e.role_name.clone(),
-                        format_number_with_commas(e.holders),
-                    )
-                };
-
-                table.add_row(vec![
-                    code_str,
-                    name_str,
-                    holders_str,
-                ]);
-            }
-
-            let rendered = if args.format == OutputFormat::Table && color {
-                crate::ansi::dim_borders(&table.to_string())
-            } else {
-                table.to_string()
-            };
+            let rendered = render_role_table(&entries, args.format, color, explicit_width);
             writeln!(writer, "{}", rendered)?;
         }
         OutputFormat::Csv => {
@@ -247,6 +192,63 @@ pub fn run_with_writer_color_width(
     }
 
     Ok(())
+}
+
+/// Renders the `role` table (or, for `markdown`, a plain ASCII table that never
+/// wraps). `explicit_width` follows the width policy shared with `find`
+/// (`crate::ansi::apply_table_width_policy`): `Some(width)` wraps to that width,
+/// `None` disables wrapping so every row stays on one line.
+fn render_role_table(
+    entries: &[RoleEntry],
+    format: OutputFormat,
+    color: bool,
+    explicit_width: Option<u16>,
+) -> String {
+    let is_table = format == OutputFormat::Table;
+    let mut table = Table::new();
+
+    if format == OutputFormat::Markdown {
+        table.load_style(presets::ASCII_MARKDOWN);
+        table.set_content_arrangement(ContentArrangement::Disabled);
+    } else {
+        table.load_style(presets::UTF8_FULL_CONDENSED);
+        table.set_truncation_indicator("…");
+        crate::ansi::apply_table_width_policy(&mut table, explicit_width);
+    }
+
+    table.set_header(vec!["Code", "Name", "Holders"]);
+
+    for e in entries {
+        let (code_str, name_str, holders_str) = if color && is_table {
+            if e.holders > 0 {
+                (
+                    format!("{}{}{}", crate::ansi::ANSI_YELLOW, e.role_code, crate::ansi::ANSI_RESET),
+                    e.role_name.clone(),
+                    format_number_with_commas(e.holders),
+                )
+            } else {
+                (
+                    format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_code, crate::ansi::ANSI_RESET),
+                    format!("{}{}{}", crate::ansi::ANSI_MUTED, e.role_name, crate::ansi::ANSI_RESET),
+                    format!("{}{}{}", crate::ansi::ANSI_MUTED, format_number_with_commas(e.holders), crate::ansi::ANSI_RESET),
+                )
+            }
+        } else {
+            (
+                e.role_code.clone(),
+                e.role_name.clone(),
+                format_number_with_commas(e.holders),
+            )
+        };
+
+        table.add_row(vec![code_str, name_str, holders_str]);
+    }
+
+    if format == OutputFormat::Table && color {
+        crate::ansi::dim_borders(&table.to_string())
+    } else {
+        table.to_string()
+    }
 }
 
 fn count_role_holders(path: &Path, include_inactive: bool) -> Result<HashMap<String, usize>> {
@@ -318,4 +320,50 @@ pub fn format_number_with_commas(n: usize) -> String {
         result.push(b as char);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Protects the guarantee in `docs/cli.md`'s "Table width" section: a table
+    /// written to a file or pipe doesn't wrap unless `COLUMNS` says so. Curated role
+    /// names (`data/role_names.json`) top out around 55 characters, too short to force
+    /// a real row past 120 columns, so this drives `render_role_table` — the exact
+    /// function `run_with_writer_color_width` calls — with a deliberately long name.
+    #[test]
+    fn test_role_table_width_none_disables_wrap_and_columns_60_wraps() {
+        let long_name = "Extremely Long Curated Role Name That Exceeds Any Reasonable \
+                          Terminal Width By Design For This Test Case Only"
+            .to_string();
+        let entries = vec![RoleEntry {
+            role_code: "ZZ1".to_string(),
+            role_name: long_name.clone(),
+            holders: 42,
+        }];
+
+        // No resolved width (piped, COLUMNS unset, stdout not a terminal): the row
+        // stays on one line, longer than 120 characters.
+        let unwrapped = render_role_table(&entries, OutputFormat::Table, false, None);
+        assert!(
+            unwrapped.contains(&long_name),
+            "the whole name should appear on one line when unwrapped:\n{unwrapped}"
+        );
+        let row_line = unwrapped
+            .lines()
+            .find(|l| l.contains("ZZ1"))
+            .expect("row present");
+        assert!(
+            row_line.width() > 120,
+            "unwrapped row should stay a single line over 120 columns wide: {row_line:?}"
+        );
+
+        // COLUMNS=60: the same row wraps, so the whole name no longer appears contiguously.
+        let wrapped = render_role_table(&entries, OutputFormat::Table, false, Some(60));
+        assert!(
+            !wrapped.contains(&long_name),
+            "the name should wrap across lines once a width is resolved:\n{wrapped}"
+        );
+    }
 }

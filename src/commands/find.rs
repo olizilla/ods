@@ -5,7 +5,6 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -773,13 +772,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let resolved_input = crate::workspace::resolve_parquet_input(args.input.as_deref())?;
     let color = crate::ansi::stdout_color_enabled(args.plain);
-    let explicit_width = if let Ok(col_env) = std::env::var("COLUMNS").and_then(|c| c.parse::<u16>().map_err(|_| std::env::VarError::NotPresent)) {
-        Some(col_env)
-    } else if std::io::stdout().is_terminal() {
-        crossterm::terminal::size().ok().map(|(cols, _)| cols)
-    } else {
-        None
-    };
+    let explicit_width = crate::ansi::resolve_display_width();
 
     run_with_writer_color_width(args, &mut std::io::stdout(), &resolved_input, color, explicit_width)
 }
@@ -917,24 +910,15 @@ pub fn resolve_sql_parquet_path(parquet_dir: &Path, file_name: &str) -> PathBuf 
     full
 }
 
-fn terminal_width() -> usize {
-    if let Ok(cols_str) = std::env::var("COLUMNS") {
-        if let Ok(cols) = cols_str.parse::<usize>() {
-            if cols > 0 {
-                return cols;
-            }
-        }
-    }
-    if let Ok((w, _)) = crossterm::terminal::size() {
-        if w > 0 {
-            return w as usize;
-        }
-    }
-    120
-}
-
-fn wrap_notice_line(text: &str) -> String {
-    let width = terminal_width();
+/// Wraps `text` to `width` columns, or leaves it whole when `width` is `None` — a
+/// piped or redirected notice must not depend on the terminal it happened to run in.
+/// `width` is the same value resolved once per command by
+/// `crate::ansi::resolve_display_width` and threaded through as `explicit_width`.
+fn wrap_notice_line(text: &str, width: Option<u16>) -> String {
+    let Some(width) = width else {
+        return text.to_string();
+    };
+    let width = width as usize;
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.is_empty() {
         return text.to_string();
@@ -963,6 +947,15 @@ fn wrap_notice_line(text: &str) -> String {
         lines.push(current_line);
     }
     lines.join("\n")
+}
+
+/// Wraps `text` in `sgr`'s SGR code and `ANSI_RESET`, or leaves it alone when `color` is false.
+fn colorize(text: &str, sgr: &str, color: bool) -> String {
+    if color {
+        format!("{sgr}{text}{}", crate::ansi::ANSI_RESET)
+    } else {
+        text.to_string()
+    }
 }
 
 fn escape_sql_literal(s: &str) -> String {
@@ -1117,6 +1110,7 @@ pub fn run_with_writer_color_width(
 ) -> Result<()> {
     let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading(parquet_dir);
     let file_name = "orgs.parquet";
+    let color = color && args.format == OutputFormat::Table;
 
     // Expand alias flags (--gp, --dentist) into role filters with OR semantics
     let mut effective_roles = args.role.clone();
@@ -1130,10 +1124,14 @@ pub fn run_with_writer_color_width(
                 .iter()
                 .filter_map(|c| crate::roles::role_names().name(c))
                 .collect();
-            alias_notices.push(format!(
-                "* --gp: {} — {}",
-                alias.codes.join(", "),
-                names.join(", ")
+            alias_notices.push(colorize(
+                &format!(
+                    "* --gp: {} — {}",
+                    alias.codes.join(", "),
+                    names.join(", ")
+                ),
+                crate::ansi::ANSI_MUTED,
+                color,
             ));
         }
     }
@@ -1146,10 +1144,14 @@ pub fn run_with_writer_color_width(
                 .iter()
                 .filter_map(|c| crate::roles::role_names().name(c))
                 .collect();
-            alias_notices.push(format!(
-                "* --dentist: {} — {}",
-                alias.codes.join(", "),
-                names.join(", ")
+            alias_notices.push(colorize(
+                &format!(
+                    "* --dentist: {} — {}",
+                    alias.codes.join(", "),
+                    names.join(", ")
+                ),
+                crate::ansi::ANSI_MUTED,
+                color,
             ));
         }
     }
@@ -1507,7 +1509,7 @@ pub fn run_with_writer_color_width(
             if candidates.len() > 3 {
                 line.push_str(&format!(" · +{} more", candidates.len() - 3));
             }
-            Some(line)
+            Some(colorize(&line, crate::ansi::ANSI_MUTED, color))
         } else {
             None
         }
@@ -1526,7 +1528,7 @@ pub fn run_with_writer_color_width(
                     } else {
                         format!("* {} includes its {} sub-districts: {}", d, subs_vec.len(), subs_vec.join(", "))
                     };
-                    alias_notices.push(wrap_notice_line(&line));
+                    alias_notices.push(colorize(&wrap_notice_line(&line, explicit_width), crate::ansi::ANSI_MUTED, color));
                 }
             }
         }
@@ -1591,6 +1593,9 @@ pub fn run_with_writer_color_width(
                 record_class: &'a str,
                 status: &'a str,
                 matched_fields: &'a str,
+                // "colour means live" (colour.md): a closed row (inactive, or active but
+                // past its legal end) is muted in every cell, code included.
+                is_closed: bool,
             }
 
             let display_rows: Vec<DisplayRow> = matches
@@ -1613,6 +1618,14 @@ pub fn run_with_writer_color_width(
 
                     let role_display = crate::roles::format_roles_for_display(&r.org.role_codes, &r.org.role_names, args.verbose);
 
+                    // Only reachable under --all: without it, legally-closed rows were
+                    // already dropped (`continue`, above) before `matches` was built.
+                    let is_closed = r.org.status.eq_ignore_ascii_case("inactive")
+                        || r.org
+                            .legal_end
+                            .as_deref()
+                            .is_some_and(|le| le <= r.org.trud_release_date.as_str());
+
                     DisplayRow {
                         ods_code: &r.org.ods_code,
                         full_name,
@@ -1621,6 +1634,7 @@ pub fn run_with_writer_color_width(
                         record_class: &r.org.record_class,
                         status: &r.org.status,
                         matched_fields: &r.matched_fields,
+                        is_closed,
                     }
                 })
                 .collect();
@@ -1652,8 +1666,7 @@ pub fn run_with_writer_color_width(
                 } else {
                     table.load_style(presets::UTF8_FULL_CONDENSED);
                     table.set_truncation_indicator("…");
-                    table.set_content_arrangement(ContentArrangement::Dynamic);
-                    table.set_width(explicit_width.unwrap_or(120));
+                    crate::ansi::apply_table_width_policy(&mut table, explicit_width);
                 }
 
                 let has_location = !parsed_locations.is_empty();
@@ -1669,44 +1682,59 @@ pub fn run_with_writer_color_width(
                     table.set_header(vec!["ODS Code", "Name", "Postcode", "Roles", "Class"]);
                 }
 
+                // The `table` format only: `ODS Code` is `ANSI_CYAN`, as `ods info` colours
+                // a code you can pass back to it; a closed row (only shown under --all)
+                // is `ANSI_MUTED` in every cell, code included ("colour means live").
+                let code_cell = |text: &str, closed: bool| -> String {
+                    colorize(text, if closed { crate::ansi::ANSI_MUTED } else { crate::ansi::ANSI_CYAN }, color)
+                };
+                let cell = |text: &str, closed: bool| -> String {
+                    if closed {
+                        colorize(text, crate::ansi::ANSI_MUTED, color)
+                    } else {
+                        text.to_string()
+                    }
+                };
+
                 for row in &display_rows {
+                    let closed = row.is_closed;
                     if has_location {
                         if args.all {
                             table.add_row(vec![
-                                row.ods_code,
-                                &row.full_name,
-                                row.postcode,
-                                &row.role_display,
-                                row.record_class,
-                                row.status,
-                                row.matched_fields,
+                                code_cell(row.ods_code, closed),
+                                cell(&row.full_name, closed),
+                                cell(row.postcode, closed),
+                                cell(&row.role_display, closed),
+                                cell(row.record_class, closed),
+                                cell(row.status, closed),
+                                cell(row.matched_fields, closed),
                             ]);
                         } else {
                             table.add_row(vec![
-                                row.ods_code,
-                                &row.full_name,
-                                row.postcode,
-                                &row.role_display,
-                                row.record_class,
-                                row.matched_fields,
+                                code_cell(row.ods_code, closed),
+                                cell(&row.full_name, closed),
+                                cell(row.postcode, closed),
+                                cell(&row.role_display, closed),
+                                cell(row.record_class, closed),
+                                cell(row.matched_fields, closed),
                             ]);
                         }
                     } else if args.all {
                         table.add_row(vec![
-                            row.ods_code,
-                            &row.full_name,
-                            row.postcode,
-                            &row.role_display,
-                            row.record_class,
-                            row.status,
+                            code_cell(row.ods_code, closed),
+                            cell(&row.full_name, closed),
+                            cell(row.postcode, closed),
+                            cell(&row.role_display, closed),
+                            cell(row.record_class, closed),
+                            cell(row.status, closed),
                         ]);
                     } else {
                         table.add_row(vec![
-                            row.ods_code,
-                            &row.full_name,
-                            row.postcode,
-                            &row.role_display,
-                            row.record_class,
+                            code_cell(row.ods_code, closed),
+                            cell(&row.full_name, closed),
+                            cell(row.postcode, closed),
+                            cell(&row.role_display, closed),
+                            cell(row.record_class, closed),
                         ]);
                     }
                 }
@@ -1722,7 +1750,7 @@ pub fn run_with_writer_color_width(
                 } else {
                     // OutputFormat::Table
                     // 1. Source header & disagreement notice
-                    for line in crate::workspace::format_source_header(parquet_dir, file_name, false) {
+                    for line in crate::workspace::format_source_header(parquet_dir, file_name, color) {
                         writeln!(writer, "{}", line)?;
                     }
 
@@ -1782,7 +1810,7 @@ pub fn run_with_writer_color_width(
                     };
                     writeln!(writer, "{}", table_out)?;
                     if let Some(hint) = rendered_footer.overflow_hint {
-                        writeln!(writer, "* {}", hint)?;
+                        writeln!(writer, "{}", colorize(&format!("* {}", hint), crate::ansi::ANSI_MUTED, color))?;
                     }
                 }
             }
@@ -1794,7 +1822,8 @@ pub fn run_with_writer_color_width(
         if let Some(ref q) = args.query {
             let q_clean = q.trim().to_uppercase();
             if org_metadata.contains_key(&q_clean) {
-                writeln!(writer, "\n* '{}' is also an ODS code — ods info {}", q_clean, q_clean)?;
+                let line = format!("* '{}' is also an ODS code — ods info {}", q_clean, q_clean);
+                writeln!(writer, "\n{}", colorize(&line, crate::ansi::ANSI_MUTED, color))?;
             }
         }
     }
@@ -1810,6 +1839,7 @@ pub fn run_with_writer_color_width(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn test_squash_unit_invariants() {
@@ -2060,6 +2090,61 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
         assert_eq!(val["ods_code"], "A101");
         assert_eq!(val["name"], "Alpha Health Centre");
+    }
+
+    /// `ods find` colours codes and mutes its `*` lines (`backlog-top4.md` Task 1):
+    /// the `ODS Code` cell is cyan, a closed row under `--all` is muted in every cell
+    /// including the code, and colour never carries meaning alone (`colour.md`,
+    /// `docs/tests.md` O2) — stripping the escapes must reproduce the `color: false`
+    /// output byte for byte.
+    #[test]
+    fn test_find_colours_code_cyan_and_mutes_closed_rows() {
+        let (_dir, parquet_dir) = setup_synthetic_parquet();
+
+        let args = Args {
+            code: vec!["A101".to_string(), "B202".to_string()],
+            all: true,
+            sort: Some(SortBy::Code),
+            format: OutputFormat::Table,
+            input: Some(parquet_dir.clone()),
+            ..Default::default()
+        };
+
+        let mut colored_out = Vec::new();
+        run_with_writer_color(args.clone(), &mut colored_out, &parquet_dir, true).unwrap();
+        let colored = String::from_utf8(colored_out).unwrap();
+
+        let mut plain_out = Vec::new();
+        run_with_writer_color(args, &mut plain_out, &parquet_dir, false).unwrap();
+        let plain = String::from_utf8(plain_out).unwrap();
+
+        let source_line = colored.lines().next().expect("* Source: line");
+        assert!(
+            source_line.starts_with(crate::ansi::ANSI_MUTED),
+            "* Source: line should open with ANSI_MUTED:\n{source_line}"
+        );
+
+        // A101 is active and not past its legal end: open, so its code is cyan.
+        let a101_line = colored.lines().find(|l| l.contains("A101")).expect("A101 row");
+        assert!(
+            a101_line.contains(crate::ansi::ANSI_CYAN),
+            "open row's ODS code should be cyan:\n{a101_line}"
+        );
+
+        // B202 is inactive: closed, so the whole row (code included) is muted,
+        // never cyan ("colour means live", colour.md).
+        let b202_line = colored.lines().find(|l| l.contains("B202")).expect("B202 row");
+        assert!(
+            !b202_line.contains(crate::ansi::ANSI_CYAN),
+            "closed row must carry no cyan:\n{b202_line}"
+        );
+        assert!(
+            b202_line.contains(crate::ansi::ANSI_MUTED),
+            "closed row should be muted:\n{b202_line}"
+        );
+
+        // O2 / colour.md: colour is redundant by construction.
+        assert_eq!(crate::ansi::strip_ansi(&colored), plain);
     }
 
     #[test]
@@ -2456,6 +2541,135 @@ mod tests {
                 "Line {} display width mismatch: '{}'",
                 idx,
                 line
+            );
+        }
+    }
+
+    /// A minimal single-record workspace with a caller-supplied, deliberately long
+    /// name, so a test can force a table row wider than any reasonable width without
+    /// depending on real curated data.
+    fn setup_wide_row_parquet(long_name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().unwrap();
+        let parquet_dir = dir.path().to_path_buf();
+
+        let records = vec![crate::ods_xml::OdsRecord {
+            ods_code: "W100".to_string(),
+            name: long_name.to_string(),
+            status: "active".to_string(),
+            role: "gp practice".to_string(),
+            record_class: "org".to_string(),
+            geo_loc: Some(crate::ods_xml::Location {
+                address_lines: vec![],
+                town: None,
+                county: None,
+                postcode: Some("SW1A 1AA".to_string()),
+                country: None,
+                uprn: None,
+            }),
+            roles: vec![crate::ods_xml::OdsRole {
+                id: "RO76".to_string(),
+                code: None,
+                display_name: Some("gp practice".to_string()),
+                unique_role_id: "1".to_string(),
+                primary_role: true,
+                status: "active".to_string(),
+                dates: vec![],
+            }],
+            ..Default::default()
+        }];
+
+        let edges = crate::commands::parquet::build_succession_edges(&records);
+        let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
+        let prov = crate::provenance::OdsProvenance {
+            trud_release_date: Some("2026-07-31".to_string()),
+            ..Default::default()
+        };
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+
+        (dir, parquet_dir)
+    }
+
+    /// Protects the guarantee in `docs/cli.md`'s "Table width" section: a table
+    /// written to a file or pipe doesn't wrap unless `COLUMNS` says so. `explicit_width`
+    /// is the single value `run()` resolves once per invocation
+    /// (`crate::ansi::resolve_display_width`) and threads through to every width site
+    /// this command touches, this table included.
+    #[test]
+    fn test_find_table_width_none_disables_wrap_and_columns_60_wraps() {
+        let long_name = "Extremely Long Organisation Name That Exceeds Any Reasonable \
+                          Terminal Width By Design For This Test Case Only"
+            .to_string();
+        let (_dir, parquet_dir) = setup_wide_row_parquet(&long_name);
+
+        // No resolved width (piped, COLUMNS unset, stdout not a terminal): the row
+        // stays on one line, longer than 120 characters.
+        let mut out = Vec::new();
+        run_with_writer_color_width(
+            Args {
+                code: vec!["W100".to_string()],
+                format: OutputFormat::Table,
+                input: Some(parquet_dir.clone()),
+                ..Default::default()
+            },
+            &mut out,
+            &parquet_dir,
+            false,
+            None,
+        )
+        .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains(&long_name),
+            "the whole name should appear on one line when unwrapped:\n{s}"
+        );
+        let row_line = s.lines().find(|l| l.contains("W100")).expect("row present");
+        assert!(
+            row_line.width() > 120,
+            "unwrapped row should stay a single line over 120 columns wide: {row_line:?}"
+        );
+
+        // COLUMNS=60: the same row wraps, so the whole name no longer appears contiguously.
+        let mut out2 = Vec::new();
+        run_with_writer_color_width(
+            Args {
+                code: vec!["W100".to_string()],
+                format: OutputFormat::Table,
+                input: Some(parquet_dir.clone()),
+                ..Default::default()
+            },
+            &mut out2,
+            &parquet_dir,
+            false,
+            Some(60),
+        )
+        .unwrap();
+        let s2 = String::from_utf8(out2).unwrap();
+        assert!(
+            !s2.contains(&long_name),
+            "the name should wrap across lines once a width is resolved:\n{s2}"
+        );
+    }
+
+    /// Protects `docs/cli.md`'s "Notice lines follow the same rule": with no resolved
+    /// width, a notice is left whole rather than wrapped to a fallback width.
+    #[test]
+    fn test_wrap_notice_line_leaves_text_whole_without_a_width() {
+        let text = "* SW1 includes its 4 sub-districts: SW1A, SW1B, SW1C, SW1D";
+        assert_eq!(wrap_notice_line(text, None), text);
+    }
+
+    #[test]
+    fn test_wrap_notice_line_wraps_to_a_given_width() {
+        let text = "* SW1 includes its 4 sub-districts: SW1A, SW1B, SW1C, SW1D";
+        let wrapped = wrap_notice_line(text, Some(20));
+        assert!(
+            wrapped.lines().count() > 1,
+            "should wrap across multiple lines:\n{wrapped}"
+        );
+        for line in wrapped.lines() {
+            assert!(
+                line.width() <= 20,
+                "wrapped line should fit the given width: {line:?}"
             );
         }
     }

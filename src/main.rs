@@ -55,7 +55,39 @@ enum Command {
     Use(commands::use_cmd::Args),
 }
 
+/// `println!`/`print!` panic instead of returning an error when stdout is a pipe
+/// whatever reads it has already closed ("failed printing to stdout: Broken pipe
+/// (os error 32)", exit 101) — the `ods … | head` case. Every command uses these
+/// macros somewhere, so the smallest fix that covers all of them in one place is a
+/// panic hook: let a genuine panic print and exit 101 as always, but a broken-pipe
+/// print panic exits quietly with 0, the same as the `io::Error` chain check below
+/// already does for commands that propagate the error instead of panicking. The
+/// hook calls `cleanup_scratch()` itself before exiting: `std::process::exit`
+/// skips the rest of `main`, including the `cleanup_scratch()` call below it, and
+/// a command such as `ods trud audit` has already unpacked release XML (~660 MB)
+/// to scratch space by the time it's printing its report, so a quiet exit still
+/// needs to remove that.
+fn install_broken_pipe_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied());
+        let is_broken_pipe = message.is_some_and(|m| {
+            m.starts_with("failed printing to stdout") && m.contains("Broken pipe")
+        });
+        if is_broken_pipe {
+            ods::ods_xml::cleanup_scratch();
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+}
+
 fn main() {
+    install_broken_pipe_panic_hook();
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Find(args) => commands::find::run(args),

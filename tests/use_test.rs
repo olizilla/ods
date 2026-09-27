@@ -253,3 +253,90 @@ fn test_use_different_archive_warns_when_version_published_and_verifies_when_not
     assert!(stderr2.contains("* reconstructed manifest") && stderr2.contains("verified (unpublished local release)"), "got:\n{}", stderr2);
     assert!(!stderr2.contains("! releases/2026-07-31 does not match"), "got:\n{}", stderr2);
 }
+
+#[test]
+fn test_use_latest_pins_newest_local_release() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+
+    for date in ["2026-07-31", "2026-08-28"] {
+        let rel_dir = workspace.join("releases").join(date);
+        fs::create_dir_all(&rel_dir).unwrap();
+        fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    }
+    // A non-date directory under releases/ must be ignored when picking "latest".
+    fs::create_dir_all(workspace.join("releases").join("scratch")).unwrap();
+    fs::write(workspace.join("releases").join("scratch").join("orgs.parquet"), b"dummy").unwrap();
+
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "latest"])
+        .output()
+        .expect("run ods use latest");
+
+    assert!(output.status.success(), "got: {:?}", output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✓ Active release set to 2026-08-28"), "got:\n{}", stderr);
+    assert!(stderr.contains("  current → releases/2026-08-28"), "got:\n{}", stderr);
+
+    let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
+    let (active_date, _) = ws.active_release().unwrap();
+    assert_eq!(active_date, "2026-08-28");
+}
+
+#[test]
+fn test_use_refuses_non_date_argument_and_leaves_current_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir).unwrap();
+    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+
+    // Pin a release first, so we can assert "yesterday" leaves it unchanged.
+    let setup = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "2026-07-31"])
+        .output()
+        .expect("run ods use to set up an active release");
+    assert!(setup.status.success(), "got: {:?}", setup);
+
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "yesterday"])
+        .output()
+        .expect("run ods use yesterday");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✖ yesterday isn't a release date"), "got:\n{}", stderr);
+    assert!(
+        stderr.contains("  Name a release as YYYY-MM-DD, or pin the newest one here: ods use latest"),
+        "got:\n{}",
+        stderr
+    );
+
+    let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
+    let (active_date, _) = ws.active_release().unwrap();
+    assert_eq!(active_date, "2026-07-31", "a refused argument must not move the pin");
+}
+
+#[test]
+fn test_use_latest_in_empty_workspace() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+
+    let output = ods_cmd()
+        .current_dir(tmp.path())
+        .args(["use", "latest"])
+        .output()
+        .expect("run ods use latest in an empty workspace");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✖ No releases in "), "got:\n{}", stderr);
+    assert!(stderr.contains("ods_data"), "got:\n{}", stderr);
+    assert!(stderr.contains("  Run: ods pull"), "got:\n{}", stderr);
+}

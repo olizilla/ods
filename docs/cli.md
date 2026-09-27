@@ -66,6 +66,14 @@ stderr:
 A release pinned older on purpose with `ods use` gets no notice, and neither do
 machine formats such as `--format json`.
 
+### Table width
+
+A `find` or `role` table's width, in order: `COLUMNS` if set to a positive number;
+the terminal's width when stdout is a terminal; otherwise no wrapping at all, so
+each row stays on one line and a table written to a file or pipe doesn't depend on
+the terminal it happened to run in. `*` notice lines follow the same rule: wrapped
+to `COLUMNS` or the terminal, and left whole otherwise.
+
 ### Reproducibility guarantee
 
 `ods make` builds byte-identical Parquet files from the same TRUD zip, on any

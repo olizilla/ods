@@ -1,3 +1,4 @@
+use comfy_table::{ContentArrangement, Table};
 use std::io::IsTerminal;
 
 pub const ANSI_RESET: &str = "\x1b[0m";
@@ -58,6 +59,44 @@ pub fn dim_borders(s: &str) -> String {
     out
 }
 
+/// Resolves the width for a table or a wrapped notice line written to stdout.
+///
+/// In order: `COLUMNS` if set to a positive number; the terminal's width when stdout
+/// is a terminal and it reports a positive width; otherwise `None`, meaning don't
+/// wrap at all — a table or notice written to a file or pipe must not depend on the
+/// terminal it happened to run in. `COLUMNS` set to `0`, empty or non-numeric, and a
+/// terminal reporting a width of `0`, all count as unset.
+pub fn resolve_display_width() -> Option<u16> {
+    if let Ok(cols_str) = std::env::var("COLUMNS") {
+        if let Ok(cols) = cols_str.parse::<u16>() {
+            if cols > 0 {
+                return Some(cols);
+            }
+        }
+    }
+    if std::io::stdout().is_terminal() {
+        if let Ok((width, _)) = crossterm::terminal::size() {
+            if width > 0 {
+                return Some(width);
+            }
+        }
+    }
+    None
+}
+
+/// Applies the table width policy shared by `find` and `role`: `Some(width)` sets
+/// `Dynamic` arrangement at that width, so a row wraps to fit it; `None` sets
+/// `Disabled`, so every row stays on one line regardless of its length, and the
+/// table doesn't depend on the terminal it happened to run in.
+pub fn apply_table_width_policy(table: &mut Table, explicit_width: Option<u16>) {
+    if let Some(width) = explicit_width {
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+        table.set_width(width);
+    } else {
+        table.set_content_arrangement(ContentArrangement::Disabled);
+    }
+}
+
 /// Strips all ANSI escape sequences from `s`.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -103,6 +142,48 @@ mod tests {
     fn test_dim_borders_no_box_chars() {
         let input = "Hello world! 12345";
         assert_eq!(dim_borders(input), input);
+    }
+
+    #[test]
+    fn test_apply_table_width_policy_disabled_keeps_long_row_on_one_line() {
+        let mut table = Table::new();
+        table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
+        table.set_header(vec!["Code", "Name"]);
+        let long_name = "Z".repeat(150);
+        table.add_row(vec!["A1".to_string(), long_name.clone()]);
+
+        apply_table_width_policy(&mut table, None);
+        let rendered = table.to_string();
+        let row_line = rendered
+            .lines()
+            .find(|l| l.contains(&long_name))
+            .expect("the long value should appear whole on one line");
+        assert!(
+            unicode_width::UnicodeWidthStr::width(row_line) > 120,
+            "unwrapped row should stay a single line over 120 columns wide: {row_line:?}"
+        );
+    }
+
+    #[test]
+    fn test_apply_table_width_policy_with_width_wraps_long_row() {
+        let mut table = Table::new();
+        table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
+        table.set_header(vec!["Code", "Name"]);
+        let long_name = "Z".repeat(150);
+        table.add_row(vec!["A1".to_string(), long_name.clone()]);
+
+        apply_table_width_policy(&mut table, Some(60));
+        let rendered = table.to_string();
+        assert!(
+            !rendered.contains(&long_name),
+            "the value should wrap across lines once a width is given:\n{rendered}"
+        );
+        for line in rendered.lines() {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line) <= 60,
+                "wrapped line should fit the given width: {line:?}"
+            );
+        }
     }
 
     #[test]

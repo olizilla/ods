@@ -1141,6 +1141,74 @@ pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
     (tmp, dir)
 }
 
+/// A synthetic Parquet workspace with `count` GP practices, big enough that
+/// `ods find --role RO76 --all` writes well over a pipe's 64 KB kernel buffer.
+/// Used to exercise a stdout pipe closed mid-write (Task 4, backlog-top4).
+#[allow(dead_code)]
+pub fn setup_large_find_workspace(count: usize) -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().expect("create temp dir");
+    let dir = tmp.path().to_path_buf();
+
+    let records: Vec<OdsRecord> = (0..count)
+        .map(|i| OdsRecord {
+            ods_code: format!("Z{i:05}"),
+            name: format!("SYNTHETIC BULK GP PRACTICE NUMBER {i:05} FOR BROKEN PIPE TEST"),
+            status: "active".to_string(),
+            role: "GP Practice".to_string(),
+            parent_organisation: None,
+            region_code: None,
+            root: None,
+            assigning_authority_name: None,
+            record_class: "org".to_string(),
+            last_change_date: Some("2026-01-01".to_string()),
+            dates: vec![OdsDate {
+                date_type: "Operational".to_string(),
+                start: Some("2000-01-01".to_string()),
+                end: None,
+            }],
+            geo_loc: Some(Location {
+                address_lines: vec!["1 TEST STREET".to_string()],
+                town: Some("TESTTOWN".to_string()),
+                county: Some("TESTSHIRE".to_string()),
+                postcode: Some(format!("TE{:02} 1AA", i % 100)),
+                country: Some("ENGLAND".to_string()),
+                uprn: None,
+            }),
+            contacts: vec![],
+            roles: vec![OdsRole {
+                id: "RO76".to_string(),
+                code: Some("RO76".to_string()),
+                display_name: Some("GP Practice".to_string()),
+                unique_role_id: format!("uid_{i}"),
+                primary_role: true,
+                status: "active".to_string(),
+                dates: vec![],
+            }],
+            relationships: vec![],
+            successors: vec![],
+        })
+        .collect();
+
+    let prov = OdsProvenance {
+        trud_release_date: Some("2026-07-31".to_string()),
+        ..Default::default()
+    };
+
+    let edges = build_succession_edges(&records);
+    let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
+    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
+    export_roles(&dir, &records, Some(&prov)).expect("export roles");
+    export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
+    export_successions(&dir, &records, Some(&prov)).expect("export successions");
+    std::fs::write(
+        dir.join(ods::provenance::PROVENANCE_FILENAME),
+        serde_json::to_string_pretty(&prov).unwrap(),
+    )
+    .expect("write _provenance.json");
+
+    (tmp, dir)
+}
+
 #[allow(dead_code)]
 pub const FIXTURE_MOCK_XML: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
