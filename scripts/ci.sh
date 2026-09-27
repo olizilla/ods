@@ -334,32 +334,37 @@ has_conformance() {
 printf 'ods ci  %s%s  %s  %s\n' "$sha" "$dirty" "$(date '+%Y-%m-%d %H:%M')" "$(uname -sm)"
 printf '%-20s %-8s %8s  %s\n' step status seconds detail
 
+deps=$(cargo metadata --format-version 1 2>/dev/null | jq '.packages | length')
+
 run "rust compile" compile
 if [ "$STATUS" -eq 0 ]; then
   crates=$(grep -c '^ *Compiling ' "$LOG")
   case "$crates" in
-    0) record "nothing to compile" ;;
-    1) record "compiled 1 crate" ;;
-    *) record "compiled $crates crates" ;;
+    0) detail="nothing to compile" ;;
+    1) detail="compiled 1 crate" ;;
+    *) detail="compiled $crates crates" ;;
   esac
 else
-  record ""
+  detail=""
 fi
+[ -n "$deps" ] && detail="$detail${detail:+ · }$deps deps"
+record "$detail"
 compiled=$STATUS
 
-run "clippy" clippy_check
-if [ "$STATUS" -eq 0 ]; then
-  record "ok"
-else
-  warnings=$(awk '/^error: could not compile/{c++} /^error: /{t++} END{print t-c}' "$LOG")
-  record "$warnings warnings"
-fi
-
 if [ "$compiled" -ne 0 ]; then
+  skip "clippy" "compile failed"
   skip "rust tests" "compile failed"
   skip "reproduce" "compile failed"
   skip "smoke make/audit" "compile failed"
 else
+  run "clippy" clippy_check
+  if [ "$STATUS" -eq 0 ]; then
+    record "ok"
+  else
+    warnings=$(awk '/^error: could not compile/{c++} /^error: /{t++} END{print t-c}' "$LOG")
+    record "$warnings warnings"
+  fi
+
   if [ "$release_data" = 1 ] && [ -z "${TRUD_XML_PATH:-}" ]; then
     TRUD_XML_PATH=$(ls "$PWD"/ods_data/releases/2026-08-28/trud/*.zip 2>/dev/null | head -n 1)
     export TRUD_XML_PATH
