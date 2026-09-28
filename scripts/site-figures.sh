@@ -17,20 +17,28 @@ ORGS="$RELEASE_DIR/orgs.parquet"
 ROLES="$RELEASE_DIR/roles.parquet"
 RELATIONSHIPS="$RELEASE_DIR/relationships.parquet"
 SUCCESSIONS="$RELEASE_DIR/successions.parquet"
-PROVENANCE="$RELEASE_DIR/_provenance.json"
-DATAPACKAGE="$RELEASE_DIR/datapackage.json"
-
-for f in "$ORGS" "$ROLES" "$RELATIONSHIPS" "$SUCCESSIONS" "$PROVENANCE" "$DATAPACKAGE"; do
+for f in "$ORGS" "$ROLES" "$RELATIONSHIPS" "$SUCCESSIONS"; do
   if [ ! -f "$f" ]; then
     echo "missing $f" >&2
     exit 1
   fi
 done
 
-TRUD_RELEASE_DATE="$(jq -r '.trud_release_date' "$PROVENANCE")"
-DATASET_VERSION="$(jq -r '.version' "$DATAPACKAGE")"
+# The release's provenance is the object every Parquet file carries under its `datapackage`
+# key (docs/provenance.md): the page shows it as DuckDB reads it from orgs.parquet's footer.
+PROVENANCE_SQL="SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WHERE decode(key) = 'datapackage'"
+echo "$PROVENANCE_SQL"
+PROVENANCE="$(duckdb -noheader -list -c "SELECT decode(value) FROM parquet_kv_metadata('$ORGS') WHERE decode(key) = 'datapackage'")"
+if [ -z "$PROVENANCE" ]; then
+  echo "$ORGS carries no provenance: build it from a pulled TRUD release" >&2
+  exit 1
+fi
 
-echo "release: $TRUD_RELEASE_DATE, dataset $DATASET_VERSION"
+RELEASE_DATE="$(jq -r '.sources[0].version' <<<"$PROVENANCE")"
+# `version` is <source release>_<dataset version>.
+DATASET_VERSION="$(jq -r '.version | split("_")[1]' <<<"$PROVENANCE")"
+
+echo "release: $RELEASE_DATE, dataset $DATASET_VERSION"
 echo
 
 # --- file sizes and record count -------------------------------------------------
@@ -59,7 +67,7 @@ echo
 # --- GP practices: open orgs holding RO76, RO227 or RO315, by country -------------
 
 gp_sql="SELECT country, count(*) FROM orgs
-WHERE status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date)
+WHERE status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)
   AND list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])
 GROUP BY country;"
 echo "$gp_sql"
@@ -73,7 +81,7 @@ echo
 # --- PCNs: open holders of RO272 ---------------------------------------------------
 
 pcn_sql="SELECT count(*) FROM orgs
-WHERE status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date)
+WHERE status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)
   AND list_contains(role_codes, 'RO272');"
 echo "$pcn_sql"
 pcn_count=$(duckdb -csv -noheader -c "
@@ -87,7 +95,7 @@ echo
 # split open / moving to a successor / closing down with no successor
 
 trusts_sql="SELECT
-    status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date) AS open,
+    status = 'active' AND (legal_end IS NULL OR legal_end > publication_date) AS open,
     len(successor_codes) = 0 AS no_successor,
     count(*)
   FROM orgs
@@ -114,7 +122,7 @@ mkdir -p "$REPO_ROOT/site/src/data"
 gp_total=$(echo "$gp_json" | jq '[.[]."count_star()"] | add')
 
 jq -n \
-  --arg date "$TRUD_RELEASE_DATE" \
+  --arg date "$RELEASE_DATE" \
   --arg version "$DATASET_VERSION" \
   --argjson totalSizeBytes "$total_size" \
   --argjson orgsRecordCount "$orgs_count" \
@@ -132,7 +140,8 @@ jq -n \
   --argjson rolesCount "$roles_count" \
   --argjson relationshipsCount "$relationships_count" \
   --argjson successionsCount "$successions_count" \
-  --rawfile provenance "$PROVENANCE" \
+  --arg provenance "$PROVENANCE" \
+  --arg provenanceSql "$PROVENANCE_SQL" \
   '{
     release: {
       date: $date,
@@ -159,7 +168,8 @@ jq -n \
       { name: "roles.parquet", records: $rolesCount, sizeBytes: $rolesSizeBytes },
       { name: "successions.parquet", records: $successionsCount, sizeBytes: $successionsSizeBytes }
     ],
-    provenance: $provenance
+    provenance: $provenance,
+    provenanceSql: $provenanceSql
   }' > "$OUT"
 
 echo "wrote $OUT"

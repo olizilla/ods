@@ -6,6 +6,9 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+/// The `PublicationDate` the fixture XML carries: a rewritten table is dated as a build dates it.
+const PUBLICATION_DATE: &str = "2026-07-31";
+
 const HEADER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
   <un:ManifestHeader>
@@ -137,7 +140,7 @@ fn audit_fails_naming_the_code_when_an_archived_organisation_is_missing() {
     let record = ods::provenance::read_release(&release.release_dir).unwrap();
     let prov = record.facts().map(|f| f.embedded.clone());
     let no_closures = std::collections::HashMap::new();
-    ods::commands::parquet::export_orgs(&release.release_dir, &[live_only], &no_closures, &no_closures, prov.as_ref())
+    ods::commands::parquet::export_orgs(&release.release_dir, &[live_only], &no_closures, &no_closures, prov.as_ref(), PUBLICATION_DATE)
         .unwrap();
 
     let out = audit(&release);

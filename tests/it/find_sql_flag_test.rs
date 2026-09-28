@@ -186,11 +186,11 @@ fn setup_sql_workspace() -> (TempDir, PathBuf) {
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
     let prov = ods::provenance::fixture_embedded("2026-08-28");
 
-    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov))
+    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-08-28")
         .expect("export orgs");
-    export_roles(&parquet_dir, &records, Some(&prov)).expect("export roles");
-    export_relationships(&parquet_dir, &records, Some(&prov)).expect("export relationships");
-    export_successions(&parquet_dir, &records, Some(&prov)).expect("export successions");
+    export_roles(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export roles");
+    export_relationships(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export relationships");
+    export_successions(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export successions");
 
     (tmp, parquet_dir)
 }
@@ -384,7 +384,7 @@ fn test_find_sql_output_hygiene_and_isolation() {
     assert!(sql_bare.contains("SELECT *\nFROM"));
     assert!(sql_bare.contains("ORDER BY ods_code;"));
     assert!(sql_bare.contains(
-        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\nORDER BY ods_code;"
+        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > publication_date)\nORDER BY ods_code;"
     ));
     assert!(!sql_bare.contains("No search filters given"));
 
@@ -418,7 +418,7 @@ fn test_task2_clause_presence() {
         &parquet_dir,
     );
     assert!(sql_code.contains(
-        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\n  AND ods_code IN ('A82608')\nORDER BY ods_code;"
+        "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > publication_date)\n  AND ods_code IN ('A82608')\nORDER BY ods_code;"
     ));
 
     // --code A82608,8GJ58

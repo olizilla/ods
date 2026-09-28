@@ -306,7 +306,7 @@ fn test_provenance_json_untouched_by_attestations() {
     let prov: serde_json::Value = serde_json::from_str(&prov_text).unwrap();
 
     // The pull record lists NHS's files by name, hash and size, and never TRUD's URLs
-    assert_eq!(prov["$schema"], ods::datapackage::DATAPACKAGE_SCHEMA_V1_URL);
+    assert_eq!(prov["$schema"], ods::datapackage::ODS_DATAPACKAGE_SCHEMA_URL);
     assert_eq!(prov["version"], "2026-07-31");
     assert!(!prov_text.contains("FileUrl") && !prov_text.contains("/download/"), "no TRUD URL: {prov_text}");
     let names: Vec<&str> = prov["resources"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();

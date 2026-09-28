@@ -7,8 +7,8 @@
 # checks NHS's signature again (scripts/verify-trud-bundle.sh), then builds it exactly as a user's
 # own `ods make <zip>` would: `ods make -i <zip> -o <release-dir>`, with no `--index` and no
 # `--force` — `ods make` matches the zip's SHA-256 against the index built into this build (the
-# tag's data/releases.json) first, then TRUD's API if TRUD_API_KEY is set, and writes
-# `_provenance.json` from whichever matched. If neither knows this archive, `ods make` refuses on
+# tag's data/releases.json) first, then TRUD's API if TRUD_API_KEY is set, and embeds the
+# provenance from whichever matched in every Parquet file. If neither knows this archive, `ods make` refuses on
 # its own `✖`, and `set -e` stops this script there: a dataset built without provenance can't be
 # pushed, attested or recorded. Then `ods make oci --format json` on the result, for its manifest
 # digest.

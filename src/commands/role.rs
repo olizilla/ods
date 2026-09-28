@@ -278,7 +278,7 @@ fn count_role_holders(path: &Path, include_inactive: bool) -> Result<HashMap<Str
             .context("status StringArray")?;
         let legal_end_arr = schema.index_of("legal_end").ok()
             .and_then(|i| batch.column(i).as_any().downcast_ref::<Date32Array>());
-        let trud_release_date_arr = schema.index_of("trud_release_date").ok()
+        let publication_date_arr = schema.index_of("publication_date").ok()
             .and_then(|i| batch.column(i).as_any().downcast_ref::<Date32Array>());
 
         for i in 0..batch.num_rows() {
@@ -286,9 +286,9 @@ fn count_role_holders(path: &Path, include_inactive: bool) -> Result<HashMap<Str
                 if status_arr.value(i) != "active" {
                     continue;
                 }
-                if let (Some(legal_end), Some(trud_release_date)) = (legal_end_arr, trud_release_date_arr) {
-                    if legal_end.is_valid(i) && trud_release_date.is_valid(i)
-                        && legal_end.value(i) <= trud_release_date.value(i)
+                if let (Some(legal_end), Some(publication_date)) = (legal_end_arr, publication_date_arr) {
+                    if legal_end.is_valid(i) && publication_date.is_valid(i)
+                        && legal_end.value(i) <= publication_date.value(i)
                     {
                         continue;
                     }

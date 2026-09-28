@@ -116,7 +116,7 @@ if [[ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]]; then
   fail "the zip isn't the one NHS signed" "NHS's SHA-1      $EXPECTED_SHA1" "the zip's SHA-1  $ACTUAL_SHA1"
 fi
 
-# The zip's SHA-256, upper case as TRUD and _provenance.json write it. NHS signs only the SHA-1;
+# The zip's SHA-256, upper case as TRUD and the release index write it. NHS signs only the SHA-1;
 # the SHA-256 is TRUD's, and ties this zip to TRUD's listing.
 SHA256="$(openssl dgst -sha256 -r "$ZIP" | awk '{print toupper($1)}')"
 

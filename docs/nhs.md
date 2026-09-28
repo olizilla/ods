@@ -205,6 +205,16 @@ NHS England has since resolved both the same way. In the 2026-08-28 release `T12
 
 Two complete records in one file with no operational start on either, or with the same start, fail the build: the source hasn't said which is later, and `ods` doesn't guess. Two stubs for one code fail too.
 
+### A zip holding two full files
+
+Each inner zip normally holds one XML file. One of the 98 TRUD releases from 2018-06-29 to 2026-09-25 doesn't: 2019-05-31's `fullfile.zip` holds two full files, `HSCOrgRefData_Full_20190513.xml` (PublicationDate 2019-05-13, sequence 427) and `HSCOrgRefData_Full_20190528.xml` (2019-05-28, sequence 442), beside one archive file dated 2019-05-28. A release's full and archive files are published together, so `ods` builds from the full file and archive file whose `PublicationDate` is the same, and names every file it skipped on stderr at build time:
+
+```text
+! 2019-05-31: fullfile.zip holds 2 full files; built from HSCOrgRefData_Full_20190528.xml (2019-05-28), skipped HSCOrgRefData_Full_20190513.xml (2019-05-13)
+```
+
+When more than one pair shares a date, `ods` takes the one published nearest TRUD's release date. A `--force` build has no TRUD date to go by, so there it refuses rather than guess, and so does a zip with no full file and archive file of the same date: the `✖` block names each file and its `PublicationDate`. An XML file loose in the release zip, outside both inner zips (2018-12-14 has one), isn't read.
+
 ## Status: active, and open
 
 NHS England derives `status` from dates, [publishing the rule](https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Status_620600210.html) this way:
@@ -217,4 +227,4 @@ and, on [Organisation Data](https://www.odsdatasearchandexport.nhs.uk/referenceD
 
 So `active` means "not yet closed in every sense", not "real today": a legally dissolved organisation stays `active` while its suppliers migrate off it, for as long as that takes. On 2026-08-28 that covers **4,908 rows** whose legal end has already passed the release date — and only **544 of them (11%)** are inside NHS's own six-month migration window. The rest are older: **3,434 sites** are more than two years past their legal end and still `active`.
 
-`ods` reports NHS's `status` exactly as published — in `orgs.parquet`, in `--all`'s Status column, and in `ods info`, which never filters. For its own default output, `ods find` and `ods role` filter on **open**: active, and not past its legal end as of the release date (`status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date)`, compared to the *release's* date, never to today's — a dated release answers the same question forever). `--all` drops the filter and shows everything, `--sql` prints the clause verbatim, and the footer says how many rows a search held back and how to see them.
+`ods` reports NHS's `status` exactly as published — in `orgs.parquet`, in `--all`'s Status column, and in `ods info`, which never filters. For its own default output, `ods find` and `ods role` filter on **open**: active, and not past its legal end as of the release's publication date (`status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)`, compared to the date NHS published the *release*, never to today's — a dated release answers the same question forever). `--all` drops the filter and shows everything, `--sql` prints the clause verbatim, and the footer says how many rows a search held back and how to see them.

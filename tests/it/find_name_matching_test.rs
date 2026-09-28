@@ -97,10 +97,10 @@ fn setup_name_matching_workspace() -> (TempDir, PathBuf) {
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
     let prov = ods::provenance::fixture_embedded("2026-08-28");
 
-    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_roles(&parquet_dir, &records, Some(&prov)).expect("export roles");
-    export_relationships(&parquet_dir, &records, Some(&prov)).expect("export relationships");
-    export_successions(&parquet_dir, &records, Some(&prov)).expect("export successions");
+    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-08-28").expect("export orgs");
+    export_roles(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export roles");
+    export_relationships(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export relationships");
+    export_successions(&parquet_dir, &records, Some(&prov), "2026-08-28").expect("export successions");
 
     (tmp, parquet_dir)
 }
@@ -473,7 +473,7 @@ fn test_st_marys_sql_output_format_on_release_data() {
         &release_dir,
     );
 
-    let expected_suffix = "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > trud_release_date)\n  AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
+    let expected_suffix = "WHERE status = 'active'\n  AND (legal_end IS NULL OR legal_end > publication_date)\n  AND regexp_replace(name, '[^A-Z0-9]', '', 'g') LIKE '%STMARYS%'\nORDER BY (name LIKE '%ST MARYS%') DESC, ods_code;";
     assert!(
         sql.contains(expected_suffix),
         "SQL output must contain expected clause and order by, got:\n{}",

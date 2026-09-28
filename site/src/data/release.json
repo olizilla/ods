@@ -2,7 +2,7 @@
   "release": {
     "date": "2026-08-28",
     "datasetVersion": "0.1.0",
-    "totalSizeBytes": 29690329,
+    "totalSizeBytes": 29538054,
     "orgsRecordCount": 370917
   },
   "gpPractices": {
@@ -39,23 +39,24 @@
     {
       "name": "orgs.parquet",
       "records": 370917,
-      "sizeBytes": 16435840
+      "sizeBytes": 16355724
     },
     {
       "name": "relationships.parquet",
       "records": 769527,
-      "sizeBytes": 7837834
+      "sizeBytes": 7801934
     },
     {
       "name": "roles.parquet",
       "records": 529348,
-      "sizeBytes": 5092610
+      "sizeBytes": 5062655
     },
     {
       "name": "successions.parquet",
       "records": 24373,
-      "sizeBytes": 324045
+      "sizeBytes": 317741
     }
   ],
-  "provenance": "{\n  \"$schema\": \"https://ods.fyi/schema/provenance.v1.json\",\n  \"trud_release_date\": \"2026-08-28\",\n  \"trud_release_sha256\": \"ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801\",\n  \"trud_release_sha256_verified\": \"trud_api\",\n  \"trud_release_filesize_bytes\": 38064419,\n  \"trud_schema_version\": \"2-0-0\",\n  \"tool_version\": \"0.1.0\",\n  \"tool_git_sha\": \"3dd504e23172b0dce702ab094e85850321249d7c\",\n  \"tool_git_dirty\": true\n}"
+  "provenance": "{\"name\":\"ods-data\",\"version\":\"2026-08-28_0.1.0\",\"licenses\":[{\"name\":\"OGL-UK-3.0\",\"path\":\"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/\",\"title\":\"Open Government Licence v3.0\",\"attribution\":\"Contains information from NHS England, licensed under the current version of the Open Government Licence.\"}],\"contributors\":[{\"title\":\"NHS England\",\"roles\":[\"rightsHolder\"]},{\"title\":\"NHS TRUD\",\"roles\":[\"distributor\"]}],\"sources\":[{\"title\":\"NHS Organisation Data Service XML Data\",\"version\":\"2026-08-28\",\"path\":\"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases\",\"hash\":\"sha256:abdd194b1569d5ff3cdd81d618847f05642bd43c5b15d6cd43d8289b7466d801\",\"bytes\":38064419}]}",
+  "provenanceSql": "SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WHERE decode(key) = 'datapackage'"
 }

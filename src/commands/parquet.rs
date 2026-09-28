@@ -88,12 +88,6 @@ fn writer_properties(embedded: Option<&crate::provenance::Embedded>) -> WriterPr
         .build()
 }
 
-/// The source release date an embedded object names, for the `trud_release_date` column when
-/// the caller doesn't give one.
-fn source_release_date(embedded: &crate::provenance::Embedded) -> Option<&str> {
-    embedded.sources.as_ref()?.first().map(|s| s.version.as_str())
-}
-
 /// A one-column, one-row Parquet file carrying `embedded` (if any) under its `datapackage` key, with
 /// `content` as its only value: what a release's files look like to every reader of provenance,
 /// without building real tables. For tests.
@@ -139,11 +133,14 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     };
 
     let archive_path: PathBuf;
-    let release_date: String;
     let output_path: PathBuf;
-    // The object every table carries: from the pull record, from the index row or TRUD's API
-    // for a bare zip, or without provenance for a `--force` build.
-    let embedded: crate::provenance::Embedded;
+    // The object every table carries: from the pull record, or from the index row or TRUD's
+    // API for a bare zip. A `--force` build carries none: it can't back a name, a licence or a
+    // source for an archive nobody could match.
+    let embedded: Option<crate::provenance::Embedded>;
+    // TRUD's release date, when the archive is matched to one: it chooses between pairs of XML
+    // files when a release zip holds more than one (`crate::ods_xml::find_release_xml`).
+    let source_release: Option<String>;
     let mut external_provenance_to_report: Option<PathBuf> = None;
 
     if input_path.is_dir() {
@@ -198,8 +195,9 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             );
         }
 
-        let archive_info = crate::archive::resolve_trud_archive(&input_path)?;
-        archive_path = archive_info.archive_path.clone();
+        // The zip is the one the record names. Its SHA-256 and size, checked next, tie it to the
+        // record; its file name carries nothing (2022-05-30's is stamped 2022-05-27).
+        archive_path = record.archive_path(&record_path)?;
 
         let actual_sha = crate::provenance::compute_file_sha256(&archive_path)?;
         let actual_size = std::fs::metadata(&archive_path)?.len();
@@ -222,17 +220,6 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             );
         }
 
-        if record.version != archive_info.release_date {
-            anyhow::bail!(
-                "✖ Release date mismatch: trud/{} specifies '{}' but archive filename specifies '{}'",
-                crate::provenance::PULL_RECORD_FILENAME,
-                record.version,
-                archive_info.release_date
-            );
-        }
-
-        release_date = record.version.clone();
-
         output_path = match args.output {
             Some(p) => p,
             None => {
@@ -248,7 +235,8 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             external_provenance_to_report = Some(record_path);
         }
 
-        embedded = record.embedded(crate::datapackage::DATASET_VERSION)?;
+        embedded = Some(record.embedded(crate::datapackage::DATASET_VERSION)?);
+        source_release = Some(record.version.clone());
     } else {
         archive_path = input_path.clone();
         let file_name = input_path
@@ -256,6 +244,14 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
+        // A release is both of NHS's XML files, and TRUD ships them as a zip. A lone XML file
+        // would build without the archive's organisations.
+        if !input_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")) {
+            anyhow::bail!(
+                "✖ {} isn't a zip\n  ods make builds a TRUD release zip, which holds fullfile.zip and archive.zip: give it the zip TRUD published.",
+                file_name
+            );
+        }
         let local_sha256 = crate::provenance::compute_file_sha256(&input_path)?;
 
         let ws_root = args
@@ -299,7 +295,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
         )?;
 
         if let Some(matched) = matched {
-            release_date = matched.release_date.clone();
+            let release_date = matched.release_date.clone();
             // No `ods trud pull` wrote a record for a bare zip, so the facts it would hold come
             // from the index row or TRUD's API, in the same shape.
             let record = crate::provenance::PullRecord::for_trud_release(
@@ -309,7 +305,8 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                 matched.trud_release_filesize_bytes,
                 &[],
             )?;
-            embedded = record.embedded(crate::datapackage::DATASET_VERSION)?;
+            embedded = Some(record.embedded(crate::datapackage::DATASET_VERSION)?);
+            source_release = Some(release_date.clone());
 
             if !quiet {
                 eprintln!(
@@ -326,21 +323,14 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                 }
             };
         } else {
-            embedded = crate::provenance::Embedded::without_provenance();
+            embedded = None;
+            source_release = None;
 
             match args.output {
                 Some(out_dir) => {
-                    // A name ods can't parse as a TRUD archive can't be built at all, with or
-                    // without --force: there's no release date to derive it from.
-                    let (_, _, file_date) =
-                        match crate::archive::parse_trud_archive_filename(&file_name) {
-                            Some(parsed) => parsed,
-                            None => anyhow::bail!(
-                                "{}",
-                                crate::archive::format_not_a_trud_archive_error(&file_name)
-                            ),
-                        };
-
+                    // The file's name doesn't matter: nothing is read from it. The rows are
+                    // dated by the XML's own PublicationDate, like every other build's, and a
+                    // zip without the release's inner zips is refused when it's unpacked.
                     if !args.force {
                         eprintln!(
                             "{}",
@@ -350,7 +340,6 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                     }
 
                     output_path = out_dir;
-                    release_date = file_date;
                     held_warnings.push(crate::provenance::format_unmatched_archive_warning(
                         &file_name,
                         &local_sha256,
@@ -398,14 +387,20 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
     let progress = Progress::stderr(ProgressCaps::detect(quiet, verbose, no_progress));
     progress.step("unpacking the release…");
-    let xml_paths = crate::ods_xml::find_xml_file(&archive_path)?;
+    let release_xml = crate::ods_xml::find_release_xml(&archive_path, source_release.as_deref())?;
+    let xml_paths = release_xml.paths;
+
+    // Every row is dated as of NHS England's own PublicationDate, which every XML file's
+    // manifest carries and all of them must agree on. Refused before the long parse.
+    let headers = crate::ods_xml::read_manifest_headers(&xml_paths)?;
+    let publication_date = crate::ods_xml::agreed_publication_date(&headers)?;
 
     // Both totals are known before the work starts: the manifests declare their records and the
     // files' sizes are on disk. They are stated once and never move; the bars carry the change.
     let mut declared: Option<usize> = Some(0);
     let mut xml_bytes = 0u64;
-    for path in &xml_paths {
-        declared = match (declared, crate::ods_xml::declared_record_count(path)?) {
+    for (path, (_, header)) in xml_paths.iter().zip(&headers) {
+        declared = match (declared, header.record_count) {
             (Some(total), Some(n)) => Some(total + n),
             _ => None,
         };
@@ -458,7 +453,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     // The four tables share nothing mutable, so each is built and written by one thread of
     // its own. Parallelism goes across files, never inside one: a file's bytes don't depend
     // on how many cores the machine has.
-    let prov = Some(&embedded);
+    let prov = embedded.as_ref();
     let on_rows = |n: usize| {
         state.rows_written(n);
         state.paint(&progress);
@@ -477,26 +472,26 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                 &successor_closures,
                 &predecessor_closures,
                 prov,
-                Some(&release_date),
+                &publication_date,
                 &on_rows,
             )
             .context("writing orgs.parquet")?;
             done(3, "orgs.parquet", exported)
         });
         let roles = scope.spawn(|| {
-            let exported = write_roles(&output_path, &records, prov, Some(&release_date), &on_rows)
+            let exported = write_roles(&output_path, &records, prov, &publication_date, &on_rows)
                 .context("writing roles.parquet")?;
             done(1, "roles.parquet", exported)
         });
         let relationships = scope.spawn(|| {
             let exported =
-                write_relationships(&output_path, &records, prov, Some(&release_date), &on_rows)
+                write_relationships(&output_path, &records, prov, &publication_date, &on_rows)
                     .context("writing relationships.parquet")?;
             done(2, "relationships.parquet", exported)
         });
         let successions = scope.spawn(|| {
             let exported =
-                write_successions(&output_path, &records, prov, Some(&release_date), &on_rows)
+                write_successions(&output_path, &records, prov, &publication_date, &on_rows)
                     .context("writing successions.parquet")?;
             done(0, "successions.parquet", exported)
         });
@@ -528,6 +523,9 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
     // Warnings come after the block, and only for data the source gave us that isn't in the
     // tables. Stubs the merge set aside lose nothing and aren't warned about.
+    for line in &release_xml.skipped {
+        eprintln!("{line}");
+    }
     for line in &duplicates_dropped {
         eprintln!("! {line}");
     }
@@ -949,7 +947,7 @@ pub fn orgs_schema() -> Schema {
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
         Field::new("last_changed", DataType::Date32, true),
-        Field::new("trud_release_date", DataType::Date32, false),
+        Field::new("publication_date", DataType::Date32, false),
     ])
 }
 
@@ -958,7 +956,7 @@ fn build_orgs_batch(
     records: &[&OdsRecord],
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
-    release_days: i32,
+    publication_days: i32,
     problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
@@ -983,7 +981,7 @@ fn build_orgs_batch(
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
     let mut last_change_date = Date32Builder::new();
-    let mut trud_release_date = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     let empty_vec = Vec::new();
 
@@ -1098,7 +1096,7 @@ fn build_orgs_batch(
         append_date(&mut operational_start, o_start.as_deref(), "operational_start", &r.ods_code, problems);
         append_date(&mut operational_end, o_end.as_deref(), "operational_end", &r.ods_code, problems);
         append_date(&mut last_change_date, r.last_change_date.as_deref(), "last_changed", &r.ods_code, problems);
-        trud_release_date.append_value(release_days);
+        publication_date.append_value(publication_days);
     }
 
     let batch = RecordBatch::try_new(
@@ -1126,7 +1124,7 @@ fn build_orgs_batch(
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
             Arc::new(last_change_date.finish()) as ArrayRef,
-            Arc::new(trud_release_date.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow orgs batch")?;
@@ -1144,6 +1142,7 @@ pub fn export_orgs(
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::Embedded>,
+    publication_date: &str,
 ) -> Result<usize> {
     write_orgs(
         output_dir,
@@ -1151,7 +1150,7 @@ pub fn export_orgs(
         successor_closures,
         predecessor_closures,
         provenance,
-        None,
+        publication_date,
         &|_| {},
     )
     .map(|e| e.rows)
@@ -1164,18 +1163,15 @@ pub fn write_orgs(
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
     provenance: Option<&crate::provenance::Embedded>,
-    release_date: Option<&str>,
+    publication_date: &str,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
     let mut problems = DateProblems::default();
     let mut all_records: Vec<&OdsRecord> = records.iter().collect();
     all_records.sort_by(|a, b| (&a.status, &a.ods_code).cmp(&(&b.status, &b.ods_code)));
 
-    let release_date_str = release_date
-        .or_else(|| provenance.and_then(source_release_date))
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
+    let publication_days = parse_date_to_days(publication_date)
+        .ok_or_else(|| anyhow::anyhow!("Invalid publication_date: {}", publication_date))?;
 
     let schema = embed_metadata(&orgs_schema());
     let output_file =
@@ -1190,7 +1186,7 @@ pub fn write_orgs(
             chunk,
             successor_closures,
             predecessor_closures,
-            release_days,
+            publication_days,
             &mut problems,
         )?;
         writer.write(&batch).context("writing orgs batch")?;
@@ -1230,14 +1226,14 @@ pub fn roles_schema() -> Schema {
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
         Field::new("role_id", DataType::Utf8, false),
-        Field::new("trud_release_date", DataType::Date32, false),
+        Field::new("publication_date", DataType::Date32, false),
     ])
 }
 
 fn build_roles_batch(
     schema: &Arc<Schema>,
     rows: &[RoleRow],
-    release_days: i32,
+    publication_days: i32,
     problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut ods_code = StringBuilder::new();
@@ -1250,7 +1246,7 @@ fn build_roles_batch(
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
     let mut role_id = StringBuilder::new();
-    let mut trud_release_date = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for r in rows {
         ods_code.append_value(&r.ods_code);
@@ -1263,7 +1259,7 @@ fn build_roles_batch(
         append_date(&mut operational_start, r.operational_start.as_deref(), "operational_start", &r.ods_code, problems);
         append_date(&mut operational_end, r.operational_end.as_deref(), "operational_end", &r.ods_code, problems);
         role_id.append_value(&r.role_id);
-        trud_release_date.append_value(release_days);
+        publication_date.append_value(publication_days);
     }
 
     let batch = RecordBatch::try_new(
@@ -1279,7 +1275,7 @@ fn build_roles_batch(
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
             Arc::new(role_id.finish()) as ArrayRef,
-            Arc::new(trud_release_date.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow roles batch")?;
@@ -1291,8 +1287,9 @@ pub fn export_roles(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
+    publication_date: &str,
 ) -> Result<usize> {
-    write_roles(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
+    write_roles(output_dir, records, provenance, publication_date, &|_| {}).map(|e| e.rows)
 }
 
 /// Writes `roles.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
@@ -1300,7 +1297,7 @@ pub fn write_roles(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
-    release_date: Option<&str>,
+    publication_date: &str,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
     let mut problems = DateProblems::default();
@@ -1334,11 +1331,8 @@ pub fn write_roles(
             .then_with(|| a.role_id.cmp(&b.role_id))
     });
 
-    let release_date_str = release_date
-        .or_else(|| provenance.and_then(source_release_date))
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
+    let publication_days = parse_date_to_days(publication_date)
+        .ok_or_else(|| anyhow::anyhow!("Invalid publication_date: {}", publication_date))?;
 
     let schema = embed_metadata(&roles_schema());
     let output_file =
@@ -1348,7 +1342,7 @@ pub fn write_roles(
         .context("creating roles ArrowWriter")?;
 
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_roles_batch(&schema, chunk, release_days, &mut problems)?;
+        let batch = build_roles_batch(&schema, chunk, publication_days, &mut problems)?;
         writer.write(&batch).context("writing roles batch")?;
         on_rows(chunk.len());
     }
@@ -1386,14 +1380,14 @@ pub fn relationships_schema() -> Schema {
         Field::new("operational_start", DataType::Date32, true),
         Field::new("operational_end", DataType::Date32, true),
         Field::new("rel_id", DataType::Utf8, false),
-        Field::new("trud_release_date", DataType::Date32, false),
+        Field::new("publication_date", DataType::Date32, false),
     ])
 }
 
 fn build_relationships_batch(
     schema: &Arc<Schema>,
     rows: &[RelationshipRow],
-    release_days: i32,
+    publication_days: i32,
     problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut source_code = StringBuilder::new();
@@ -1406,7 +1400,7 @@ fn build_relationships_batch(
     let mut operational_start = Date32Builder::new();
     let mut operational_end = Date32Builder::new();
     let mut rel_id = StringBuilder::new();
-    let mut trud_release_date = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for r in rows {
         source_code.append_value(&r.source_code);
@@ -1419,7 +1413,7 @@ fn build_relationships_batch(
         append_date(&mut operational_start, r.operational_start.as_deref(), "operational_start", &r.source_code, problems);
         append_date(&mut operational_end, r.operational_end.as_deref(), "operational_end", &r.source_code, problems);
         rel_id.append_value(&r.rel_id);
-        trud_release_date.append_value(release_days);
+        publication_date.append_value(publication_days);
     }
 
     let batch = RecordBatch::try_new(
@@ -1435,7 +1429,7 @@ fn build_relationships_batch(
             Arc::new(operational_start.finish()) as ArrayRef,
             Arc::new(operational_end.finish()) as ArrayRef,
             Arc::new(rel_id.finish()) as ArrayRef,
-            Arc::new(trud_release_date.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow relationships batch")?;
@@ -1447,8 +1441,9 @@ pub fn export_relationships(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
+    publication_date: &str,
 ) -> Result<usize> {
-    write_relationships(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
+    write_relationships(output_dir, records, provenance, publication_date, &|_| {}).map(|e| e.rows)
 }
 
 /// Writes `relationships.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
@@ -1456,7 +1451,7 @@ pub fn write_relationships(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
-    release_date: Option<&str>,
+    publication_date: &str,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
     let mut problems = DateProblems::default();
@@ -1489,11 +1484,8 @@ pub fn write_relationships(
             .then_with(|| a.rel_id.cmp(&b.rel_id))
     });
 
-    let release_date_str = release_date
-        .or_else(|| provenance.and_then(source_release_date))
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
+    let publication_days = parse_date_to_days(publication_date)
+        .ok_or_else(|| anyhow::anyhow!("Invalid publication_date: {}", publication_date))?;
 
     let schema = embed_metadata(&relationships_schema());
     let output_file = File::create(output_dir.join("relationships.parquet"))
@@ -1503,7 +1495,7 @@ pub fn write_relationships(
         .context("creating relationships ArrowWriter")?;
 
     for chunk in rows.chunks(BATCH_SIZE) {
-        let batch = build_relationships_batch(&schema, chunk, release_days, &mut problems)?;
+        let batch = build_relationships_batch(&schema, chunk, publication_days, &mut problems)?;
         writer
             .write(&batch)
             .context("writing relationships batch")?;
@@ -1633,28 +1625,28 @@ pub fn successions_schema() -> Schema {
         Field::new("successor_code", DataType::Utf8, false),
         Field::new("legal_start", DataType::Date32, true),
         Field::new("succession_id", DataType::Utf8, false),
-        Field::new("trud_release_date", DataType::Date32, false),
+        Field::new("publication_date", DataType::Date32, false),
     ])
 }
 
 fn build_successions_batch(
     schema: &Arc<Schema>,
     edges: &[SuccessionEdge],
-    release_days: i32,
+    publication_days: i32,
     problems: &mut DateProblems,
 ) -> Result<RecordBatch> {
     let mut predecessor_code = StringBuilder::new();
     let mut successor_code = StringBuilder::new();
     let mut legal_start = Date32Builder::new();
     let mut succession_id = StringBuilder::new();
-    let mut trud_release_date = Date32Builder::new();
+    let mut publication_date = Date32Builder::new();
 
     for edge in edges {
         predecessor_code.append_value(&edge.predecessor_code);
         successor_code.append_value(&edge.successor_code);
         append_date(&mut legal_start, edge.legal_start.as_deref(), "legal_start", &edge.predecessor_code, problems);
         succession_id.append_value(&edge.succession_id);
-        trud_release_date.append_value(release_days);
+        publication_date.append_value(publication_days);
     }
 
     let batch = RecordBatch::try_new(
@@ -1664,7 +1656,7 @@ fn build_successions_batch(
             Arc::new(successor_code.finish()) as ArrayRef,
             Arc::new(legal_start.finish()) as ArrayRef,
             Arc::new(succession_id.finish()) as ArrayRef,
-            Arc::new(trud_release_date.finish()) as ArrayRef,
+            Arc::new(publication_date.finish()) as ArrayRef,
         ],
     )
     .context("building Arrow successions batch")?;
@@ -1676,8 +1668,9 @@ pub fn export_successions(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
+    publication_date: &str,
 ) -> Result<usize> {
-    write_successions(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
+    write_successions(output_dir, records, provenance, publication_date, &|_| {}).map(|e| e.rows)
 }
 
 /// Writes `successions.parquet` and reports each 50,000-row batch to `on_rows` as it is written.
@@ -1685,16 +1678,13 @@ pub fn write_successions(
     output_dir: &Path,
     records: &[OdsRecord],
     provenance: Option<&crate::provenance::Embedded>,
-    release_date: Option<&str>,
+    publication_date: &str,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
     let mut problems = DateProblems::default();
     let edges = build_succession_edges(records);
-    let release_date_str = release_date
-        .or_else(|| provenance.and_then(source_release_date))
-        .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
-    let release_days = parse_date_to_days(release_date_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
+    let publication_days = parse_date_to_days(publication_date)
+        .ok_or_else(|| anyhow::anyhow!("Invalid publication_date: {}", publication_date))?;
 
     let schema = embed_metadata(&successions_schema());
     let output_file = File::create(output_dir.join("successions.parquet"))
@@ -1704,7 +1694,7 @@ pub fn write_successions(
         .context("creating successions ArrowWriter")?;
 
     for chunk in edges.chunks(BATCH_SIZE) {
-        let batch = build_successions_batch(&schema, chunk, release_days, &mut problems)?;
+        let batch = build_successions_batch(&schema, chunk, publication_days, &mut problems)?;
         writer.write(&batch).context("writing successions batch")?;
         on_rows(chunk.len());
     }
@@ -1805,13 +1795,13 @@ mod tests {
         };
 
         let schema = Arc::new(orgs_schema());
-        let release_days = parse_date_to_days("2026-07-31").unwrap();
+        let publication_days = parse_date_to_days("2026-07-31").unwrap();
         let batch = build_orgs_batch(
             &schema,
             &[&record],
             &HashMap::new(),
             &HashMap::new(),
-            release_days,
+            publication_days,
             &mut DateProblems::default(),
         )
         .unwrap();
@@ -1862,7 +1852,7 @@ mod tests {
         assert!(schema.column_with_name("operational_start").is_some());
         assert!(schema.column_with_name("operational_end").is_some());
         assert!(schema.column_with_name("last_changed").is_some());
-        assert!(schema.column_with_name("trud_release_date").is_some());
+        assert!(schema.column_with_name("publication_date").is_some());
     }
 
     #[test]
@@ -2006,7 +1996,7 @@ mod tests {
         assert!(schema.column_with_name("rel_name").is_some());
         assert!(schema.column_with_name("rel_status").is_some());
         assert!(schema.column_with_name("legal_start").is_some());
-        assert!(schema.column_with_name("trud_release_date").is_some());
+        assert!(schema.column_with_name("publication_date").is_some());
 
         // Assert dropped columns do not exist
         assert!(schema.column_with_name("rel_type_code").is_none());
@@ -2034,7 +2024,7 @@ mod tests {
         };
 
         let temp_dir = tempfile::tempdir().unwrap();
-        write_relationships(temp_dir.path(), &[record], None, Some("2026-07-31"), &|_| {}).unwrap();
+        write_relationships(temp_dir.path(), &[record], None, "2026-07-31", &|_| {}).unwrap();
         assert!(temp_dir.path().join("relationships.parquet").exists());
     }
 
@@ -2075,18 +2065,18 @@ mod tests {
     }
 
     #[test]
-    fn test_trud_release_date_column_on_all_tables() {
+    fn test_publication_date_column_on_all_tables() {
         assert!(orgs_schema()
-            .column_with_name("trud_release_date")
+            .column_with_name("publication_date")
             .is_some());
         assert!(roles_schema()
-            .column_with_name("trud_release_date")
+            .column_with_name("publication_date")
             .is_some());
         assert!(relationships_schema()
-            .column_with_name("trud_release_date")
+            .column_with_name("publication_date")
             .is_some());
         assert!(successions_schema()
-            .column_with_name("trud_release_date")
+            .column_with_name("publication_date")
             .is_some());
     }
 }

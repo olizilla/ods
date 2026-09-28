@@ -259,8 +259,8 @@ fn test_relabel_dataset_version_changes_parquet_bytes_not_data() {
         .embedded(version)
         .unwrap()
     };
-    let (_tmp1, dir1) = common::setup_find_test_workspace_embedded(&embedded("0.1.0"));
-    let (_tmp2, dir2) = common::setup_find_test_workspace_embedded(&embedded("1.0.0"));
+    let (_tmp1, dir1) = common::setup_find_test_workspace_embedded(Some(&embedded("0.1.0")));
+    let (_tmp2, dir2) = common::setup_find_test_workspace_embedded(Some(&embedded("1.0.0")));
 
     let read_rows = |path: &Path| -> Vec<arrow::record_batch::RecordBatch> {
         let file = std::fs::File::open(path).unwrap();

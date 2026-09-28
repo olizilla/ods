@@ -470,10 +470,10 @@ fn setup_test_workspace() -> (TempDir, PathBuf) {
     let edges = ods::commands::parquet::build_succession_edges(&records);
     let (succ_closures, pred_closures) =
         ods::commands::parquet::compute_transitive_closures(&records, &edges);
-    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_roles(&dir, &records, Some(&prov)).expect("export roles");
-    export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
-    export_successions(&dir, &records, Some(&prov)).expect("export successions");
+    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-07-31").expect("export orgs");
+    export_roles(&dir, &records, Some(&prov), "2026-07-31").expect("export roles");
+    export_relationships(&dir, &records, Some(&prov), "2026-07-31").expect("export relationships");
+    export_successions(&dir, &records, Some(&prov), "2026-07-31").expect("export successions");
 
     (tmp, dir)
 }

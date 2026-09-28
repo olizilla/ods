@@ -121,7 +121,7 @@ case "$KIND" in
       UPDATE_SCHEMA=1 cargo test --quiet --test it schema_contract_test:: >/dev/null
       ok "dataset $OLD → $NEW  $DATASET_RS, $DATAPACKAGE_JSON"
       update_expected_keys
-      note "Every manifest built from now on has a new digest: datapackage.json is a layer."
+      note "Every Parquet file built from now on carries the new version, so every manifest digest changes."
       note "A dataset bump needs a tool bump at least as large: patch → patch, minor → minor, major → major. This is a $(bump_size "$OLD" "$NEW") bump; run \`scripts/bump-version.sh tool <x.y.z>\` to match it."
     fi
     ;;

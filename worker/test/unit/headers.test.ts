@@ -17,9 +17,9 @@ describe('Derived Headers & Caching Policies', () => {
         schemaVersion: 2,
         mediaType: 'application/vnd.oci.image.manifest.v1+json',
         config: {
-          mediaType: 'application/vnd.fyi.ods.provenance.v1+json',
-          digest: 'sha256:083525aae40231344be2fa3f14064ca2e455b0bcce9868d0e9051558ebbf5b0a',
-          size: 1024,
+          mediaType: 'application/vnd.oci.empty.v1+json',
+          digest: 'sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+          size: 2,
         },
         layers: [
           {
@@ -54,7 +54,7 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/e86ed21b58718bd0b4ae95ee071347256bab29f8a9599f30fa806dd31f80fa7c': {
+    'v2/ods-data/blobs/sha256/ebcebc09cf38dd3ea3964d602060f2b5fb01a1e8215adb43edc1df8a80d49a32': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -184,23 +184,13 @@ describe('Derived Headers & Caching Policies', () => {
     expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
   });
 
-  it('serves /schema/provenance.v1.json with application/schema+json and immutable cache-control', async () => {
-    const res = await worker.fetch(new Request('https://ods.fyi/schema/provenance.v1.json'), env);
+  it('serves /schema/ods-datapackage.v1.json with application/schema+json and immutable cache-control', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/schema/ods-datapackage.v1.json'), env);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/schema+json');
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     const json = await res.json() as Record<string, unknown>;
-    expect(json['$id']).toBe('https://ods.fyi/schema/provenance.v1.json');
-    expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
-  });
-
-  it('serves /schema/datapackage.v1.json with application/schema+json and immutable cache-control', async () => {
-    const res = await worker.fetch(new Request('https://ods.fyi/schema/datapackage.v1.json'), env);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/schema+json');
-    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
-    const json = await res.json() as Record<string, unknown>;
-    expect(json['$id']).toBe('https://ods.fyi/schema/datapackage.v1.json');
+    expect(json['$id']).toBe('https://ods.fyi/schema/ods-datapackage.v1.json');
     expect(json['$schema']).toBe('http://json-schema.org/draft-07/schema#');
   });
 });

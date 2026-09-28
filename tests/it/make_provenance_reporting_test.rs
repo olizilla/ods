@@ -182,10 +182,10 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
 #[test]
 fn test_make_after_trud_pull_prints_no_warning() {
     let tmp = TempDir::new().unwrap();
+    // A directory holding the zip and its record side by side, as an explicit `-i <dir>` can.
     let zip_dir = tmp.path().join("prov_dir");
-    let trud_dir = zip_dir.join("trud");
-    fs::create_dir_all(&trud_dir).unwrap();
-    let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
+    fs::create_dir_all(&zip_dir).unwrap();
+    let zip_path = create_mock_zip(&zip_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
     let record = ods::provenance::PullRecord::for_trud_release(
@@ -233,11 +233,8 @@ fn test_directory_with_an_older_record_names_the_repair() {
     let trud_dir = release_dir.join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
-    fs::write(
-        trud_dir.join("_provenance.json"),
-        r#"{"$schema":"https://ods.fyi/schema/provenance.v1.json","trud_release_date":"2026-08-28"}"#,
-    )
-    .unwrap();
+    // Only the file's presence matters: nothing reads what it holds.
+    fs::write(trud_dir.join("_provenance.json"), "{}").unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -256,4 +253,62 @@ fn test_directory_with_an_older_record_names_the_repair() {
         "got:\n{stderr}"
     );
     assert!(stderr.contains("ods trud pull 2026-08-28 --force && ods make"), "got:\n{stderr}");
+}
+
+/// A release directory's zip is the one its pull record names, whatever date TRUD stamped in its
+/// name: 2022-05-30's zip is `…_20220527000001.zip`. The SHA-256 and size tie it to the record.
+#[test]
+fn test_release_dir_builds_the_zip_its_record_names_whatever_date_its_name_carries() {
+    let tmp = TempDir::new().unwrap();
+    let release_dir = tmp.path().join("releases").join("2022-05-30");
+    let trud_dir = release_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    let zip = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_5.0.0_20220527000001.zip");
+    let sha = ods::provenance::compute_file_sha256(&zip).unwrap();
+    let bytes = fs::metadata(&zip).unwrap().len();
+    ods::provenance::write_pull_record(&release_dir, "2022-05-30", "hscorgrefdataxml_data_5.0.0_20220527000001.zip", &sha, bytes, &[]).unwrap();
+
+    let out = tmp.path().join("out");
+    let output = ods_binary().arg("make").arg("-i").arg(&release_dir).arg("-o").arg(&out).output().expect("execute ods make");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "ods make must build the zip the record names, got:\n{stderr}");
+
+    let facts = ods::provenance::read_release(&out).unwrap();
+    let facts = facts.facts().expect("the build carries provenance");
+    assert_eq!(facts.release_date, "2022-05-30", "the release is TRUD's date, not the name's");
+}
+
+/// A record whose archive isn't on disk is refused, naming the file and the repair.
+#[test]
+fn test_release_dir_refuses_a_record_naming_a_missing_zip_with_the_repair() {
+    let tmp = TempDir::new().unwrap();
+    let release_dir = tmp.path().join("releases").join("2022-05-30");
+    fs::create_dir_all(release_dir.join("trud")).unwrap();
+    ods::provenance::write_pull_record(
+        &release_dir,
+        "2022-05-30",
+        "hscorgrefdataxml_data_5.0.0_20220527000001.zip",
+        "CA0FEE7512F593ADA1FA9B95BF1372B41911167DA463A98FECF33ADFD86697E5",
+        38138574,
+        &[],
+    )
+    .unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("make")
+        .arg("-i")
+        .arg(&release_dir)
+        .arg("-o")
+        .arg(tmp.path().join("out"))
+        .output()
+        .expect("execute ods make");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("names the archive hscorgrefdataxml_data_5.0.0_20220527000001.zip, and it isn't in")
+            && stderr.contains("Download it again: ods trud pull 2022-05-30 --force"),
+        "got:\n{stderr}"
+    );
+    assert!(!tmp.path().join("out").join("orgs.parquet").exists());
 }

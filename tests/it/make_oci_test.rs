@@ -245,7 +245,7 @@ fn test_refusal_baseline_invalid_before_disk_mutations() {
     // A file built without provenance: nothing to annotate a manifest with
     ods::commands::parquet::write_stub_parquet(
         &rel_dir.join("orgs.parquet"),
-        Some(&ods::provenance::Embedded::without_provenance()),
+        None,
         "orgs",
     )
     .unwrap();
@@ -371,7 +371,7 @@ fn test_make_oci_refuses_an_embedded_object_without_a_source_hash() -> Result<()
 
     // The files carry a source with no hash
     let mut broken = embedded(&"0".repeat(64));
-    broken.sources.as_mut().unwrap()[0].hash = String::new();
+    broken.sources[0].hash = String::new();
     for name in ["orgs.parquet", "roles.parquet"] {
         ods::commands::parquet::write_stub_parquet(&rel_dir.join(name), Some(&broken), name)?;
     }

@@ -18,7 +18,7 @@ fn manifest_xml(declared: usize, orgs: &[(&str, &str, &str)]) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
-  <un:ManifestHeader><un:Version value="2.0.0" /><un:RecordCount value="{declared}" /></un:ManifestHeader>
+  <un:ManifestHeader><un:Version value="2.0.0" /><un:PublicationDate value="2026-05-18" /><un:RecordCount value="{declared}" /></un:ManifestHeader>
   <un:Organisations>{body}</un:Organisations>
 </un:OrganisationManifest>"#
     )
@@ -150,7 +150,7 @@ fn odd_dates_release(dir: &std::path::Path) -> std::path::PathBuf {
     let d2 = r#"<un:Organisation><un:Name>SUCCESSOR</un:Name><un:OrgId extension="D2" /><un:Status value="Active" /></un:Organisation>"#;
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0"><un:ManifestHeader><un:Version value="2.0.0" /><un:RecordCount value="2" /></un:ManifestHeader><un:Organisations>{org}{d2}</un:Organisations></un:OrganisationManifest>"#
+<un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0"><un:ManifestHeader><un:Version value="2.0.0" /><un:PublicationDate value="2026-05-18" /><un:RecordCount value="2" /></un:ManifestHeader><un:Organisations>{org}{d2}</un:Organisations></un:OrganisationManifest>"#
     );
     write_release_zip(dir, &xml, &manifest_xml(0, &[]))
 }
@@ -190,6 +190,177 @@ fn malformed_date_stays_null_in_every_table() {
     assert_eq!(date_column(&out.join("successions.parquet"), "legal_start"), [None]);
 }
 
+/// Every row of every table is dated by the XML's own PublicationDate: 2026-05-18 here, in a zip
+/// TRUD would name 2026-05-29. The zip matches no release, so this is a `--force` build, which
+/// dates its rows the same way a matched one does.
+#[test]
+fn make_dates_every_row_by_the_xml_publication_date() {
+    use ::arrow::array::{Array, Date32Array};
+    use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    let tmp = TempDir::new().unwrap();
+    let zip_path = odd_dates_release(tmp.path());
+    let out = tmp.path().join("out");
+    parquet::run(parquet::Args { input: Some(zip_path), output: Some(out.clone()), force: true, ..Default::default() }).unwrap();
+
+    // 2026-05-18 is 20591 days after 1970-01-01.
+    for table in ["orgs", "roles", "relationships", "successions"] {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(out.join(format!("{table}.parquet"))).unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        let mut dates = Vec::new();
+        for batch in reader {
+            let batch = batch.unwrap();
+            let col = batch.column(batch.schema().index_of("publication_date").unwrap());
+            let col = col.as_any().downcast_ref::<Date32Array>().unwrap();
+            dates.extend((0..col.len()).map(|i| col.value(i)));
+        }
+        assert!(!dates.is_empty() && dates.iter().all(|d| *d == 20591), "{table}: {dates:?}");
+    }
+}
+
+/// The two XML files of a release must carry one PublicationDate. A release zip whose files
+/// disagree, or where one carries none, refuses the build with a block naming each file and
+/// what it says; so does a zip holding one XML file that carries none.
+#[test]
+fn make_refuses_xml_files_without_one_publication_date() {
+    let tmp = TempDir::new().unwrap();
+    let full = manifest_xml(1, &[("RAE", "LIVE ONE", "Active")]);
+    let later = manifest_xml(1, &[("ARCH1", "CLOSED LONG AGO", "Inactive")]).replace("2026-05-18", "2026-05-25");
+    let undate = |xml: &str| xml.replace(r#"<un:PublicationDate value="2026-05-18" />"#, "");
+    let undated = undate(&manifest_xml(1, &[("ARCH1", "CLOSED LONG AGO", "Inactive")]));
+
+    let refusal = |input: &std::path::Path, dir: &std::path::Path| {
+        let output = common::ods_cmd()
+            .args(["make", "--input"])
+            .arg(input)
+            .arg("--output")
+            .arg(dir.join("out"))
+            .arg("--force")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(!dir.join("out").join("orgs.parquet").exists(), "nothing is written");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        stderr.lines().skip_while(|l| !l.starts_with('✖')).collect::<Vec<_>>().join("\n")
+    };
+    let zip_refusal = |archive: &str| {
+        let dir = TempDir::new_in(tmp.path()).unwrap();
+        let zip = write_release_zip(dir.path(), &full, archive);
+        refusal(&zip, dir.path())
+    };
+
+    assert_eq!(
+        zip_refusal(&later),
+        "✖ hscorgrefdataxml_data_7.0.0_20260529000001.zip holds no full file and archive file with the same PublicationDate\n  \
+         fullfile.zip  HSCOrgRefData_Full_20260518.xml     PublicationDate 2026-05-18\n  \
+         archive.zip   HSCOrgRefData_Archive_20260518.xml  PublicationDate 2026-05-25\n  \
+         Every row is dated as of NHS's publication date, so ods can't build this release until that's understood."
+    );
+    assert_eq!(
+        zip_refusal(&undated),
+        "✖ hscorgrefdataxml_data_7.0.0_20260529000001.zip holds no full file and archive file with the same PublicationDate\n  \
+         fullfile.zip  HSCOrgRefData_Full_20260518.xml     PublicationDate 2026-05-18\n  \
+         archive.zip   HSCOrgRefData_Archive_20260518.xml  no PublicationDate\n  \
+         Every row is dated as of NHS's publication date, so ods can't build this release until that's understood."
+    );
+
+    // A zip holding one XML file directly, as a hand-made archive might.
+    let dir = TempDir::new_in(tmp.path()).unwrap();
+    let flat = dir.path().join("hscorgrefdataxml_data_7.0.0_20260529000001.zip");
+    fs::write(&flat, create_inner_zip("HSCOrgRefData_Full_20260518.xml", undate(&full).as_bytes())).unwrap();
+    assert_eq!(
+        refusal(&flat, dir.path()),
+        "✖ The release's XML doesn't say when NHS England published it\n  \
+         HSCOrgRefData_Full_20260518.xml  no PublicationDate\n  \
+         Every row is dated as of NHS's publication date, so ods can't build this release without one."
+    );
+}
+
+/// A `--force` build doesn't need TRUD's name for the zip: nothing is read from the name, and the
+/// rows are dated by the XML. `find` reads the result.
+#[test]
+fn force_builds_a_renamed_zip_and_find_reads_it() {
+    let tmp = TempDir::new().unwrap();
+    let full = manifest_xml(1, &[("RAE", "LIVE ONE", "Active")]);
+    let archive = manifest_xml(1, &[("ARCH1", "CLOSED LONG AGO", "Inactive")]);
+    let zip = write_release_zip(tmp.path(), &full, &archive);
+    let renamed = tmp.path().join("archive.zip");
+    fs::rename(&zip, &renamed).unwrap();
+    let out = tmp.path().join("out");
+
+    let make = common::ods_cmd().args(["make", "--input"]).arg(&renamed).arg("--output").arg(&out).arg("--force").output().unwrap();
+    assert!(make.status.success(), "{}", String::from_utf8_lossy(&make.stderr));
+    assert!(String::from_utf8_lossy(&make.stderr).contains("! archive.zip isn't a TRUD release ods knows"));
+
+    let find = common::ods_cmd().args(["find", "--code", "RAE", "--plain", "-i"]).arg(&out).output().unwrap();
+    assert!(find.status.success(), "{}", String::from_utf8_lossy(&find.stderr));
+    assert!(String::from_utf8_lossy(&find.stdout).contains("LIVE ONE"));
+
+    // Without --force it's refused as an archive ods doesn't know, not for its name.
+    let refused = common::ods_cmd().args(["make", "--input"]).arg(&renamed).arg("--output").arg(tmp.path().join("out2")).output().unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("✖ archive.zip isn't a TRUD release ods knows") && stderr.contains("--force"), "{stderr}");
+}
+
+/// A zip that doesn't hold a release's inner zips says what's missing, under `--force` too.
+#[test]
+fn force_refuses_a_zip_without_the_release_zips_naming_what_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let full = manifest_xml(1, &[("RAE", "LIVE ONE", "Active")]);
+    let zip = tmp.path().join("something.zip");
+    {
+        let mut w = zip::ZipWriter::new(fs::File::create(&zip).unwrap());
+        w.start_file("fullfile.zip", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut w, &create_inner_zip("HSCOrgRefData_Full_20260518.xml", full.as_bytes())).unwrap();
+        w.finish().unwrap();
+    }
+    let out = common::ods_cmd().args(["make", "--input"]).arg(&zip).arg("--output").arg(tmp.path().join("out")).arg("--force").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("something.zip holds fullfile.zip but no archive.zip"), "{stderr}");
+}
+
+/// `ods trud diff` reads a release zip as `ods make` does: both files, and when `fullfile.zip` holds a
+/// second full file, the one whose PublicationDate matches the archive's, naming the one skipped.
+#[test]
+fn diff_reads_the_pair_make_builds_from() {
+    let tmp = TempDir::new().unwrap();
+    let dated = |date: &str, orgs: &[(&str, &str, &str)]| manifest_xml(orgs.len(), orgs).replace("2026-05-18", date);
+    let new_full = dated("2026-05-18", &[("RAE", "NEW NAME", "Active")]);
+    let archive = create_inner_zip("HSCOrgRefData_Archive_20260518.xml", dated("2026-05-18", &[("ARCH1", "CLOSED LONG AGO", "Inactive")]).as_bytes());
+
+    // fullfile.zip holding both full files, the older first.
+    let mut two = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut two);
+        for (name, bytes) in [("HSCOrgRefData_Full_20260511.xml", dated("2026-05-11", &[("RAE", "OLD NAME", "Active")])), ("HSCOrgRefData_Full_20260518.xml", new_full.clone())] {
+            w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut w, bytes.as_bytes()).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    let target = tmp.path().join("hscorgrefdataxml_data_7.0.0_20260529000001.zip");
+    create_nested_trud_zip(&target, &[("archive.zip", &archive), ("fullfile.zip", &two.into_inner())]);
+    let baseline_dir = tmp.path().join("baseline");
+    fs::create_dir_all(&baseline_dir).unwrap();
+    let baseline = write_release_zip(&baseline_dir, &dated("2026-05-18", &[("RAE", "NEW NAME", "Active")]), &dated("2026-05-18", &[("ARCH1", "CLOSED LONG AGO", "Inactive")]));
+
+    let out = common::ods_cmd().args(["trud", "diff"]).arg(&baseline).arg(&target).args(["--format", "markdown"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("! hscorgrefdataxml_data_7.0.0_20260529000001.zip: fullfile.zip holds 2 full files; built from HSCOrgRefData_Full_20260518.xml (2026-05-18), skipped HSCOrgRefData_Full_20260511.xml (2026-05-11)"),
+        "{stderr}"
+    );
+    // Both sides read the same pair, archive included: nothing changed.
+    assert!(stdout.contains("Baseline: 2 records as of 2026-05-18  ➔  Target: 2 records as of 2026-05-18"), "{stdout}");
+    assert!(stdout.contains("- ✎ Modified:        0 organisations"), "the older full file wasn't read: {stdout}");
+}
+
 // ---------------------------------------------------------------------------
 // The `ods make` report: what is printed, and what is warned about after it
 // ---------------------------------------------------------------------------
@@ -209,7 +380,7 @@ fn manifest_of(orgs: &[String]) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <un:OrganisationManifest xmlns:un="http://refdata.hscic.gov.uk/org/v2-0-0">
-  <un:ManifestHeader><un:Version value="2.0.0" /><un:RecordCount value="{}" /></un:ManifestHeader>
+  <un:ManifestHeader><un:Version value="2.0.0" /><un:PublicationDate value="2026-05-18" /><un:RecordCount value="{}" /></un:ManifestHeader>
   <un:Organisations>{}</un:Organisations>
 </un:OrganisationManifest>"#,
         orgs.len(),

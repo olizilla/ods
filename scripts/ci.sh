@@ -205,7 +205,7 @@ EOF
   return $status
 }
 
-# Rebuilds the newest dataset published at this build's DATASET_VERSION from its kept archive
+# Rebuilds the newest dataset published at this build's dataset version from its kept archive
 # (nhs-ods-xml), and compares the manifest digest with the one recorded for it, so a change to the
 # bytes without a dataset version bump fails here instead of at the pull request that caused it
 # (docs/tests.md D5). CI_REPRODUCE_INDEX reads another index in place of data/releases.json — this
@@ -223,7 +223,10 @@ EOF
 reproduce() {
   local index="${CI_REPRODUCE_INDEX:-data/releases.json}"
   local dataset_version
-  dataset_version=$(sed -n 's/^pub const DATASET_VERSION: &str = "\([^"]*\)";/\1/p' src/datapackage.rs | head -1)
+  # data/datapackage.json is the committed schema snapshot, and its `version` is the plain
+  # dataset version (0.1.0), never a release's <date>_<version>. schema_contract_test keeps it
+  # equal to what this ods generates, and runs in "rust tests", before this step.
+  dataset_version=$(jq -r .version data/datapackage.json)
 
   local date row_digest
   date=$(jq -r --arg v "$dataset_version" '

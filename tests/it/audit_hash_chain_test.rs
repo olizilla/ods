@@ -7,6 +7,9 @@ use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
 
+/// The `PublicationDate` the fixture XML carries: a rewritten table is dated as a build dates it.
+const PUBLICATION_DATE: &str = "2026-07-31";
+
 static CACHED_WORKSPACE: std::sync::OnceLock<(TempDir, std::path::PathBuf, std::path::PathBuf)> =
     std::sync::OnceLock::new();
 
@@ -283,7 +286,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
     let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
     let release_record = ods::provenance::read_release(&active_dir)?;
     let prov = release_record.facts().map(|f| f.embedded.clone());
-    ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
+    ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref(), PUBLICATION_DATE)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -331,7 +334,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
     };
     let release_record = ods::provenance::read_release(&active_dir)?;
     let prov = release_record.facts().map(|f| f.embedded.clone());
-    ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
+    ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref(), PUBLICATION_DATE)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -384,6 +387,7 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
         &empty_closures,
         &empty_closures,
         prov.as_ref(),
+        PUBLICATION_DATE,
     )?;
 
     let args = ods::commands::audit::Args {

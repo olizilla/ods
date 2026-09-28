@@ -126,7 +126,7 @@ fn run_routed_mock_server(routes: BTreeMap<String, Vec<u8>>) -> (String, mpsc::S
 /// `run_routed_mock_server` needs to serve it at `/v2/ods-data/manifests/<digest>` and
 /// `/v2/ods-data/blobs/<digest>`.
 fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) -> (String, u64, BTreeMap<String, Vec<u8>>) {
-    let prov = serde_json::json!({ "trud_release_date": release_date });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -390,7 +390,7 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files for a mock OCI pull
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 

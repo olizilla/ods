@@ -900,7 +900,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     fs::create_dir_all(&rel_dir).unwrap();
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
-    let copy_release = |embedded: &ods::provenance::Embedded| {
+    let copy_release = |embedded: Option<&ods::provenance::Embedded>| {
         let (_find_tmp, find_dir) = common::setup_find_test_workspace_embedded(embedded);
         for entry in fs::read_dir(&find_dir).unwrap() {
             let entry = entry.unwrap();
@@ -912,7 +912,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
 
     // 1. The files carry provenance; the pull record under trud/ is unreadable. Nothing that
     // reads a release reads that record, so find says nothing about it.
-    copy_release(&ods::provenance::fixture_embedded("2026-08-28"));
+    copy_release(Some(&ods::provenance::fixture_embedded("2026-08-28")));
     let trud_dir = rel_dir.join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(
@@ -933,7 +933,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
 
     // 2. Files built without provenance: find warns once and still delivers; make oci refuses
     // with the ✖ block and leaves oci/ absent.
-    copy_release(&ods::provenance::Embedded::without_provenance());
+    copy_release(None);
     let find_absent = ods_binary()
         .current_dir(&ws)
         .args(["find", "sedbergh", "-i", "releases/2026-08-28", "--plain"])
@@ -944,7 +944,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     let absent_stderr = String::from_utf8_lossy(&find_absent.stderr);
     assert!(absent_stdout.contains("SEDBERGH"));
     assert_eq!(
-        absent_stderr.matches("has no provenance").count(),
+        absent_stderr.matches("carry no provenance").count(),
         1,
         "find warns exactly once, got:\n{}",
         absent_stderr
@@ -960,13 +960,13 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     assert_eq!(make_oci_absent.status.code(), Some(1));
     assert!(
         make_oci_stderr.contains(
-            "has no provenance: it was built from an archive ods couldn't match to a TRUD release"
+            "carry no provenance: it was built from an archive ods couldn't match to a TRUD release, or by an older ods"
         ),
         "stderr should report no provenance refusal, got:\n{}",
         make_oci_stderr
     );
     assert!(
-        make_oci_stderr.contains("To cite or publish it, get the archive through ods trud pull."),
+        make_oci_stderr.contains("To cite or publish it, get the archive through ods trud pull and build it with ods make, or pull the release with ods pull."),
         "stderr should guide user to pull, got:\n{}",
         make_oci_stderr
     );

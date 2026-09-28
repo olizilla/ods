@@ -12,13 +12,11 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 import releasesV1Schema from '../schema/releases.v1.json';
-import provenanceV1Schema from '../schema/provenance.v1.json';
-import datapackageV1Schema from '../schema/datapackage.v1.json';
+import odsDatapackageV1Schema from '../schema/ods-datapackage.v1.json';
 
 const SCHEMAS: Record<string, unknown> = {
   'releases.v1.json': releasesV1Schema,
-  'provenance.v1.json': provenanceV1Schema,
-  'datapackage.v1.json': datapackageV1Schema,
+  'ods-datapackage.v1.json': odsDatapackageV1Schema,
 };
 
 // Astro's site/public/ files that land at the root, unhashed — generated from the actual

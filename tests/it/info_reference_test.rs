@@ -2,15 +2,10 @@ use ods::commands::info::model::InfoRecord;
 use ods::commands::info::render::{render_info, RenderOptions, ResponsiveBand, TableStyle};
 use std::fs;
 
-fn source_header_for(record: &InfoRecord, color: bool) -> Vec<String> {
-    let file = "orgs.parquet";
-    let release_date = if record.trud_release_date.is_empty() {
-        "current"
-    } else {
-        &record.trud_release_date
-    };
-    let path = format!("releases/{}/{}", release_date, file);
-    vec![ods::workspace::format_source_line(&path, color)]
+/// The fixtures are records from the 2026-08-28 release (published by NHS 2026-08-27).
+fn source_header_for(_record: &InfoRecord, color: bool) -> Vec<String> {
+    let path = "releases/2026-08-28/orgs.parquet";
+    vec![ods::workspace::format_source_line(path, color)]
 }
 
 fn test_case(

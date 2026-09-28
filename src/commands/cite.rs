@@ -81,10 +81,6 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             eprintln!("{}", crate::provenance::format_no_provenance_error(&input_dir));
             return Err(crate::commands::pull::AlreadyReported.into());
         }
-        crate::workspace::VerificationOutcome::NotEmbedded => {
-            eprintln!("{}", crate::provenance::format_not_embedded_error(&input_dir));
-            return Err(crate::commands::pull::AlreadyReported.into());
-        }
         crate::workspace::VerificationOutcome::Corrupted(err) => {
             eprintln!("{}", err);
             return Err(crate::commands::pull::AlreadyReported.into());

@@ -69,31 +69,19 @@ pub struct Source {
 }
 
 /// The object every Parquet file carries under `datapackage`. Field order is the serialised
-/// order. A build without provenance (`ods make --force -o`) has no `version` and no `sources`:
-/// that absence is how every reader recognises it.
+/// order. A build without provenance (`ods make --force -o`) carries no `datapackage` key at
+/// all: it can't back a name, a licence or a source for an archive nobody could match, and the
+/// key's absence is how every reader recognises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Embedded {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+    pub version: String,
     pub licenses: Vec<License>,
     pub contributors: Vec<Contributor>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sources: Option<Vec<Source>>,
+    pub sources: Vec<Source>,
 }
 
 impl Embedded {
-    /// The embedded object for a build `ods` couldn't match to a source release.
-    pub fn without_provenance() -> Self {
-        Self {
-            name: crate::datapackage::NAME.to_string(),
-            version: None,
-            licenses: vec![crate::terms::license()],
-            contributors: crate::terms::contributors(),
-            sources: None,
-        }
-    }
-
     /// Compact JSON, as written into the Parquet metadata.
     pub fn to_compact_json(&self) -> Result<String> {
         serde_json::to_string(self).context("serialising the embedded datapackage object")
@@ -158,7 +146,7 @@ impl PullRecord {
             });
         }
         Ok(Self {
-            schema: crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL.to_string(),
+            schema: crate::datapackage::ODS_DATAPACKAGE_SCHEMA_URL.to_string(),
             name: SOURCE_NAME.to_string(),
             version: date.to_string(),
             title: SOURCE_TITLE.to_string(),
@@ -199,7 +187,30 @@ impl PullRecord {
         if !is_prefixed_sha256(&archive.hash) {
             anyhow::bail!("{} records the archive's hash as '{}', not sha256:<hex>", PULL_RECORD_FILENAME, archive.hash);
         }
+        // A file name beside the record, as `ods trud pull` writes it: never a path that leaves `trud/`.
+        let mut components = Path::new(&archive.path).components();
+        if !matches!((components.next(), components.next()), (Some(std::path::Component::Normal(_)), None)) {
+            anyhow::bail!("{} names the archive as '{}', not a file name beside it", PULL_RECORD_FILENAME, archive.path);
+        }
         Ok(())
+    }
+
+    /// The archive this record describes: the file its `archive` resource names, beside the
+    /// record. Refuses, with the repair, when it isn't there.
+    pub fn archive_path(&self, record_path: &Path) -> Result<PathBuf> {
+        let archive = self.archive().context("the pull record lists no archive resource")?;
+        let dir = record_path.parent().unwrap_or(Path::new("."));
+        let path = dir.join(&archive.path);
+        if !path.is_file() {
+            anyhow::bail!(
+                "✖ {} names the archive {}, and it isn't in {}\n  Download it again: ods trud pull {} --force",
+                format_provenance_display_path(record_path),
+                archive.path,
+                crate::workspace::relative_to_cwd(dir).display(),
+                self.version
+            );
+        }
+        Ok(path)
     }
 
     /// The embedded object a build from this release carries: `sources[0]` is derived from the
@@ -210,16 +221,16 @@ impl PullRecord {
         let archive = self.archive().expect("validate_baseline checked the archive");
         Ok(Embedded {
             name: crate::datapackage::NAME.to_string(),
-            version: Some(format!("{}_{}", self.version, dataset_version)),
+            version: format!("{}_{}", self.version, dataset_version),
             licenses: self.licenses.clone(),
             contributors: self.contributors.clone(),
-            sources: Some(vec![Source {
+            sources: vec![Source {
                 title: self.title.clone(),
                 version: self.version.clone(),
                 path: self.homepage.clone(),
                 hash: archive.hash.clone(),
                 bytes: archive.bytes,
-            }]),
+            }],
         })
     }
 
@@ -259,7 +270,7 @@ impl PullRecord {
             return RecordLoad::NotARecord;
         }
         match serde_json::from_value::<Self>(value) {
-            Ok(record) if record.schema == crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL => {
+            Ok(record) if record.schema == crate::datapackage::ODS_DATAPACKAGE_SCHEMA_URL => {
                 RecordLoad::Read(Box::new(record), path.to_path_buf())
             }
             _ => unreadable(),
@@ -355,7 +366,7 @@ pub fn format_unreadable_record_error(path: &Path, date: &str) -> String {
     format!(
         "✖ {} isn't a pull record this ods can read\n  Expected $schema {} and name {}\n  Write it again with `ods trud pull {}`, then run `ods make`.",
         format_provenance_display_path(path),
-        crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL,
+        crate::datapackage::ODS_DATAPACKAGE_SCHEMA_URL,
         SOURCE_NAME,
         date
     )
@@ -380,7 +391,7 @@ pub struct ReleaseFacts {
 impl ReleaseFacts {
     /// `version`: the OCI tag, `<source release>_<dataset version>`.
     pub fn version(&self) -> &str {
-        self.embedded.version.as_deref().unwrap_or_default()
+        &self.embedded.version
     }
 
     /// The source archive's SHA-256 as upper-case hex, the form the release index uses.
@@ -393,10 +404,9 @@ impl ReleaseFacts {
     }
 
     fn from_embedded(embedded: Embedded) -> std::result::Result<Self, String> {
-        let version = embedded.version.clone().ok_or("it has sources but no version")?;
-        let source = match embedded.sources.as_deref() {
-            Some([first, ..]) => first.clone(),
-            _ => return Err(format!("version {} names no source", version)),
+        let version = embedded.version.clone();
+        let Some(source) = embedded.sources.first().cloned() else {
+            return Err(format!("version {} names no source", version));
         };
         if embedded.licenses.is_empty() {
             return Err("it names no licence".to_string());
@@ -427,11 +437,10 @@ impl ReleaseFacts {
 pub enum ReleaseRecord {
     /// Every file carries the same embedded object, with a version and a source.
     Provenanced(Box<ReleaseFacts>),
-    /// Every file carries the same embedded object, with no version and no source: a build
-    /// `ods` couldn't match to a source release.
-    NoProvenance(Box<Embedded>),
-    /// No file carries a `datapackage` key: an older `ods` built them.
-    NotEmbedded,
+    /// No file carries a `datapackage` key: built from an archive `ods` couldn't match to a
+    /// source release (`ods make --force`), or by an `ods` older than the key. The files can't
+    /// say which.
+    NoProvenance,
     /// The directory holds no Parquet files.
     NoFiles,
 }
@@ -510,7 +519,7 @@ pub fn read_release(dir: &Path) -> Result<ReleaseRecord> {
     }
 
     let Some(raw) = first else {
-        return Ok(ReleaseRecord::NotEmbedded);
+        return Ok(ReleaseRecord::NoProvenance);
     };
     let unreadable = |why: String| {
         anyhow::anyhow!(
@@ -521,9 +530,6 @@ pub fn read_release(dir: &Path) -> Result<ReleaseRecord> {
         )
     };
     let embedded: Embedded = serde_json::from_str(raw).map_err(|e| unreadable(e.to_string()))?;
-    if embedded.version.is_none() && embedded.sources.is_none() {
-        return Ok(ReleaseRecord::NoProvenance(Box::new(embedded)));
-    }
     ReleaseFacts::from_embedded(embedded)
         .map(|facts| ReleaseRecord::Provenanced(Box::new(facts)))
         .map_err(unreadable)
@@ -547,19 +553,19 @@ fn describe_embedded_value(value: Option<&str>) -> String {
 // Messages
 // ---------------------------------------------------------------------------------------------
 
-pub fn format_no_provenance_error(dir: &Path) -> String {
-    let dir_display = crate::workspace::relative_to_cwd(dir);
+/// What a release without provenance is, as far as its files can say: they carry no
+/// `datapackage` key, which a `--force` build and an older `ods`'s build share.
+pub fn describe_no_provenance(dir: &Path) -> String {
     format!(
-        "✖ {} has no provenance: it was built from an archive ods couldn't match to a TRUD release\n  To cite or publish it, get the archive through ods trud pull.",
-        dir_display.display()
+        "{}'s Parquet files carry no provenance: it was built from an archive ods couldn't match to a TRUD release, or by an older ods",
+        crate::workspace::relative_to_cwd(dir).display()
     )
 }
 
-pub fn format_not_embedded_error(dir: &Path) -> String {
-    let dir_display = crate::workspace::relative_to_cwd(dir);
+pub fn format_no_provenance_error(dir: &Path) -> String {
     format!(
-        "✖ {}'s Parquet files carry no provenance: an older ods built them\n  Rebuild it with `ods make`, or pull it again with `ods pull --force`.",
-        dir_display.display()
+        "✖ {}\n  To cite or publish it, get the archive through ods trud pull and build it with ods make, or pull the release with ods pull.",
+        describe_no_provenance(dir)
     )
 }
 
@@ -568,8 +574,7 @@ pub fn format_not_embedded_error(dir: &Path) -> String {
 pub fn format_record_refusal(dir: &Path, record: &ReleaseRecord) -> Option<String> {
     match record {
         ReleaseRecord::Provenanced(_) => None,
-        ReleaseRecord::NoProvenance(_) => Some(format_no_provenance_error(dir)),
-        ReleaseRecord::NotEmbedded => Some(format_not_embedded_error(dir)),
+        ReleaseRecord::NoProvenance => Some(format_no_provenance_error(dir)),
         ReleaseRecord::NoFiles => Some(format!(
             "✖ No Parquet files found in {}",
             crate::workspace::relative_to_cwd(dir).display()
@@ -812,17 +817,9 @@ mod tests {
     }
 
     #[test]
-    fn test_without_provenance_has_no_version_and_no_sources() {
-        let json = Embedded::without_provenance().to_compact_json().unwrap();
-        assert!(!json.contains("\"version\""));
-        assert!(!json.contains("\"sources\""));
-        assert!(json.starts_with(r#"{"name":"ods-data","licenses":"#));
-    }
-
-    #[test]
     fn test_facts_refuse_a_version_that_disagrees_with_its_source() {
         let mut embedded = record().embedded("0.1.0").unwrap();
-        embedded.version = Some("2026-09-24_0.1.0".to_string());
+        embedded.version = "2026-09-24_0.1.0".to_string();
         let err = ReleaseFacts::from_embedded(embedded).unwrap_err();
         assert!(err.contains("doesn't start with its source's version"), "{err}");
     }

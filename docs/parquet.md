@@ -71,21 +71,21 @@ This is where the parquet and duckdb (or pandas, polars, pyarrows etc) get inter
 
 ```sql
 -- find total and active entities per dataset release
-SELECT trud_release_date, count(*) AS n_rows,
+SELECT publication_date, count(*) AS n_rows,
        count(*) FILTER (WHERE status = 'active') AS n_active
 FROM read_parquet('ods_data/releases/*/orgs.parquet')
 GROUP BY 1 ORDER BY 1;
 ```
 ```
-┌───────────────────┬────────┬──────────┐
-│ trud_release_date │ n_rows │ n_active │
-│       date        │ int64  │  int64   │
-├───────────────────┼────────┼──────────┤
-│ 2026-05-29        │ 368495 │   216564 │
-│ 2026-06-26        │ 369400 │   216417 │
-│ 2026-07-31        │ 370257 │   216886 │
-│ 2026-08-28        │ 370917 │   217059 │
-└───────────────────┴────────┴──────────┘
+┌──────────────────┬────────┬──────────┐
+│ publication_date │ n_rows │ n_active │
+│       date       │ int64  │  int64   │
+├──────────────────┼────────┼──────────┤
+│ 2026-05-26       │ 368495 │   216564 │
+│ 2026-06-22       │ 369400 │   216417 │
+│ 2026-07-28       │ 370257 │   216886 │
+│ 2026-08-27       │ 370917 │   217059 │
+└──────────────────┴────────┴──────────┘
 ```
 
 
@@ -120,7 +120,7 @@ period starts later; [nhs.md](./nhs.md#a-code-published-twice) names the two cas
 | `operational_start` | `DATE` | yes | Populated on every row |
 | `operational_end` | `DATE` | yes | Set on inactive rows, and on 623 active ones with a closure already scheduled |
 | `last_changed` | `DATE` | yes | ODS's own last-modified date |
-| `trud_release_date` | `DATE` | no | The release this row came from |
+| `publication_date` | `DATE` | no | NHS England's publication date for the release: what the row is as of |
 
 `role_names` is the column you want for _what is this thing_. `primary_role_code`
 is often administrative rather than descriptive — it files most GP practices under
@@ -144,7 +144,7 @@ One row per role held. An organisation holding three roles has three rows.
 | `operational_start` | `DATE` | yes | |
 | `operational_end` | `DATE` | yes | |
 | `role_id` | `VARCHAR` | no | ODS's identifier for this holding. Stable across releases |
-| `trud_release_date` | `DATE` | no | |
+| `publication_date` | `DATE` | no | |
 
 The full vocabulary is `SELECT DISTINCT role_code, role_name FROM 'roles.parquet'`
 — 209 of them in the current release. `ods role` lists them with holder counts.
@@ -172,7 +172,7 @@ record, so `source_code` is the organisation making the statement.
 | `operational_start` | `DATE` | yes | |
 | `operational_end` | `DATE` | yes | |
 | `rel_id` | `VARCHAR` | no | ODS's identifier for this relationship. Stable across releases |
-| `trud_release_date` | `DATE` | no | |
+| `publication_date` | `DATE` | no | |
 
 The types in the current release:
 
@@ -201,7 +201,7 @@ One row per succession event.
 | `successor_code` | `VARCHAR` | no | The organisation that succeeded it |
 | `legal_start` | `DATE` | no | When it took effect |
 | `succession_id` | `VARCHAR` | no | ODS's identifier for this event. Stable across releases |
-| `trud_release_date` | `DATE` | no | |
+| `publication_date` | `DATE` | no | |
 
 This is the edge list. `orgs.successor_codes` and `orgs.predecessor_codes` hold
 the whole chain — not just the next step — so you never have to walk it yourself.
@@ -254,7 +254,7 @@ Most succession questions need no join. `orgs.successor_codes` and
 
 **Never `NATURAL JOIN` these tables.** `roles` shares more than its key with `orgs`:
 `legal_start`, `legal_end`, `operational_start`, `operational_end` and
-`trud_release_date` too, so a natural join matches on the dates as well and silently
+`publication_date` too, so a natural join matches on the dates as well and silently
 drops rows.
 
 ```sql
@@ -288,9 +288,29 @@ Six rules, and they explain nearly every decision here.
   `ods`, where it can be revised, not baked into files people have cited. Use
   `ods find`, `ods info` and the [recipes in queries.md][queries.md].
 
+## `publication_date`: what a row is as of
+
+Every row of every table carries `publication_date`: the date NHS England published the
+release, verbatim from the XML's `<Manifest><PublicationDate value="…"/>`. It's the date a row
+is judged "as of". `ods find`'s rule for open is `status = 'active' AND (legal_end IS NULL OR
+legal_end > publication_date)`, and a query that compares with it, never with `current_date`,
+answers the same way on the same file whenever you run it.
+
+It's NHS's date rather than TRUD's because the files NHS publishes carry it. TRUD's release
+date names the release (its directory, its tag and the embedded `sources[0].version`), but an
+archive `ods` couldn't match to a TRUD release has no TRUD date, only a guess from its file
+name. The XML always says when NHS published it, so every build gets a sourced date with
+nothing typed in. `ods make` refuses XML files that don't carry one, or don't agree on it.
+
+It's a few days before the TRUD release date. Of the 98 releases from June 2018 to September
+2026, NHS published 58 four days before TRUD's date, and the rest between 1 and 7 days before.
+The 2026-09-25 release was published on 2026-09-21. The full file and archive file `ods` builds
+from always share one date; 2019-05-31 holds a second, older full file, and
+[nhs.md](./nhs.md#a-zip-holding-two-full-files) says which is read.
+
 ## Point-in-time queries
 
-`orgs.parquet` holds every organisation as of the release date, with its status then.
+`orgs.parquet` holds every organisation as of its `publication_date`, with its status then.
 For an earlier date, filter on the operational dates:
 
 ```sql
@@ -311,31 +331,9 @@ reparenting are all recoverable [across an archive](./queries.md#across-releases
 
 ## Data Package
 
-`ods make` and `ods pull` write a `datapackage.json` beside the Parquet files to surface the
-provenance, source license, and data schema in an open [Data Package v2][datapackage] format.
-
-It's generated from metadata baked into the parquet files, to reduce the surface for determinism
-issue around canonical JSON formatting. Instead it's a view we generate during `ods pull`
-
-The four list columns in `orgs` are declared as Table Schema's `array` type.
-Its `list` type, with `itemType: string`, is the closer fit for a Parquet `LIST<VARCHAR>`, but
-it's a delimited string in the spec's lexical form, and the published v2 profile
-(`datapackage.org/profiles/2.0`) has no `list` type, so a descriptor that used it would fail that
-profile. The fix is merged upstream, to be published as v2.1 ([datapackage#1089][dp-1089]). When
-a v2.1 profile is published, the view declares the four columns as `list` with `itemType:
-string`. The view isn't part of any digest, so that needs no dataset version bump.
-
-Note that at the time of writing frictionless-py reads Parquet through pandas, which hands list cells over as NumPy arrays, so every list column reads as a type error. It also skips counting and hashing Parquet files, so every declared `bytes` and `hash` fails. Both are bugs in its Parquet reader, not in the release. It needs `pandas` installed alongside the `parquet` extra ([#1773][fl-1773]), and loads each file whole ([#1203][fl-1203]).
-
-To check a release's files against its descriptor today:
-
-```console
-$ ods make datapackage -o - | jq -r '.resources[] | "\(.hash[7:])  \(.path)"' | shasum -a 256 -c
-orgs.parquet: OK
-roles.parquet: OK
-relationships.parquet: OK
-successions.parquet: OK
-```
+`ods make` and `ods pull` write a `datapackage.json` beside the Parquet files: a [Data
+Package][datapackage] view of the release, with each table's Table Schema.
+[datapackage.md](./datapackage.md) describes it, and what Frictionless tools make of it.
 
 ## Provenance
 
@@ -369,7 +367,7 @@ the dataset version, so it doesn't differ between builders.
 ## Versioning
 
 Three numbers, three jobs:
-- `trud_release_date` — which source? (every Parquet row, the embedded object's `sources[0].version`, and the manifest's `fyi.ods.source.version` annotation).
+- the TRUD release date — which source? (the embedded object's `sources[0].version`, the release's directory and tag, and its row in the release index). Every row carries NHS's own `publication_date`, a few days earlier.
 - `dataset_version` — which cut, and which attempt at it? (SemVer, after the `_` in the embedded object's `version` and the manifest's `org.opencontainers.image.version`, and on the release index row).
 - `ods` crate version — which tool? (`Cargo.toml`; for a published dataset, the `tool_version` on its release index row).
 
@@ -422,9 +420,6 @@ Join on `ods_code`, always — [worked through here](./queries.md#names-are-not-
 
 [queries.md]: ./queries.md
 [datapackage]: https://datapackage.org/
-[fl-1773]: https://github.com/frictionlessdata/frictionless-py/issues/1773
-[fl-1203]: https://github.com/frictionlessdata/frictionless-py/issues/1203
-[dp-1089]: https://github.com/frictionlessdata/datapackage/issues/1089
 [Croissant]: https://docs.mlcommons.org/croissant/
 [ods-model]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 [ods-relationships]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Relationships_571324965.html

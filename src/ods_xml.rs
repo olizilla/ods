@@ -273,8 +273,9 @@ pub fn cleanup_scratch() {
 /// TRUD filenames already encode version, date and sequence and never change
 /// for a given release; length is included so a truncated or replaced download
 /// misses the cache rather than silently reusing a stale unpack. The trailing
-/// `v2` separates entries that hold both XML files from older ones that held
-/// only the full file, which would otherwise read as a complete unpack.
+/// `v3` separates entries from older ones: `v1` held only the full file, and
+/// `v2` was unpacked before an inner zip holding more than one XML file was
+/// refused, so either could read as a complete unpack.
 fn cache_key(zip_path: &Path) -> Result<String> {
     let stem = zip_path
         .file_stem()
@@ -289,7 +290,7 @@ fn cache_key(zip_path: &Path) -> Result<String> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    Ok(format!("{stem}_{len}_{mtime}_v2"))
+    Ok(format!("{stem}_{len}_{mtime}_v3"))
 }
 
 /// True when an XML file name says it is the archive product.
@@ -322,15 +323,33 @@ fn cached_xmls(dir: &Path) -> Option<Vec<PathBuf>> {
     }
 }
 
+/// A release's XML files, full first, and a `!` line for each inner zip that held more XML
+/// files than the one the release was built from, naming what was skipped.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReleaseXml {
+    pub paths: Vec<PathBuf>,
+    pub skipped: Vec<String>,
+}
+
+/// The file in the cache entry that keeps an unpack's `skipped` lines, so a cache hit reports
+/// what the unpack skipped.
+const SKIPPED_NOTES_FILE: &str = "skipped.txt";
+
 /// Extracts the release's XML files, full first, reusing a previous unpack when one exists.
 ///
-/// A TRUD release holds `fullfile.zip` and `archive.zip`, and both are extracted.
-/// A zip holding XML directly is one file supplied as it is.
+/// A TRUD release holds `fullfile.zip` and `archive.zip`, and one XML file from each is
+/// extracted: the pair `choose_pair` picks. A zip holding XML directly is one file supplied as it is.
 ///
 /// Unpacking is ~830 MB and previously ran on every invocation, leaving the
 /// result behind in the temp directory each time. Now it happens once per
 /// release and is shared.
 pub fn extract_xml_from_zip(zip_path: &Path) -> Result<Vec<PathBuf>> {
+    extract_release_xml(zip_path, None).map(|x| x.paths)
+}
+
+/// `extract_xml_from_zip`, choosing between pairs by `release_date` (TRUD's), and returning the
+/// lines naming what it skipped.
+pub fn extract_release_xml(zip_path: &Path, release_date: Option<&str>) -> Result<ReleaseXml> {
     sweep_stale_extractions();
 
     // Default path: extract to process scratch, cleaned up when the command
@@ -346,14 +365,15 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<Vec<PathBuf>> {
         let staging = process_scratch()?.join(format!("x_{}", unique_suffix()));
         std::fs::create_dir_all(&staging)
             .with_context(|| format!("creating extraction directory {}", staging.display()))?;
-        return extract_into(zip_path, &staging);
+        return extract_into(zip_path, &staging, release_date);
     };
 
-    let key = cache_key(zip_path)?;
+    // The pair chosen can depend on TRUD's date, so the date is part of the key.
+    let key = format!("{}_{}", cache_key(zip_path)?, release_date.unwrap_or("undated"));
     let cache_dir = root.join(&key);
 
-    if let Some(xmls) = cached_xmls(&cache_dir) {
-        return Ok(xmls);
+    if let Some(cached) = cached_release_xml(&cache_dir) {
+        return Ok(cached);
     }
 
     std::fs::create_dir_all(&root)
@@ -368,7 +388,7 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<Vec<PathBuf>> {
     ));
     std::fs::create_dir_all(&staging)?;
 
-    let extracted = match extract_into(zip_path, &staging) {
+    let extracted = match extract_into(zip_path, &staging, release_date) {
         Ok(p) => p,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&staging);
@@ -379,47 +399,177 @@ pub fn extract_xml_from_zip(zip_path: &Path) -> Result<Vec<PathBuf>> {
     // Keep only the XML; the intermediate inner zips are another ~38 MB.
     if let Ok(entries) = std::fs::read_dir(&staging) {
         for entry in entries.flatten() {
-            if !extracted.contains(&entry.path()) {
+            if !extracted.paths.contains(&entry.path()) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
+    if !extracted.skipped.is_empty() {
+        std::fs::write(staging.join(SKIPPED_NOTES_FILE), extracted.skipped.join("\n"))?;
+    }
 
-    let published: Vec<PathBuf> = extracted
-        .iter()
-        .map(|p| cache_dir.join(p.file_name().unwrap()))
-        .collect();
+    let published = ReleaseXml {
+        paths: extracted.paths.iter().map(|p| cache_dir.join(p.file_name().unwrap())).collect(),
+        skipped: extracted.skipped.clone(),
+    };
 
     match std::fs::rename(&staging, &cache_dir) {
         Ok(()) => Ok(published),
         Err(_) => {
             // Another process published this release first: prefer theirs and
             // discard our copy.
-            if let Some(xmls) = cached_xmls(&cache_dir) {
+            if let Some(cached) = cached_release_xml(&cache_dir) {
                 let _ = std::fs::remove_dir_all(&staging);
-                return Ok(xmls);
+                return Ok(cached);
             }
             Ok(extracted)
         }
     }
 }
 
-/// Copies the one XML in `zip_path` into `dest`.
-fn extract_single_xml(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
-    let file = File::open(zip_path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let xml_name = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
-        .find(|n| n.to_lowercase().ends_with(".xml"))
-        .with_context(|| format!("No XML file found inside {}", zip_path.display()))?;
-    let mut xml_file = archive.by_name(&xml_name)?;
-    let out_path = dest.join(Path::new(&xml_name).file_name().unwrap());
+/// A cached unpack: its XML files, full first, and the lines it recorded about skipped files.
+fn cached_release_xml(dir: &Path) -> Option<ReleaseXml> {
+    let paths = cached_xmls(dir)?;
+    let skipped = std::fs::read_to_string(dir.join(SKIPPED_NOTES_FILE))
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+    Some(ReleaseXml { paths, skipped })
+}
+
+/// A release zip with no one full file and archive file to build from: the `Display` is the
+/// whole `✖` block, naming every file and its `PublicationDate`.
+#[derive(Debug)]
+pub struct NoPairToBuild(pub String);
+
+impl std::fmt::Display for NoPairToBuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoPairToBuild {}
+
+/// One XML file inside one of a release's inner zips, with the `PublicationDate` its manifest
+/// carries.
+#[derive(Debug, Clone)]
+struct InnerXml {
+    inner: String,
+    name: String,
+    date: Option<String>,
+}
+
+/// The XML files in an inner zip on disk, in the order the zip stores them, each with its
+/// `PublicationDate`. Reads only the manifest at the top of each file.
+fn list_inner_xml(inner_zip_path: &Path, inner: &str) -> Result<Vec<InnerXml>> {
+    let mut archive = zip::ZipArchive::new(File::open(inner_zip_path)?)?;
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.name_for_index(i))
+        .filter(|n| n.to_lowercase().ends_with(".xml"))
+        .map(|n| n.to_string())
+        .collect();
+    let mut files = Vec::with_capacity(names.len());
+    for name in names {
+        let entry = archive.by_name(&name)?;
+        let header = parse_manifest_header(Reader::from_reader(BufReader::new(entry)))
+            .with_context(|| format!("reading {name}'s manifest in {inner}"))?;
+        files.push(InnerXml { inner: inner.to_string(), name, date: header.publication_date });
+    }
+    Ok(files)
+}
+
+/// The days between two `YYYY-MM-DD` dates, or `None` when either isn't one.
+fn days_apart(a: &str, b: &str) -> Option<i64> {
+    let parse = |d: &str| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok();
+    Some((parse(a)? - parse(b)?).num_days().abs())
+}
+
+/// Every file of both inner zips, one per line, for a refusal block.
+fn list_for_refusal(full: &[InnerXml], archive: &[InnerXml]) -> String {
+    let files: Vec<&InnerXml> = full.iter().chain(archive).collect();
+    let inner_w = files.iter().map(|f| f.inner.len()).max().unwrap_or(0);
+    let name_w = files.iter().map(|f| f.name.len()).max().unwrap_or(0);
+    files
+        .iter()
+        .map(|f| {
+            let date = match f.date.as_deref() {
+                Some(d) => format!("PublicationDate {d}"),
+                None => "no PublicationDate".to_string(),
+            };
+            format!("\n  {:<inner_w$}  {:<name_w$}  {}", f.inner, f.name, date)
+        })
+        .collect()
+}
+
+/// Picks the full file and archive file a release is built from: the one pair with the same
+/// `PublicationDate`. When more than one pair qualifies, the one published nearest TRUD's
+/// release date; without a TRUD date (a `--force` build), or when two are as near, it refuses
+/// rather than guess. When none qualifies, it refuses. Each refusal names every file and its date.
+fn choose_pair(outer: &str, full: &[InnerXml], archive: &[InnerXml], release_date: Option<&str>) -> Result<(usize, usize)> {
+    let mut pairs: Vec<(usize, usize, &str)> = Vec::new();
+    for (i, f) in full.iter().enumerate() {
+        for (j, a) in archive.iter().enumerate() {
+            if let (Some(fd), Some(ad)) = (f.date.as_deref(), a.date.as_deref()) {
+                if fd == ad {
+                    pairs.push((i, j, fd));
+                }
+            }
+        }
+    }
+    let files = list_for_refusal(full, archive);
+    match pairs.len() {
+        0 => Err(NoPairToBuild(format!(
+            "✖ {outer} holds no full file and archive file with the same PublicationDate{files}\n  Every row is dated as of NHS's publication date, so ods can't build this release until that's understood."
+        ))
+        .into()),
+        1 => Ok((pairs[0].0, pairs[0].1)),
+        n => {
+            let Some(release_date) = release_date else {
+                return Err(NoPairToBuild(format!(
+                    "✖ {outer} holds {n} pairs of full and archive files with the same PublicationDate{files}\n  A build ods can't match to a TRUD release has no release date to choose the nearest by, and ods won't guess."
+                ))
+                .into());
+            };
+            let distance = |date: &str| days_apart(date, release_date).unwrap_or(i64::MAX);
+            let nearest = pairs.iter().map(|(_, _, d)| distance(d)).min().unwrap_or(i64::MAX);
+            let at_nearest: Vec<_> = pairs.iter().filter(|(_, _, d)| distance(d) == nearest).collect();
+            if at_nearest.len() != 1 || nearest == i64::MAX {
+                return Err(NoPairToBuild(format!(
+                    "✖ {outer} holds {n} pairs of full and archive files with the same PublicationDate, and none nearer TRUD's release date, {release_date}, than the others{files}\n  ods won't guess which NHS meant, so this release can't be built until that's understood."
+                ))
+                .into());
+            }
+            Ok((at_nearest[0].0, at_nearest[0].1))
+        }
+    }
+}
+
+/// The `!` line naming what an inner zip held besides the file the release was built from.
+fn skipped_note(label: &str, kind: &str, files: &[InnerXml], chosen: usize) -> Option<String> {
+    if files.len() < 2 {
+        return None;
+    }
+    let describe = |f: &InnerXml| format!("{} ({})", f.name, f.date.as_deref().unwrap_or("no PublicationDate"));
+    let skipped: Vec<String> = files.iter().enumerate().filter(|(i, _)| *i != chosen).map(|(_, f)| describe(f)).collect();
+    Some(format!(
+        "! {label}: {} holds {} {kind} files; built from {}, skipped {}",
+        files[chosen].inner,
+        files.len(),
+        describe(&files[chosen]),
+        skipped.join(", ")
+    ))
+}
+
+/// Copies the entry `name` of the zip at `zip_path` into `dest`.
+fn extract_entry(zip_path: &Path, name: &str, dest: &Path) -> Result<PathBuf> {
+    let mut archive = zip::ZipArchive::new(File::open(zip_path)?)?;
+    let mut xml_file = archive.by_name(name)?;
+    let out_path = dest.join(Path::new(name).file_name().unwrap());
     let mut out = File::create(&out_path)?;
     std::io::copy(&mut xml_file, &mut out)?;
     Ok(out_path)
 }
 
-fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
+fn extract_into(zip_path: &Path, dest: &Path, release_date: Option<&str>) -> Result<ReleaseXml> {
     let file = File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
@@ -439,6 +589,7 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
     // A TRUD release: `fullfile.zip` and `archive.zip`, both required. The
     // archive holds every organisation closed before NHS's cut-off, so a build
     // without it would look complete and be missing tens of thousands of them.
+    // XML files beside them in the release zip (2018-12-14 has one) aren't read.
     if !inner_zip_names.is_empty() {
         let full_inner = inner_zip_names
             .iter()
@@ -452,36 +603,37 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
 
         let Some(full_inner) = full_inner else {
             anyhow::bail!(
-                "No full dataset ZIP found inside archive {}. Package contains only historical 'archive.zip'.",
+                "✖ {} holds archive.zip but no fullfile.zip\n  A TRUD release zip holds fullfile.zip and archive.zip, each with the release's XML: without fullfile.zip the live organisations would be missing.",
                 zip_path.display()
             );
         };
         let Some(archive_inner) = archive_inner else {
             anyhow::bail!(
-                "No archive ZIP found inside {}. A TRUD release holds both fullfile.zip and archive.zip, and without archive.zip the organisations closed before NHS's cut-off would be missing.",
+                "✖ {} holds fullfile.zip but no archive.zip\n  A TRUD release zip holds fullfile.zip and archive.zip, each with the release's XML: without archive.zip the organisations closed before NHS's cut-off would be missing.",
                 zip_path.display()
             );
         };
 
-        // The two inner zips read different entries of the release zip and write different names
-        // into `dest`, so each is copied out and unpacked on a thread of its own, each with its
-        // own handle on the release zip. The XML files come back full first.
-        let results: Vec<Result<PathBuf>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = [&full_inner, &archive_inner]
+        // The two inner zips are separate entries of the release zip, so each is copied out and
+        // read on a thread of its own, with its own handle on the release zip.
+        let inner_zips = [&full_inner, &archive_inner];
+        let listed: Vec<Result<(PathBuf, Vec<InnerXml>)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = inner_zips
                 .into_iter()
                 .map(|inner| {
-                    scope.spawn(move || -> Result<PathBuf> {
+                    scope.spawn(move || -> Result<(PathBuf, Vec<InnerXml>)> {
                         let mut outer = zip::ZipArchive::new(File::open(zip_path)?)?;
                         let mut inner_file = outer.by_name(inner)?;
                         let inner_zip_path = dest.join(Path::new(inner).file_name().unwrap());
                         let mut out = File::create(&inner_zip_path)?;
                         std::io::copy(&mut inner_file, &mut out)?;
                         drop(out);
-
-                        // Extract without re-entering the cache: the cache is keyed on the
-                        // outer release archive, not on intermediate inner zips.
-                        extract_single_xml(&inner_zip_path, dest)
-                            .with_context(|| format!("extracting {inner} from {}", zip_path.display()))
+                        let files = list_inner_xml(&inner_zip_path, inner)
+                            .with_context(|| format!("reading {inner} from {}", zip_path.display()))?;
+                        if files.is_empty() {
+                            anyhow::bail!("No XML file found inside {inner} in {}", zip_path.display());
+                        }
+                        Ok((inner_zip_path, files))
                     })
                 })
                 .collect();
@@ -490,8 +642,45 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
                 .map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("an extraction thread panicked"))))
                 .collect()
         });
-        let xmls = results.into_iter().collect::<Result<Vec<PathBuf>>>()?;
-        return Ok(xmls);
+        let mut listed = listed.into_iter().collect::<Result<Vec<_>>>()?;
+        let (archive_zip, archive_files) = listed.pop().expect("two inner zips");
+        let (full_zip, full_files) = listed.pop().expect("two inner zips");
+
+        let outer_name = zip_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| zip_path.display().to_string());
+        let (fi, ai) = choose_pair(&outer_name, &full_files, &archive_files, release_date)?;
+        let label = release_date.unwrap_or(&outer_name);
+        let skipped: Vec<String> = [
+            skipped_note(label, "full", &full_files, fi),
+            skipped_note(label, "archive", &archive_files, ai),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        // The two chosen files are unpacked on threads of their own. They come back full first.
+        let chosen = [(&full_zip, &full_files[fi]), (&archive_zip, &archive_files[ai])];
+        let results: Vec<Result<PathBuf>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = chosen
+                .into_iter()
+                .map(|(inner_zip_path, xml)| {
+                    scope.spawn(move || {
+                        // Extract without re-entering the cache: the cache is keyed on the
+                        // outer release archive, not on intermediate inner zips.
+                        extract_entry(inner_zip_path, &xml.name, dest)
+                            .with_context(|| format!("extracting {} from {} in {}", xml.name, xml.inner, zip_path.display()))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("an extraction thread panicked"))))
+                .collect()
+        });
+        let paths = results.into_iter().collect::<Result<Vec<PathBuf>>>()?;
+        return Ok(ReleaseXml { paths, skipped });
     }
 
     // A zip holding XML directly is one file supplied as it is.
@@ -517,25 +706,34 @@ fn extract_into(zip_path: &Path, dest: &Path) -> Result<Vec<PathBuf>> {
         let mut out = File::create(&extracted_xml_path)?;
         std::io::copy(&mut xml_file, &mut out)?;
 
-        return Ok(vec![extracted_xml_path]);
+        return Ok(ReleaseXml { paths: vec![extracted_xml_path], skipped: Vec::new() });
     }
 
-    anyhow::bail!("No XML or ZIP files found inside archive {}", zip_path.display())
+    anyhow::bail!(
+        "✖ {} holds no fullfile.zip, archive.zip or XML file\n  A TRUD release zip holds fullfile.zip and archive.zip, each with the release's XML.",
+        zip_path.display()
+    )
 }
 
 /// Finds the release's XML files, full first: a bare XML, a TRUD zip, or a directory holding one.
 pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
+    find_release_xml(input_path, None).map(|x| x.paths)
+}
+
+/// `find_xml_file`, choosing between a TRUD zip's pairs by `release_date` (TRUD's), and
+/// returning the lines naming what it skipped.
+pub fn find_release_xml(input_path: &Path, release_date: Option<&str>) -> Result<ReleaseXml> {
     if input_path.is_file() {
         if input_path.extension().is_some_and(|ext| ext == "zip") {
-            return extract_xml_from_zip(input_path);
+            return extract_release_xml(input_path, release_date);
         }
         if input_path.extension().is_some_and(|ext| ext == "xml") {
-            return Ok(vec![input_path.to_path_buf()]);
+            return Ok(ReleaseXml { paths: vec![input_path.to_path_buf()], skipped: Vec::new() });
         }
         if let Some(parent) = input_path.parent() {
-            return find_xml_file(parent);
+            return find_release_xml(parent, release_date);
         }
-        return Ok(vec![input_path.to_path_buf()]);
+        return Ok(ReleaseXml { paths: vec![input_path.to_path_buf()], skipped: Vec::new() });
     }
 
     let mut candidates = Vec::new();
@@ -574,12 +772,15 @@ pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
     let mut failures: Vec<String> = Vec::new();
     for path in &candidates {
         if path.extension().is_some_and(|ext| ext == "zip") {
-            match extract_xml_from_zip(path) {
-                Ok(xmls) => return Ok(xmls),
+            match extract_release_xml(path, release_date) {
+                Ok(xml) => return Ok(xml),
+                // A release zip that unpacks but has no one pair to build from is the answer,
+                // not a reason to try the next candidate.
+                Err(e) if e.downcast_ref::<NoPairToBuild>().is_some() => return Err(e),
                 Err(e) => failures.push(format!("  {}: {e:#}", path.display())),
             }
         } else if path.extension().is_some_and(|ext| ext == "xml") {
-            return Ok(vec![path.clone()]);
+            return Ok(ReleaseXml { paths: vec![path.clone()], skipped: Vec::new() });
         }
     }
 
@@ -596,6 +797,7 @@ pub fn find_xml_file(input_path: &Path) -> Result<Vec<PathBuf>> {
         input_path.display(),
         failures.join("\n")
     )
+
 }
 
 /// Turns the parsed organisations into records, keyed and ordered by ODS code.
@@ -696,6 +898,8 @@ fn get_manifest_attr<B: std::io::BufRead>(e: &BytesStart, reader: &Reader<B>) ->
 pub struct ManifestHeader {
     pub record_count: Option<usize>,
     pub primary_role_scope: Option<Vec<String>>,
+    /// `<PublicationDate value="…"/>`: the date NHS England published the file, verbatim.
+    pub publication_date: Option<String>,
 }
 
 pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Result<ManifestHeader> {
@@ -714,6 +918,8 @@ pub fn parse_manifest_header<R: std::io::BufRead>(mut reader: Reader<R>) -> Resu
                 }
                 if name_ref == b"RecordCount" {
                     header.record_count = get_manifest_attr(e, &reader).and_then(|s| s.parse::<usize>().ok());
+                } else if name_ref == b"PublicationDate" {
+                    header.publication_date = get_manifest_attr(e, &reader);
                 } else if name_ref.eq_ignore_ascii_case(b"PrimaryRole") {
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref().eq_ignore_ascii_case(b"id") {
@@ -941,13 +1147,57 @@ pub fn parse_release_reporting(
     Ok(release)
 }
 
-/// Finds a release's XML files at `input` and parses them as one release.
-/// The record count an XML file's `<ManifestHeader>` declares, read without parsing the file.
-pub fn declared_record_count(xml_path: &Path) -> Result<Option<usize>> {
-    let file = File::open(xml_path).with_context(|| format!("opening {}", xml_path.display()))?;
-    Ok(parse_manifest_header(Reader::from_reader(BufReader::new(file)))?.record_count)
+/// Each XML file's name and `<Manifest>`, read without parsing the files, in the order given.
+pub fn read_manifest_headers(xml_paths: &[PathBuf]) -> Result<Vec<(String, ManifestHeader)>> {
+    xml_paths
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+            let header = parse_manifest_header(Reader::from_reader(BufReader::new(file)))
+                .with_context(|| format!("reading {name}'s manifest"))?;
+            Ok((name, header))
+        })
+        .collect()
 }
 
+/// The date every row of a release is as of: the `PublicationDate` every XML file's manifest
+/// carries, which must be a date and the same in every file. Anything else refuses, with a `✖`
+/// block naming each file and what it says. There's no fallback: not the file name, not TRUD's
+/// release date.
+pub fn agreed_publication_date(headers: &[(String, ManifestHeader)]) -> Result<String> {
+    let is_date = |d: &str| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok();
+    let first = headers.first().and_then(|(_, h)| h.publication_date.as_deref());
+    let all_dated = headers
+        .iter()
+        .all(|(_, h)| h.publication_date.as_deref().is_some_and(is_date));
+    let agree = headers.iter().all(|(_, h)| h.publication_date.as_deref() == first);
+    if let (Some(date), true, true) = (first, all_dated, agree) {
+        return Ok(date.to_string());
+    }
+
+    let mut msg = if all_dated {
+        "✖ The release's XML files don't agree on when NHS England published them".to_string()
+    } else {
+        "✖ The release's XML doesn't say when NHS England published it".to_string()
+    };
+    let width = headers.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    for (name, header) in headers {
+        let says = match header.publication_date.as_deref() {
+            Some(d) if is_date(d) => format!("PublicationDate {d}"),
+            Some(d) => format!("PublicationDate '{d}', not a date"),
+            None => "no PublicationDate".to_string(),
+        };
+        msg.push_str(&format!("\n  {name:<width$}  {says}"));
+    }
+    msg.push_str("\n  Every row is dated as of NHS's publication date, so ods can't build this release without one.");
+    anyhow::bail!(msg)
+}
+
+/// Finds a release's XML files at `input` and parses them as one release.
 pub fn parse_release_at(input: &Path) -> Result<ParsedRelease> {
     parse_release(&find_xml_file(input)?)
 }
@@ -1710,7 +1960,7 @@ mod tests {
 
     fn manifest_xml(orgs: &[String]) -> String {
         format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" /><RecordCount value="{}" /></Manifest><Organisations>{}</Organisations></OrgRefData>"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" /><PublicationDate value="2026-08-27" /><RecordCount value="{}" /></Manifest><Organisations>{}</Organisations></OrgRefData>"#,
             orgs.len(),
             orgs.concat()
         )
@@ -1870,6 +2120,118 @@ mod tests {
         let err = format!("{:#}", parse_release_at(&zip).unwrap_err());
 
         assert!(err.contains("archive.zip"), "{err}");
+        Ok(())
+    }
+
+    /// A TRUD-shaped zip whose inner zips hold the given XML files, each named for its
+    /// `PublicationDate`: `(file name, date)`.
+    fn dated_release_zip(dir: &Path, full: &[(&str, &str)], archive: &[(&str, &str)]) -> PathBuf {
+        let dated = |date: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2-0-0" /><PublicationDate value="{date}" /><RecordCount value="0" /></Manifest><Organisations></Organisations></OrgRefData>"#
+            )
+        };
+        let inner = |files: &[(&str, &str)]| {
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            {
+                let mut zip = zip::ZipWriter::new(&mut cursor);
+                for (name, date) in files {
+                    zip.start_file(*name, stored()).unwrap();
+                    zip.write_all(dated(date).as_bytes()).unwrap();
+                }
+                zip.finish().unwrap();
+            }
+            cursor.into_inner()
+        };
+        let path = dir.join("hscorgrefdataxml_data_5.0.0_20190531000001.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        zip.start_file("archive.zip", stored()).unwrap();
+        zip.write_all(&inner(archive)).unwrap();
+        zip.start_file("fullfile.zip", stored()).unwrap();
+        zip.write_all(&inner(full)).unwrap();
+        zip.finish().unwrap();
+        path
+    }
+
+    fn names(xml: &ReleaseXml) -> Vec<String> {
+        xml.paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    const FULL_13: (&str, &str) = ("HSCOrgRefData_Full_20190513.xml", "2019-05-13");
+    const FULL_28: (&str, &str) = ("HSCOrgRefData_Full_20190528.xml", "2019-05-28");
+    const ARCHIVE_13: (&str, &str) = ("HSCOrgRefData_Archive_20190513.xml", "2019-05-13");
+    const ARCHIVE_28: (&str, &str) = ("HSCOrgRefData_Archive_20190528.xml", "2019-05-28");
+
+    /// 2019-05-31's shape: `fullfile.zip` holds two full files a fortnight apart, beside one
+    /// archive file. The one pair with the same PublicationDate is built, with or without a TRUD
+    /// date, and the file skipped is named.
+    #[test]
+    fn one_matching_pair_among_extra_files_is_chosen_and_the_rest_named() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = dated_release_zip(dir.path(), &[FULL_13, FULL_28], &[ARCHIVE_28]);
+        for (date, label) in [(Some("2019-05-31"), "2019-05-31"), (None, "hscorgrefdataxml_data_5.0.0_20190531000001.zip")] {
+            let xml = find_release_xml(&zip, date)?;
+            assert_eq!(names(&xml), ["HSCOrgRefData_Full_20190528.xml", "HSCOrgRefData_Archive_20190528.xml"]);
+            assert_eq!(
+                xml.skipped,
+                [format!("! {label}: fullfile.zip holds 2 full files; built from HSCOrgRefData_Full_20190528.xml (2019-05-28), skipped HSCOrgRefData_Full_20190513.xml (2019-05-13)")]
+            );
+        }
+        // The directory holding it finds the same pair.
+        assert_eq!(names(&find_release_xml(dir.path(), None)?), ["HSCOrgRefData_Full_20190528.xml", "HSCOrgRefData_Archive_20190528.xml"]);
+        Ok(())
+    }
+
+    /// Two pairs qualify: with TRUD's release date the nearer is built, and without one (a
+    /// `--force` build) ods refuses rather than guess.
+    #[test]
+    fn two_qualifying_pairs_take_the_nearer_to_trud_or_refuse_without_a_date() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = dated_release_zip(dir.path(), &[FULL_13, FULL_28], &[ARCHIVE_13, ARCHIVE_28]);
+
+        let xml = find_release_xml(&zip, Some("2019-05-31"))?;
+        assert_eq!(names(&xml), ["HSCOrgRefData_Full_20190528.xml", "HSCOrgRefData_Archive_20190528.xml"]);
+        assert_eq!(xml.skipped.len(), 2, "{:?}", xml.skipped);
+        assert!(xml.skipped[1].starts_with("! 2019-05-31: archive.zip holds 2 archive files; built from HSCOrgRefData_Archive_20190528.xml (2019-05-28), skipped HSCOrgRefData_Archive_20190513.xml (2019-05-13)"));
+
+        // A date two pairs are as near as each other refuses too.
+        let tie_dir = TempDir::new()?;
+        let full_14 = ("HSCOrgRefData_Full_20190514.xml", "2019-05-14");
+        let archive_14 = ("HSCOrgRefData_Archive_20190514.xml", "2019-05-14");
+        let tied = dated_release_zip(tie_dir.path(), &[full_14, FULL_28], &[archive_14, ARCHIVE_28]);
+        let tie = find_release_xml(&tied, Some("2019-05-21")).unwrap_err();
+        assert!(tie.to_string().contains("none nearer TRUD's release date, 2019-05-21, than the others"), "{tie}");
+
+        let err = find_release_xml(&zip, None).unwrap_err();
+        assert!(err.downcast_ref::<NoPairToBuild>().is_some(), "{err:#}");
+        assert_eq!(
+            err.to_string(),
+            "✖ hscorgrefdataxml_data_5.0.0_20190531000001.zip holds 2 pairs of full and archive files with the same PublicationDate\n  \
+             fullfile.zip  HSCOrgRefData_Full_20190513.xml     PublicationDate 2019-05-13\n  \
+             fullfile.zip  HSCOrgRefData_Full_20190528.xml     PublicationDate 2019-05-28\n  \
+             archive.zip   HSCOrgRefData_Archive_20190513.xml  PublicationDate 2019-05-13\n  \
+             archive.zip   HSCOrgRefData_Archive_20190528.xml  PublicationDate 2019-05-28\n  \
+             A build ods can't match to a TRUD release has no release date to choose the nearest by, and ods won't guess."
+        );
+        Ok(())
+    }
+
+    /// No full file and archive file share a PublicationDate: refused, naming each, and the
+    /// directory search doesn't fall through to another candidate.
+    #[test]
+    fn no_qualifying_pair_refuses_naming_each_file() -> Result<()> {
+        let dir = TempDir::new()?;
+        let zip = dated_release_zip(dir.path(), &[FULL_13], &[ARCHIVE_28]);
+        for input in [zip.as_path(), dir.path()] {
+            let err = find_release_xml(input, Some("2019-05-31")).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "✖ hscorgrefdataxml_data_5.0.0_20190531000001.zip holds no full file and archive file with the same PublicationDate\n  \
+                 fullfile.zip  HSCOrgRefData_Full_20190513.xml     PublicationDate 2019-05-13\n  \
+                 archive.zip   HSCOrgRefData_Archive_20190528.xml  PublicationDate 2019-05-28\n  \
+                 Every row is dated as of NHS's publication date, so ods can't build this release until that's understood."
+            );
+        }
         Ok(())
     }
 

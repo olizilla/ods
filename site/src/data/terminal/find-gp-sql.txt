@@ -2,6 +2,6 @@
 SELECT *
 FROM 'ods_data/releases/2026-08-28/orgs.parquet'
 WHERE status = 'active'
-  AND (legal_end IS NULL OR legal_end > trud_release_date)
+  AND (legal_end IS NULL OR legal_end > publication_date)
   AND list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])
 ORDER BY ods_code;

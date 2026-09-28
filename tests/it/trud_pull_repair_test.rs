@@ -137,11 +137,8 @@ fn hold_zip(ws: &Path, release: &TrudReleaseItem, bytes: &[u8]) -> PathBuf {
     let file = fs::OpenOptions::new().write(true).open(&zip).unwrap();
     file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000))
         .unwrap();
-    fs::write(
-        dir.join(LEGACY_PROVENANCE_FILENAME),
-        r#"{"$schema":"https://ods.fyi/schema/provenance.v1.json","trud_release_date":"old"}"#,
-    )
-    .unwrap();
+    // Only the file's presence matters: nothing reads what it holds.
+    fs::write(dir.join(LEGACY_PROVENANCE_FILENAME), "{}").unwrap();
     zip
 }
 

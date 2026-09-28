@@ -251,8 +251,8 @@ fn parquet_projection_populates_date_columns() {
         "orgs.parquet legal_start is entirely null"
     );
     assert!(
-        non_null_count(&out_dir.join("orgs.parquet"), "trud_release_date") > 0,
-        "orgs.parquet trud_release_date is entirely null"
+        non_null_count(&out_dir.join("orgs.parquet"), "publication_date") > 0,
+        "orgs.parquet publication_date is entirely null"
     );
     // Role dates live on the roles holdings table.
     assert!(
@@ -264,8 +264,8 @@ fn parquet_projection_populates_date_columns() {
         "roles.parquet operational_end is entirely null"
     );
     assert!(
-        non_null_count(&out_dir.join("roles.parquet"), "trud_release_date") > 0,
-        "roles.parquet trud_release_date is entirely null"
+        non_null_count(&out_dir.join("roles.parquet"), "publication_date") > 0,
+        "roles.parquet publication_date is entirely null"
     );
 }
 

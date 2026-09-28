@@ -107,7 +107,7 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
         assert!(!output.contains("NHS Digital"), "cite format {} must NOT mention NHS Digital", fmt);
         assert!(!output.contains("HSCIC"), "cite format {} must NOT mention HSCIC", fmt);
         if fmt == "text" || fmt == "csljson" {
-            assert!(output.contains("2026-07-31"), "cite format {} must contain trud_release_date 2026-07-31", fmt);
+            assert!(output.contains("2026-07-31"), "cite format {} must contain the release date 2026-07-31", fmt);
         } else {
             assert!(output.contains("2026"), "cite format {} must contain year 2026", fmt);
         }

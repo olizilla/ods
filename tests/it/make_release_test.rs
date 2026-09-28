@@ -207,7 +207,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     // Files built from a 16-byte archive: the check reads the source's size from the files
-    rewrite_embedded(&rel_dir, |e| e.sources.as_mut().unwrap()[0].bytes = 16);
+    rewrite_embedded(&rel_dir, |e| e.sources[0].bytes = 16);
 
     let failures = perform_all_release_checks(
         &rel_dir,
@@ -228,7 +228,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
 
 /// Rewrites `rel_dir`'s files carrying dataset `version`: what the version checks below read.
 fn repack_with_version(rel_dir: &Path, version: &str) -> Result<()> {
-    rewrite_embedded(rel_dir, |e| e.version = Some(format!("2026-07-31_{version}")));
+    rewrite_embedded(rel_dir, |e| e.version = format!("2026-07-31_{version}"));
     Ok(())
 }
 
@@ -275,7 +275,7 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     // Files whose `version` names no dataset version after the source release's
-    rewrite_embedded(&rel_dir, |e| e.version = Some("2026-07-31".to_string()));
+    rewrite_embedded(&rel_dir, |e| e.version = "2026-07-31".to_string());
 
     let res = run_as(Args {
         input: Some(rel_dir),

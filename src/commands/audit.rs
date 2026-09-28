@@ -288,10 +288,7 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         anyhow::bail!("Input file does not exist: {}", input_path.display());
     }
 
-    // 1. Locate XML source file
-    let xml_paths = crate::ods_xml::find_xml_file(&input_path)?;
-
-    // 2. Discover workspace root and active release directory
+    // 1. Discover workspace root and active release directory
     let ws = match ws {
         Some(w) => w,
         None => crate::workspace::Workspace::open(args.workspace.as_deref())?,
@@ -344,8 +341,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // ------------------------------------------------------------------------
     // SECTION 1: File integrity
     // ------------------------------------------------------------------------
+    let pull_record = crate::provenance::PullRecord::load_from_dir(&input_path).error_building_with_path()?;
     let (input_sha256, input_date, input_size) =
-        if let Some((record, _)) = crate::provenance::PullRecord::load_from_dir(&input_path).error_building_with_path()? {
+        if let Some((record, _)) = &pull_record {
             (
                 record.archive_sha256_upper(),
                 Some(record.version.clone()),
@@ -365,6 +363,19 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     let workspace_sha256 = Some(workspace_facts.source_sha256_upper());
     let workspace_size = Some(workspace_facts.source.bytes);
+
+    // The release's XML files, the pair `ods make` builds from: when a release zip holds more
+    // than one full or archive file, TRUD's release date chooses, from the pull record or else
+    // the release the Parquet files say they are.
+    let trud_date = pull_record
+        .as_ref()
+        .map(|(record, _)| record.version.clone())
+        .unwrap_or_else(|| workspace_facts.release_date.clone());
+    let release_xml = crate::ods_xml::find_release_xml(&input_path, Some(&trud_date))?;
+    for line in &release_xml.skipped {
+        eprintln!("{line}");
+    }
+    let xml_paths = release_xml.paths;
 
     let input_date = input_date.unwrap_or_else(|| workspace_date.clone());
 
@@ -2020,7 +2031,7 @@ fn audit_sample_and_derived_parity(
     sample_orgs: &HashMap<String, XmlSampleOrgRecord>,
     succession_edges: &[(String, String)],
     _parquet_dir: &Path,
-    _trud_release_date: &str,
+    _release_date: &str,
     discrepancies: &mut Vec<String>,
 ) -> Result<(bool, bool)> {
     if !orgs_parquet.exists() || sample_orgs.is_empty() {

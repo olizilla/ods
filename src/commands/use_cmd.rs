@@ -103,15 +103,7 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
         crate::workspace::VerificationOutcome::NoProvenance => {
             writeln!(
                 err_writer,
-                "! releases/{} can't be checked: it has no provenance, built from an archive ods couldn't match to a TRUD release\n  Repair it: ods pull --force {}",
-                release_date,
-                release_date
-            )?;
-        }
-        crate::workspace::VerificationOutcome::NotEmbedded => {
-            writeln!(
-                err_writer,
-                "! releases/{} can't be checked: its Parquet files carry no provenance, built by an older ods\n  Repair it: ods pull --force {}, or rebuild it with ods make",
+                "! releases/{} can't be checked: its Parquet files carry no provenance\n  Repair it: ods pull --force {}, or rebuild it with ods make",
                 release_date,
                 release_date
             )?;

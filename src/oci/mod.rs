@@ -20,18 +20,12 @@ pub const ANNOTATION_LICENSES: &str = "org.opencontainers.image.licenses";
 pub const ANNOTATION_SOURCE: &str = "org.opencontainers.image.source";
 pub const ANNOTATION_VERSION: &str = "org.opencontainers.image.version";
 
+pub const ANNOTATION_DESCRIPTION: &str = "org.opencontainers.image.description";
+
 /// The `nhs-ods-xml` source bundles' own annotations (`src/oci/source.rs`). A dataset manifest
-/// doesn't carry them: its source is named in the generic `fyi.ods.source.*` keys below.
+/// carries only the image spec's keys: its source's facts are in the Parquet files.
 pub const ANNOTATION_FYI_TRUD_RELEASE_DATE: &str = "fyi.ods.trud-release-date";
 pub const ANNOTATION_FYI_TRUD_RELEASE_SHA256: &str = "fyi.ods.trud-release-sha256";
-
-/// A dataset manifest's source release, from the embedded object's `sources[0]`: the keys
-/// every dataset uses, whatever its source. Annotation values are strings, so `bytes` is
-/// decimal text.
-pub const ANNOTATION_FYI_SOURCE_TITLE: &str = "fyi.ods.source.title";
-pub const ANNOTATION_FYI_SOURCE_VERSION: &str = "fyi.ods.source.version";
-pub const ANNOTATION_FYI_SOURCE_HASH: &str = "fyi.ods.source.hash";
-pub const ANNOTATION_FYI_SOURCE_BYTES: &str = "fyi.ods.source.bytes";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciDescriptor {

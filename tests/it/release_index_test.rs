@@ -46,7 +46,7 @@ fn test_baked_index_matches_its_schema() -> Result<()> {
 
 #[test]
 fn test_built_pull_record_matches_its_schema() -> Result<()> {
-    let schema_str = include_str!("../../worker/schema/datapackage.v1.json");
+    let schema_str = include_str!("../../worker/schema/ods-datapackage.v1.json");
     let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
     let validator = jsonschema::validator_for(&schema_json)
         .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;

@@ -44,7 +44,7 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
   let serverUrl: string;
   let port: string;
   let manifestDigestHex: string;
-  let provDigestHex: string;
+  let configDigestHex: string;
   let parquetDigestHex: string;
 
   beforeAll(async () => {
@@ -73,14 +73,9 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
     const bucket = await mf.getR2Bucket('BUCKET');
 
     // Seed release objects
-    const provBytes = new TextEncoder().encode(
-      JSON.stringify({
-        $schema: 'https://ods.fyi/schema/provenance.v1.json',
-        trud_release_date: '2026-07-31',
-        dataset_version: '1.0.1',
-      })
-    );
-    provDigestHex = crypto.createHash('sha256').update(provBytes).digest('hex');
+    // The empty config every dataset manifest carries: the two bytes `{}`.
+    const configBytes = new TextEncoder().encode('{}');
+    configDigestHex = crypto.createHash('sha256').update(configBytes).digest('hex');
 
     const parquetBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
     parquetDigestHex = crypto.createHash('sha256').update(parquetBytes).digest('hex');
@@ -89,9 +84,9 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
       schemaVersion: 2,
       mediaType: 'application/vnd.oci.image.manifest.v1+json',
       config: {
-        mediaType: 'application/vnd.fyi.ods.provenance.v1+json',
-        digest: `sha256:${provDigestHex}`,
-        size: provBytes.length,
+        mediaType: 'application/vnd.oci.empty.v1+json',
+        digest: `sha256:${configDigestHex}`,
+        size: configBytes.length,
       },
       layers: [
         {
@@ -110,7 +105,7 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
     await bucket.put('v2/ods-data/manifests/2026-07-31', manifestBytes);
     await bucket.put('v2/ods-data/manifests/latest', manifestBytes);
     await bucket.put(`v2/ods-data/blobs/sha256/${manifestDigestHex}`, manifestBytes);
-    await bucket.put(`v2/ods-data/blobs/sha256/${provDigestHex}`, provBytes);
+    await bucket.put(`v2/ods-data/blobs/sha256/${configDigestHex}`, configBytes);
     await bucket.put(`v2/ods-data/blobs/sha256/${parquetDigestHex}`, parquetBytes);
     await bucket.put('2026-07-31/1.0.1/orgs.parquet', parquetBytes);
     await bucket.put('latest/orgs.parquet', parquetBytes);
@@ -141,7 +136,7 @@ describe('Official OCI Distribution Spec Conformance Test', () => {
       OCI_API_REFERRER: 'false',
       OCI_RO_DATA_TAGS: '2026-07-31_1.0.1 2026-07-31 latest',
       OCI_RO_DATA_MANIFESTS: `sha256:${manifestDigestHex}`,
-      OCI_RO_DATA_BLOBS: `sha256:${provDigestHex} sha256:${parquetDigestHex}`,
+      OCI_RO_DATA_BLOBS: `sha256:${configDigestHex} sha256:${parquetDigestHex}`,
       OCI_LOG: 'warn',
     };
 

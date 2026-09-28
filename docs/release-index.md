@@ -50,7 +50,7 @@ Every field and its constraints are defined in [releases.v1.json](https://ods.fy
 
 Formats we own that travel alone carry `$schema` as their identifier. Facts carry namespace prefixes (`trud_`, `dataset_`, `tool_`). A generated `datapackage.json` view follows Data Package v2.
 
-A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes`: the same facts the Parquet files carry as their source's `version`, `hash` and `bytes`, and the manifest as `fyi.ods.source.version`, `.hash` and `.bytes`. The hash is upper-case hex here, as TRUD writes it, and `sha256:` with lower-case hex in the Data Package vocabulary. Datasets carry `dataset_version`, `manifest_digest`, `dataset_filesize_bytes` (the sum of the manifest's layer sizes — what `ods pull` downloads), `tool_version` and `tool_git_sha` (the `ods` that built it), and optional `dataset_doi` and `withdrawn`.
+A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes`: the same facts the Parquet files carry as their source's `version`, `hash` and `bytes`. The hash is upper-case hex here, as TRUD writes it, and `sha256:` with lower-case hex in the Data Package vocabulary. Datasets carry `dataset_version`, `manifest_digest`, `dataset_filesize_bytes` (the sum of the manifest's layer sizes — what `ods pull` downloads), `tool_version` and `tool_git_sha` (the `ods` that built it), and optional `dataset_doi` and `withdrawn`.
 
 ## How a dataset gets into the index
 
@@ -68,21 +68,14 @@ maintainer tries it with `ods pull --index`, mirrors it to ods.fyi, and commits 
 | :--- | :--- |
 | Blobs, by digest | the bytes |
 | Each Parquet file's `datapackage` metadata | the dataset's name and version, the licence and attribution, and the TRUD release it came from, with its SHA-256 and size |
-| The manifest | nothing of its own: a pure function of the Parquet files, its annotations copied from their `datapackage` object |
+| The manifest | nothing of its own: a function of the Parquet files ([oci.md](./oci.md)) |
 | The index row | that the dataset is blessed, whether it's withdrawn, its DOI, and the `ods` that built it |
 | The index's `mirrors` | where to fetch it |
 | Registry tags | a name for the dataset on that registry, for OCI tools |
 
-**Tags are the same on ghcr.io and ods.fyi.**
-
-- `<date>_<version>` names one dataset and never moves. A push that would move it is refused.
-- `<date>` names the newest dataset built for that date, and moves.
-- `latest` names the newest release on ods.fyi, and moves.
-
-A tag doesn't bless anything. CI tags a dataset on ghcr.io when it pushes it, and the mirror
-script tags it on ods.fyi, both before its index row is committed. `ods` finds datasets only
-through the index, and never reads a registry tag (`docs/tests.md` R3). The tags are there for
-`oras`, `docker` and other OCI tools.
+**A tag doesn't bless anything.** Registry tags name datasets for `oras`, `docker` and other OCI
+tools, and `ods` never reads one: it finds datasets only through the index. The tags and their
+rules are in [oci.md](./oci.md#tags).
 
 **Credentials stay split.** GitHub holds the TRUD API key and the workflow's `GITHUB_TOKEN`, which
 can push to ghcr.io. Cloudflare holds nothing from GitHub. The token that writes to ods.fyi's R2
@@ -104,16 +97,5 @@ The GitHub raw URL works once the repository is public.
 ## Verifying a dataset's attestation
 
 Every dataset was pushed and attested by `.github/workflows/build-dataset.yml` (R9), so a reader
-can check that directly, without trusting this index:
-
-```bash
-gh attestation verify oci://ghcr.io/olizilla/ods-data@<manifest_digest> \
-  -R olizilla/ods --signer-workflow olizilla/ods/.github/workflows/build-dataset.yml
-```
-
-This checks GitHub's signature on the digest and prints the SLSA predicate: the workflow, the
-ref (the tag `v<tool_version>`) and the commit it ran at. Reading `build-dataset.yml` at that
-commit shows the rest: the `primary` job's *Compare with the witness* step fails before *Push*
-unless the Ubuntu build's manifest digest equals the macOS witness's. So one attestation, on the
-digest *Push* names, is enough. A reader verifies the digest was pushed by that workflow at that
-commit, then reads the file to see that pushing only happens after the runners agreed (`docs/tests.md` R9).
+can check that directly, without trusting this index: [oci.md](./oci.md#attestations) has the
+command and what it proves.

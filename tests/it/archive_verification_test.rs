@@ -108,8 +108,16 @@ fn test_make_zip_absent_from_index_is_unverified() {
     assert!(stderr.contains("Built without provenance. You can explore it with find, info and role, but not cite or publish it."));
 
     assert!(!out_dir.join("trud").exists(), "nothing is written under trud/ for a build");
-    let embedded: serde_json::Value = serde_json::from_str(&embedded_of(&out_dir)).unwrap();
-    assert!(embedded.get("version").is_none() && embedded.get("sources").is_none(), "no provenance embedded: {embedded}");
+    for table in ["orgs", "roles", "relationships", "successions"] {
+        let value = ods::provenance::read_embedded_value(&out_dir.join(format!("{table}.parquet"))).unwrap();
+        assert_eq!(value, None, "{table}.parquet carries no datapackage key");
+    }
+    // The view says only what the files are: their resources, and that their source and terms
+    // are unknown.
+    let view: serde_json::Value = serde_json::from_str(&fs::read_to_string(out_dir.join("datapackage.json")).unwrap()).unwrap();
+    let keys: Vec<&str> = view.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    assert_eq!(keys, ["$schema", "description", "resources"], "{view}");
+    assert_eq!(view["resources"].as_array().unwrap().len(), 4);
 }
 
 #[test]
@@ -836,7 +844,7 @@ fn test_make_release_refuses_unprovenanced_build() {
         .unwrap();
     assert!(!rel_out.status.success(), "make release must refuse unprovenanced release");
     let stderr = String::from_utf8_lossy(&rel_out.stderr);
-    assert!(stderr.contains("has no provenance"), "stderr was: {stderr}");
+    assert!(stderr.contains("carry no provenance"), "stderr was: {stderr}");
 }
 
 #[test]
@@ -850,7 +858,7 @@ fn test_trud_audit_refuses_unprovenanced_release() {
     // A Parquet file built without provenance, and a releases.json marker so workspace is valid
     ods::commands::parquet::write_stub_parquet(
         &rel_2026.join("orgs.parquet"),
-        Some(&ods::provenance::Embedded::without_provenance()),
+        None,
         "dummy parquet",
     )
     .unwrap();
@@ -878,7 +886,7 @@ fn test_trud_audit_refuses_unprovenanced_release() {
 
     assert!(!output.status.success(), "trud audit must refuse release without provenance");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("has no provenance: it was built from an archive ods couldn't match to a TRUD release"), "stderr was: {stderr}");
+    assert!(stderr.contains("carry no provenance: it was built from an archive ods couldn't match to a TRUD release, or by an older ods"), "stderr was: {stderr}");
     assert!(stderr.contains("To cite or publish it, get the archive through ods trud pull"), "stderr was: {stderr}");
 }
 

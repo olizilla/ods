@@ -11,13 +11,19 @@ pub const DATASET_VERSION: &str = "0.1.0";
 
 /// Our Data Package v2 extension profile: extends the published profile with
 /// `licenses[].attribution` and the Source properties `hash`, `bytes` and `_cache`.
-pub const DATAPACKAGE_SCHEMA_V1_URL: &str = "https://ods.fyi/schema/datapackage.v1.json";
+pub const ODS_DATAPACKAGE_SCHEMA_URL: &str = "https://ods.fyi/schema/ods-datapackage.v1.json";
 
 /// The dataset family's stable name. With `version` it is unique per release, and equals the
 /// OCI `repository:tag`.
 pub const NAME: &str = "ods-data";
 const TITLE: &str = "ods: NHS Organisation Data as verifiable Parquet files";
+/// The dataset in one sentence: the first of `DESCRIPTION`, and the start of a dataset manifest's
+/// `org.opencontainers.image.description`.
+pub const SUMMARY: &str = "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files.";
 const DESCRIPTION: &str = "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.";
+
+/// A view of files that carry no provenance says only what it can: which files they are.
+const NO_PROVENANCE_DESCRIPTION: &str = "Parquet files that carry no provenance: built from an archive ods couldn't match to a TRUD release, or by an older ods. Their source and terms are unknown.";
 
 /// The source's title in the schema contract: the pull record's `title` for the TRUD release.
 const TRUD_SOURCE_TITLE: &str = crate::provenance::SOURCE_TITLE;
@@ -31,7 +37,9 @@ fn arrow_type_to_table_schema_type(dt: &DataType) -> &'static str {
         DataType::Utf8 => "string",
         DataType::Date32 => "date",
         DataType::Boolean => "boolean",
-        DataType::List(_) => "array",
+        // Table Schema's List Field, ahead of Data Package 2.0.1: our profile adds it to the
+        // published field types (worker/schema/ods-datapackage.v1.json, docs/datapackage.md).
+        DataType::List(_) => "list",
         _ => "string",
     }
 }
@@ -40,6 +48,9 @@ fn field_to_json(field: &Field) -> Value {
     let mut obj = serde_json::Map::new();
     obj.insert("name".to_string(), json!(field.name()));
     obj.insert("type".to_string(), json!(arrow_type_to_table_schema_type(field.data_type())));
+    if let DataType::List(item) = field.data_type() {
+        obj.insert("itemType".to_string(), json!(arrow_type_to_table_schema_type(item.data_type())));
+    }
 
     if !field.is_nullable() {
         obj.insert("constraints".to_string(), json!({ "required": true }));
@@ -156,7 +167,7 @@ fn resources_value() -> Vec<Value> {
 /// of a fixture release".
 pub fn generate_datapackage() -> Value {
     json!({
-        "$schema": DATAPACKAGE_SCHEMA_V1_URL,
+        "$schema": ODS_DATAPACKAGE_SCHEMA_URL,
         "name": NAME,
         "title": TITLE,
         "description": DESCRIPTION,
@@ -179,7 +190,10 @@ pub fn generate_datapackage() -> Value {
 ///
 /// `id` is the index row's `dataset_doi` when the row names this exact manifest and has one,
 /// else the release's `oci` purl from the rebuilt manifest: the view isn't part of any digest,
-/// so it may name it. A build without provenance has no manifest, so no `id`.
+/// so it may name it.
+///
+/// Files without provenance (no `datapackage` key) get `$schema`, a `description` saying their
+/// source and terms are unknown, and `resources`: the facts about the files, and nothing else.
 pub fn generate_view(
     release_dir: &std::path::Path,
     index: Option<&crate::index::OdsReleaseIndex>,
@@ -188,7 +202,7 @@ pub fn generate_view(
 
     type Files = Vec<(String, u64, String)>;
     let record = crate::provenance::read_release(release_dir)?;
-    let (embedded, id, files): (crate::provenance::Embedded, Option<String>, Files) = match record {
+    let (embedded, id, files): (Option<crate::provenance::Embedded>, Option<String>, Files) = match record {
         ReleaseRecord::Provenanced(facts) => {
             let (manifest, _) = crate::oci::dataset::build(release_dir, &facts)?;
             let digest = manifest.digest()?;
@@ -210,9 +224,9 @@ pub fn generate_view(
                     Some((title.clone(), l.size, l.digest.clone()))
                 })
                 .collect();
-            (facts.embedded.clone(), Some(id), files)
+            (Some(facts.embedded.clone()), Some(id), files)
         }
-        ReleaseRecord::NoProvenance(embedded) => {
+        ReleaseRecord::NoProvenance => {
             let mut files = Vec::new();
             for name in crate::provenance::release_parquet_files(release_dir)? {
                 let path = release_dir.join(&name);
@@ -220,7 +234,7 @@ pub fn generate_view(
                 let hash = crate::provenance::prefixed_sha256(&crate::provenance::compute_file_sha256(&path)?);
                 files.push((name, bytes, hash));
             }
-            (*embedded, None, files)
+            (None, None, files)
         }
         other => anyhow::bail!(
             "{}",
@@ -229,26 +243,29 @@ pub fn generate_view(
     };
 
     let mut obj = serde_json::Map::new();
-    obj.insert("$schema".to_string(), json!(DATAPACKAGE_SCHEMA_V1_URL));
+    obj.insert("$schema".to_string(), json!(ODS_DATAPACKAGE_SCHEMA_URL));
     if let Some(id) = id {
         obj.insert("id".to_string(), json!(id));
     }
-    obj.insert("name".to_string(), json!(embedded.name));
-    if let Some(ref version) = embedded.version {
-        obj.insert("version".to_string(), json!(version));
-    }
-    obj.insert("title".to_string(), json!(TITLE));
-    obj.insert("description".to_string(), json!(DESCRIPTION));
-    obj.insert("licenses".to_string(), serde_json::to_value(&embedded.licenses)?);
-    obj.insert("contributors".to_string(), serde_json::to_value(&embedded.contributors)?);
-    if let Some(ref sources) = embedded.sources {
-        let mut values = Vec::with_capacity(sources.len());
-        for source in sources {
-            let mut value = serde_json::to_value(source)?;
-            value["_cache"] = json!([format!("{}{}", NHS_ODS_XML_CACHE_BASE, source.hash.trim_start_matches("sha256:"))]);
-            values.push(value);
+    match embedded {
+        Some(embedded) => {
+            obj.insert("name".to_string(), json!(embedded.name));
+            obj.insert("version".to_string(), json!(embedded.version));
+            obj.insert("title".to_string(), json!(TITLE));
+            obj.insert("description".to_string(), json!(DESCRIPTION));
+            obj.insert("licenses".to_string(), serde_json::to_value(&embedded.licenses)?);
+            obj.insert("contributors".to_string(), serde_json::to_value(&embedded.contributors)?);
+            let mut values = Vec::with_capacity(embedded.sources.len());
+            for source in &embedded.sources {
+                let mut value = serde_json::to_value(source)?;
+                value["_cache"] = json!([format!("{}{}", NHS_ODS_XML_CACHE_BASE, source.hash.trim_start_matches("sha256:"))]);
+                values.push(value);
+            }
+            obj.insert("sources".to_string(), json!(values));
         }
-        obj.insert("sources".to_string(), json!(values));
+        None => {
+            obj.insert("description".to_string(), json!(NO_PROVENANCE_DESCRIPTION));
+        }
     }
 
     let mut resources = Vec::new();
@@ -297,6 +314,11 @@ pub fn oci_purl(manifest_digest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_description_starts_with_the_summary() {
+        assert!(DESCRIPTION.starts_with(SUMMARY));
+    }
 
     #[test]
     fn test_generate_datapackage_has_no_per_release_facts() {

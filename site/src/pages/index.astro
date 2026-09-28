@@ -103,9 +103,9 @@ const duckdbHttpQuery = `duckdb -c "
 
       <Section tag="Local first" title="Download the files" id="download">
         <p class="body-text">
-          Each release is 4 Parquet files plus its provenance metadata and its schema as a
-          Frictionless <code>datapackage.json</code>, published as an OCI Image, stored by the hash
-          of the data.
+          Each release is 4 Parquet files, each carrying its own provenance, published as an OCI
+          image and stored by the hash of the data. <code>ods</code> writes a Frictionless
+          <code>datapackage.json</code> beside them, describing their schema.
         </p>
         <p class="body-text">
           <code>ods</code> (or any OCI client) can download a release to your machine and verify the
@@ -169,7 +169,7 @@ const duckdbHttpQuery = `duckdb -c "
           </Card>
         </div>
         <div class="code-with-terminal">
-          <CodeBlock content={provenanceJson} label="cat _provenance.json" lang="json" />
+          <CodeBlock content={provenanceJson} label="DuckDB: parquet_kv_metadata('orgs.parquet')" lang="json" />
         </div>
         <Callout>
           To check a release yourself: <code>ods trud pull</code> fetches and verifies the source archive,{' '}

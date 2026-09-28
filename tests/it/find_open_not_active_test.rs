@@ -118,7 +118,7 @@ fn find_sql_matches_find_for_the_open_filter() {
         let (sql, sql_stderr, sql_ok) = run_find(&sql_args, &release);
         assert!(sql_ok, "stderr: {sql_stderr}");
         assert!(
-            sql.contains("(legal_end IS NULL OR legal_end > trud_release_date)"),
+            sql.contains("(legal_end IS NULL OR legal_end > publication_date)"),
             "the open clause must appear beside status = 'active', got:\n{sql}"
         );
 

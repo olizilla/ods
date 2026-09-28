@@ -33,9 +33,9 @@ A release fetched with `ods pull` holds the four Parquet files and `datapackage.
 
 Every Parquet file carries the release's provenance in one key-value metadata key,
 `datapackage`: the dataset's name and version, its licence and attribution, and the TRUD release
-it was built from, with its SHA-256 and size. It's the one record `ods` reads. The OCI manifest is
-rebuilt from the files whenever `ods` verifies a release, and `datapackage.json` is a view of them
-that nothing reads back.
+it was built from, with its SHA-256 and size. It's the one record `ods` reads. The [OCI
+manifest](./oci.md) is rebuilt from the files whenever `ods` verifies a release, and
+`datapackage.json` is a view of them that nothing reads back ([datapackage.md](./datapackage.md)).
 
 Which `ods` built a published dataset is recorded in its release index row (`tool_version`, 
 `tool_git_sha`,see [release-index.md](./release-index.md)) and in the CI attestation, not here. 

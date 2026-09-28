@@ -256,7 +256,6 @@ impl Workspace {
 
     pub fn set_active(&self, date: &str) -> Result<()> {
         set_active_release(&self.root, date)?;
-        let _ = generate_workspace_readme(&self.root, date, None, None);
         ensure_workspace_gitignore(&self.root)?;
         ensure_workspace_readme(&self.root)?;
         Ok(())
@@ -393,7 +392,7 @@ fn find_workspace_root(explicit: Option<&Path>) -> Result<Option<PathBuf>> {
 /// When an explicit `-i` path is given:
 /// 1. If explicit/orgs.parquet exists, return explicit directly (loose parquet dir).
 /// 2. If explicit/parquet/orgs.parquet exists, return explicit/parquet.
-/// 3. If explicit itself is a release directory (contains `_provenance.json`):
+/// 3. If explicit itself is a release directory (holds `datapackage.json` or `trud/`):
 ///    - if explicit/parquet is a directory, return explicit/parquet.
 ///    - otherwise return explicit directly.
 /// 4. If explicit does not exist, fail with diagnostic error.
@@ -478,14 +477,35 @@ fn ensure_workspace_gitignore(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The README `ods` writes in a workspace root: the same bytes in every workspace, with nothing
+/// in it that changes (no dates, counts, names or release facts). Its first line marks it as
+/// `ods`'s.
+pub const WORKSPACE_README: &str = include_str!("workspace_readme.md");
+
+/// The first line of `WORKSPACE_README`, which marks a README as `ods`'s to rewrite.
+const WORKSPACE_README_MARKER: &str = "<!-- Written by ods, which rewrites this file: edits won't last. -->";
+
+/// How every README an earlier `ods` generated began, before it carried the marker.
+const OLDER_WORKSPACE_README_OPENING: &str = "# `ods` workspace\n\nThis directory holds verified releases of NHS Organisation Data as Parquet files, pulled by the `ods` CLI.";
+
+/// Whether a workspace README is `ods`'s: it starts with the marker, or with an earlier `ods`'s
+/// generated opening. Anything else is the user's.
+fn is_ods_workspace_readme(content: &[u8]) -> bool {
+    content.starts_with(WORKSPACE_README_MARKER.as_bytes()) || content.starts_with(OLDER_WORKSPACE_README_OPENING.as_bytes())
+}
+
+/// Writes the workspace README when it's missing, and rewrites it when it's `ods`'s and differs
+/// from `WORKSPACE_README` (after an upgrade, say). A README the user wrote is left alone.
 fn ensure_workspace_readme(workspace_root: &Path) -> Result<()> {
     let readme_path = workspace_root.join("README.md");
-    if !readme_path.exists() {
-        let active = get_active_release(workspace_root).ok().map(|(d, _)| d);
-        let date_str = active.as_deref().unwrap_or("none");
-        generate_workspace_readme(workspace_root, date_str, None, None)?;
+    let write = || fs::write(&readme_path, WORKSPACE_README).with_context(|| format!("writing {}", readme_path.display()));
+    match fs::read(&readme_path) {
+        Ok(existing) if existing == WORKSPACE_README.as_bytes() => Ok(()),
+        Ok(existing) if is_ods_workspace_readme(&existing) => write(),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(),
+        Err(e) => Err(e).with_context(|| format!("reading {}", readme_path.display())),
     }
-    Ok(())
 }
 
 static NUDGE_EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -653,13 +673,9 @@ pub fn format_source_line(path: &str, color: bool) -> String {
 /// Parquet files says nothing here: the command's own not-found error covers it.
 pub fn check_release_provenance(parquet_dir: &Path) -> Result<()> {
     match crate::provenance::read_release(parquet_dir)? {
-        crate::provenance::ReleaseRecord::NoProvenance(_) => eprintln!(
-            "! {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
-            relative_to_cwd(parquet_dir).display()
-        ),
-        crate::provenance::ReleaseRecord::NotEmbedded => eprintln!(
-            "! {}'s Parquet files carry no provenance: an older ods built them\n  You can explore it, but not cite or verify it. Rebuild it with `ods make`, or pull it again.",
-            relative_to_cwd(parquet_dir).display()
+        crate::provenance::ReleaseRecord::NoProvenance => eprintln!(
+            "! {}\n  You can explore it, but not cite or verify it.",
+            crate::provenance::describe_no_provenance(parquet_dir)
         ),
         crate::provenance::ReleaseRecord::Provenanced(_) | crate::provenance::ReleaseRecord::NoFiles => {}
     }
@@ -850,52 +866,6 @@ fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
     Ok(releases)
 }
 
-/// Generates the self-documenting `README.md` file in the workspace root.
-fn generate_workspace_readme(
-    workspace_root: &Path,
-    release_date: &str,
-    seq_num: Option<&str>,
-    entity_count: Option<usize>,
-) -> Result<()> {
-    let readme_path = workspace_root.join("README.md");
-    let seq_info = seq_num.map(|s| format!(" (TRUD Sequence #{s})")).unwrap_or_default();
-    let count_info = entity_count.map(|c| format!("{c} entities")).unwrap_or_else(|| "Active dataset".to_string());
-    let ws_name = workspace_root.file_name().and_then(|n| n.to_str()).unwrap_or(DEFAULT_WORKSPACE_DIR);
-
-    let content = format!(
-        "# `ods` workspace\n\n\
-         This directory holds verified releases of NHS Organisation Data as Parquet files, pulled by the `ods` CLI.\n\
-         The data is NHS England's Organisation Data Service, under the Open Government Licence.\n\n\
-         - **Active Release**: {release_date}{seq_info}\n\
-         - **Status**: {count_info} indexed in `current/`\n\n\
-         ## Directory Structure\n\n\
-         - `_releases.json`: Cached release index\n\
-         - `current`: Symlink pointing to active release\n\
-         - `releases/`: Dated release directories containing Parquet tables, Frictionless datapackage, and metadata\n\n\
-         ## Quick Start: Querying with DuckDB\n\n\
-         ```sql\n\
-         -- Query active GP practices in Sedbergh\n\
-         SELECT name, ods_code, postcode, telephone\n\
-         FROM '{ws_name}/current/orgs.parquet'\n\
-         WHERE status = 'active' AND town = 'SEDBERGH';\n\
-         ```\n\n\
-         ## Python Integration\n\n\
-         ```python\n\
-         import duckdb\n\
-         con = duckdb.connect()\n\
-         df = con.execute(\"SELECT * FROM '{ws_name}/current/orgs.parquet'\").df()\n\
-         print(df.head())\n\
-         ```\n\n\
-         ## CLI Commands\n\n\
-         - `ods find <query>`: Fast terminal lookup\n\
-         - `ods cite`: Output APA and BibTeX academic citations\n\
-         - `ods trud diff`: Diff active release against previous release\n"
-    );
-
-    fs::write(readme_path, content).context("Failed to write workspace README.md")?;
-    Ok(())
-}
-
 /// Helper function to count total rows in a Parquet file.
 pub fn count_records_in_parquet(path: &Path) -> Result<usize> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -941,10 +911,9 @@ pub enum VerificationOutcome {
         published_digest: String,
         reconstructed_digest: String,
     },
-    /// Built from an archive `ods` couldn't match to a TRUD release (`ods make --force -o`).
+    /// Parquet files with no `datapackage` key: built from an archive `ods` couldn't match to a
+    /// TRUD release (`ods make --force -o`), or by an older `ods`.
     NoProvenance,
-    /// Parquet files an older `ods` built, with no `datapackage` key.
-    NotEmbedded,
     /// The directory holds no Parquet files.
     NoFiles,
     /// The files can't be read as a release: the `✖` block that says why.
@@ -962,7 +931,6 @@ impl VerificationOutcome {
             }
             VerificationOutcome::DifferentBytes { .. }
             | VerificationOutcome::NoProvenance
-            | VerificationOutcome::NotEmbedded
             | VerificationOutcome::NoFiles
             | VerificationOutcome::Corrupted(_) => false,
         }
@@ -983,8 +951,7 @@ pub fn verify_release_dir(
 ) -> VerificationOutcome {
     let facts = match crate::provenance::read_release(release_dir) {
         Ok(crate::provenance::ReleaseRecord::Provenanced(facts)) => *facts,
-        Ok(crate::provenance::ReleaseRecord::NoProvenance(_)) => return VerificationOutcome::NoProvenance,
-        Ok(crate::provenance::ReleaseRecord::NotEmbedded) => return VerificationOutcome::NotEmbedded,
+        Ok(crate::provenance::ReleaseRecord::NoProvenance) => return VerificationOutcome::NoProvenance,
         Ok(crate::provenance::ReleaseRecord::NoFiles) => return VerificationOutcome::NoFiles,
         Err(e) => return VerificationOutcome::Corrupted(format!("{:#}", e)),
     };
@@ -1177,11 +1144,8 @@ mod tests {
             ("F. different bytes", vec![("orgs.parquet", published(), "orgs"), ("roles.parquet", published(), "roles")], Box::new(|o| {
                 assert!(matches!(o, VerificationOutcome::DifferentBytes { date, version, .. } if date == "2026-08-28" && version == "0.1.0"), "{o:?}");
             })),
-            ("no provenance", vec![("orgs.parquet", Some(crate::provenance::Embedded::without_provenance()), "orgs")], Box::new(|o| {
+            ("no provenance", vec![("orgs.parquet", None, "orgs")], Box::new(|o| {
                 assert!(matches!(o, VerificationOutcome::NoProvenance), "{o:?}");
-            })),
-            ("not embedded", vec![("orgs.parquet", None, "orgs")], Box::new(|o| {
-                assert!(matches!(o, VerificationOutcome::NotEmbedded), "{o:?}");
             })),
             ("files disagree", vec![("orgs.parquet", published(), "orgs"), ("roles.parquet", Some(embedded("2026-08-28", published_sha, "0.3.0")), "roles")], Box::new(|o| {
                 assert!(matches!(o, VerificationOutcome::Corrupted(block) if block.contains("don't carry the same provenance") && block.contains("orgs.parquet") && block.contains("roles.parquet")), "{o:?}");

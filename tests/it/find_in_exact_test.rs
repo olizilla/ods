@@ -91,10 +91,10 @@ fn setup_exact_in_workspace() -> (TempDir, PathBuf) {
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
     let prov = ods::provenance::fixture_embedded("2026-08-28");
 
-    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-    export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
-    export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
-    export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
+    export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-08-28").unwrap();
+    export_roles(&parquet_dir, &records, Some(&prov), "2026-08-28").unwrap();
+    export_relationships(&parquet_dir, &records, Some(&prov), "2026-08-28").unwrap();
+    export_successions(&parquet_dir, &records, Some(&prov), "2026-08-28").unwrap();
 
     (tmp, parquet_dir)
 }

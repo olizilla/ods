@@ -63,7 +63,7 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -180,7 +180,7 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -257,7 +257,7 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -366,7 +366,7 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -438,7 +438,7 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -515,7 +515,7 @@ fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
@@ -670,7 +670,7 @@ fn make_standard_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result
     let fix_dir = tmp.join(format!("fix_{}_{}", date, version));
     fs::create_dir_all(&fix_dir)?;
 
-    let prov = serde_json::json!({ "trud_release_date": date });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
 
     let dp = serde_json::json!({
@@ -1437,7 +1437,7 @@ fn make_unique_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<S
     let fix_dir = tmp.join(format!("uniq_{}_{}", date, version));
     fs::create_dir_all(&fix_dir)?;
 
-    let prov = serde_json::json!({ "trud_release_date": date });
+    let prov = serde_json::json!({ "written_by": "an older ods, and never a layer" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
 
     let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });

@@ -551,6 +551,6 @@ fn test_cite_exit_codes_and_warnings_for_all_cases() {
     let err_np = String::from_utf8_lossy(&out_np.stderr);
     // Genuinely no provenance anywhere (not just unpacked) gets the specific wording back: `ods
     // make oci` wouldn't be a fix here, since there's nothing to pack from.
-    assert!(err_np.contains("has no provenance: it was built from an archive ods couldn't match to a TRUD release"));
-    assert!(err_np.contains("To cite or publish it, get the archive through ods trud pull."));
+    assert!(err_np.contains("carry no provenance: it was built from an archive ods couldn't match to a TRUD release, or by an older ods"));
+    assert!(err_np.contains("To cite or publish it, get the archive through ods trud pull and build it with ods make, or pull the release with ods pull."));
 }

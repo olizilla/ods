@@ -58,12 +58,12 @@ pub use ods_cmd as ods_binary;
 
 #[allow(dead_code)]
 pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
-    setup_find_test_workspace_embedded(&ods::provenance::fixture_embedded("2026-07-31"))
+    setup_find_test_workspace_embedded(Some(&ods::provenance::fixture_embedded("2026-07-31")))
 }
 
 /// `setup_find_test_workspace`, with every table carrying `prov`.
 #[allow(clippy::vec_init_then_push, dead_code)]
-pub fn setup_find_test_workspace_embedded(prov: &ods::provenance::Embedded) -> (TempDir, PathBuf) {
+pub fn setup_find_test_workspace_embedded(prov: Option<&ods::provenance::Embedded>) -> (TempDir, PathBuf) {
     let tmp = TempDir::new().expect("create temp dir");
     let dir = tmp.path().to_path_buf();
 
@@ -1129,16 +1129,16 @@ pub fn setup_find_test_workspace_embedded(prov: &ods::provenance::Embedded) -> (
 
     // Every table carries the object `ods make` embeds, as a release built from `ods trud
     // pull` does: the files are the release's whole record.
-    // The `trud_release_date` column is the release the object names, or 2026-07-31 for a
-    // build without provenance, as `ods make --force` takes it from the zip's name.
-    let date = prov.sources.as_ref().and_then(|s| s.first()).map(|s| s.version.clone()).unwrap_or_else(|| "2026-07-31".to_string());
-    let date = Some(date.as_str());
+    // The fixture's `publication_date`: the release the object names, or 2026-07-31 for one
+    // without provenance. A real build takes it from the XML's PublicationDate.
+    let date = prov.and_then(|p| p.sources.first()).map(|s| s.version.clone()).unwrap_or_else(|| "2026-07-31".to_string());
+    let date = date.as_str();
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
-    write_orgs(&dir, &records, &succ_closures, &pred_closures, Some(prov), date, &|_| {}).expect("export orgs");
-    write_roles(&dir, &records, Some(prov), date, &|_| {}).expect("export roles");
-    write_relationships(&dir, &records, Some(prov), date, &|_| {}).expect("export relationships");
-    write_successions(&dir, &records, Some(prov), date, &|_| {}).expect("export successions");
+    write_orgs(&dir, &records, &succ_closures, &pred_closures, prov, date, &|_| {}).expect("export orgs");
+    write_roles(&dir, &records, prov, date, &|_| {}).expect("export roles");
+    write_relationships(&dir, &records, prov, date, &|_| {}).expect("export relationships");
+    write_successions(&dir, &records, prov, date, &|_| {}).expect("export successions");
 
     (tmp, dir)
 }
@@ -1195,10 +1195,10 @@ pub fn setup_large_find_workspace(count: usize) -> (TempDir, PathBuf) {
 
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
-    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_roles(&dir, &records, Some(&prov)).expect("export roles");
-    export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
-    export_successions(&dir, &records, Some(&prov)).expect("export successions");
+    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-07-31").expect("export orgs");
+    export_roles(&dir, &records, Some(&prov), "2026-07-31").expect("export roles");
+    export_relationships(&dir, &records, Some(&prov), "2026-07-31").expect("export relationships");
+    export_successions(&dir, &records, Some(&prov), "2026-07-31").expect("export successions");
 
     (tmp, dir)
 }
@@ -1240,9 +1240,25 @@ pub fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
     zip_path
 }
 
-/// An archive product with no organisations, for fixtures that are not about the archive.
+/// An archive product with no organisations, for fixtures that are not about the archive,
+/// published the same day as the full file beside it (`PublicationDate`, or none when it has none).
 #[allow(dead_code)]
-pub const EMPTY_ARCHIVE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" /><RecordCount value="0" /></Manifest><Organisations></Organisations></OrgRefData>"#;
+pub fn empty_archive_xml(publication_date: Option<&str>) -> String {
+    let date = publication_date
+        .map(|d| format!(r#"<PublicationDate value="{d}" />"#))
+        .unwrap_or_default();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><OrgRefData><Manifest><Version value="2.0.0" />{date}<RecordCount value="0" /></Manifest><Organisations></Organisations></OrgRefData>"#
+    )
+}
+
+/// The `PublicationDate` of the one XML file inside an inner zip's bytes, if it carries one.
+fn inner_zip_publication_date(inner: &[u8]) -> Option<String> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(inner)).ok()?;
+    let entry = zip.by_index(0).ok()?;
+    let reader = quick_xml::reader::Reader::from_reader(std::io::BufReader::new(entry));
+    ods::ods_xml::parse_manifest_header(reader).ok()?.publication_date
+}
 
 /// Creates a nested mock TRUD zip (outer zip containing inner zips/files) at `outer_path`.
 ///
@@ -1261,8 +1277,10 @@ pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     let has_full = entries.iter().any(|(n, _)| n.to_lowercase().contains("fullfile"));
     let has_archive = entries.iter().any(|(n, _)| n.to_lowercase().contains("archive"));
     if has_full && !has_archive {
+        let full = entries.iter().find(|(n, _)| n.to_lowercase().contains("fullfile")).map(|(_, d)| *d).unwrap_or_default();
+        let xml = empty_archive_xml(inner_zip_publication_date(full).as_deref());
         outer_zip.start_file("archive.zip", options).unwrap();
-        let archive = create_inner_zip("HSCOrgRefData_Archive_mock.xml", EMPTY_ARCHIVE_XML.as_bytes());
+        let archive = create_inner_zip("HSCOrgRefData_Archive_mock.xml", xml.as_bytes());
         std::io::Write::write_all(&mut outer_zip, &archive).unwrap();
     }
     outer_zip.finish().unwrap();
@@ -1601,14 +1619,14 @@ pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
             .unwrap()
     };
     let embedded = match case_variant {
-        "no_prov" => ods::provenance::Embedded::without_provenance(),
-        _ => embedded_at(this_archive_sha, this_dataset_version),
+        "no_prov" => None,
+        _ => Some(embedded_at(this_archive_sha, this_dataset_version)),
     };
     let orgs_content = match case_variant {
         "F" => "different orgs content for F",
         _ => "dummy orgs content",
     };
-    write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), orgs_content).unwrap();
+    write_stub_parquet(&rel_dir.join("orgs.parquet"), embedded.as_ref(), orgs_content).unwrap();
     // Case D: a second file carrying a different object, so the files don't agree on what
     // release they are.
     if case_variant == "D" {

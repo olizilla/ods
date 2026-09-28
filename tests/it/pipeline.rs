@@ -23,7 +23,7 @@ fn make_parquet_rejects_bare_xml() {
         output: Some(tmp.path().join("out")), ..Default::default() });
     assert!(res.is_err());
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("Not a TRUD release archive"));
+    assert!(err.contains("isn't a zip"), "{err}");
 }
 
 /// Verifies that `ods make parquet` produces Parquet tables with correctly

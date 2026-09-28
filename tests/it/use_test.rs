@@ -181,7 +181,7 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
     let readme = workspace.join("README.md");
     assert!(readme.exists());
     let readme_content = fs::read_to_string(readme)?;
-    assert!(readme_content.contains("2026-07-31"));
+    assert_eq!(readme_content, ods::workspace::WORKSPACE_README, "the README names no release");
 
     Ok(())
 }

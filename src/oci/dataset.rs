@@ -2,8 +2,9 @@
 //!
 //! The config is the fixed empty descriptor (`application/vnd.oci.empty.v1+json`),
 //! `artifactType` is `application/vnd.fyi.ods.dataset.v1`, the layers are the Parquet files, and
-//! the annotations are derived from the object every file carries under its `datapackage`
-//! key-value metadata (`crate::provenance`). Nothing else in a release directory contributes, so
+//! the annotations are the image spec's own keys, derived from the object every file carries
+//! under its `datapackage` key-value metadata (`crate::provenance`). The source's facts stay in
+//! the files. Nothing else in a release directory contributes, so
 //! a directory holding only the Parquet files rebuilds the manifest, and `ods` verifies a
 //! release by rebuilding it and comparing its digest with the release index. No stored `oci/`
 //! is read; `ods make oci` writes one only for publishing.
@@ -14,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use super::source::{ANNOTATION_FYI_ATTRIBUTION, MEDIA_TYPE_EMPTY};
+use super::source::MEDIA_TYPE_EMPTY;
 use super::*;
 use crate::provenance::{compute_file_sha256, ReleaseFacts, ReleaseRecord};
 
@@ -34,22 +35,21 @@ pub fn is_empty_config(config: &OciDescriptor) -> bool {
     *config == empty_config_descriptor()
 }
 
-/// The manifest's annotations, derived from the embedded object.
+/// The manifest's annotations: the image spec's own keys, derived from the embedded object.
+/// `description` is the dataset's summary, then the licence's attribution.
 fn annotations(facts: &ReleaseFacts) -> BTreeMap<String, String> {
     let license = facts.license();
-    let source = &facts.source;
     let mut annotations = BTreeMap::new();
     annotations.insert(ANNOTATION_TITLE.to_string(), facts.embedded.name.clone());
     annotations.insert(ANNOTATION_VERSION.to_string(), facts.version().to_string());
+    annotations.insert(
+        ANNOTATION_DESCRIPTION.to_string(),
+        format!("{} {}", crate::datapackage::SUMMARY, license.attribution),
+    );
     annotations.insert(ANNOTATION_LICENSES.to_string(), license.name.clone());
     // RFC 3339 date-time, as the image spec defines the key: midnight UTC on the source's date.
-    annotations.insert(ANNOTATION_CREATED.to_string(), derive_created_timestamp(&source.version));
+    annotations.insert(ANNOTATION_CREATED.to_string(), derive_created_timestamp(&facts.source.version));
     annotations.insert(ANNOTATION_SOURCE.to_string(), SOURCE_REPOSITORY.to_string());
-    annotations.insert(ANNOTATION_FYI_ATTRIBUTION.to_string(), license.attribution.clone());
-    annotations.insert(ANNOTATION_FYI_SOURCE_TITLE.to_string(), source.title.clone());
-    annotations.insert(ANNOTATION_FYI_SOURCE_VERSION.to_string(), source.version.clone());
-    annotations.insert(ANNOTATION_FYI_SOURCE_HASH.to_string(), source.hash.clone());
-    annotations.insert(ANNOTATION_FYI_SOURCE_BYTES.to_string(), source.bytes.to_string());
     annotations
 }
 
@@ -115,12 +115,11 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("fyi.ods.attribution", crate::terms::ATTRIBUTION),
-                ("fyi.ods.source.bytes", "38138574"),
-                ("fyi.ods.source.hash", "sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5"),
-                ("fyi.ods.source.title", "NHS Organisation Data Service XML Data"),
-                ("fyi.ods.source.version", "2026-09-25"),
                 ("org.opencontainers.image.created", "2026-09-25T00:00:00Z"),
+                (
+                    "org.opencontainers.image.description",
+                    "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Contains information from NHS England, licensed under the current version of the Open Government Licence."
+                ),
                 ("org.opencontainers.image.licenses", "OGL-UK-3.0"),
                 ("org.opencontainers.image.source", "https://github.com/olizilla/ods"),
                 ("org.opencontainers.image.title", "ods-data"),
@@ -132,13 +131,8 @@ mod tests {
     #[test]
     fn test_build_from_dir_refuses_a_release_without_provenance() {
         let tmp = tempfile::tempdir().unwrap();
-        crate::commands::parquet::write_stub_parquet(
-            &tmp.path().join("orgs.parquet"),
-            Some(&crate::provenance::Embedded::without_provenance()),
-            "orgs",
-        )
-        .unwrap();
+        crate::commands::parquet::write_stub_parquet(&tmp.path().join("orgs.parquet"), None, "orgs").unwrap();
         let err = build_from_dir(tmp.path()).unwrap_err();
-        assert!(format!("{:#}", err).contains("has no provenance"), "{err:#}");
+        assert!(format!("{:#}", err).contains("carry no provenance"), "{err:#}");
     }
 }

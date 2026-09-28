@@ -7,20 +7,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use crate::ods_xml::{convert_parsed_orgs, parse_release_at, OdsRecord};
+use crate::ods_xml::{convert_parsed_orgs, OdsRecord};
 
-/// The provenance line an NDJSON export may open with: only the release date is used, to label
-/// the report.
-#[derive(Debug, Clone, serde::Deserialize)]
-struct OdsProvenance {
-    #[serde(rename = "$schema")]
-    schema: String,
-    #[serde(default)]
-    trud_release_date: Option<String>,
-}
-
-/// The `$schema` an NDJSON export's provenance line names.
-const NDJSON_PROVENANCE_SCHEMA: &str = "https://ods.fyi/schema/provenance.v1.json";
+/// The date a dataset's rows are as of, when it says: an `orgs.parquet`'s `publication_date`, or
+/// the XML's PublicationDate. NDJSON inputs are labelled by their record count alone.
+type AsOf = Option<String>;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -97,10 +88,10 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     eprintln!("Loading baseline dataset from {}...", old_path.display());
-    let (old_prov, old_records) = load_dataset(&old_path)?;
+    let (old_as_of, old_records) = load_dataset(&old_path)?;
 
     eprintln!("Loading target dataset from {}...", new_path.display());
-    let (new_prov, new_records) = load_dataset(&new_path)?;
+    let (new_as_of, new_records) = load_dataset(&new_path)?;
 
     eprintln!(
         "Loaded {} baseline records and {} target records.",
@@ -123,11 +114,11 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     match args.format.to_lowercase().as_str() {
-        "summary" => render_summary_tui(&mut writer, &args, old_prov.as_ref(), new_prov.as_ref(), old_records.len(), new_records.len(), &added, &removed, &modified, &stats)?,
+        "summary" => render_summary_tui(&mut writer, &args, old_as_of.as_deref(), new_as_of.as_deref(), old_records.len(), new_records.len(), &added, &removed, &modified, &stats)?,
         "json" | "ndjson" => render_json_ndjson(&mut writer, &added, &removed, &modified)?,
         "patch" => render_unified_patch(&mut writer, &added, &removed, &modified)?,
         "csv" => render_csv(&mut writer, &added, &removed, &modified)?,
-        "markdown" | "md" => render_markdown(&mut writer, &args, old_prov.as_ref(), new_prov.as_ref(), old_records.len(), new_records.len(), &added, &removed, &modified, &stats)?,
+        "markdown" | "md" => render_markdown(&mut writer, &args, old_as_of.as_deref(), new_as_of.as_deref(), old_records.len(), new_records.len(), &added, &removed, &modified, &stats)?,
         other => anyhow::bail!("Unsupported format '{}'. Supported formats: summary, json, patch, csv, markdown", other),
     }
 
@@ -135,7 +126,7 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
+fn load_dataset(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
     }
@@ -146,9 +137,7 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
             return load_parquet(path);
         } else if ext.eq_ignore_ascii_case("ndjson") || ext.eq_ignore_ascii_case("json") {
             return load_ndjson(path);
-        } else if ext.eq_ignore_ascii_case("zip") {
-            return load_zip(path);
-        } else if ext.eq_ignore_ascii_case("xml") {
+        } else if ext.eq_ignore_ascii_case("zip") || ext.eq_ignore_ascii_case("xml") {
             return load_xml(path);
         }
     }
@@ -166,17 +155,25 @@ fn load_dataset(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
     anyhow::bail!("Could not determine file format for {}", path.display())
 }
 
-fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
+fn load_parquet(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     let file = File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let reader = builder.build()?;
 
     let mut records = HashMap::new();
+    let mut as_of: AsOf = None;
     for batch in reader {
         let batch = batch?;
         let schema = batch.schema();
         let num_rows = batch.num_rows();
+        if as_of.is_none() && num_rows > 0 {
+            as_of = schema
+                .index_of("publication_date")
+                .ok()
+                .and_then(|idx| batch.column(idx).as_any().downcast_ref::<arrow::array::Date32Array>().and_then(|a| a.value_as_date(0)))
+                .map(|d| d.format("%Y-%m-%d").to_string());
+        }
 
         let ods_code_arr = batch.column(schema.index_of("ods_code")?)
             .as_any().downcast_ref::<arrow::array::StringArray>().context("ods_code StringArray")?;
@@ -234,80 +231,41 @@ fn load_parquet(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, O
         }
     }
 
-    Ok((None, records))
+    Ok((as_of, records))
 }
 
-fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
+fn load_ndjson(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
     let file = File::open(path)?;
     let reader = BufReader::with_capacity(128 * 1024, file);
     let mut records = HashMap::new();
-    let mut provenance = None;
 
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if provenance.is_none() {
-            if let Ok(prov) = serde_json::from_str::<OdsProvenance>(&line) {
-                if prov.schema == NDJSON_PROVENANCE_SCHEMA {
-                    provenance = Some(prov);
-                    continue;
-                }
-            }
-        }
         let record: OdsRecord = serde_json::from_str(&line)
             .with_context(|| format!("failed to parse NDJSON line in {}", path.display()))?;
         records.insert(record.ods_code.clone(), record);
     }
 
-    Ok((provenance, records))
+    Ok((None, records))
 }
 
-fn load_xml(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
-    let release = parse_release_at(path)?;
+/// A release's XML, from a zip, a directory or a bare XML file: both files, the pair `ods make`
+/// builds from, chosen by TRUD's release date when a pull record beside the input names it.
+/// Labelled by the XML's own PublicationDate.
+fn load_xml(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
+    let trud_date = crate::provenance::PullRecord::load_from_dir(path).ok().map(|record| record.version);
+    let release_xml = crate::ods_xml::find_release_xml(path, trud_date.as_deref())?;
+    for line in &release_xml.skipped {
+        eprintln!("{line}");
+    }
+    let headers = crate::ods_xml::read_manifest_headers(&release_xml.paths)?;
+    let as_of = crate::ods_xml::agreed_publication_date(&headers)?;
+    let release = crate::ods_xml::parse_release(&release_xml.paths)?;
     let map: HashMap<String, OdsRecord> = convert_parsed_orgs(release.orgs).into_iter().collect();
-    Ok((None, map))
-}
-
-fn load_zip(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, OdsRecord>)> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-
-    // Check if zip directly contains an XML file
-    for i in 0..archive.len() {
-        let file = archive.by_index(i)?;
-        if file.name().ends_with(".xml") {
-            let temp_dir = std::env::temp_dir().join("ods_zip_cache");
-            std::fs::create_dir_all(&temp_dir)?;
-            let temp_xml_path = temp_dir.join(Path::new(file.name()).file_name().unwrap_or_default());
-            let mut outfile = File::create(&temp_xml_path)?;
-            let mut reader = BufReader::new(file);
-            std::io::copy(&mut reader, &mut outfile)?;
-            return load_xml(&temp_xml_path);
-        }
-    }
-
-    // Check if zip contains fullfile.zip
-    if let Ok(mut fullfile) = archive.by_name("fullfile.zip") {
-        let mut buffer = Vec::new();
-        std::io::copy(&mut fullfile, &mut buffer)?;
-        let mut inner_archive = zip::ZipArchive::new(std::io::Cursor::new(buffer))?;
-        for i in 0..inner_archive.len() {
-            let file = inner_archive.by_index(i)?;
-            if file.name().ends_with(".xml") {
-                let temp_dir = std::env::temp_dir().join("ods_zip_cache");
-                std::fs::create_dir_all(&temp_dir)?;
-                let temp_xml_path = temp_dir.join(Path::new(file.name()).file_name().unwrap_or_default());
-                let mut outfile = File::create(&temp_xml_path)?;
-                let mut reader = BufReader::new(file);
-                std::io::copy(&mut reader, &mut outfile)?;
-                return load_xml(&temp_xml_path);
-            }
-        }
-    }
-
-    anyhow::bail!("No XML file found inside zip archive {}", path.display())
+    Ok((Some(as_of), map))
 }
 
 #[derive(Default, Debug)]
@@ -458,7 +416,7 @@ fn matches_filter(rec: &OdsRecord, args: &Args) -> bool {
     true
 }
 
-// Ten flat, unrelated-in-type parameters (a writer, the run's args, both releases' provenance,
+// Ten flat, unrelated-in-type parameters (a writer, the run's args, both releases' as-of dates,
 // both totals, three record slices and the stats). Bundling them into a params struct would just
 // move the same ten values one level down and touch every line of this and render_markdown's
 // body for no clarity gain, so this stays as a single call site with its inputs named at the
@@ -467,8 +425,8 @@ fn matches_filter(rec: &OdsRecord, args: &Args) -> bool {
 fn render_summary_tui(
     w: &mut dyn Write,
     args: &Args,
-    old_prov: Option<&OdsProvenance>,
-    new_prov: Option<&OdsProvenance>,
+    old_as_of: Option<&str>,
+    new_as_of: Option<&str>,
     total_old: usize,
     total_new: usize,
     added: &[OdsRecord],
@@ -481,14 +439,12 @@ fn render_summary_tui(
     let red = |s: &str| format!("\x1b[1;31m{}\x1b[0m", s);
     let yellow = |s: &str| format!("\x1b[1;33m{}\x1b[0m", s);
 
-    let old_label = old_prov
-        .and_then(|p| p.trud_release_date.as_deref())
-        .map(|d| format!("{} ({} recs)", d, total_old))
+    let old_label = old_as_of
+        .map(|d| format!("{} records as of {}", total_old, d))
         .unwrap_or_else(|| format!("{} records", total_old));
 
-    let new_label = new_prov
-        .and_then(|p| p.trud_release_date.as_deref())
-        .map(|d| format!("{} ({} recs)", d, total_new))
+    let new_label = new_as_of
+        .map(|d| format!("{} records as of {}", total_new, d))
         .unwrap_or_else(|| format!("{} records", total_new));
 
     writeln!(w, "\n{}", bold("================ ODS TRUD RELEASE DIFF REPORT ================"))?;
@@ -701,8 +657,8 @@ fn render_csv(
 fn render_markdown(
     w: &mut dyn Write,
     _args: &Args,
-    old_prov: Option<&OdsProvenance>,
-    new_prov: Option<&OdsProvenance>,
+    old_as_of: Option<&str>,
+    new_as_of: Option<&str>,
     total_old: usize,
     total_new: usize,
     added: &[OdsRecord],
@@ -712,14 +668,12 @@ fn render_markdown(
 ) -> Result<()> {
     let mod_pct = if total_old > 0 { (modified.len() as f64 / total_old as f64) * 100.0 } else { 0.0 };
 
-    let old_label = old_prov
-        .and_then(|p| p.trud_release_date.as_deref())
-        .map(|d| format!("{} ({} recs)", d, total_old))
+    let old_label = old_as_of
+        .map(|d| format!("{} records as of {}", total_old, d))
         .unwrap_or_else(|| format!("{} records", total_old));
 
-    let new_label = new_prov
-        .and_then(|p| p.trud_release_date.as_deref())
-        .map(|d| format!("{} ({} recs)", d, total_new))
+    let new_label = new_as_of
+        .map(|d| format!("{} records as of {}", total_new, d))
         .unwrap_or_else(|| format!("{} records", total_new));
 
     writeln!(w, "# ODS TRUD Release Diff Report\n")?;

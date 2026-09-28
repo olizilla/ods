@@ -1,6 +1,6 @@
 $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out
 --- stderr
-✖ hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 1FB785C4…AD80)
+✖ hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 BC003725…185D)
   Get it through ods trud pull, or run ods pull for a newer release index.
   To build it anyway, without provenance: ods make -i hscorgrefdataxml_data_7.0.0_20260731000001.zip -o <dir> --force
 --- exit 1
@@ -14,25 +14,25 @@ $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --
 $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force
 --- stderr
 * Source: hscorgrefdataxml_data_7.0.0_20260731000001.zip
-  reading xml   ████████████████████                      2KB
-  writing       ████████████████████  4 parquet files    16KB
-  successions   0 rows · 1.1KB
-  roles         2 rows · 3.6KB
-  relationships 1 rows · 3.7KB
-  orgs          2 rows · 8.0KB
-! hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 1FB785C4…AD80)
+  reading xml   ████████████████████                      3KB
+  writing       ████████████████████  4 parquet files    15KB
+  successions   0 rows · 0.7KB
+  roles         2 rows · 3.2KB
+  relationships 1 rows · 3.2KB
+  orgs          2 rows · 7.5KB
+! hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 BC003725…185D)
   Built without provenance. You can explore it with find, info and role, but not cite or publish it.
 
 $ COLUMNS=100 ods make --input hscorgrefdataxml_data_7.0.0_20260731000001.zip --output out --force --verbose
 --- stderr
 * Source: hscorgrefdataxml_data_7.0.0_20260731000001.zip
 * unpacking the release…
-  reading xml   ████████████████████                      2KB
-  writing       ████████████████████  4 parquet files    16KB
-  successions   0 rows · 1.1KB
-  roles         2 rows · 3.6KB
-  relationships 1 rows · 3.7KB
-  orgs          2 rows · 8.0KB
+  reading xml   ████████████████████                      3KB
+  writing       ████████████████████  4 parquet files    15KB
+  successions   0 rows · 0.7KB
+  roles         2 rows · 3.2KB
+  relationships 1 rows · 3.2KB
+  orgs          2 rows · 7.5KB
   stubs         0 superseded
-! hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 1FB785C4…AD80)
+! hscorgrefdataxml_data_7.0.0_20260731000001.zip isn't a TRUD release ods knows (SHA-256 BC003725…185D)
   Built without provenance. You can explore it with find, info and role, but not cite or publish it.

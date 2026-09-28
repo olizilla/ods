@@ -17,8 +17,8 @@
 # the same credentials from; this script does nothing extra there.
 #
 # Each bundle's manifest carries the annotation fyi.ods.trud-release-sha256: a convenience copy of
-# the zip layer's digest, in upper case, in the same form as the dataset manifests' annotation, so
-# a dataset links to its source bundle by one value.
+# the zip layer's digest, in upper case, in the same form as the release index's
+# trud_release_sha256, so a release links to its source bundle by one value.
 #
 # The package is meant to stay private and is published and forgotten: a bundle holds exactly
 # NHS's bytes and terms, its digest is a fixed function of them, and a tag is never moved.

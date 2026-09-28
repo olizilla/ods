@@ -116,7 +116,7 @@ NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) upda
 3. Checks for a cached local archive in `./ods_data/releases/<date>/trud/`.
 4. Downloads the archive ZIP if it isn't there. A ZIP that is there is never downloaded again while it matches TRUD's hash: the release directory is repaired from it instead (below).
 5. Computes the local SHA-256 hash and checks it against TRUD's published `archiveFileSha256`.
-6. Fetches NHS's checksum, signature and key, then writes `trud/datapackage.json`, the pull record, beside the archive it describes: the TRUD release as a Data Package, the archive's hash and size from TRUD's listing and the other three files' hashed from disk. It's never part of the dataset. `ods make` reads it and embeds the same facts in every Parquet file it writes (see [provenance.md](./provenance.md)).
+6. Fetches NHS's checksum, signature and key, then writes `trud/datapackage.json`, the pull record, beside the archive it describes: the TRUD release as a Data Package, the archive's hash and size from TRUD's listing and the other three files' hashed from disk. It's never part of the dataset. `ods make` reads it and embeds the same facts in every Parquet file it writes ([datapackage.md](./datapackage.md#truddatapackagejson-the-pull-record) describes it).
 7. Updates the workspace active release symlink (`./ods_data/current -> releases/<date>`).
 
 ```mermaid

@@ -70,7 +70,7 @@ Verifiable provenance for the data is essential so `ods` manages pulling and ver
 2. Run `ods trud pull` to fech the data and verify its hash
 3. Run `ods make` to create deterministic projections of the data as parquet files
 
-Anyone with a TRUD account can rebuild the release and get identical bytes. But we expect most folks won't have a TRUD account, and shouldn't need one to query the open data, so we publish those parquet files as content-addressed OCI Images, and allow uses to fetch them via `ods`
+Anyone with a TRUD account can rebuild the release and get identical bytes. But we expect most folks won't have a TRUD account, and shouldn't need one to query the open data, so we publish those parquet files as content-addressed [OCI images](./docs/oci.md), and allow uses to fetch them via `ods`
 
 1. TRUD publishes a SHA-256 for the release archive
 2. We build the parquet on Github Actions with SLSA attestations for provenance.
@@ -257,9 +257,15 @@ Per the OGL licence:
 
 - [docs/parquet.md] — schemas, naming rules, and the decisions they settle
 - [docs/queries.md] — worked queries, single-release and across an archive
+- [docs/provenance.md] — what each release says about where it came from, and whose word it is
+- [docs/oci.md] — the OCI images: what's in a manifest, the tags, and fetching with stock tools
+- [docs/datapackage.md] — `datapackage.json`, the pull record, and our Data Package profile
 
 [docs/parquet.md]: ./docs/parquet.md
 [docs/queries.md]: ./docs/queries.md
+[docs/provenance.md]: ./docs/provenance.md
+[docs/oci.md]: ./docs/oci.md
+[docs/datapackage.md]: ./docs/datapackage.md
 [D5]: ./docs/tests.md#the-data
 [role_names.json]: ./data/role_names.json
 [open government licence]: https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/licence/26

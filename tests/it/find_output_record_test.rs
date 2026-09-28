@@ -130,7 +130,7 @@ fn dummy_org_row() -> OrgRow {
         operational_start: None,
         operational_end: None,
         last_changed: None,
-        trud_release_date: "2026-07-31".to_string(),
+        publication_date: "2026-07-31".to_string(),
     }
 }
 
@@ -388,11 +388,12 @@ fn setup_two_hop_chain_workspace() -> (TempDir, PathBuf) {
         &succ_closures,
         &pred_closures,
         Some(&prov),
+        "2026-07-31",
     )
     .unwrap();
-    export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
-    export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
-    export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
+    export_roles(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
+    export_relationships(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
+    export_successions(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
 
     (tmp, parquet_dir)
 }

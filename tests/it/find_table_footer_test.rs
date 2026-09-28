@@ -30,7 +30,7 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
             .unwrap()
             .embedded(version)
             .unwrap();
-        let (_find_tmp, sample_parquet_dir) = setup_find_test_workspace_embedded(&embedded);
+        let (_find_tmp, sample_parquet_dir) = setup_find_test_workspace_embedded(Some(&embedded));
         let rel = ws_root.join("releases").join(date);
         fs::create_dir_all(&rel).unwrap();
         for entry in fs::read_dir(&sample_parquet_dir).unwrap() {

@@ -696,8 +696,52 @@ fn test_ensure_workspace_root_is_idempotent() {
     assert_eq!(gitignore_1, gitignore_2, ".gitignore must be unchanged after second call");
 }
 
+/// The README an `ods` before the marker wrote: it described the active release, so every
+/// workspace's differed and none was ever updated.
+const OLDER_GENERATED_README: &str = "# `ods` workspace\n\n\
+This directory holds verified releases of NHS Organisation Data as Parquet files, pulled by the `ods` CLI.\n\
+The data is NHS England's Organisation Data Service, under the Open Government Licence.\n\n\
+- **Active Release**: 2026-08-28\n\
+- **Status**: Active dataset indexed in `current/`\n";
 
+/// The workspace README is `ods`'s to rewrite when it's missing, when an earlier `ods` generated
+/// it, or when it carries the marker and says something else; a README the user wrote is left
+/// alone.
+#[test]
+fn test_workspace_readme_is_rewritten_only_when_it_is_ods_own() {
+    let marked_but_edited = format!(
+        "{}\n# my notes\nedited by hand\n",
+        ods::workspace::WORKSPACE_README.lines().next().unwrap()
+    );
+    let users = "# Our NHS data\n\nPulled weekly by the analytics team.\n";
+    for (case, before, after) in [
+        ("today's generated README", OLDER_GENERATED_README, ods::workspace::WORKSPACE_README),
+        ("a README with the marker and different text", marked_but_edited.as_str(), ods::workspace::WORKSPACE_README),
+        ("a README the user wrote", users, users),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("ods_data");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("README.md"), before).unwrap();
 
+        ods::workspace::ensure_workspace_root(&ws).unwrap();
 
+        assert_eq!(fs::read_to_string(ws.join("README.md")).unwrap(), after, "{case}");
+    }
+}
 
-
+/// Every workspace gets the same README bytes, whatever it holds.
+#[test]
+fn test_workspace_readme_is_the_same_in_every_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let readmes: Vec<Vec<u8>> = ["first_ws", "second_ws"]
+        .iter()
+        .map(|name| {
+            let ws = tmp.path().join(name);
+            ods::workspace::ensure_workspace_root(&ws).unwrap();
+            fs::read(ws.join("README.md")).unwrap()
+        })
+        .collect();
+    assert_eq!(readmes[0], readmes[1]);
+    assert_eq!(readmes[0], ods::workspace::WORKSPACE_README.as_bytes());
+}

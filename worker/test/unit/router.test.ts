@@ -125,9 +125,9 @@ describe('Root convenience path still resolves through the latest manifest', () 
         schemaVersion: 2,
         mediaType: 'application/vnd.oci.image.manifest.v1+json',
         config: {
-          mediaType: 'application/vnd.fyi.ods.provenance.v1+json',
-          digest: 'sha256:083525aae40231344be2fa3f14064ca2e455b0bcce9868d0e9051558ebbf5b0a',
-          size: 1024,
+          mediaType: 'application/vnd.oci.empty.v1+json',
+          digest: 'sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+          size: 2,
         },
         layers: [
           {

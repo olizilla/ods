@@ -1,16 +1,3 @@
-use anyhow::{bail, Result};
-use std::path::{Path, PathBuf};
-
-/// Extracted TRUD release archive metadata from verified filename pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrudArchiveInfo {
-    pub archive_path: PathBuf,
-    pub filename: String,
-    pub version: String,
-    pub release_name: String,
-    pub release_date: String,
-}
-
 /// Parses and validates a TRUD release archive filename.
 /// Pattern: `hscorgrefdataxml_data_<version>_<YYYYMMDD><seq>.zip`
 /// Returns `(version, release_name, release_date_yyyy_mm_dd)`
@@ -43,83 +30,6 @@ pub fn parse_trud_archive_filename(filename: &str) -> Option<(String, String, St
     let release_name = format!("Release {}", version);
 
     Some((version.to_string(), release_name, date_str))
-}
-
-/// Formats the official error when input is not a recognized TRUD release archive.
-pub fn format_not_a_trud_archive_error(filename: &str) -> String {
-    format!(
-        "✖ Not a TRUD release archive: {}\n  Expected a file named like hscorgrefdataxml_data_<version>_<YYYYMMDD><seq>.zip\n  The release date is read from the filename, so `ods` can record which release\n  the data came from.",
-        filename
-    )
-}
-
-/// Resolves and validates a TRUD release archive from a file or directory path.
-pub fn resolve_trud_archive(input_path: &Path) -> Result<TrudArchiveInfo> {
-    if !input_path.exists() {
-        bail!("Input path does not exist: {}", input_path.display());
-    }
-
-    if input_path.is_file() {
-        let filename = input_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        match parse_trud_archive_filename(filename) {
-            Some((version, release_name, release_date)) => Ok(TrudArchiveInfo {
-                archive_path: input_path.to_path_buf(),
-                filename: filename.to_string(),
-                version,
-                release_name,
-                release_date,
-            }),
-            None => bail!("{}", format_not_a_trud_archive_error(filename)),
-        }
-    } else if input_path.is_dir() {
-        let mut candidates = Vec::new();
-        let trud_sub = input_path.join("trud");
-        let search_dirs = if trud_sub.is_dir() {
-            vec![trud_sub, input_path.to_path_buf()]
-        } else {
-            vec![input_path.to_path_buf()]
-        };
-
-        for dir in search_dirs {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() && path.extension().is_some_and(|ext| ext == "zip") {
-                        candidates.push(path);
-                    }
-                }
-            }
-        }
-
-        // Check matching archive
-        for path in &candidates {
-            let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if let Some((version, release_name, release_date)) = parse_trud_archive_filename(filename) {
-                return Ok(TrudArchiveInfo {
-                    archive_path: path.clone(),
-                    filename: filename.to_string(),
-                    version,
-                    release_name,
-                    release_date,
-                });
-            }
-        }
-
-        if let Some(first) = candidates.first() {
-            let filename = first.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            bail!("{}", format_not_a_trud_archive_error(filename));
-        }
-
-        bail!(
-            "No TRUD release archive (*.zip) found in directory '{}'",
-            input_path.display()
-        );
-    } else {
-        bail!("Invalid input path: {}", input_path.display());
-    }
 }
 
 #[cfg(test)]

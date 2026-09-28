@@ -41,17 +41,13 @@ Options:
   -V, --version  Print version
 ```
 
-### JSON output is not yet stable
+### JSON output
 
-`--format json` is intended for scripts and agents, but its shape is **not
-versioned**. Today each `ods find` row carries the `orgs.parquet` column names.
-Later releases may add joined or derived fields, or change existing ones, without
-notice.
+`--format json` is intended for scripts and agents. 
 
-The Parquet schema has `dataset_version` and a
-`datapackage.json` contract; the CLI's JSON output has no equivalent yet. If you
-are building something durable, read the Parquet files directly — they are the
-stable interface, and `datapackage.json` describes them.
+Each `ods find` row carries the `orgs.parquet` column names. Later releases may add joined or derived fields.
+
+The JSON output of other commands is not yet tested for stability across releases. If you need this, open an issue.
 
 ### Notices
 

@@ -149,7 +149,7 @@ An inactive organisation with a three-hop succession chain:
   "operational_start": "1994-04-01",
   "operational_end": "2012-10-01",
   "last_changed": "2013-03-22",
-  "trud_release_date": "2026-07-31",
+  "publication_date": "2026-07-28",
   "primary_role_name": "Regional Health Authority",
   "other_roles": [],
   "succession": [

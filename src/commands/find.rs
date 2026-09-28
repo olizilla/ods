@@ -180,7 +180,7 @@ pub struct OrgRow {
     pub operational_start: Option<String>,
     pub operational_end: Option<String>,
     pub last_changed: Option<String>,
-    pub trud_release_date: String,
+    pub publication_date: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,7 +207,7 @@ pub struct OrgColumnIndices {
     pub leg_start: Option<usize>,
     pub leg_end: Option<usize>,
     pub last_change: Option<usize>,
-    pub trud_release_date: Option<usize>,
+    pub publication_date: Option<usize>,
 }
 
 impl OrgColumnIndices {
@@ -235,7 +235,7 @@ impl OrgColumnIndices {
             leg_start: schema.index_of("legal_start").ok(),
             leg_end: schema.index_of("legal_end").ok(),
             last_change: schema.index_of("last_changed").ok(),
-            trud_release_date: schema.index_of("trud_release_date").ok(),
+            publication_date: schema.index_of("publication_date").ok(),
         })
     }
 }
@@ -361,7 +361,7 @@ pub fn extract_org_row_from_batch(
         operational_start: extract_batch_date(batch, idx.op_start, row),
         operational_end: extract_batch_date(batch, idx.op_end, row),
         last_changed: extract_batch_date(batch, idx.last_change, row),
-        trud_release_date: extract_batch_date(batch, idx.trud_release_date, row).unwrap_or_default(),
+        publication_date: extract_batch_date(batch, idx.publication_date, row).unwrap_or_default(),
     }
 }
 
@@ -451,7 +451,7 @@ pub fn csv_headers_from_output_record() -> Vec<String> {
             operational_start: None,
             operational_end: None,
             last_changed: None,
-            trud_release_date: String::new(),
+            publication_date: String::new(),
         },
         predecessors: vec![Related {
             code: String::new(),
@@ -988,7 +988,7 @@ pub fn build_sql_query(
 
     if !args.all {
         clauses.push("status = 'active'".to_string());
-        clauses.push("(legal_end IS NULL OR legal_end > trud_release_date)".to_string());
+        clauses.push("(legal_end IS NULL OR legal_end > publication_date)".to_string());
     }
 
     if let Some(ref q) = args.query {
@@ -1441,13 +1441,13 @@ pub fn run_with_writer_color_width(
 
             let org = extract_org_row_from_batch(&batch, i, &indices);
 
-            // A row past its legal end as of the release date is closed, not merely
+            // A row past its legal end as of the publication date is closed, not merely
             // not-yet-closed in every sense NHS tracks — checked last, against only
             // what the search would otherwise have returned, so the footer can say
             // how many of *this search's* matches were held back, not the dataset's.
             if !args.all {
                 if let Some(ref legal_end) = org.legal_end {
-                    if legal_end.as_str() <= org.trud_release_date.as_str() {
+                    if legal_end.as_str() <= org.publication_date.as_str() {
                         legally_closed_count += 1;
                         continue;
                     }
@@ -1627,7 +1627,7 @@ pub fn run_with_writer_color_width(
                         || r.org
                             .legal_end
                             .as_deref()
-                            .is_some_and(|le| le <= r.org.trud_release_date.as_str());
+                            .is_some_and(|le| le <= r.org.publication_date.as_str());
 
                     DisplayRow {
                         ods_code: &r.org.ods_code,
@@ -1775,7 +1775,7 @@ pub fn run_with_writer_color_width(
                         let active_count = matches.iter().filter(|r| r.org.status.eq_ignore_ascii_case("active")).count();
                         let legally_closed_count = matches.iter().filter(|r| {
                             r.org.status.eq_ignore_ascii_case("active")
-                                && r.org.legal_end.as_deref().is_some_and(|le| le <= r.org.trud_release_date.as_str())
+                                && r.org.legal_end.as_deref().is_some_and(|le| le <= r.org.publication_date.as_str())
                         }).count();
                         let open_count = active_count.saturating_sub(legally_closed_count);
                         let inactive_count = n.saturating_sub(active_count);
@@ -1957,10 +1957,10 @@ mod tests {
 
         let prov = crate::provenance::fixture_embedded("2026-07-31");
 
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
-        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
-        crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov)).unwrap();
-        crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov)).unwrap();
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-07-31").unwrap();
+        crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
+        crate::commands::parquet::export_relationships(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
+        crate::commands::parquet::export_successions(&parquet_dir, &records, Some(&prov), "2026-07-31").unwrap();
 
         (dir, parquet_dir)
     }
@@ -2179,7 +2179,7 @@ mod tests {
             operational_start: None,
             operational_end: None,
             last_changed: None,
-            trud_release_date: "X".to_string(),
+            publication_date: "X".to_string(),
         };
 
         let org_val = serde_json::to_value(&dummy_org).unwrap();
@@ -2239,10 +2239,10 @@ mod tests {
         assert_eq!(json_keys[24], "successors");
     }
 
-    /// A code whose legal end is the release date is closed, `>` not `>=`
+    /// A code whose legal end is the publication date is closed, `>` not `>=`
     /// (`open-not-just-active.md`, decided 2026-09-23).
     #[test]
-    fn test_open_filter_excludes_a_legal_end_equal_to_the_release_date() {
+    fn test_open_filter_excludes_a_legal_end_equal_to_the_publication_date() {
         let dir = tempdir().unwrap();
         let parquet_dir = dir.path().to_path_buf();
 
@@ -2263,7 +2263,7 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
         let prov = crate::provenance::fixture_embedded("2026-07-31");
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-07-31").unwrap();
 
         let mut out = Vec::new();
         run_with_writer(
@@ -2279,7 +2279,7 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
         assert!(
             !s.contains("FG241"),
-            "a legal end equal to the release date is closed, not open:\n{s}"
+            "a legal end equal to the publication date is closed, not open:\n{s}"
         );
 
         let mut out_all = Vec::new();
@@ -2340,7 +2340,7 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
         let prov = crate::provenance::fixture_embedded(release_date);
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), release_date).unwrap();
 
         let run = |query: &str, all: bool| -> String {
             let mut out = Vec::new();
@@ -2575,7 +2575,7 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
         let prov = crate::provenance::fixture_embedded("2026-07-31");
-        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
+        crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov), "2026-07-31").unwrap();
 
         (dir, parquet_dir)
     }

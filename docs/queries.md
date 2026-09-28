@@ -7,10 +7,10 @@ You can point `duckdb` at the parquet files and go. Local-first! All examples he
 `status = 'active'` alone isn't the same question as "is this open": NHS keeps a legally dissolved organisation `active` for a migration window that's meant to be six months and often runs years over (see [nhs.md](./nhs.md#status-active-and-open)). What `ods find` and `ods role` actually filter on, and what a query should use if it means the same thing, is:
 
 ```sql
-WHERE status = 'active' AND (legal_end IS NULL OR legal_end > trud_release_date)
+WHERE status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)
 ```
 
-Compare to `trud_release_date`, the column, never to `current_date`: a query against a dated, immutable release should answer the same way whenever you run it. Comparing to today's date instead makes the same query drift out of date the moment it's written, and answer differently on the same file next year.
+Compare to `publication_date`, the column, never to `current_date`: a query against a dated, immutable release should answer the same way whenever you run it. It's NHS England's publication date for the release, from the XML ([parquet.md](./parquet.md#publication_date-what-a-row-is-as-of) says why). Comparing to today's date instead makes the same query drift out of date the moment it's written, and answer differently on the same file next year.
 
 ```console
 $ duckdb -c "SELECT ods_code, name, role_names FROM 'ods_data/current/orgs.parquet' WHERE status = 'active' AND town = 'SEDBERGH'"
@@ -420,27 +420,27 @@ WHERE status = 'active' AND ods_code NOT IN (SELECT code FROM linked);
 
 ## Across releases
 
-Every table carries `trud_release_date`, so a directory of pinned releases is a
+Every table carries `publication_date`, so a directory of pinned releases is a
 time series and one glob reads the lot.
 
 ```sql
-SELECT trud_release_date, count(*) AS n_rows,
+SELECT publication_date, count(*) AS n_rows,
        count(*) FILTER (WHERE status = 'active') AS n_active
 FROM read_parquet('ods_data/releases/*/orgs.parquet')
 GROUP BY 1 ORDER BY 1;
 ```
 
-| trud_release_date | n_rows | n_active |
+| publication_date | n_rows | n_active |
 | :--- | ---: | ---: |
-| 2026-05-29 | 368,495 | 216,564 |
-| 2026-06-26 | 369,400 | 216,417 |
-| 2026-07-31 | 370,257 | 216,886 |
-| 2026-08-28 | 370,917 | 217,059 |
+| 2026-05-26 | 368,495 | 216,564 |
+| 2026-06-22 | 369,400 | 216,417 |
+| 2026-07-28 | 370,257 | 216,886 |
+| 2026-08-27 | 370,917 | 217,059 |
 
 Nearly everything below is the same idiom with a different column plugged in:
 
 ```sql
-lag(anything) OVER (PARTITION BY ods_code ORDER BY trud_release_date)
+lag(anything) OVER (PARTITION BY ods_code ORDER BY publication_date)
 ```
 
 Four releases scan in under 0.1s, so this stays snappy well past a decade of
@@ -450,23 +450,23 @@ monthly snapshots.
 
 ```sql
 WITH s AS (
-  SELECT ods_code, name, trud_release_date, status,
-         lag(status) OVER (PARTITION BY ods_code ORDER BY trud_release_date) AS prev_status
+  SELECT ods_code, name, publication_date, status,
+         lag(status) OVER (PARTITION BY ods_code ORDER BY publication_date) AS prev_status
   FROM read_parquet('ods_data/releases/*/orgs.parquet')
 )
-SELECT trud_release_date, prev_status, status, count(*) AS n
+SELECT publication_date, prev_status, status, count(*) AS n
 FROM s WHERE prev_status IS NOT NULL AND prev_status <> status
 GROUP BY ALL ORDER BY 1, 2;
 ```
 
-| trud_release_date | was | now | n |
+| publication_date | was | now | n |
 | :--- | :--- | :--- | ---: |
-| 2026-06-26 | active | inactive | 1068 |
-| 2026-06-26 | inactive | active | 18 |
-| 2026-07-31 | active | inactive | 618 |
-| 2026-07-31 | inactive | active | 44 |
-| 2026-08-28 | active | inactive | 610 |
-| 2026-08-28 | inactive | active | 123 |
+| 2026-06-22 | active | inactive | 1068 |
+| 2026-06-22 | inactive | active | 18 |
+| 2026-07-28 | active | inactive | 618 |
+| 2026-07-28 | inactive | active | 44 |
+| 2026-08-27 | active | inactive | 610 |
+| 2026-08-27 | inactive | active | 123 |
 
 The reopenings are the half nobody expects. 185 organisations came back from the
 dead over three months, and no single release records that it ever happened.
@@ -477,9 +477,9 @@ dead over three months, and no single release records that it ever happened.
 Every one of them an inactive organisation when last seen, mostly schools.
 
 ```sql
-WITH r AS (SELECT ods_code, trud_release_date FROM read_parquet('ods_data/releases/*/orgs.parquet'))
+WITH r AS (SELECT ods_code, publication_date FROM read_parquet('ods_data/releases/*/orgs.parquet'))
 SELECT count(*) FROM (
-  SELECT ods_code FROM r GROUP BY 1 HAVING max(trud_release_date) < DATE '2026-08-28'
+  SELECT ods_code FROM r GROUP BY 1 HAVING max(publication_date) < DATE '2026-08-27'
 );
 -- 186
 ```
@@ -497,11 +497,11 @@ One release carries one current name per entity. Two releases carry the change.
 
 ```sql
 WITH s AS (
-  SELECT ods_code, name, trud_release_date,
-         lag(name) OVER (PARTITION BY ods_code ORDER BY trud_release_date) AS was
+  SELECT ods_code, name, publication_date,
+         lag(name) OVER (PARTITION BY ods_code ORDER BY publication_date) AS was
   FROM read_parquet('ods_data/releases/*/orgs.parquet')
 )
-SELECT ods_code, was, name AS now, trud_release_date
+SELECT ods_code, was, name AS now, publication_date
 FROM s WHERE was IS NOT NULL AND name <> was ORDER BY ods_code;
 ```
 
@@ -552,23 +552,23 @@ Commissioning links (`RE4`) and operational links (`RE6`) change across monthly 
 
 ```sql
 WITH rel_history AS (
-  SELECT source_code, rel_code, target_code, trud_release_date,
-         lag(target_code) OVER (PARTITION BY source_code, rel_code ORDER BY trud_release_date) AS prev_target
+  SELECT source_code, rel_code, target_code, publication_date,
+         lag(target_code) OVER (PARTITION BY source_code, rel_code ORDER BY publication_date) AS prev_target
   FROM read_parquet('ods_data/releases/*/relationships.parquet')
   WHERE rel_status = 'active'
 )
-SELECT trud_release_date,
+SELECT publication_date,
   count(*) FILTER (WHERE rel_code = 'RE4' AND target_code IS DISTINCT FROM prev_target) AS commissioner_changed,
   count(*) FILTER (WHERE rel_code = 'RE6' AND target_code IS DISTINCT FROM prev_target) AS operated_by_changed
-FROM rel_history WHERE trud_release_date > DATE '2026-05-29'
+FROM rel_history WHERE publication_date > DATE '2026-05-26'
 GROUP BY 1 ORDER BY 1;
 ```
 
-| trud_release_date | commissioner_changed | operated_by_changed |
+| publication_date | commissioner_changed | operated_by_changed |
 | :--- | ---: | ---: |
-| 2026-06-26 | 140 | 648 |
-| 2026-07-31 | 158 | 776 |
-| 2026-08-28 | 99 | 488 |
+| 2026-06-22 | 140 | 648 |
+| 2026-07-28 | 158 | 776 |
+| 2026-08-27 | 99 | 488 |
 
 ## Is `last_changed` honest?
 
@@ -577,12 +577,12 @@ check whether it's telling the truth, instead of hoping.
 
 ```sql
 WITH s AS (
-  SELECT ods_code, trud_release_date, last_changed, name, postcode, status, primary_role_code,
+  SELECT ods_code, publication_date, last_changed, name, postcode, status, primary_role_code,
          lag(last_changed)      OVER w AS p_changed,  lag(name)     OVER w AS p_name,
          lag(postcode)          OVER w AS p_postcode, lag(status)   OVER w AS p_status,
          lag(primary_role_code) OVER w AS p_role
   FROM read_parquet('ods_data/releases/*/orgs.parquet')
-  WINDOW w AS (PARTITION BY ods_code ORDER BY trud_release_date)
+  WINDOW w AS (PARTITION BY ods_code ORDER BY publication_date)
 ), c AS (
   SELECT *,
     (name IS DISTINCT FROM p_name OR postcode IS DISTINCT FROM p_postcode
@@ -590,18 +590,18 @@ WITH s AS (
     (last_changed IS DISTINCT FROM p_changed) AS stamped
   FROM s WHERE p_changed IS NOT NULL
 )
-SELECT trud_release_date,
+SELECT publication_date,
   count(*) FILTER (WHERE edited AND stamped)     AS edited_and_stamped,
   count(*) FILTER (WHERE edited AND NOT stamped) AS edited_not_stamped,
   count(*) FILTER (WHERE NOT edited AND stamped) AS stamped_no_visible_edit
 FROM c GROUP BY 1 ORDER BY 1;
 ```
 
-| trud_release_date | edited & stamped | edited, not stamped | stamped, no visible edit |
+| publication_date | edited & stamped | edited, not stamped | stamped, no visible edit |
 | :--- | ---: | ---: | ---: |
-| 2026-06-26 | 1797 | 0 | 1093 |
-| 2026-07-31 | 1335 | 0 | 3459 |
-| 2026-08-28 | 1267 | 0 | 758 |
+| 2026-06-22 | 1797 | 0 | 1093 |
+| 2026-07-28 | 1335 | 0 | 3459 |
+| 2026-08-27 | 1267 | 0 | 758 |
 
 Not one unstamped edit in any month, across name, postcode, status and primary
 role. That's a good result for ODS. _(It only covers those four fields over three
@@ -612,14 +612,14 @@ don't show up as `orgs` columns.)_
 
 ```sql
 WITH s AS (
-  SELECT ods_code, trud_release_date, successor_codes,
-         lag(successor_codes) OVER (PARTITION BY ods_code ORDER BY trud_release_date) AS was
+  SELECT ods_code, publication_date, successor_codes,
+         lag(successor_codes) OVER (PARTITION BY ods_code ORDER BY publication_date) AS was
   FROM read_parquet('ods_data/releases/*/orgs.parquet')
 )
-SELECT trud_release_date, count(*) AS gained_successors
+SELECT publication_date, count(*) AS gained_successors
 FROM s WHERE was IS NOT NULL AND len(successor_codes) > len(was)
 GROUP BY 1 ORDER BY 1;
--- 2026-07-31 | 6
+-- 2026-07-28 | 6
 ```
 
 The paperwork lands after the merger, so a mapping built from one release can be
@@ -656,11 +656,12 @@ SELECT rel_status, count(*) FROM 'ods_data/current/relationships.parquet' GROUP 
 -- active   | 302852
 ```
 
-**Group by `trud_release_date` for release identity.** It aligns with the directory
-names and TRUD release distributions (e.g. `2026-05-29`, `2026-06-26`, `2026-07-31`, `2026-08-28`).
-It's TRUD's release date, recorded in every Parquet row and in each file's embedded
-provenance (`sources[0].version`), not the XML manifest's own internal publication date,
-which `ods` doesn't capture.
+**Group by `publication_date` for release identity.** It's NHS England's own
+publication date from the release XML, one value per release, a few days before the TRUD
+release date that names the directory: `2026-05-26`, `2026-06-22`, `2026-07-28` and
+`2026-08-27` for the `2026-05-29`, `2026-06-26`, `2026-07-31` and `2026-08-28` releases. The TRUD
+date is in each file's embedded provenance (`sources[0].version`), or add `filename = true` to
+`read_parquet` and read it from the path.
 
 **Add `union_by_name = true` when your releases span a schema change.** Missing
 columns read as NULL instead of failing the query. Pre-1.0 that's every schema

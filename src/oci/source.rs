@@ -12,8 +12,9 @@
 //! NHS stamps differently for some releases.
 //!
 //! The `fyi.ods.trud-release-sha256` annotation is a convenience copy of the zip layer's digest,
-//! in upper case, in the same form as the dataset manifests' annotation, so a dataset links to its
-//! source bundle by one value. It adds no trust: the layer's own digest is the same hash.
+//! in upper case, in the same form as the release index's `trud_release_sha256`, so a release
+//! links to its source bundle by one value. It adds no trust: the layer's own digest is the same
+//! hash.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;

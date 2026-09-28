@@ -7,25 +7,30 @@ The NHS Organisation Data Service (ODS) publishes reference data for every healt
 - `ods` is a Rust CLI that makes the ODS data easy to fetch, query, cite, and reproduce.
 - [`ods.fyi`](https://ods.fyi) hosts the data as verifiable OCI Images. Republished to ghcr.io for resilience.
 
-You can use the data in multiple ways:
+> **NOTE** this is an independent project not commissioned by the NHS. The goal is to provide reliable and useful projections of NHS data, to aid research and to demonstrate the value of open formats, content-addressing and good UX.
 
-| I want to...                  | Feature                | Commands |
-|-------------------------------|------------------------|----------|
-| _**Query** the data with SQL_ | Hosted Parquet files   | `SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5` |
-| _**Find** NHS orgs_           | Local-first search     | `ods pull` & `ods find`|
-| _**Verify** the provenance_   | Reproducible builds    | `ods trud pull` & `ods make` |
-| _**Cite** the data_           | Academic citation info | `ods cite` |
-| _See what changed_            | Diff trud ods releases | `ods trud diff` |
-| _Know how it works_           | See the SQL queries    | `ods find --sql` |
+
+Inspired by [`sct`][sct], the [SNOMED CT CLI][sct]. `ods` aims to provide an open, resilient, academically citable and easy to use source for NHS Org structure data.
+
+**Best bits**
 
 - **Open formats**: https://ods.fyi republishes it as Parquet files you can query with standard SQL. The tables can be queried over https via `duckdb`, or Python without installing `ods` at all.
 - **Easy to query out of the box**: `ods find` gives you fast, local-first search across all NHS orgs and sites. Parent, PCN, ICB, Trust, and Successor relationships are all pre-calculated.
 - **Reproducible projections**: Built directly from official NHS TRUD XML data with full provenance tracking and SHA-256 hash checks. You can build byte-for-byte identical projections yourself anytime with `ods make`.
 - **Content-addressed**: https://ods.fyi publishes the datasets as OCI Images. `ods pull` automatically checks the file integrity for you, and will fetch identical bytes from ods.fyi or ghcr.io.
 
-A sister project to `sct`, the SNOMED CT CLI. `ods` aims to provide an open, resilient, academically citable and easy to use source for NHS Org structure data.
 
-> **NOTE** this is an independent project not commissioned by the NHS. The goal is to provide reliable and useful projections of NHS data, to aid research and to demonstrate the value of open formats and good UX.
+Use the data in multiple ways:
+
+| I want to...               | Feature                | Commands |
+|----------------------------|------------------------|----------|
+| _Query the data with SQL_  | Hosted Parquet files   | `SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5` |
+| _Find NHS orgs_            | Local-first search     | `ods pull` & `ods find`|
+| _Verify the provenance_    | Reproducible builds    | `ods trud pull` & `ods make` |
+| _Cite the data_            | Academic citation info | `ods cite` |
+| _See what changed_         | Diff trud ods releases | `ods trud diff` |
+| _Know how it works_        | See the SQL queries    | `ods find --sql` |
+
 
 ## Query the data
 
@@ -44,16 +49,18 @@ duckdb -c "
   SELECT ods_code, name, postcode, role_names
     FROM 'https://ods.fyi/orgs.parquet'
    WHERE status = 'active'
-     AND (legal_end IS NULL OR legal_end > trud_release_date)
+     AND (legal_end IS NULL OR legal_end > publication_date)
    AND list_contains(role_names, 'GP Practice')
    AND postcode LIKE 'SW9%';"
 ```
 
 ### Local-first
 
-Running more than a few queries? Fetch the parquet files for the release once with `ods pull`
+Running more than a few queries? Fetch the parquet files for the release once with `ods pull`. Local queries on static parquet files are _fast_, and **reliable**. 
 
-```bash
+Datasets are published as a content-addressed [OCI Images](https://opencontainers.org/faq/), and `ods pull` verifies the file integrity for you.
+
+```console
 $ ods pull
   2026-08-28    ████████████████████  28MB   6 files  from ods.fyi  in 4.1s
   dataset       ods-data/2026-08-28_0.1.0
@@ -81,8 +88,6 @@ $ ods find --gp --in SW9
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Local queries on static parquet files are _fast_! Each dataset is published as an [OCI Image](https://opencontainers.org/faq/), and `ods pull` verifies the file integrity for you.
-
 ## ODS data directory
 
 The `ods` CLI manages a local workspace directory called `ods_data` to keep a local copy of each release you use, so you can always access it and refer back to it later.
@@ -95,7 +100,7 @@ Each release gets its own date stamped folder, and a symlink is set up to point 
 
 ```text
 ods_data/
-├── README.md                           # Workspace schema documentation
+├── README.md                           # How to use the workspace, written by ods
 ├── current -> releases/2026-07-31/     # Active release pin (symlink)
 └── releases/
     └── 2026-07-31/                    # Release directory
@@ -106,9 +111,9 @@ ods_data/
         └── successions.parquet        # Entity successor chains
 ```
 
-Each Parquet file carries its own provenance, so a single copied file still says which release it
-is and whose data it holds. `datapackage.json` describes the release in the shape at
-<https://datapackage.org/standard/data-package/>. See [docs/provenance.md](./docs/provenance.md).
+Each Parquet file carries its provenance as metadata in the file, see:([docs/provenance.md](./docs/provenance.md)). 
+
+A `datapackage.json` describes the release in the open Data Package ([docs/datapackage.md](./docs/datapackage.md)) format and each release is published as a content addressed OCI image ([docs/oci.md](./docs/oci.md)).
 
 See [docs/ods_data.md](./docs/ods_data.md) for full workspace specification details.
 
@@ -225,3 +230,4 @@ See: [CONTRIBUTING.md](./CONTRIBUTING.md#licensing) for more detail.
 
 
 [Data Package]: https://datapackage.org/overview/introduction/
+[sct]: https://github.com/pacharanero/sct
