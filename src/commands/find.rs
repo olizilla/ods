@@ -1108,7 +1108,7 @@ pub fn run_with_writer_color_width(
     color: bool,
     explicit_width: Option<u16>,
 ) -> Result<()> {
-    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading(parquet_dir);
+    crate::workspace::check_release_provenance(parquet_dir)?;
     let file_name = "orgs.parquet";
     let color = color && args.format == OutputFormat::Table;
 
@@ -1231,7 +1231,10 @@ pub fn run_with_writer_color_width(
 
     let path = parquet_dir.join(file_name);
     if !path.exists() {
-        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if args.input.is_some()
+            || parquet_dir.join(crate::datapackage::DATAPACKAGE_FILENAME).exists()
+            || parquet_dir.join("oci").is_dir()
+        {
             anyhow::bail!(
                 "✖ Parquet file '{}' not found in '{}'",
                 file_name,
@@ -1952,10 +1955,7 @@ mod tests {
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
 
-        let prov = crate::provenance::OdsProvenance {
-            trud_release_date: Some("2026-07-31".to_string()),
-            ..Default::default()
-        };
+        let prov = crate::provenance::fixture_embedded("2026-07-31");
 
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
         crate::commands::parquet::export_roles(&parquet_dir, &records, Some(&prov)).unwrap();
@@ -2262,10 +2262,7 @@ mod tests {
 
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
-        let prov = crate::provenance::OdsProvenance {
-            trud_release_date: Some("2026-07-31".to_string()),
-            ..Default::default()
-        };
+        let prov = crate::provenance::fixture_embedded("2026-07-31");
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
 
         let mut out = Vec::new();
@@ -2342,10 +2339,7 @@ mod tests {
 
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
-        let prov = crate::provenance::OdsProvenance {
-            trud_release_date: Some(release_date.to_string()),
-            ..Default::default()
-        };
+        let prov = crate::provenance::fixture_embedded(release_date);
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
 
         let run = |query: &str, all: bool| -> String {
@@ -2580,10 +2574,7 @@ mod tests {
 
         let edges = crate::commands::parquet::build_succession_edges(&records);
         let (succ_closures, pred_closures) = crate::commands::parquet::compute_transitive_closures(&records, &edges);
-        let prov = crate::provenance::OdsProvenance {
-            trud_release_date: Some("2026-07-31".to_string()),
-            ..Default::default()
-        };
+        let prov = crate::provenance::fixture_embedded("2026-07-31");
         crate::commands::parquet::export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
 
         (dir, parquet_dir)

@@ -8,8 +8,8 @@
 //! pins them.
 //!
 //! The bundle's date, its tag and the `fyi.ods.trud-release-date` annotation are TRUD's release
-//! date from `_provenance.json`, not the date in the zip's filename, which NHS stamps differently
-//! for some releases.
+//! date from the pull record, `trud/datapackage.json`, not the date in the zip's filename, which
+//! NHS stamps differently for some releases.
 //!
 //! The `fyi.ods.trud-release-sha256` annotation is a convenience copy of the zip layer's digest,
 //! in upper case, in the same form as the dataset manifests' annotation, so a dataset links to its
@@ -25,7 +25,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::provenance::{compute_file_sha256, OdsProvenance, ProvenanceLoad, PROVENANCE_FILENAME};
+use crate::provenance::{compute_file_sha256, PullRecord, RecordLoad};
 
 pub const ARTIFACT_TYPE_SOURCE: &str = "application/vnd.fyi.ods.source.v1";
 pub const MEDIA_TYPE_EMPTY: &str = "application/vnd.oci.empty.v1+json";
@@ -226,7 +226,7 @@ fn file_entry(path: &Path, media_type: &'static str) -> Result<SourceFile> {
 ///
 /// 1. all four files are present;
 /// 2. the checksum file names this zip, and its SHA-1 is the zip's;
-/// 3. the zip's SHA-256 and size are the ones `_provenance.json` records, which `ods trud pull`
+/// 3. the zip's SHA-256 and size are the ones `trud/datapackage.json` records, which `ods trud pull`
 ///    wrote after checking TRUD's listing.
 ///
 /// `ods` doesn't verify NHS's PGP signature: `scripts/verify-trud-bundle.sh` does, against the
@@ -238,7 +238,7 @@ pub fn gather(release_dir: &Path) -> Result<SourceBundle, Refusal> {
 
     let zip_name = file_name(&found.zip);
 
-    // Until `_provenance.json` is read, a refusal is labelled with the release directory's name.
+    // Until the pull record is read, a refusal is labelled with the release directory's name.
     // The zip's filename isn't a source of the date: NHS's stamp and TRUD's release date differ
     // for some releases (2022-05-30's zip is stamped 20220527).
     let mut release = dir_name.clone();
@@ -266,51 +266,51 @@ pub fn gather(release_dir: &Path) -> Result<SourceBundle, Refusal> {
         ));
     }
 
-    // 3. `_provenance.json` records this zip's SHA-256 and size
-    let prov_path = release_dir.join(PROVENANCE_FILENAME);
-    let prov = match OdsProvenance::load_from_file(&prov_path) {
-        ProvenanceLoad::Read(p, _) => *p,
+    // 3. The pull record records this zip's SHA-256 and size
+    const RECORD: &str = "trud/datapackage.json";
+    let record_path = crate::provenance::pull_record_path(release_dir);
+    let record = match PullRecord::load_from_file(&record_path) {
+        RecordLoad::Read(r, _) => *r,
         _ => {
             return Err(Refusal::new(
                 &release,
-                &format!("there is no readable {} to check the zip against", PROVENANCE_FILENAME),
+                &format!("there is no readable {} to check the zip against", RECORD),
                 vec![format!("Write it from TRUD's listing with: ods trud pull {}", release)],
             ))
         }
     };
-    // From here on the release is TRUD's date, which `_provenance.json` records.
-    let date = match prov.trud_release_date.clone() {
-        Some(date) if !date.is_empty() => date,
-        _ => {
-            return Err(Refusal::new(
-                &release,
-                &format!("{} records no release date", PROVENANCE_FILENAME),
-                vec![format!("Write it from TRUD's listing with: ods trud pull {}", release)],
-            ))
-        }
-    };
+    // From here on the release is TRUD's date, which the pull record records.
+    let date = record.version.clone();
+    if date.is_empty() {
+        return Err(Refusal::new(
+            &release,
+            &format!("{} records no release date", RECORD),
+            vec![format!("Write it from TRUD's listing with: ods trud pull {}", release)],
+        ));
+    }
     release = date.clone();
     let zip_file =
         file_entry(&found.zip, MEDIA_TYPE_ZIP).map_err(|e| unreadable(&release, "the zip can't be read", e))?;
     let zip_sha256 = zip_file.sha256_hex.to_uppercase();
-    let recorded_sha256 = prov.trud_release_sha256.clone().unwrap_or_default();
+    let recorded_sha256 = record.archive_sha256_upper().unwrap_or_default();
     if !recorded_sha256.eq_ignore_ascii_case(&zip_sha256) {
         return Err(Refusal::new(
             &release,
-            &format!("{} names a different archive", PROVENANCE_FILENAME),
+            &format!("{} names a different archive", RECORD),
             vec![
                 format!("the zip's SHA-256        {}", zip_sha256),
-                format!("{} records  {}", PROVENANCE_FILENAME, recorded_sha256),
+                format!("{} records  {}", RECORD, recorded_sha256),
             ],
         ));
     }
-    if prov.trud_release_filesize_bytes != Some(zip_file.size) {
+    let recorded_size = record.archive().map(|a| a.bytes);
+    if recorded_size != Some(zip_file.size) {
         return Err(Refusal::new(
             &release,
-            &format!("{} records a different size", PROVENANCE_FILENAME),
+            &format!("{} records a different size", RECORD),
             vec![
                 format!("the zip's size        {} bytes", zip_file.size),
-                format!("{} records  {}", PROVENANCE_FILENAME, prov.trud_release_filesize_bytes.map_or("nothing".to_string(), |s| format!("{} bytes", s))),
+                format!("{} records  {}", RECORD, recorded_size.map_or("nothing".to_string(), |s| format!("{} bytes", s))),
             ],
         ));
     }
@@ -360,7 +360,7 @@ fn index_bytes(bundle: &SourceBundle) -> Result<Vec<u8>> {
         media_type: MEDIA_TYPE_INDEX.to_string(),
         manifests: vec![OciIndexManifestEntry {
             media_type: MEDIA_TYPE_MANIFEST.to_string(),
-            artifact_type: ARTIFACT_TYPE_SOURCE.to_string(),
+            artifact_type: Some(ARTIFACT_TYPE_SOURCE.to_string()),
             digest: bundle.manifest_digest.clone(),
             size: bundle.manifest_bytes.len() as u64,
             annotations: Some(annotations),

@@ -693,38 +693,44 @@ fn snapshot_trud_pull() {
 /// sum — what `build_padded_oci_release` returns.
 type PaddedOciRelease = (String, Vec<u8>, Vec<(String, String, Vec<u8>)>, u64);
 
-/// Builds a real release directory — six files, one padded to `target_total` so the bar has
-/// something to move over — and its OCI manifest, the way `ods make release` would.
+/// `len` characters of hex that zstd can't squeeze much: a SHA-256 chain from `seed`. What a
+/// stub table needs to hold for its file to be about as big as a real one.
+fn incompressible(seed: &str, len: usize) -> String {
+    let mut out = String::with_capacity(len + 64);
+    let mut block = sha2::Sha256::digest(seed.as_bytes());
+    while out.len() < len {
+        out.push_str(&format!("{:x}", block));
+        block = sha2::Sha256::digest(block);
+    }
+    out.truncate(len);
+    out
+}
+
+/// Builds a real release directory — the four Parquet files, carrying the release's
+/// provenance, `orgs.parquet` padded so the whole is about `target_total` bytes and the bar
+/// has something to move over — and its OCI manifest, the way `ods make oci` would.
 fn build_padded_oci_release(
     dir: &Path,
     date: &str,
     version: &str,
     target_total: usize,
 ) -> PaddedOciRelease {
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
-        date,
-        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-        37_983_173,
-    );
-    let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
-    let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
-    let dp_bytes = serde_json::to_vec_pretty(&dp).unwrap();
-    let roles_bytes = format!("roles parquet for {}", date).into_bytes();
-    let relationships_bytes = format!("relationships parquet for {}", date).into_bytes();
-    let successions_bytes = format!("successions parquet for {}", date).into_bytes();
+    let write = |name: &str, content: &str| {
+        common::write_fixture_parquet(
+            &dir.join(name),
+            date,
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            version,
+            content,
+        )
+    };
+    write("roles.parquet", &format!("roles parquet for {}", date));
+    write("relationships.parquet", &format!("relationships parquet for {}", date));
+    write("successions.parquet", &format!("successions parquet for {}", date));
+    // Hex packs two characters a byte once compressed.
+    write("orgs.parquet", &incompressible(&format!("orgs parquet for {}", date), target_total * 2));
 
-    let fixed_total = prov_bytes.len() + dp_bytes.len() + roles_bytes.len() + relationships_bytes.len() + successions_bytes.len();
-    let mut orgs_bytes = format!("orgs parquet for {}\n", date).into_bytes();
-    orgs_bytes.resize(target_total.saturating_sub(fixed_total).max(orgs_bytes.len()), b'.');
-
-    fs::write(dir.join("orgs.parquet"), &orgs_bytes).unwrap();
-    fs::write(dir.join("roles.parquet"), &roles_bytes).unwrap();
-    fs::write(dir.join("relationships.parquet"), &relationships_bytes).unwrap();
-    fs::write(dir.join("successions.parquet"), &successions_bytes).unwrap();
-    fs::write(dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
-    fs::write(dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
-
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(dir, &prov, version).unwrap();
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(dir).unwrap();
     let manifest_digest = manifest.digest().unwrap();
     let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
 
@@ -736,15 +742,7 @@ fn build_padded_oci_release(
             .and_then(|a| a.get("org.opencontainers.image.title"))
             .cloned()
             .unwrap();
-        let bytes = match title.as_str() {
-            ods::provenance::PROVENANCE_FILENAME => prov_bytes.clone(),
-            ods::datapackage::DATAPACKAGE_FILENAME => dp_bytes.clone(),
-            "orgs.parquet" => orgs_bytes.clone(),
-            "relationships.parquet" => relationships_bytes.clone(),
-            "roles.parquet" => roles_bytes.clone(),
-            "successions.parquet" => successions_bytes.clone(),
-            other => panic!("Unexpected layer: {}", other),
-        };
+        let bytes = fs::read(dir.join(&title)).unwrap();
         files.push((title, layer.digest.clone(), bytes));
     }
 
@@ -932,7 +930,7 @@ fn snapshot_cite() {
             args: vec!["cite"],
             use_input: true,
         },
-        // Case D: Changed since built
+        // Case D: The files disagree about what release they are
         TestCase {
             cmd_str: "ods cite",
             columns: None,

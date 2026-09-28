@@ -8,7 +8,19 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::ods_xml::{convert_parsed_orgs, parse_release_at, OdsRecord};
-use crate::provenance::OdsProvenance;
+
+/// The provenance line an NDJSON export may open with: only the release date is used, to label
+/// the report.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct OdsProvenance {
+    #[serde(rename = "$schema")]
+    schema: String,
+    #[serde(default)]
+    trud_release_date: Option<String>,
+}
+
+/// The `$schema` an NDJSON export's provenance line names.
+const NDJSON_PROVENANCE_SCHEMA: &str = "https://ods.fyi/schema/provenance.v1.json";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -238,7 +250,7 @@ fn load_ndjson(path: &Path) -> Result<(Option<OdsProvenance>, HashMap<String, Od
         }
         if provenance.is_none() {
             if let Ok(prov) = serde_json::from_str::<OdsProvenance>(&line) {
-                if prov.schema == crate::provenance::PROVENANCE_SCHEMA_V1_URL {
+                if prov.schema == NDJSON_PROVENANCE_SCHEMA {
                     provenance = Some(prov);
                     continue;
                 }

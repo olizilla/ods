@@ -4,74 +4,51 @@ The `ods_data` directory is the local workspace data root managed by the `ods` C
 
 ## Workspace directory tree
 
-When initialised by `ods trud pull` or workspace-aware subcommands, `ods_data` maintains an immutable release archive with an active release pin symlink:
+`ods pull` creates an ods_data dir in the current working directy to keep monthly the monthly releases
+in a well known order, so you don't have to manage it, and so we can share interesting queries that
+glob over multiple months datasets. See: [queries.md](./queries.md)
 
 ```text
 ods_data/
-├── README.md                           # Auto-generated workspace query guide & schema documentation
-├── .gitignore                           # Ignores raw downloads (releases/*/trud/, *.zip, *.xml)
-├── current -> releases/2026-07-31/      # Active workspace release pin (symlink)
+├── current -> releases/2026-07-31/     # Symlink for the release for ods commands should use.
 └── releases/
-    └── 2026-07-31/                     # Immutable release directory (named by release date)
-        ├── _provenance.json            # Source TRUD metadata & build provenance
-        ├── orgs.parquet                # Every organisation & site, active and inactive: filter on status (Primary surface)
+    └── 2026-07-31/                     
+        ├── datapackage.json            # The release's Data Package view, written by `ods make` or `ods pull`
+        ├── orgs.parquet                # All the orgs
         ├── relationships.parquet       # Target relationship links (ICB, Trust, Region, PCN)
-        ├── roles.parquet              # Primary & secondary role mappings
-        ├── successions.parquet        # Entity successor chains & reorganisations
-        ├── datapackage.json           # Frictionless Data Package descriptor
-        └── trud/                      # Official TRUD zip archives (gitignored)
-            └── hscorgrefdataxml_data_7.0.0_20260731000001.zip
+        ├── roles.parquet               # Primary & secondary role mappings
+        ├── successions.parquet         # Entity successor chains & reorganisations
+        #
+        └── trud/                       # Only present after `ods trud pull`
+            ├── hscorgrefdataxml_data_7.0.0_20260731000001.zip            # The source!
+            ├── trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml       # SHA1 checksum of zip
+            ├── trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml.asc   # Signed checksum
+            ├── trud-public-key-2013-04-01.pgp                            # NHS's public key
+            └── datapackage.json                                          # Metadata
 ```
 
-## `_provenance.json` schema
+A release fetched with `ods pull` holds the four Parquet files and `datapackage.json`.
 
-Every release folder contains a `_provenance.json` file recording the integrity, source parameters, and licence attribution of the dataset.
+## Provenance lives in the Parquet files
 
-### Provenance keys
+Every Parquet file carries the release's provenance in one key-value metadata key,
+`datapackage`: the dataset's name and version, its licence and attribution, and the TRUD release
+it was built from, with its SHA-256 and size. It's the one record `ods` reads. The OCI manifest is
+rebuilt from the files whenever `ods` verifies a release, and `datapackage.json` is a view of them
+that nothing reads back.
 
-`_provenance.json` holds exactly six keys, all describing NHS's archive and the terms under which it was published: `$schema`, the three `trud_*` facts, `license`, and `attribution`. It's fetched directly from the NHS TRUD REST API (`/items/341/releases`), or recorded in the release index, and represents the source archive published on TRUD:
+Which `ods` built a published dataset is recorded in its release index row (`tool_version`, 
+`tool_git_sha`,see [release-index.md](./release-index.md)) and in the CI attestation, not here. 
 
-- `trud_release_date`: Official release date in `YYYY-MM-DD` format (e.g. `"2026-07-31"`).
-- `trud_release_sha256`: Published SHA-256 checksum from NHS TRUD.
-- `trud_release_filesize_bytes`: Archive file size in bytes (`37983173`).
-- `license`: Official data licence terms (`"Open Government Licence v3.0"`).
-- `attribution`: Required attribution statement (`"Contains public sector information licensed under the Open Government Licence v3.0."`).
-
-Which `ods` built a published dataset is recorded in its release index row (`tool_version`, `tool_git_sha`, see [release-index.md](./release-index.md)) and in the CI attestation, not here. How the archive was checked is printed when the check runs and not stored. See [provenance.md](./provenance.md) for details on provenance and unmatched archive handling.
-
-### Example `_provenance.json`
-
-```json
-{
-  "$schema": "https://ods.fyi/schema/provenance.v1.json",
-  "trud_release_date": "2026-07-31",
-  "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-  "trud_release_filesize_bytes": 37983173,
-  "license": "Open Government Licence v3.0",
-  "attribution": "Contains public sector information licensed under the Open Government Licence v3.0."
-}
-```
-
-## SHA-256 verification flow
-
-```mermaid
-flowchart TD
-    A[ods trud pull] --> B[Query TRUD REST API /items/341/releases]
-    B --> C[Fetch Official archiveFileSha256 & archiveFileUrl]
-    C --> D[Download Archive .zip to ods_data/releases/DATE/trud/]
-    D --> E[Compute Local SHA-256 Hash]
-    E --> F{Local SHA-256 == Official TRUD SHA-256?}
-    F -- Match --> G[✓ Print SHA-256 verified by TRUD API]
-    F -- Mismatch --> H[Retry once -> If fail, rename bad file to .zip.bad-sha]
-```
+See [provenance.md](./provenance.md) for more details
 
 ## Command integration and workspace lifecycle
 
-| Subcommand | Interaction with `ods_data` |
+| Command | Interaction with `ods_data` |
 | :--- | :--- |
-| **`ods trud list`** | Queries TRUD API and lists available release archives, indicating which are held in the workspace. |
-| **`ods trud pull`** | Queries TRUD API, downloads ZIP into `releases/<date>/trud/`, verifies SHA-256, writes `_provenance.json`, and updates `current` symlink. |
-| **`ods cite`** | Displays active release pin, provenance metadata, local release versions, disk space, and SHA-256 verification status. |
-| **`ods pull`** | Pulls pre-built dataset release or switches active release pin to target release date. |
-| **`ods trud audit`** | Validates workspace Parquet tables against ground-truth TRUD XML/ZIP archives and verifies release provenance alignment. |
-| **`ods find`** | Queries active workspace Parquet tables in `ods_data/current/orgs.parquet` automatically. |
+| **`pull`** | Pulls pre-built dataset release or switches active release pin to target release date. |
+| **`find`** | Queries active workspace Parquet tables in `ods_data/current/orgs.parquet` automatically. |
+| **`cite`** | Displays active release pin, provenance metadata, local release versions, disk space, and SHA-256 verification status. |
+| **`trud pull`** | Queries TRUD API, downloads ZIP into `releases/<date>/trud/`, verifies SHA-256, writes the pull record `trud/datapackage.json` for `ods make` to build from, and updates `current` symlink. |
+| **`trud audit`** | Validates workspace Parquet tables against ground-truth TRUD XML/ZIP archives and verifies release provenance alignment. |
+

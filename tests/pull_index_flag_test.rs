@@ -126,15 +126,11 @@ fn run_routed_mock_server(routes: BTreeMap<String, Vec<u8>>) -> (String, mpsc::S
 /// `run_routed_mock_server` needs to serve it at `/v2/ods-data/manifests/<digest>` and
 /// `/v2/ods-data/blobs/<digest>`.
 fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) -> (String, u64, BTreeMap<String, Vec<u8>>) {
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some(release_date.to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": release_date });
     let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"sample orgs parquet bytes for the pull index flag test".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes(release_date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, "sample orgs parquet bytes for the pull index flag test");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
@@ -144,11 +140,11 @@ fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) 
     let fixture_dir = tmp.join(format!("fixture_{}", release_date));
     fs::create_dir_all(&fixture_dir).unwrap();
     fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
-    fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
+    fs::write(fixture_dir.join("_provenance.json"), &prov_bytes).unwrap();
     fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
 
     let (manifest, manifest_bytes) =
-        ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, version).unwrap();
+        ods::commands::make_oci::build_manifest_from_dir(&fixture_dir).unwrap();
     let manifest_digest = manifest.digest().unwrap();
     let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
 
@@ -394,15 +390,11 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files for a mock OCI pull
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"sample orgs parquet bytes".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "sample orgs parquet bytes");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -416,10 +408,10 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_task3");
     fs::create_dir_all(&fixture_dir)?;
     fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let supplied_index = make_v1_index(&[(
@@ -455,7 +447,9 @@ fn test_supplied_index_resolves_and_pulls_absent_release() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists(), "Release directory must exist after pull");
     assert!(rel_dir.join("orgs.parquet").exists());
-    assert!(rel_dir.join("_provenance.json").exists());
+    // A pull writes the layers and the `datapackage.json` view, and stores no manifest.
+    assert!(rel_dir.join("datapackage.json").exists(), "pulled release must have the datapackage.json view");
+    assert!(!rel_dir.join("oci").exists(), "a pull stores no manifest");
 
     Ok(())
 }

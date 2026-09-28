@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Datelike;
 use clap::Parser;
-use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde_json::json;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug, Clone)]
@@ -38,77 +36,29 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     _fetcher: &F,
     cwd: &Path,
 ) -> Result<()> {
-    let files = vec![
-        "orgs.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-    ];
-
     let input_dir = match args.input {
         Some(ref dir) => dir.clone(),
         None => crate::workspace::resolve_parquet_input_from(cwd, None)?,
     };
 
-    // 1. Fail early: check if at least one expected Parquet file exists
-    let mut any_exist = false;
-    for f in &files {
-        if input_dir.join(f).exists() {
-            any_exist = true;
-            break;
-        }
-    }
-    if !any_exist {
+    // Everything this command says about the release comes from the object its Parquet files
+    // carry: the release date, the dataset version, the source archive's hash, the licence and
+    // attribution. A directory holding only the files (what `oras pull` yields) cites the same.
+    let record = crate::provenance::read_release(&input_dir)?;
+    if matches!(record, crate::provenance::ReleaseRecord::NoFiles) {
         anyhow::bail!(
-            "✖ No Parquet files found in the directory '{}'. Did you run `ods parquet` first?",
+            "✖ No Parquet files found in the directory '{}'. Did you run `ods make` first?",
             input_dir.display()
         );
     }
-
-    let prov = crate::provenance::OdsProvenance::load_from_dir(&input_dir).ok();
-
-    let prov_unwrapped = prov.as_ref().cloned().unwrap_or_default();
-    let dataset_version = crate::datapackage::read_dataset_version_from_dir(&input_dir)
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let mut archive_sha256 = prov_unwrapped.trud_release_sha256.clone()
-        .unwrap_or_else(|| "<not verified>".to_string());
-    let mut trud_date = prov_unwrapped.trud_release_date.clone()
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Fall back to key-value metadata in Parquet file headers if missing from provenance struct
-    for f in &files {
-        let path = input_dir.join(f);
-        if path.exists() {
-            if let Ok(file) = File::open(&path) {
-                if let Ok(reader) = SerializedFileReader::new(file) {
-                    let file_metadata = reader.metadata().file_metadata();
-                    if let Some(kv) = file_metadata.key_value_metadata() {
-                        for item in kv {
-                            match item.key.as_str() {
-                                "ods.trud_release_date" => {
-                                    if trud_date == "unknown" {
-                                        if let Some(ref val) = item.value {
-                                            trud_date = val.clone();
-                                        }
-                                    }
-                                }
-                                "ods.trud_release_sha256" => {
-                                    if archive_sha256 == "<not verified>" {
-                                        if let Some(ref val) = item.value {
-                                            archive_sha256 = val.clone();
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let Some(facts) = record.facts().cloned() else {
+        eprintln!("{}", crate::provenance::format_record_refusal(&input_dir, &record).unwrap_or_default());
+        return Err(crate::commands::pull::AlreadyReported.into());
+    };
+    let dataset_version = facts.dataset_version.clone();
+    let archive_sha256 = facts.source_sha256_upper();
+    let trud_date = facts.release_date.clone();
+    let attribution = facts.license().attribution.clone();
 
     // 1. Discover workspace and load/cache index
     let workspace_root = match crate::workspace::find_workspace_root_from(&input_dir, None)? {
@@ -124,33 +74,30 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
         _fetcher,
     )?;
 
-    // 2. Verify directory against index
+    // 2. Verify directory against index: the manifest rebuilt from the files, by digest
     let outcome = crate::workspace::verify_release_dir(&input_dir, &index);
-    match &outcome {
-        crate::workspace::VerificationOutcome::ChangedSinceBuilt { file } => {
-            eprintln!("✖ releases/{} has changed since it was built", trud_date);
-            eprintln!("  {}'s SHA-256 isn't the one its datapackage.json records.", file);
-            eprintln!("  Pull it again: ods pull --force {}", trud_date);
+    let manifest_digest = match &outcome {
+        crate::workspace::VerificationOutcome::NoProvenance => {
+            eprintln!("{}", crate::provenance::format_no_provenance_error(&input_dir));
             return Err(crate::commands::pull::AlreadyReported.into());
         }
-        crate::workspace::VerificationOutcome::NoProvenance => {
-            eprintln!(
-                "{}",
-                crate::provenance::format_no_provenance_error(&input_dir)
-            );
+        crate::workspace::VerificationOutcome::NotEmbedded => {
+            eprintln!("{}", crate::provenance::format_not_embedded_error(&input_dir));
             return Err(crate::commands::pull::AlreadyReported.into());
         }
         crate::workspace::VerificationOutcome::Corrupted(err) => {
-            eprintln!("✖ Refusing to cite corrupted release in {}: {}", input_dir.display(), err);
+            eprintln!("{}", err);
             return Err(crate::commands::pull::AlreadyReported.into());
         }
-        _ => {}
-    }
-
-    // 3. Reconstruct manifest in memory
-    let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&input_dir, &prov_unwrapped, &dataset_version)
-        .context("reconstructing manifest in memory for citation")?;
-    let manifest_digest = manifest.digest()?;
+        crate::workspace::VerificationOutcome::NoFiles => {
+            anyhow::bail!("✖ No Parquet files found in the directory '{}'", input_dir.display());
+        }
+        crate::workspace::VerificationOutcome::VerifiedPublished { digest, .. }
+        | crate::workspace::VerificationOutcome::DateUnknown { digest, .. }
+        | crate::workspace::VerificationOutcome::DifferentArchive { digest, .. }
+        | crate::workspace::VerificationOutcome::VersionUnpublished { digest, .. } => digest.clone(),
+        crate::workspace::VerificationOutcome::DifferentBytes { reconstructed_digest, .. } => reconstructed_digest.clone(),
+    };
 
     let is_published = matches!(outcome, crate::workspace::VerificationOutcome::VerifiedPublished { .. });
 
@@ -250,7 +197,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 writer,
                 "  note = {{Manifest: {}. {}}}",
                 manifest_digest,
-                crate::terms::ATTRIBUTION
+                attribution
             )?;
             writeln!(writer, "}}\n")?;
 
@@ -301,7 +248,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 json!(format!(
                     "Manifest: {}. {}",
                     manifest_digest,
-                    crate::terms::ATTRIBUTION
+                    attribution
                 )),
             );
             let data_obj = serde_json::Value::Object(data_map);
@@ -360,7 +307,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "    NHS England. ({}). NHS Organisation Data Service XML Data, release {}\n    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud\n    {}",
                 year,
                 d_tag,
-                wrap_words(crate::terms::ATTRIBUTION, 80).join("\n    ")
+                wrap_words(&attribution, 80).join("\n    ")
             )?;
             writeln!(writer)?;
             writeln!(writer, "  The data:")?;
@@ -530,7 +477,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             eprintln!("  {:<10}  {}", "published", pub_d);
             eprintln!("  {:<10}  {}", "this build", recon_d);
             eprintln!(
-                "  Its files match its own datapackage.json, so it was built by an ods that doesn't\n  reproduce dataset {}. Cite the published release: ods pull {}",
+                "  Its files name that release but aren't its files: an ods that doesn't reproduce\n  dataset {} built them, or they've changed since. Cite the published release: ods pull {}",
                 version, date
             );
         }

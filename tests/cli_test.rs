@@ -100,18 +100,7 @@ fn test_cli_cite_output_formatting() {
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy").unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .unwrap();
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy");
 
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
@@ -158,30 +147,18 @@ fn test_cli_pull_local_release_output() {
     let ws = tmp.path().join("ods_data");
     fs::create_dir_all(&ws).unwrap();
 
-    let prov1 = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-05-29".to_string()),
-        ..Default::default()
-    };
     let rel1 = ws.join("releases").join("2026-05-29");
     fs::create_dir_all(&rel1).unwrap();
-    fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov1).unwrap()).unwrap();
-    fs::write(rel1.join("orgs.parquet"), b"dummy parquet 1").unwrap();
-    fs::write(rel1.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+    common::write_fixture_parquet(&rel1.join("orgs.parquet"), "2026-05-29", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy parquet 1");
 
-    let (m1, _) = ods::commands::make_oci::build_manifest_from_dir(&rel1, &prov1, "1.0.1").unwrap();
+    let (m1, _) = ods::commands::make_oci::build_manifest_from_dir(&rel1).unwrap();
     let d1 = m1.digest().unwrap();
 
-    let prov2 = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-06-26".to_string()),
-        ..Default::default()
-    };
     let rel2 = ws.join("releases").join("2026-06-26");
     fs::create_dir_all(&rel2).unwrap();
-    fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_string_pretty(&prov2).unwrap()).unwrap();
-    fs::write(rel2.join("orgs.parquet"), b"dummy parquet 2").unwrap();
-    fs::write(rel2.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+    common::write_fixture_parquet(&rel2.join("orgs.parquet"), "2026-06-26", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy parquet 2");
 
-    let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2, &prov2, "1.0.1").unwrap();
+    let (m2, _) = ods::commands::make_oci::build_manifest_from_dir(&rel2).unwrap();
     let d2 = m2.digest().unwrap();
 
     let index = make_v1_index(&[
@@ -700,13 +677,16 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
     let mock_zip =
         create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let index_file = common::write_index_for_zip(tmp.path(), "2026-07-31", &mock_zip);
+    // rel1 is built as a different, earlier TRUD release date: its own index says so. The files
+    // carry the date, so that's what `ods cite` reads.
+    let index_file_0501 = common::write_index_for_zip(tmp.path(), "2026-05-01", &mock_zip);
 
     let make1 = ods_binary()
         .arg("make")
         .arg("-i")
         .arg(&mock_zip)
         .arg("--index")
-        .arg(&index_file)
+        .arg(&index_file_0501)
         .arg("-o")
         .arg(&rel1_dir)
         .output()
@@ -733,12 +713,6 @@ fn test_cite_with_non_active_release_honours_explicit_release_dir() {
         .output()
         .expect("ods use");
     assert!(use_output.status.success());
-
-    // Mark rel1 provenance as verified so ods cite allows it
-    let prov_path = rel1_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    let mut prov = ods::provenance::OdsProvenance::load_from_dir(&rel1_dir).unwrap();
-    prov.trud_release_date = Some("2026-05-01".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
 
     // Query cite on release 1 explicitly: output should cite 2026-05-01, NOT 2026-07-31
     let cite_output = ods_binary()
@@ -926,78 +900,40 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     fs::create_dir_all(&rel_dir).unwrap();
     fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
 
-    let (_find_tmp, find_dir) = common::setup_find_test_workspace();
-    for entry in fs::read_dir(&find_dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.path().extension().is_some_and(|ext| ext == "parquet") {
-            fs::copy(entry.path(), rel_dir.join(entry.file_name())).unwrap();
+    let copy_release = |embedded: &ods::provenance::Embedded| {
+        let (_find_tmp, find_dir) = common::setup_find_test_workspace_embedded(embedded);
+        for entry in fs::read_dir(&find_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().extension().is_some_and(|ext| ext == "parquet") {
+                fs::copy(entry.path(), rel_dir.join(entry.file_name())).unwrap();
+            }
         }
-    }
-    let dp = ods::datapackage::generate_release_datapackage(&rel_dir, None, None);
-    fs::write(rel_dir.join("datapackage.json"), serde_json::to_string_pretty(&dp).unwrap()).unwrap();
+    };
 
-    // 1. Unreadable provenance with no $schema
-    let bad_prov = r#"{
-  "trud_release_date": "2026-08-28",
-  "unrecognised_field": "some_value"
-}"#;
-    fs::write(rel_dir.join(ods::provenance::PROVENANCE_FILENAME), bad_prov).unwrap();
-
-    // ods find should return rows and print the '!' warning once on stderr
+    // 1. The files carry provenance; the pull record under trud/ is unreadable. Nothing that
+    // reads a release reads that record, so find says nothing about it.
+    copy_release(&ods::provenance::fixture_embedded("2026-08-28"));
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    fs::write(
+        trud_dir.join(ods::provenance::PULL_RECORD_FILENAME),
+        r#"{"name":"nhs-ods-xml","unrecognised_field":"some_value"}"#,
+    )
+    .unwrap();
     let find_out = ods_binary()
         .current_dir(&ws)
         .args(["find", "sedbergh", "-i", "releases/2026-08-28", "--plain"])
         .output()
         .expect("ods find");
-    assert!(find_out.status.success(), "find must succeed even with unreadable provenance");
+    assert!(find_out.status.success(), "find must succeed");
     let stdout = String::from_utf8_lossy(&find_out.stdout);
     let stderr = String::from_utf8_lossy(&find_out.stderr);
     assert!(stdout.contains("SEDBERGH"), "find output must contain rows");
-    assert!(
-        stderr.contains("! releases/2026-08-28/_provenance.json isn't provenance this ods can read. Rebuild the release with `ods make`, or pull it again."),
-        "stderr must contain '!' warning, got:\n{}",
-        stderr
-    );
-    // Ensure the warning is printed exactly once
-    assert_eq!(
-        stderr.matches("isn't provenance this ods can read").count(),
-        1,
-        "warning should be printed exactly once, got:\n{}",
-        stderr
-    );
+    assert!(!stderr.contains('!'), "no warning: the files carry the release's provenance, got:\n{}", stderr);
 
-    // ods make oci should fail with exit 1, print the '✖' block, and leave oci/ absent
-    let make_oci_out = ods_binary()
-        .current_dir(&ws)
-        .args(["make", "oci", "-i", "releases/2026-08-28"])
-        .output()
-        .expect("ods make oci");
-    assert!(!make_oci_out.status.success(), "make oci must fail on unreadable provenance");
-    assert_eq!(make_oci_out.status.code(), Some(1));
-    let oci_stderr = String::from_utf8_lossy(&make_oci_out.stderr);
-    assert!(
-        oci_stderr.contains("✖ releases/2026-08-28/_provenance.json isn't provenance this ods can read"),
-        "stderr must contain '✖' error block, got:\n{}",
-        oci_stderr
-    );
-    assert!(
-        oci_stderr.contains("Expected $schema https://ods.fyi/schema/provenance.v1.json"),
-        "stderr must explain expected $schema, got:\n{}",
-        oci_stderr
-    );
-    assert!(
-        oci_stderr.contains("Pull the archive again with `ods trud pull 2026-08-28 --force`, then run `ods make`."),
-        "stderr must provide remediation hint, got:\n{}",
-        oci_stderr
-    );
-    assert!(
-        !rel_dir.join("oci").exists(),
-        "oci/ must remain absent on unreadable provenance failure"
-    );
-
-    // 2. Absent provenance: both commands behave as expected
-    fs::remove_file(rel_dir.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-
+    // 2. Files built without provenance: find warns once and still delivers; make oci refuses
+    // with the ✖ block and leaves oci/ absent.
+    copy_release(&ods::provenance::Embedded::without_provenance());
     let find_absent = ods_binary()
         .current_dir(&ws)
         .args(["find", "sedbergh", "-i", "releases/2026-08-28", "--plain"])
@@ -1007,9 +943,11 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     let absent_stdout = String::from_utf8_lossy(&find_absent.stdout);
     let absent_stderr = String::from_utf8_lossy(&find_absent.stderr);
     assert!(absent_stdout.contains("SEDBERGH"));
-    assert!(
-        !absent_stderr.contains("isn't provenance this ods can read"),
-        "absent provenance must NOT emit unreadable warning"
+    assert_eq!(
+        absent_stderr.matches("has no provenance").count(),
+        1,
+        "find warns exactly once, got:\n{}",
+        absent_stderr
     );
 
     let make_oci_absent = ods_binary()
@@ -1032,13 +970,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
         "stderr should guide user to pull, got:\n{}",
         make_oci_stderr
     );
-    assert!(
-        absent_stderr.contains(
-            "has no provenance: it was built from an archive ods couldn't match to a TRUD release"
-        ),
-        "stderr should report no provenance warning for find, got:\n{}",
-        absent_stderr
-    );
+    assert!(!rel_dir.join("oci").exists(), "oci/ must remain absent on refusal");
 }
 
 

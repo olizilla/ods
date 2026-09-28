@@ -1,13 +1,13 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use crate::oci::*;
-use crate::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+use crate::provenance::compute_file_sha256;
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
@@ -63,88 +63,10 @@ struct SourceDigestReport {
     trud_release_date: String,
 }
 
-/// Builds an OCI manifest directly by scanning the release directory files and computing digests.
-pub fn build_manifest_from_dir(
-    release_dir: &Path,
-    prov: &OdsProvenance,
-    version: &str,
-) -> Result<(OciManifest, Vec<u8>)> {
-    let mut publishable_files = Vec::new();
-    let mut file_hashes = HashMap::new();
-    let mut file_sizes = HashMap::new();
-
-    let entries = fs::read_dir(release_dir)?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with('.') || name == "oci" {
-                    continue;
-                }
-                publishable_files.push(name.to_string());
-                let meta = fs::metadata(&path)?;
-                let hash = compute_file_sha256(&path)?;
-                file_sizes.insert(name.to_string(), meta.len());
-                file_hashes.insert(name.to_string(), hash);
-            }
-        }
-    }
-    publishable_files.sort();
-
-    let prov_hash = file_hashes
-        .get(PROVENANCE_FILENAME)
-        .ok_or_else(|| anyhow::anyhow!("Missing _provenance.json"))?
-        .to_lowercase();
-    let prov_size = file_sizes[PROVENANCE_FILENAME];
-    let config = OciDescriptor::new(
-        MEDIA_TYPE_PROVENANCE,
-        &format!("sha256:{}", prov_hash),
-        prov_size,
-    );
-
-    let mut layers = Vec::new();
-    for fname in &publishable_files {
-        let fhash = file_hashes[fname].to_lowercase();
-        let fsize = file_sizes[fname];
-        let media_type = media_type_for_file(fname);
-        layers.push(OciDescriptor::new(media_type, &format!("sha256:{}", fhash), fsize).with_title(fname));
-    }
-
-    let mut annotations = BTreeMap::new();
-    if let Some(ref release_date) = prov.trud_release_date {
-        annotations.insert(
-            ANNOTATION_CREATED.to_string(),
-            derive_created_timestamp(release_date),
-        );
-    }
-    annotations.insert(
-        ANNOTATION_LICENSES.to_string(),
-        crate::terms::LICENSE.to_string(),
-    );
-    annotations.insert(
-        ANNOTATION_SOURCE.to_string(),
-        "https://github.com/olizilla/ods".to_string(),
-    );
-    annotations.insert(ANNOTATION_VERSION.to_string(), version.to_string());
-    annotations.insert(ANNOTATION_FYI_DATASET_VERSION.to_string(), version.to_string());
-    if let Some(ref d) = prov.trud_release_date {
-        annotations.insert(ANNOTATION_FYI_TRUD_RELEASE_DATE.to_string(), d.clone());
-    }
-    if let Some(ref trud_sha) = prov.trud_release_sha256 {
-        annotations.insert(ANNOTATION_FYI_TRUD_RELEASE_SHA256.to_string(), trud_sha.to_uppercase());
-    }
-
-    let manifest = OciManifest {
-        schema_version: 2,
-        media_type: MEDIA_TYPE_MANIFEST.to_string(),
-        artifact_type: ARTIFACT_TYPE_DATASET.to_string(),
-        config,
-        layers,
-        annotations: Some(annotations),
-    };
-
-    let manifest_bytes = manifest.to_canonical_bytes()?;
-    Ok((manifest, manifest_bytes))
+/// Builds a release directory's OCI manifest from its Parquet files alone: the layers are the
+/// files, the annotations come from the object they carry (`crate::oci::dataset`).
+pub fn build_manifest_from_dir(release_dir: &Path) -> Result<(OciManifest, Vec<u8>)> {
+    crate::oci::dataset::build_from_dir(release_dir).map(|(manifest, bytes, _)| (manifest, bytes))
 }
 
 /// `ods make oci --source`: packs a release's `trud/` as an OCI bundle of NHS's files.
@@ -270,60 +192,25 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let prov = match OdsProvenance::load_from_dir(&release_dir) {
-        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
-        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
-            bail!(
-                "{}",
-                crate::provenance::format_unreadable_provenance_error(&path, &date)
-            );
-        }
-        crate::provenance::ProvenanceLoad::Absent => {
-            bail!(
-                "{}",
-                crate::provenance::format_no_provenance_error(&release_dir)
-            );
-        }
-    };
-
-    let version = crate::datapackage::read_dataset_version_from_dir(&release_dir).ok_or_else(|| {
-        anyhow::anyhow!("Missing version in datapackage.json\n  Run `ods make` to build the release directory.")
-    })?;
-
-    let date = prov
-        .trud_release_date
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Provenance missing trud_release_date"))?;
+    // Everything the layout says comes from the Parquet files: the layers are the files, and
+    // the release date, the dataset version and the annotations come from the object they
+    // carry. A release without provenance has nothing to publish, and is refused here.
+    let (manifest, manifest_bytes, facts) = crate::oci::dataset::build_from_dir(&release_dir)?;
+    let version = facts.dataset_version.clone();
+    let date = facts.release_date.clone();
 
     let oci_dir = release_dir.join("oci");
     let blobs_dir = oci_dir.join("blobs").join("sha256");
 
     if !args.check {
-        // Step 0: Validate baseline provenance preconditions BEFORE touching disk!
-        prov.validate_baseline()
-            .context("✖ Precondition failure: invalid provenance baseline")?;
-
         // Regenerate oci/ wholesale so stale blobs or symlinks cannot survive
         if oci_dir.exists() {
             fs::remove_dir_all(&oci_dir)?;
         }
 
-        // Step 1b: Regenerate datapackage.json with the full dataset SemVer
-        let pkg = crate::datapackage::generate_release_datapackage(
-            &release_dir,
-            None,
-            Some(&version),
-        );
-        fs::write(
-            release_dir.join("datapackage.json"),
-            serde_json::to_string_pretty(&pkg)? + "\n",
-        )?;
-
-        // Step 2: Build OciManifest from disk
-        let (manifest, manifest_bytes) = build_manifest_from_dir(&release_dir, &prov, &version)?;
         let manifest_digest = manifest.digest()?;
 
-        // Step 3: Write oci/ layout
+        // Step 2: Write oci/ layout
         fs::create_dir_all(&blobs_dir)?;
 
         let layout = OciLayout::default();
@@ -334,6 +221,11 @@ pub fn run(args: Args) -> Result<()> {
         let manifest_blob_path = blobs_dir.join(manifest_hex);
         fs::write(&manifest_blob_path, &manifest_bytes)?;
 
+        // The config is the fixed empty descriptor now (manifest-only, no descriptor blob to
+        // double as it), so its blob is written directly rather than symlinked to a release file.
+        let config_hex = manifest.config.digest.trim_start_matches("sha256:");
+        fs::write(blobs_dir.join(config_hex), crate::oci::dataset::EMPTY_CONFIG)?;
+
         let mut ann_date = BTreeMap::new();
         ann_date.insert(ANNOTATION_REF_NAME.to_string(), date.clone());
 
@@ -342,7 +234,7 @@ pub fn run(args: Args) -> Result<()> {
 
         let entry_date = OciIndexManifestEntry {
             media_type: MEDIA_TYPE_MANIFEST.to_string(),
-            artifact_type: ARTIFACT_TYPE_DATASET.to_string(),
+            artifact_type: Some(ARTIFACT_TYPE_DATASET.to_string()),
             digest: manifest_digest.clone(),
             size: manifest_bytes.len() as u64,
             annotations: Some(ann_date),
@@ -350,7 +242,7 @@ pub fn run(args: Args) -> Result<()> {
 
         let entry_versioned = OciIndexManifestEntry {
             media_type: MEDIA_TYPE_MANIFEST.to_string(),
-            artifact_type: ARTIFACT_TYPE_DATASET.to_string(),
+            artifact_type: Some(ARTIFACT_TYPE_DATASET.to_string()),
             digest: manifest_digest.clone(),
             size: manifest_bytes.len() as u64,
             annotations: Some(ann_versioned),
@@ -401,7 +293,7 @@ pub fn run(args: Args) -> Result<()> {
     let total_size: u64 = manifest.layers.iter().map(|l| l.size).sum();
     let size_mb = (total_size as f64) / (1024.0 * 1024.0);
 
-    let pub_warnings = prov.validate_publishable();
+    let pub_warnings = validate_publishable(&facts);
 
     // Text: the human report on stdout, as before, now naming the manifest digest on its own
     // line after the verified/written line, the way --source already does. Json: the same
@@ -439,13 +331,27 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+/// What `ods make release` will refuse, found early: an implausibly small source archive.
+fn validate_publishable(facts: &crate::provenance::ReleaseFacts) -> Vec<String> {
+    if facts.source.bytes < 1_000_000 {
+        vec![format!("the source archive is implausibly small ({} bytes)", facts.source.bytes)]
+    } else {
+        Vec::new()
+    }
+}
+
 fn find_manifest_in_blobs(blobs_dir: &Path) -> Result<PathBuf> {
     if !blobs_dir.exists() {
         bail!("blobs directory does not exist: {}", blobs_dir.display());
     }
     for entry in fs::read_dir(blobs_dir)?.flatten() {
         let path = entry.path();
-        if path.is_file() && !path.is_symlink() {
+        // The config blob is also a real (non-symlink) file now, the fixed two bytes `{}`. Skip
+        // it — the manifest is the other real file.
+        if path.is_file()
+            && !path.is_symlink()
+            && fs::read(&path).map(|b| b != crate::oci::dataset::EMPTY_CONFIG).unwrap_or(true)
+        {
             return Ok(path);
         }
     }
@@ -455,18 +361,23 @@ fn find_manifest_in_blobs(blobs_dir: &Path) -> Result<PathBuf> {
 pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
-    let prov = match OdsProvenance::load_from_dir(release_dir).error_building()? {
-        Some(p) => p,
-        None => {
-            failures.push("Failed to load _provenance.json".to_string());
+    // Check 1: the Parquet files carry provenance
+    let facts = match crate::provenance::read_release(release_dir) {
+        Ok(crate::provenance::ReleaseRecord::Provenanced(facts)) => facts,
+        Ok(other) => {
+            failures.push(
+                crate::provenance::format_record_refusal(release_dir, &other)
+                    .unwrap_or_default()
+                    .trim_start_matches("✖ ")
+                    .to_string(),
+            );
+            return Ok(failures);
+        }
+        Err(e) => {
+            failures.push(format!("{:#}", e).trim_start_matches("✖ ").to_string());
             return Ok(failures);
         }
     };
-
-    // Check 1: Provenance baseline validation
-    if let Err(e) = prov.validate_baseline() {
-        failures.push(format!("Provenance baseline failure: {}", e));
-    }
 
     let oci_dir = release_dir.join("oci");
     let blobs_dir = oci_dir.join("blobs").join("sha256");
@@ -514,7 +425,7 @@ pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> 
         failures.push("Missing oci/index.json".to_string());
     } else if let Ok(index_bytes) = fs::read(&index_path) {
         if let Ok(index) = serde_json::from_slice::<OciIndex>(&index_bytes) {
-            let date = prov.trud_release_date.as_deref().unwrap_or("");
+            let date = facts.release_date.as_str();
             let ref_date = date.to_string();
             let ref_versioned = format!("{}_{}", date, expected_version);
 
@@ -615,68 +526,22 @@ pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> 
             }
         }
 
-        // Check 5b: datapackage.json resource hashes agree with layer digests
-        let dp_path = release_dir.join("datapackage.json");
-        if dp_path.exists() {
-            if let Ok(dp_bytes) = fs::read(&dp_path) {
-                if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
-                    if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
-                        for res in resources {
-                            if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
-                                let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
-                                let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                                let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                                let found_layer = m.layers.iter().find(|l| {
-                                    l.annotations
-                                        .as_ref()
-                                        .and_then(|a| a.get(ANNOTATION_TITLE))
-                                        .map(|t| t == res_name || t == res_path)
-                                        .unwrap_or(false)
-                                });
-                                match found_layer {
-                                    Some(l) => {
-                                        let l_hash = l.digest.trim_start_matches("sha256:").to_lowercase();
-                                        if clean_hash != l_hash {
-                                            failures.push(format!(
-                                                "datapackage.json resource {} hash {} disagrees with layer digest {}",
-                                                res_name, res_hash, l.digest
-                                            ));
-                                        }
-                                    }
-                                    None => {
-                                        failures.push(format!(
-                                            "datapackage.json resource {} not found in manifest layers",
-                                            res_name
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        // Check 5b: manifest-only, so every layer is a Parquet file — no `_provenance.json`, no
+        // `datapackage.json` layer to disagree with anything.
+        for layer in &m.layers {
+            let title = layer.annotations.as_ref().and_then(|a| a.get(ANNOTATION_TITLE));
+            if title.map(|t| !t.ends_with(".parquet")).unwrap_or(true) {
+                failures.push(format!(
+                    "manifest-only layer isn't a Parquet file: {:?} ({})",
+                    title, layer.digest
+                ));
             }
         }
 
-        // Check 6: config.digest equals the digest of the layer titled _provenance.json
-        let prov_layer = m.layers.iter().find(|l| {
-            l.annotations
-                .as_ref()
-                .and_then(|ann| ann.get(ANNOTATION_TITLE))
-                .map(|t| t == PROVENANCE_FILENAME)
-                .unwrap_or(false)
-        });
-        match prov_layer {
-            Some(l) => {
-                if l.digest != m.config.digest {
-                    failures.push(format!(
-                        "config.digest ({}) != _provenance.json layer digest ({})",
-                        m.config.digest, l.digest
-                    ));
-                }
-            }
-            None => {
-                failures.push("Manifest layers missing _provenance.json layer".to_string());
-            }
+        // Check 6: config is the fixed empty descriptor (manifest-only: no descriptor blob
+        // doubles as it any more).
+        if !crate::oci::dataset::is_empty_config(&m.config) {
+            failures.push(format!("config isn't the fixed empty descriptor: {:?}", m.config));
         }
 
         // Check 7: every digest is lowercase hex
@@ -697,7 +562,7 @@ pub fn perform_structural_checks(release_dir: &Path, expected_version: &str) -> 
         }
 
         // Check 8: re-packing from source files on disk yields a byte-identical manifest
-        match build_manifest_from_dir(release_dir, &prov, expected_version) {
+        match crate::oci::dataset::build(release_dir, &facts) {
             Ok((_, repacked_bytes)) => {
                 if manifest_bytes != repacked_bytes {
                     failures.push(

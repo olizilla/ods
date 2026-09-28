@@ -95,7 +95,7 @@ fn test_directory_input_without_provenance_fails_with_hard_error() {
     assert!(!output.status.success(), "directory input without provenance must fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Missing _provenance.json in input directory") && stderr.contains("Did you run 'ods trud pull' first?"),
+        stderr.contains("Missing trud/datapackage.json in input directory") && stderr.contains("Did you run 'ods trud pull' first?"),
         "must bail with existing directory error, got:\n{}",
         stderr
     );
@@ -115,21 +115,22 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     let ws_root = tmp.path().join("workspace");
     fs::create_dir_all(&ws_root).unwrap();
 
-    // Setup releases/2026-08-28 directory with trud zip and _provenance.json
+    // Setup releases/2026-08-28 directory with trud zip and its pull record
     let rel_dir = ws_root.join("releases").join("2026-08-28");
     let trud_dir = rel_dir.join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &rel_dir,
         "2026-08-28",
+        "hscorgrefdataxml_data_8.0.0_20260828000001.zip",
         &zip_sha256,
         fs::metadata(&zip_path).unwrap().len(),
-    );
-
-    let prov_file = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    fs::write(&prov_file, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+        &[],
+    )
+    .unwrap();
 
     // Open/create workspace and pin active release to 2026-08-28
     let ws = ods::workspace::Workspace::open_or_create(Some(&ws_root)).unwrap();
@@ -155,22 +156,21 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     );
     assert!(!stderr.contains("→"), "no '<date> (current) → <dir>' line, got:\n{}", stderr);
 
-    // 2. The release directory's own _provenance.json is the expected one, so it goes unnamed
+    // 2. The release directory's own pull record is the expected one, so it goes unnamed
     assert!(
-        ws_root.join("releases/2026-08-28/_provenance.json").exists(),
-        "the release's own provenance exists on disk"
+        ws_root.join("releases/2026-08-28/trud/datapackage.json").exists(),
+        "the release's own pull record exists on disk"
     );
     assert!(!stderr.contains("* Provenance:"), "the release's own provenance isn't named, got:\n{}", stderr);
 
     // 3. The report block follows the source line
     assert!(stderr.contains("  reading xml   "), "stderr must contain the report block, got:\n{}", stderr);
 
-    // 4. Stdout is empty
-    assert!(
-        stdout.trim().is_empty(),
-        "stdout must be empty, got:\n{}",
-        stdout
-    );
+    // 4. Bare `ods make` writes the Parquet files and the datapackage.json view, and packs
+    // nothing: `ods make oci` does that, for publishing. Stdout stays empty.
+    assert!(stdout.trim().is_empty(), "stdout must be empty, got:\n{}", stdout);
+    assert!(rel_dir.join("datapackage.json").exists(), "the view is written");
+    assert!(!rel_dir.join("oci").exists(), "nothing is packed");
 
     // 5. Stderr does not contain ! warning
     assert!(
@@ -188,16 +188,15 @@ fn test_make_after_trud_pull_prints_no_warning() {
     let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    let record = ods::provenance::PullRecord::for_trud_release(
         "2026-08-28",
+        "hscorgrefdataxml_data_8.0.0_20260828000001.zip",
         &zip_sha256,
         fs::metadata(&zip_path).unwrap().len(),
-    );
-    fs::write(
-        zip_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
+    fs::write(zip_dir.join(ods::provenance::PULL_RECORD_FILENAME), record.to_json_string().unwrap()).unwrap();
 
     let out_dir = tmp.path().join("out");
     fs::create_dir_all(&out_dir).unwrap();
@@ -223,4 +222,38 @@ fn test_make_after_trud_pull_prints_no_warning() {
     );
     assert!(stdout.trim().is_empty());
     assert!(!stderr.contains("! No provenance info found"));
+}
+
+/// A release an older `ods trud pull` left holds `trud/_provenance.json` and no pull record:
+/// `ods make` names it and the command that replaces it, without reading it.
+#[test]
+fn test_directory_with_an_older_record_names_the_repair() {
+    let tmp = TempDir::new().unwrap();
+    let release_dir = tmp.path().join("releases").join("2026-08-28");
+    let trud_dir = release_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
+    fs::write(
+        trud_dir.join("_provenance.json"),
+        r#"{"$schema":"https://ods.fyi/schema/provenance.v1.json","trud_release_date":"2026-08-28"}"#,
+    )
+    .unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .arg("make")
+        .arg("-i")
+        .arg(&release_dir)
+        .arg("-o")
+        .arg(&release_dir)
+        .output()
+        .expect("execute ods make");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("✖ releases/2026-08-28 holds trud/_provenance.json, the record an older ods wrote, and no trud/datapackage.json"),
+        "got:\n{stderr}"
+    );
+    assert!(stderr.contains("ods trud pull 2026-08-28 --force && ods make"), "got:\n{stderr}");
 }

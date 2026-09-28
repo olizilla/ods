@@ -74,8 +74,34 @@ pub fn relative_to_cwd(path: &Path) -> PathBuf {
     }
 }
 
+/// Whether `dir` holds a readable, factual record of its release: Parquet files carrying
+/// provenance (built or pulled), or a readable pull record, `trud/datapackage.json` (pulled
+/// from TRUD, not yet built).
+fn has_release_record(dir: &Path) -> bool {
+    matches!(crate::provenance::read_release(dir), Ok(crate::provenance::ReleaseRecord::Provenanced(_)))
+        || crate::provenance::PullRecord::load_from_file(&crate::provenance::pull_record_path(dir)).ok().is_some()
+}
+
+/// The release date `dir`'s Parquet files name, when they carry provenance. For labels and
+/// nudges only: a release that can't be read says nothing here, and the command that reads it
+/// reports why.
+pub fn embedded_release_date(dir: &Path) -> Option<String> {
+    match crate::provenance::read_release(dir) {
+        Ok(crate::provenance::ReleaseRecord::Provenanced(facts)) => Some(facts.release_date),
+        _ => None,
+    }
+}
+
+/// The release date `dir`'s pull record names, for a release pulled from TRUD.
+fn pull_record_date(dir: &Path) -> Option<String> {
+    crate::provenance::PullRecord::load_from_file(&crate::provenance::pull_record_path(dir))
+        .ok()
+        .map(|r| r.version)
+}
+
 /// Checks whether `dir/releases/` contains at least one date-shaped directory
-/// (`\d{4}-\d{2}-\d{2}`) holding a readable `_provenance.json`.
+/// (`\d{4}-\d{2}-\d{2}`) holding a readable release record (see `has_release_record`): a stored
+/// release's Parquet files carrying provenance, or a pull record.
 ///
 /// Bounded traversal: `releases/` is only opened if it exists.
 /// Stops at the first valid release found without enumerating the rest.
@@ -95,9 +121,7 @@ pub fn has_readable_release(dir: &Path) -> bool {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok()
-            && crate::provenance::OdsProvenance::load_from_dir(&path).ok().is_some()
-        {
+        if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() && has_release_record(&path) {
             return true;
         }
     }
@@ -391,7 +415,7 @@ pub fn resolve_parquet_input_from(start: &Path, explicit: Option<&Path>) -> Resu
         if input.join("parquet").join("orgs.parquet").exists() {
             return Ok(input.join("parquet"));
         }
-        if input.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if input.join(crate::datapackage::DATAPACKAGE_FILENAME).exists() || input.join("trud").is_dir() {
             if input.join("parquet").is_dir() {
                 return Ok(input.join("parquet"));
             }
@@ -500,17 +524,11 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
     if NUDGE_EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let prov_file = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
-    let Ok(content) = fs::read_to_string(&prov_file) else {
+    // The release's date is the one its Parquet files carry.
+    let Some(date_str) = embedded_release_date(release_dir) else {
         return;
     };
-    let Ok(prov) = serde_json::from_str::<crate::provenance::OdsProvenance>(&content) else {
-        return;
-    };
-    let Some(ref date_str) = prov.trud_release_date else {
-        return;
-    };
-    let Ok(rel_date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") else {
+    let Ok(rel_date) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") else {
         return;
     };
 
@@ -535,11 +553,9 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
 /// Detects if a directory is a release directory.
 /// Returns Some("YYYY-MM-DD") if dir is a release directory, or None otherwise.
 pub fn detect_release_from_dir(dir: &Path) -> Option<String> {
-    // 1. If dir has _provenance.json with trud_release_date:
-    if let Some(prov) = crate::provenance::OdsProvenance::load_from_dir(dir).ok() {
-        if let Some(d) = prov.trud_release_date {
-            return Some(d);
-        }
+    // 1. The date its Parquet files carry, or its pull record's:
+    if let Some(d) = embedded_release_date(dir).or_else(|| pull_record_date(dir)) {
+        return Some(d);
     }
     // 2. If parent directory is named "releases" and folder name matches YYYY-MM-DD:
     // Structural inspection of dir is strictly for the disagreement UX nudge; it never discovers workspaces or selects data.
@@ -631,6 +647,25 @@ pub fn format_source_line(path: &str, color: bool) -> String {
     }
 }
 
+/// What `find`, `info` and `role` say about a release's provenance before they read it. Files
+/// that disagree, or carry an object this `ods` can't read, are refused with the reader's `✖`
+/// block. A release without provenance is warned about and still read. A directory with no
+/// Parquet files says nothing here: the command's own not-found error covers it.
+pub fn check_release_provenance(parquet_dir: &Path) -> Result<()> {
+    match crate::provenance::read_release(parquet_dir)? {
+        crate::provenance::ReleaseRecord::NoProvenance(_) => eprintln!(
+            "! {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
+            relative_to_cwd(parquet_dir).display()
+        ),
+        crate::provenance::ReleaseRecord::NotEmbedded => eprintln!(
+            "! {}'s Parquet files carry no provenance: an older ods built them\n  You can explore it, but not cite or verify it. Rebuild it with `ods make`, or pull it again.",
+            relative_to_cwd(parquet_dir).display()
+        ),
+        crate::provenance::ReleaseRecord::Provenanced(_) | crate::provenance::ReleaseRecord::NoFiles => {}
+    }
+    Ok(())
+}
+
 /// Builds the source header lines for a resolved release directory and file name.
 ///
 /// Returns:
@@ -639,9 +674,8 @@ pub fn format_source_line(path: &str, color: bool) -> String {
 ///    an additional disagreement line:
 ///    `! Run from releases/{cwd_date}. Change source with: ods use {cwd_date}`
 pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) -> Vec<String> {
-    let release_date = crate::provenance::OdsProvenance::load_from_dir(release_dir)
-        .ok()
-        .and_then(|p| p.trud_release_date)
+    let release_date = embedded_release_date(release_dir)
+        .or_else(|| pull_record_date(release_dir))
         .or_else(|| {
             find_workspace_root_from(release_dir, None)
                 .ok()
@@ -907,10 +941,13 @@ pub enum VerificationOutcome {
         published_digest: String,
         reconstructed_digest: String,
     },
-    ChangedSinceBuilt {
-        file: String,
-    },
+    /// Built from an archive `ods` couldn't match to a TRUD release (`ods make --force -o`).
     NoProvenance,
+    /// Parquet files an older `ods` built, with no `datapackage` key.
+    NotEmbedded,
+    /// The directory holds no Parquet files.
+    NoFiles,
+    /// The files can't be read as a release: the `✖` block that says why.
     Corrupted(String),
 }
 
@@ -924,8 +961,9 @@ impl VerificationOutcome {
                 published_digest.is_none()
             }
             VerificationOutcome::DifferentBytes { .. }
-            | VerificationOutcome::ChangedSinceBuilt { .. }
             | VerificationOutcome::NoProvenance
+            | VerificationOutcome::NotEmbedded
+            | VerificationOutcome::NoFiles
             | VerificationOutcome::Corrupted(_) => false,
         }
     }
@@ -935,88 +973,28 @@ impl VerificationOutcome {
     }
 }
 
+/// Verifies a release directory against the release index by rebuilding its manifest from its
+/// Parquet files (`crate::oci::dataset`) and comparing the digest with the index row's. The
+/// facts, the release date, the dataset version and the source's hash, come from the object the
+/// files carry. No stored `oci/` is needed or read.
 pub fn verify_release_dir(
     release_dir: &Path,
     index: &crate::index::OdsReleaseIndex,
 ) -> VerificationOutcome {
-    let prov_file = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
-    if !prov_file.exists() {
-        return VerificationOutcome::NoProvenance;
-    }
-
-    let prov = match crate::provenance::OdsProvenance::load_from_file(&prov_file) {
-        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
-        crate::provenance::ProvenanceLoad::Absent => {
-            return VerificationOutcome::NoProvenance;
-        }
-        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
-            return VerificationOutcome::Corrupted(
-                crate::provenance::format_unreadable_provenance_error(&path, &date),
-            );
-        }
+    let facts = match crate::provenance::read_release(release_dir) {
+        Ok(crate::provenance::ReleaseRecord::Provenanced(facts)) => *facts,
+        Ok(crate::provenance::ReleaseRecord::NoProvenance(_)) => return VerificationOutcome::NoProvenance,
+        Ok(crate::provenance::ReleaseRecord::NotEmbedded) => return VerificationOutcome::NotEmbedded,
+        Ok(crate::provenance::ReleaseRecord::NoFiles) => return VerificationOutcome::NoFiles,
+        Err(e) => return VerificationOutcome::Corrupted(format!("{:#}", e)),
     };
+    let date = facts.release_date.clone();
+    let version = facts.dataset_version.clone();
 
-    let date = match prov.trud_release_date.as_deref() {
-        Some(d) => d.to_string(),
-        None => return VerificationOutcome::Corrupted("Provenance missing trud_release_date".to_string()),
-    };
-
-    let version = match crate::datapackage::read_dataset_version_from_dir(release_dir) {
-        Some(v) => v,
-        None => return VerificationOutcome::Corrupted("datapackage.json missing version".to_string()),
-    };
-
-    let (manifest, _) = match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, &version) {
-        Ok(m) => m,
-        Err(e) => return VerificationOutcome::Corrupted(format!("Failed to reconstruct manifest: {}", e)),
-    };
-
-    let reconstructed_digest = match manifest.digest() {
+    let reconstructed_digest = match crate::oci::dataset::build(release_dir, &facts).and_then(|(m, _)| m.digest()) {
         Ok(d) => d,
-        Err(e) => return VerificationOutcome::Corrupted(format!("Failed to compute manifest digest: {}", e)),
+        Err(e) => return VerificationOutcome::Corrupted(format!("✖ Can't rebuild the manifest for {}: {:#}", relative_to_cwd(release_dir).display(), e)),
     };
-
-    // Cross-check datapackage.json resources if present
-    let dp_path = release_dir.join("datapackage.json");
-    if dp_path.exists() {
-        if let Ok(dp_bytes) = fs::read(&dp_path) {
-            if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
-                if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
-                    for res in resources {
-                        if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
-                            let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
-                            let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                            let file_id = if !res_name.is_empty() { res_name } else { res_path };
-                            let found_layer = manifest.layers.iter().find(|l| {
-                                l.annotations
-                                    .as_ref()
-                                    .and_then(|a| a.get(crate::oci::ANNOTATION_TITLE))
-                                    .map(|t| t == res_name || t == res_path)
-                                    .unwrap_or(false)
-                            });
-                            match found_layer {
-                                Some(l) => {
-                                    let l_hash = l.digest.trim_start_matches("sha256:").to_lowercase();
-                                    if clean_hash != l_hash {
-                                        return VerificationOutcome::ChangedSinceBuilt {
-                                            file: file_id.to_string(),
-                                        };
-                                    }
-                                }
-                                None => {
-                                    return VerificationOutcome::Corrupted(format!(
-                                        "datapackage resource {} not found in manifest layers",
-                                        file_id
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     let release_entry = index.releases.iter().find(|r| r.trud_release_date == date);
     let release_row = match release_entry {
@@ -1030,25 +1008,22 @@ pub fn verify_release_dir(
         }
     };
 
-    if let Some(ref this_archive_sha256) = prov.trud_release_sha256 {
-        if !this_archive_sha256.is_empty()
-            && !this_archive_sha256.eq_ignore_ascii_case(&release_row.trud_release_sha256)
-        {
-            let published_digest = release_row
-                .datasets
-                .iter()
-                .find(|d| d.dataset_version == version)
-                .map(|d| d.manifest_digest.clone());
+    let this_archive_sha256 = facts.source_sha256_upper();
+    if !this_archive_sha256.eq_ignore_ascii_case(&release_row.trud_release_sha256) {
+        let published_digest = release_row
+            .datasets
+            .iter()
+            .find(|d| d.dataset_version == version)
+            .map(|d| d.manifest_digest.clone());
 
-            return VerificationOutcome::DifferentArchive {
-                date,
-                version,
-                digest: reconstructed_digest,
-                this_archive_sha256: this_archive_sha256.clone(),
-                published_archive_sha256: release_row.trud_release_sha256.clone(),
-                published_digest,
-            };
-        }
+        return VerificationOutcome::DifferentArchive {
+            date,
+            version,
+            digest: reconstructed_digest,
+            this_archive_sha256,
+            published_archive_sha256: release_row.trud_release_sha256.clone(),
+            published_digest,
+        };
     }
 
     let dataset_entry = release_row.datasets.iter().find(|d| d.dataset_version == version);
@@ -1133,223 +1108,100 @@ mod tests {
 
     #[test]
     fn test_verify_release_dir_cases() {
+        use crate::commands::parquet::write_stub_parquet;
         let base_tmp = tempfile::tempdir().unwrap();
+        let published_sha = "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801";
+        let other_sha = "1111111111111111111111111111111111111111111111111111111111111111";
 
-        let make_prov_json = |date: &str, sha: &str| -> String {
-            serde_json::to_string_pretty(&crate::provenance::OdsProvenance::from_trud_statement(
-                date, sha, 38064419,
-            ))
-            .unwrap()
+        // The object `ods make` embeds for a release of `date`, from an archive with `sha`, at
+        // dataset `version`.
+        let embedded = |date: &str, sha: &str, version: &str| {
+            crate::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 38064419, &[])
+                .unwrap()
+                .embedded(version)
+                .unwrap()
         };
 
-        let setup_fixture_dir = |dir: &Path, prov_content: Option<&str>, dp_version: Option<&str>, corrupt_resource: bool, extra_file: bool| {
-            fs::create_dir_all(dir).unwrap();
-            fs::write(dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
-            if extra_file {
-                fs::write(dir.join("roles.parquet"), b"dummy roles content").unwrap();
-            }
-
-            let orgs_hash = crate::provenance::compute_file_sha256(&dir.join("orgs.parquet")).unwrap();
-
-            if let Some(prov_str) = prov_content {
-                fs::write(dir.join(crate::provenance::PROVENANCE_FILENAME), prov_str).unwrap();
-            }
-
-            if let Some(version) = dp_version {
-                let res_hash = if corrupt_resource {
-                    "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-                } else {
-                    orgs_hash.to_lowercase()
-                };
-                let mut resources = vec![
-                    serde_json::json!({
-                        "name": "orgs.parquet",
-                        "path": "orgs.parquet",
-                        "hash": format!("sha256:{}", res_hash)
-                    })
-                ];
-                if extra_file {
-                    let roles_hash = crate::provenance::compute_file_sha256(&dir.join("roles.parquet")).unwrap();
-                    resources.push(serde_json::json!({
-                        "name": "roles.parquet",
-                        "path": "roles.parquet",
-                        "hash": format!("sha256:{}", roles_hash.to_lowercase())
-                    }));
-                }
-                let dp = serde_json::json!({
-                    "name": "ods",
-                    "version": version,
-                    "resources": resources
-                });
-                fs::write(dir.join("datapackage.json"), serde_json::to_vec(&dp).unwrap()).unwrap();
-            }
-        };
-
-        // Reference published directory to get published manifest digest
+        // Reference published directory, for the published manifest digest
         let ref_dir = base_tmp.path().join("ref_published");
-        let published_prov = make_prov_json(
-            "2026-08-28",
-            "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801",
-        );
-        setup_fixture_dir(&ref_dir, Some(&published_prov), Some("0.1.0"), false, false);
-        let ref_prov: crate::provenance::OdsProvenance = serde_json::from_str(&published_prov).unwrap();
-        let (manifest, _) = crate::commands::make_oci::build_manifest_from_dir(&ref_dir, &ref_prov, "0.1.0").unwrap();
+        fs::create_dir_all(&ref_dir).unwrap();
+        write_stub_parquet(&ref_dir.join("orgs.parquet"), Some(&embedded("2026-08-28", published_sha, "0.1.0")), "orgs").unwrap();
+        let (manifest, _, _) = crate::oci::dataset::build_from_dir(&ref_dir).unwrap();
         let published_digest = manifest.digest().unwrap();
 
         let index = crate::index::OdsReleaseIndex {
             schema: crate::index::RELEASES_SCHEMA_V1_URL.to_string(),
             trud_signing_key_fingerprints: vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()],
             mirrors: vec![],
-            releases: vec![
-                crate::index::Release {
-                    trud_release_date: "2026-08-28".to_string(),
-                    trud_release_sha256: "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801".to_string(),
-                    trud_release_filesize_bytes: 38064419,
-                    datasets: vec![
-                        crate::index::Dataset {
-                            dataset_version: "0.1.0".to_string(),
-                            manifest_digest: published_digest.clone(),
-                            dataset_filesize_bytes: 1000,
-                            tool_version: "0.2.0".to_string(),
-                            tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
-                            dataset_doi: None,
-                            withdrawn: None,
-                        }
-                    ],
-                }
-            ],
+            releases: vec![crate::index::Release {
+                trud_release_date: "2026-08-28".to_string(),
+                trud_release_sha256: published_sha.to_string(),
+                trud_release_filesize_bytes: 38064419,
+                datasets: vec![crate::index::Dataset {
+                    dataset_version: "0.1.0".to_string(),
+                    manifest_digest: published_digest.clone(),
+                    dataset_filesize_bytes: 1000,
+                    tool_version: "0.2.0".to_string(),
+                    tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                    dataset_doi: None,
+                    withdrawn: None,
+                }],
+            }],
         };
 
-        struct TableCase {
-            #[allow(dead_code)]
-            name: &'static str,
-            dir_name: &'static str,
-            prov: Option<String>,
-            version: Option<&'static str>,
-            corrupt_resource: bool,
-            extra_file: bool,
-            check: Box<dyn Fn(&VerificationOutcome)>,
-        }
-
-        let cases: Vec<TableCase> = vec![
-            TableCase {
-                name: "published",
-                dir_name: "case_published",
-                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::VerifiedPublished { date, version, .. } if date == "2026-08-28" && version == "0.1.0"));
-                }),
-            },
-            TableCase {
-                name: "A. date unknown",
-                dir_name: "case_date_unknown",
-                prov: Some(make_prov_json("2026-07-31", "8151248D1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::DateUnknown { date, version, .. } if date == "2026-07-31" && version == "0.1.0"));
-                }),
-            },
-            TableCase {
-                name: "B. different archive (version published)",
-                dir_name: "case_diff_archive_published",
-                prov: Some(make_prov_json("2026-08-28", "1111111111111111111111111111111111111111111111111111111111111111")),
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::DifferentArchive { date, version, this_archive_sha256, published_archive_sha256, published_digest, .. }
-                        if date == "2026-08-28" && version == "0.1.0"
-                        && this_archive_sha256 == "1111111111111111111111111111111111111111111111111111111111111111"
-                        && published_archive_sha256 == "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801"
-                        && published_digest.is_some()));
-                    assert!(!outcome.is_verified());
-                }),
-            },
-            TableCase {
-                name: "B. different archive (version unpublished)",
-                dir_name: "case_diff_archive_unpublished",
-                prov: Some(make_prov_json("2026-08-28", "1111111111111111111111111111111111111111111111111111111111111111")),
-                version: Some("0.3.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::DifferentArchive { date, version, this_archive_sha256, published_archive_sha256, published_digest, .. }
-                        if date == "2026-08-28" && version == "0.3.0"
-                        && this_archive_sha256 == "1111111111111111111111111111111111111111111111111111111111111111"
-                        && published_archive_sha256 == "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801"
-                        && published_digest.is_none()));
-                    assert!(outcome.is_verified());
-                }),
-            },
-            TableCase {
-                name: "C. version unpublished",
-                dir_name: "case_version_unpub",
-                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
-                version: Some("0.3.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::VersionUnpublished { date, version, published_versions, .. }
-                        if date == "2026-08-28" && version == "0.3.0" && published_versions == &["0.1.0"]));
-                }),
-            },
-            TableCase {
-                name: "F. different bytes",
-                dir_name: "case_diff_bytes",
-                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: true,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::DifferentBytes { date, version, .. }
-                        if date == "2026-08-28" && version == "0.1.0"));
-                }),
-            },
-            TableCase {
-                name: "D. changed since built",
-                dir_name: "case_changed_since_built",
-                prov: Some(make_prov_json("2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801")),
-                version: Some("0.1.0"),
-                corrupt_resource: true,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::ChangedSinceBuilt { file } if file == "orgs.parquet"));
-                }),
-            },
-            TableCase {
-                name: "no provenance",
-                dir_name: "case_no_provenance",
-                prov: None,
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::NoProvenance));
-                }),
-            },
-            TableCase {
-                name: "corrupted (unreadable provenance)",
-                dir_name: "case_corrupted_prov",
-                prov: Some("not valid json at all".to_string()),
-                version: Some("0.1.0"),
-                corrupt_resource: false,
-                extra_file: false,
-                check: Box::new(|outcome| {
-                    assert!(matches!(outcome, VerificationOutcome::Corrupted(err) if err.contains("isn't provenance this ods can read")));
-                }),
-            },
+        // Each case: a directory name, and the files to write into it as (file, embedded
+        // object or none, content). `None` for the object writes a file with no `datapackage`
+        // key; a content of "not parquet" writes bytes that aren't a Parquet file at all.
+        type Files = Vec<(&'static str, Option<crate::provenance::Embedded>, &'static str)>;
+        type Check = Box<dyn Fn(&VerificationOutcome)>;
+        let published = || Some(embedded("2026-08-28", published_sha, "0.1.0"));
+        let cases: Vec<(&str, Files, Check)> = vec![
+            ("published", vec![("orgs.parquet", published(), "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::VerifiedPublished { date, version, .. } if date == "2026-08-28" && version == "0.1.0"), "{o:?}");
+            })),
+            ("A. date unknown", vec![("orgs.parquet", Some(embedded("2026-07-31", published_sha, "0.1.0")), "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::DateUnknown { date, version, .. } if date == "2026-07-31" && version == "0.1.0"), "{o:?}");
+            })),
+            ("B. different archive (version published)", vec![("orgs.parquet", Some(embedded("2026-08-28", other_sha, "0.1.0")), "orgs")], Box::new(move |o| {
+                assert!(matches!(o, VerificationOutcome::DifferentArchive { this_archive_sha256, published_archive_sha256, published_digest, .. }
+                    if this_archive_sha256 == other_sha && published_archive_sha256 == published_sha && published_digest.is_some()), "{o:?}");
+                assert!(!o.is_verified());
+            })),
+            ("B. different archive (version unpublished)", vec![("orgs.parquet", Some(embedded("2026-08-28", other_sha, "0.3.0")), "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::DifferentArchive { version, published_digest, .. } if version == "0.3.0" && published_digest.is_none()), "{o:?}");
+                assert!(o.is_verified());
+            })),
+            ("C. version unpublished", vec![("orgs.parquet", Some(embedded("2026-08-28", published_sha, "0.3.0")), "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::VersionUnpublished { version, published_versions, .. } if version == "0.3.0" && published_versions == &["0.1.0"]), "{o:?}");
+            })),
+            ("F. different bytes", vec![("orgs.parquet", published(), "orgs"), ("roles.parquet", published(), "roles")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::DifferentBytes { date, version, .. } if date == "2026-08-28" && version == "0.1.0"), "{o:?}");
+            })),
+            ("no provenance", vec![("orgs.parquet", Some(crate::provenance::Embedded::without_provenance()), "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::NoProvenance), "{o:?}");
+            })),
+            ("not embedded", vec![("orgs.parquet", None, "orgs")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::NotEmbedded), "{o:?}");
+            })),
+            ("files disagree", vec![("orgs.parquet", published(), "orgs"), ("roles.parquet", Some(embedded("2026-08-28", published_sha, "0.3.0")), "roles")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::Corrupted(block) if block.contains("don't carry the same provenance") && block.contains("orgs.parquet") && block.contains("roles.parquet")), "{o:?}");
+            })),
+            ("not a parquet file", vec![("orgs.parquet", None, "not parquet")], Box::new(|o| {
+                assert!(matches!(o, VerificationOutcome::Corrupted(block) if block.contains("can't be read as a Parquet file")), "{o:?}");
+            })),
         ];
 
-        for case in cases {
-            let dir = base_tmp.path().join(case.dir_name);
-            setup_fixture_dir(&dir, case.prov.as_deref(), case.version, case.corrupt_resource, case.extra_file);
-            let outcome = verify_release_dir(&dir, &index);
-            (case.check)(&outcome);
+        for (name, files, check) in cases {
+            let dir = base_tmp.path().join(name.replace(['.', ' ', '(', ')'], "_"));
+            fs::create_dir_all(&dir).unwrap();
+            for (file, object, content) in files {
+                if content == "not parquet" {
+                    fs::write(dir.join(file), b"dummy orgs content").unwrap();
+                } else {
+                    write_stub_parquet(&dir.join(file), object.as_ref(), content).unwrap();
+                }
+            }
+            check(&verify_release_dir(&dir, &index));
         }
     }
 }

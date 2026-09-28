@@ -6,7 +6,6 @@ use ods::ods_xml::{
 use ods::commands::parquet::{
     export_orgs, export_relationships, export_roles, export_successions,
 };
-use ods::provenance::OdsProvenance;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -466,10 +465,7 @@ fn setup_test_workspace() -> (TempDir, PathBuf) {
         successors: vec![],
     });
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::fixture_embedded("2026-07-31");
 
     let edges = ods::commands::parquet::build_succession_edges(&records);
     let (succ_closures, pred_closures) =

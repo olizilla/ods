@@ -49,25 +49,27 @@ pub struct Args {
     pub force: bool,
 }
 
-fn embed_metadata(
-    schema: &Schema,
-    _prov: Option<&crate::provenance::OdsProvenance>,
-) -> Arc<Schema> {
+/// A table's own schema. The provenance goes in the file's key-value metadata
+/// (`writer_properties`), never in the Arrow schema.
+fn embed_metadata(schema: &Schema) -> Arc<Schema> {
     Arc::new(schema.clone())
 }
 
-fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterProperties {
-    let meta_kv = if let Some(p) = prov {
-        p.to_parquet_declared_metadata()
-            .into_iter()
-            .map(|(k, v)| parquet::file::metadata::KeyValue {
-                key: k,
-                value: Some(v),
-            })
-            .collect()
-    } else {
-        vec![]
-    };
+/// The one key-value metadata key a table carries: `datapackage`, the embedded object as
+/// compact JSON (`crate::provenance`). Every table of a build carries the same object.
+fn key_value_metadata(embedded: Option<&crate::provenance::Embedded>) -> Vec<parquet::file::metadata::KeyValue> {
+    embedded
+        .map(|e| {
+            vec![parquet::file::metadata::KeyValue {
+                key: crate::provenance::DATAPACKAGE_KEY.to_string(),
+                value: Some(e.to_compact_json().expect("the embedded object serialises")),
+            }]
+        })
+        .unwrap_or_default()
+}
+
+fn writer_properties(embedded: Option<&crate::provenance::Embedded>) -> WriterProperties {
+    let meta_kv = key_value_metadata(embedded);
 
     // Parquet Encoding Rationale:
     // 1. ZSTD at level 3 is explicitly pinned for deterministic cross-build compression and byte stability.
@@ -84,6 +86,26 @@ fn writer_properties(prov: Option<&crate::provenance::OdsProvenance>) -> WriterP
         ))
         .set_max_row_group_row_count(Some(64_000))
         .build()
+}
+
+/// The source release date an embedded object names, for the `trud_release_date` column when
+/// the caller doesn't give one.
+fn source_release_date(embedded: &crate::provenance::Embedded) -> Option<&str> {
+    embedded.sources.as_ref()?.first().map(|s| s.version.as_str())
+}
+
+/// A one-column, one-row Parquet file carrying `embedded` (if any) under its `datapackage` key, with
+/// `content` as its only value: what a release's files look like to every reader of provenance,
+/// without building real tables. For tests.
+#[doc(hidden)]
+pub fn write_stub_parquet(path: &Path, embedded: Option<&crate::provenance::Embedded>, content: &str) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("stub", DataType::Utf8, false)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(arrow::array::StringArray::from(vec![content])) as ArrayRef])?;
+    let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut writer = ArrowWriter::try_new(file, schema, Some(writer_properties(embedded)))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
 }
 
 pub fn run(args: Args) -> Result<PathBuf> {
@@ -119,39 +141,60 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     let archive_path: PathBuf;
     let release_date: String;
     let output_path: PathBuf;
-    let provenance: Option<crate::provenance::OdsProvenance>;
-    let built_from_bare_zip: bool;
+    // The object every table carries: from the pull record, from the index row or TRUD's API
+    // for a bare zip, or without provenance for a `--force` build.
+    let embedded: crate::provenance::Embedded;
     let mut external_provenance_to_report: Option<PathBuf> = None;
 
     if input_path.is_dir() {
-        let disk_prov = crate::provenance::OdsProvenance::load_from_dir_with_path(&input_path)
-            .error_building_with_path()?;
-        let (prov, prov_path) = match disk_prov {
-            Some(p) => p,
+        let (record, record_path) = match crate::provenance::PullRecord::load_from_dir(&input_path)
+            .error_building_with_path()?
+        {
+            Some(found) => found,
             None => {
+                // An older `ods trud pull` wrote `trud/_provenance.json` instead. Nothing reads it,
+                // but its presence says what to run.
+                let legacy = [input_path.join(crate::provenance::LEGACY_PROVENANCE_FILENAME), input_path.join("trud").join(crate::provenance::LEGACY_PROVENANCE_FILENAME)];
+                if legacy.iter().any(|p| p.is_file()) {
+                    let date = inferred_date.clone().or_else(|| {
+                        input_path
+                            .ancestors()
+                            .filter_map(|a| a.file_name()?.to_str())
+                            .find(|n| chrono::NaiveDate::parse_from_str(n, "%Y-%m-%d").is_ok())
+                            .map(|n| n.to_string())
+                    });
+                    let release_dir = match input_path.file_name().and_then(|n| n.to_str()) {
+                        Some("trud") => input_path.parent().unwrap_or(&input_path),
+                        _ => input_path.as_path(),
+                    };
+                    anyhow::bail!(
+                        "✖ {} holds trud/_provenance.json, the record an older ods wrote, and no trud/{}\n  Write it from TRUD's listing, then build: ods trud pull {} --force && ods make",
+                        crate::workspace::relative_to_cwd(release_dir).display(),
+                        crate::provenance::PULL_RECORD_FILENAME,
+                        date.as_deref().unwrap_or("<date>")
+                    );
+                }
                 anyhow::bail!(
-                    "Missing _provenance.json in input directory '{}'. Did you run 'ods trud pull' first?",
+                    "Missing trud/{} in input directory '{}'. Did you run 'ods trud pull' first?",
+                    crate::provenance::PULL_RECORD_FILENAME,
                     input_path.display()
                 );
             }
         };
 
-        if let Err(e) = prov.validate_baseline() {
+        if let Err(e) = record.validate_baseline() {
             anyhow::bail!(
-                "Invalid baseline _provenance.json in input '{}': {}. Did you run 'ods trud pull' first?",
+                "Invalid pull record {} in input '{}': {}. Did you run 'ods trud pull' first?",
+                record_path.display(),
                 input_path.display(),
                 e
             );
         }
 
-        if !prov.has_current_terms() {
-            let date = prov
-                .trud_release_date
-                .as_deref()
-                .unwrap_or(inferred_date.as_deref().unwrap_or(""));
+        if !record.has_current_terms() {
             anyhow::bail!(
                 "{}",
-                crate::provenance::format_older_terms_error(&prov_path, date)
+                crate::provenance::format_older_terms_error(&record_path, &record.version)
             );
         }
 
@@ -160,41 +203,35 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
         let actual_sha = crate::provenance::compute_file_sha256(&archive_path)?;
         let actual_size = std::fs::metadata(&archive_path)?.len();
-        if let Some(ref expected_sha) = prov.trud_release_sha256 {
-            if !actual_sha.eq_ignore_ascii_case(expected_sha) {
-                anyhow::bail!(
-                    "✖ Pre-build archive verification mismatch in {}: expected SHA-256 {}, got {}",
-                    archive_path.display(),
-                    expected_sha,
-                    actual_sha
-                );
-            }
+        let archive = record.archive().expect("validate_baseline checked the archive");
+        let expected_sha = record.archive_sha256_upper().unwrap_or_default();
+        if !actual_sha.eq_ignore_ascii_case(&expected_sha) {
+            anyhow::bail!(
+                "✖ Pre-build archive verification mismatch in {}: expected SHA-256 {}, got {}",
+                archive_path.display(),
+                expected_sha,
+                actual_sha
+            );
         }
-        if let Some(expected_size) = prov.trud_release_filesize_bytes {
-            if actual_size != expected_size {
-                anyhow::bail!(
-                    "✖ Pre-build archive verification mismatch in {}: expected size {}, got {}",
-                    archive_path.display(),
-                    expected_size,
-                    actual_size
-                );
-            }
+        if actual_size != archive.bytes {
+            anyhow::bail!(
+                "✖ Pre-build archive verification mismatch in {}: expected size {}, got {}",
+                archive_path.display(),
+                archive.bytes,
+                actual_size
+            );
         }
 
-        if let Some(ref parent_date) = prov.trud_release_date {
-            if parent_date != &archive_info.release_date {
-                anyhow::bail!(
-                    "✖ Release date mismatch: _provenance.json specifies '{}' but archive filename specifies '{}'",
-                    parent_date,
-                    archive_info.release_date
-                );
-            }
+        if record.version != archive_info.release_date {
+            anyhow::bail!(
+                "✖ Release date mismatch: trud/{} specifies '{}' but archive filename specifies '{}'",
+                crate::provenance::PULL_RECORD_FILENAME,
+                record.version,
+                archive_info.release_date
+            );
         }
 
-        release_date = prov
-            .trud_release_date
-            .clone()
-            .unwrap_or_else(|| archive_info.release_date.clone());
+        release_date = record.version.clone();
 
         output_path = match args.output {
             Some(p) => p,
@@ -205,17 +242,13 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             }
         };
 
-        // The release directory's own `_provenance.json` is the expected one and goes
-        // unmentioned; a provenance carried in from somewhere else is named.
-        if !same_file(
-            &prov_path,
-            &output_path.join(crate::provenance::PROVENANCE_FILENAME),
-        ) {
-            external_provenance_to_report = Some(prov_path);
+        // The release directory's own `trud/datapackage.json` is the expected one and goes
+        // unmentioned; a record carried in from somewhere else is named.
+        if !same_file(&record_path, &crate::provenance::pull_record_path(&output_path)) {
+            external_provenance_to_report = Some(record_path);
         }
 
-        provenance = Some(prov);
-        built_from_bare_zip = false;
+        embedded = record.embedded(crate::datapackage::DATASET_VERSION)?;
     } else {
         archive_path = input_path.clone();
         let file_name = input_path
@@ -267,12 +300,16 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
         if let Some(matched) = matched {
             release_date = matched.release_date.clone();
-            provenance = Some(crate::provenance::OdsProvenance::from_trud_statement(
+            // No `ods trud pull` wrote a record for a bare zip, so the facts it would hold come
+            // from the index row or TRUD's API, in the same shape.
+            let record = crate::provenance::PullRecord::for_trud_release(
                 &release_date,
+                &file_name,
                 &matched.trud_release_sha256,
                 matched.trud_release_filesize_bytes,
-            ));
-            built_from_bare_zip = true;
+                &[],
+            )?;
+            embedded = record.embedded(crate::datapackage::DATASET_VERSION)?;
 
             if !quiet {
                 eprintln!(
@@ -289,8 +326,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                 }
             };
         } else {
-            built_from_bare_zip = false;
-            provenance = None;
+            embedded = crate::provenance::Embedded::without_provenance();
 
             match args.output {
                 Some(out_dir) => {
@@ -422,7 +458,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     // The four tables share nothing mutable, so each is built and written by one thread of
     // its own. Parallelism goes across files, never inside one: a file's bytes don't depend
     // on how many cores the machine has.
-    let prov = provenance.as_ref();
+    let prov = Some(&embedded);
     let on_rows = |n: usize| {
         state.rows_written(n);
         state.paint(&progress);
@@ -485,21 +521,6 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     // Settled: the rate becomes the total size, and the block prints as it stands (once, when
     // stderr isn't a terminal or the command is quiet).
     progress.finish_block(&state.settled(&progress));
-
-    // 6. Write initial _provenance.json to output directory only when built from bare zip
-    if built_from_bare_zip {
-        if let Some(ref p) = provenance {
-            p.write_to_dir(&output_path)?;
-        }
-    }
-
-    // 7. Ship the datapackage.json alongside the data so the schema and metadata
-    //    are reproducible from a release alone, without the tool.
-    let release_pkg =
-        crate::datapackage::generate_release_datapackage(&output_path, None, None);
-    let pkg_json = serde_json::to_string_pretty(&release_pkg)? + "\n";
-    std::fs::write(output_path.join("datapackage.json"), pkg_json)
-        .context("writing datapackage.json")?;
 
     if !quiet {
         warn_unexpected_files(&output_path);
@@ -699,14 +720,14 @@ fn unread_dates_warning(exported: &[Exported; 4]) -> Option<String> {
 }
 
 pub fn get_unexpected_files(output_dir: &Path) -> Vec<String> {
+    // `datapackage.json` is the release's generated view, which bare `ods make` writes after this
+    // step.
     let known_files: HashSet<&str> = [
         "orgs.parquet",
         "roles.parquet",
         "relationships.parquet",
         "successions.parquet",
         "datapackage.json",
-        crate::provenance::PROVENANCE_FILENAME,
-        "provenance.json",
     ]
     .into_iter()
     .collect();
@@ -1122,7 +1143,7 @@ pub fn export_orgs(
     records: &[OdsRecord],
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
 ) -> Result<usize> {
     write_orgs(
         output_dir,
@@ -1142,7 +1163,7 @@ pub fn write_orgs(
     records: &[OdsRecord],
     successor_closures: &HashMap<String, Vec<String>>,
     predecessor_closures: &HashMap<String, Vec<String>>,
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
     release_date: Option<&str>,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
@@ -1151,12 +1172,12 @@ pub fn write_orgs(
     all_records.sort_by(|a, b| (&a.status, &a.ods_code).cmp(&(&b.status, &b.ods_code)));
 
     let release_date_str = release_date
-        .or_else(|| provenance.and_then(|p| p.trud_release_date.as_deref()))
+        .or_else(|| provenance.and_then(source_release_date))
         .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
     let release_days = parse_date_to_days(release_date_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
-    let schema = embed_metadata(&orgs_schema(), provenance);
+    let schema = embed_metadata(&orgs_schema());
     let output_file =
         File::create(output_dir.join("orgs.parquet")).context("creating orgs.parquet")?;
     let props = writer_properties(provenance);
@@ -1269,7 +1290,7 @@ fn build_roles_batch(
 pub fn export_roles(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
 ) -> Result<usize> {
     write_roles(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
 }
@@ -1278,7 +1299,7 @@ pub fn export_roles(
 pub fn write_roles(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
     release_date: Option<&str>,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
@@ -1314,12 +1335,12 @@ pub fn write_roles(
     });
 
     let release_date_str = release_date
-        .or_else(|| provenance.and_then(|p| p.trud_release_date.as_deref()))
+        .or_else(|| provenance.and_then(source_release_date))
         .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
     let release_days = parse_date_to_days(release_date_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
-    let schema = embed_metadata(&roles_schema(), provenance);
+    let schema = embed_metadata(&roles_schema());
     let output_file =
         File::create(output_dir.join("roles.parquet")).context("creating roles.parquet")?;
     let props = writer_properties(provenance);
@@ -1425,7 +1446,7 @@ fn build_relationships_batch(
 pub fn export_relationships(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
 ) -> Result<usize> {
     write_relationships(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
 }
@@ -1434,7 +1455,7 @@ pub fn export_relationships(
 pub fn write_relationships(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
     release_date: Option<&str>,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
@@ -1469,12 +1490,12 @@ pub fn write_relationships(
     });
 
     let release_date_str = release_date
-        .or_else(|| provenance.and_then(|p| p.trud_release_date.as_deref()))
+        .or_else(|| provenance.and_then(source_release_date))
         .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
     let release_days = parse_date_to_days(release_date_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
-    let schema = embed_metadata(&relationships_schema(), provenance);
+    let schema = embed_metadata(&relationships_schema());
     let output_file = File::create(output_dir.join("relationships.parquet"))
         .context("creating relationships.parquet")?;
     let props = writer_properties(provenance);
@@ -1654,7 +1675,7 @@ fn build_successions_batch(
 pub fn export_successions(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
 ) -> Result<usize> {
     write_successions(output_dir, records, provenance, None, &|_| {}).map(|e| e.rows)
 }
@@ -1663,19 +1684,19 @@ pub fn export_successions(
 pub fn write_successions(
     output_dir: &Path,
     records: &[OdsRecord],
-    provenance: Option<&crate::provenance::OdsProvenance>,
+    provenance: Option<&crate::provenance::Embedded>,
     release_date: Option<&str>,
     on_rows: &(dyn Fn(usize) + Sync),
 ) -> Result<Exported> {
     let mut problems = DateProblems::default();
     let edges = build_succession_edges(records);
     let release_date_str = release_date
-        .or_else(|| provenance.and_then(|p| p.trud_release_date.as_deref()))
+        .or_else(|| provenance.and_then(source_release_date))
         .ok_or_else(|| anyhow::anyhow!("Missing trud_release_date in provenance or argument"))?;
     let release_days = parse_date_to_days(release_date_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid trud_release_date: {}", release_date_str))?;
 
-    let schema = embed_metadata(&successions_schema(), provenance);
+    let schema = embed_metadata(&successions_schema());
     let output_file = File::create(output_dir.join("successions.parquet"))
         .context("creating successions.parquet")?;
     let props = writer_properties(provenance);
@@ -2012,13 +2033,8 @@ mod tests {
             ..Default::default()
         };
 
-        let prov = crate::provenance::OdsProvenance {
-            trud_release_date: Some("2026-07-31".to_string()),
-            ..Default::default()
-        };
-
         let temp_dir = tempfile::tempdir().unwrap();
-        export_relationships(temp_dir.path(), &[record], Some(&prov)).unwrap();
+        write_relationships(temp_dir.path(), &[record], None, Some("2026-07-31"), &|_| {}).unwrap();
         assert!(temp_dir.path().join("relationships.parquet").exists());
     }
 

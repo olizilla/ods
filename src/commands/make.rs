@@ -41,11 +41,14 @@ pub enum MakeCommand {
     /// Generate target projections (Parquet tables) from XML
     Parquet(crate::commands::parquet::Args),
 
-    /// Generate OCI image layout for a compiled release
+    /// Write the OCI image layout for a compiled release, for publishing
     Oci(crate::commands::make_oci::Args),
 
     /// Cut and validate a publishable release row for data/releases.json
     Release(crate::commands::make_release::Args),
+
+    /// Write datapackage.json, the release's Data Package view, from its Parquet files
+    Datapackage(crate::commands::make_datapackage::Args),
 }
 
 pub fn run(args: MakeArgs) -> Result<()> {
@@ -53,17 +56,30 @@ pub fn run(args: MakeArgs) -> Result<()> {
         Some(MakeCommand::Parquet(parquet_args)) => run_make_parquet(parquet_args).map(|_| ()),
         Some(MakeCommand::Oci(oci_args)) => crate::commands::make_oci::run(oci_args),
         Some(MakeCommand::Release(release_args)) => crate::commands::make_release::run(release_args),
-        None => run_make_parquet(crate::commands::parquet::Args {
-            input: args.input,
-            output: args.output,
-            quiet: args.quiet,
-            no_progress: args.no_progress,
-            verbose: args.verbose,
-            index: args.index,
-            force: args.force,
-        })
-        .map(|_| ()),
+        Some(MakeCommand::Datapackage(dp_args)) => crate::commands::make_datapackage::run(dp_args),
+        None => {
+            let index = args.index.clone();
+            let release_dir = run_make_parquet(crate::commands::parquet::Args {
+                input: args.input,
+                output: args.output,
+                quiet: args.quiet,
+                no_progress: args.no_progress,
+                verbose: args.verbose,
+                index: args.index,
+                force: args.force,
+            })?;
+            // The readable view beside the files, for people and Frictionless tools. `ods`
+            // never reads a value back from it; nothing is packed (`ods make oci` does that,
+            // for publishing).
+            write_release_view(&release_dir, index.as_deref())
+        }
     }
+}
+
+/// Writes `datapackage.json` into a release directory just built.
+fn write_release_view(release_dir: &std::path::Path, index_arg: Option<&str>) -> Result<()> {
+    let index = crate::commands::make_datapackage::index_for_view(release_dir, index_arg)?;
+    crate::datapackage::write_view(release_dir, Some(&index))
 }
 
 pub fn run_make_parquet(args: crate::commands::parquet::Args) -> Result<PathBuf> {

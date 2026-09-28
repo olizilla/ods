@@ -117,9 +117,9 @@ fn test_a_checksum_naming_another_zip_is_refused() {
 fn test_a_provenance_naming_a_different_archive_is_refused() {
     let tmp = TempDir::new().unwrap();
     let release = common::create_source_release(tmp.path(), "2026-07-31");
-    let prov_path = release.join(ods::provenance::PROVENANCE_FILENAME);
+    let prov_path = ods::provenance::pull_record_path(&release);
     let mut prov: serde_json::Value = serde_json::from_str(&fs::read_to_string(&prov_path).unwrap()).unwrap();
-    prov["trud_release_sha256"] = serde_json::json!("1".repeat(64));
+    prov["resources"][0]["hash"] = serde_json::json!(format!("sha256:{}", "1".repeat(64)));
     fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
 
     let block = refuses(&release).block();
@@ -132,7 +132,7 @@ fn test_a_provenance_naming_a_different_archive_is_refused() {
 fn test_a_missing_or_unreadable_provenance_is_refused_with_a_way_to_repair_it() {
     let tmp = TempDir::new().unwrap();
     let release = common::create_source_release(tmp.path(), "2026-07-31");
-    fs::write(release.join(ods::provenance::PROVENANCE_FILENAME), r#"{"_type":"old"}"#).unwrap();
+    fs::write(ods::provenance::pull_record_path(&release), r#"{"name":"nhs-ods-xml","_type":"old"}"#).unwrap();
 
     let block = refuses(&release).block();
 

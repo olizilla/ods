@@ -52,8 +52,16 @@ fn make_parquet_produces_tables_with_correct_records() {
     assert!(parquet_dir.join("roles.parquet").exists(), "roles.parquet not created");
     assert!(parquet_dir.join("relationships.parquet").exists(), "relationships.parquet not created");
     assert!(parquet_dir.join("successions.parquet").exists(), "successions.parquet not created");
-    assert!(parquet_dir.join("datapackage.json").exists(), "datapackage.json not created");
-    assert!(parquet_dir.join("_provenance.json").exists(), "_provenance.json not created");
+    assert!(
+        !parquet_dir.join("datapackage.json").exists(),
+        "`ods make parquet` writes the tables only; bare `ods make` writes the datapackage.json view"
+    );
+    // A bare zip matched by the index: the files carry the provenance, and no `trud/` record is
+    // written, since no `ods trud pull` made one.
+    let record = ods::provenance::read_release(&parquet_dir).unwrap();
+    let facts = record.facts().expect("the files carry provenance");
+    assert_eq!(facts.release_date, "2026-07-31");
+    assert!(!ods::provenance::pull_record_path(&parquet_dir).exists(), "no trud/ record for a bare zip");
 }
 
 

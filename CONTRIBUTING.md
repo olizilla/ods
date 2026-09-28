@@ -66,39 +66,39 @@ aim is to demonstrate a better way to publish this data, and for it to be a joy 
 
 Verifiable provenance for the data is essential so `ods` manages pulling and verifying the source data, ensuring the file hashes match those published by the NHS.
 
-```text
-TRUD publishes a SHA-256 for the release archive
-    │
-    ▼ ods trud pull        pull the data, verify the hash
-    │
-_provenance.json
-    │
-    ▼ ods make             deterministic projections of the data
-    │
-*.parquet + manifest
-```
+1. TRUD publishes a SHA-256 for the release archive
+2. Run `ods trud pull` to fech the data and verify its hash
+3. Run `ods make` to create deterministic projections of the data as parquet files
 
-Anyone with a TRUD account can rebuild the release and get identical bytes.
+Anyone with a TRUD account can rebuild the release and get identical bytes. But we expect most folks won't have a TRUD account, and shouldn't need one to query the open data, so we publish those parquet files as content-addressed OCI Images, and allow uses to fetch them via `ods`
 
-Four different claims, bought by four different mechanisms:
+1. TRUD publishes a SHA-256 for the release archive
+2. We build the parquet on Github Actions with SLSA attestations for provenance.
+3. We push those files to ods.fyi and ghcr.io
+4. We announce them via https://ods.fyi/releases.json
+5. User just runs `ods pull` to fech the data and verify its hash
 
-| Claim | Meaning | Secured by |
+The things we care about are: 
+
+| Features | What? | Secured by |
 | :--- | :--- | :--- |
 | **Provenance** | what this derives from | TRUD's hash, the release index row's `tool_git_sha`, `Cargo.lock` at that sha |
-| **Integrity** | bytes unchanged since publication | `manifest.json`, hashes baked into `ods`, mirrors |
-| **Authenticity** | published by this project | the Zenodo record and the git history |
+| **Integrity** | bytes unchanged since publication | the manifest digest on the release index row, which the files rebuild, hashes baked into `ods`, mirrors |
+| **Authenticity** | published by this project | in the git history (and later: Zenodo) |
 | **Correctness** | the derivation is faithful | **someone re-running it** |
 
 Hashes prove the bytes you got are the bytes we published. They cannot prove
 we derived them correctly — every copy is served from one build. What proves
-that is rebuilding it: the TRUD hash in `_provenance.json` and the `tool_git_sha`
-in the release index row are there so you can, and `ods trud audit` compares the result. If you do and
-we disagree, please open an issue.
+that is rebuilding it: the TRUD hash every Parquet file carries and the `tool_git_sha`
+in the release index row are there so you can, and `ods trud audit` compares the result. 
+We test for this in CI. If you find a release you can't reproduce the published hash for
+please open an issue.
 
 **Correctness depends on TRUD staying reachable.** Rebuilding needs the source
 archive, and only NHS England distributes it. If TRUD is withdrawn, nobody can
 re-run the derivation and our source hashes become claims you'd have to take on
-trust. We keep a copy of every source archive to guard against that possibility.
+trust. We keep a copy of every source archive to guard against that possibility
+(and to be considerate and not hammer NHS bandwidth if we have to rebuild a release).
 
 ## How to decide things
 
@@ -115,12 +115,9 @@ is documented in [role_names.json].
 checksums fetched from the same host as the data. That proves _integrity of transfer_, 
 but can't tell you whether the host was compromised. Write that plainly.
 
-**Say `unknown` when you don't know.** Provenance fields are namespaced by whose
-fact they are: `trud_*` from the TRUD API, `publication_*` from the ODS XML
-manifest, `tool_*` from `ods` itself. A missing value reads `unknown` and never
-uses a fallback. avoid offering plausible wrong answers. Same reasoning applies
-to swallowed errors. Always clearly state what went wrong and where possible offer
-steps to retry or fix it.
+**Say `unknown` when you don't know.** Aavoid offering plausible wrong answers.
+Same reasoning applies to swallowed errors. Always clearly state what went wrong
+and where possible offer steps to retry or fix it.
 
 ## What counts as done
 
@@ -199,9 +196,6 @@ the schema freeze happening before publication.
 The `_code` suffix does two jobs, and a column name should be a phrase a
 practitioner would say out loud.
 
-**CLI output** `✓` success, `*` info, `✖` error, progress lines, and status lines 
-only for work actually done. Data to stdout, progress to stderr, so `ods pull --list > file` is useful. Always exit non-zero when the command couldn't do its job.
-
 ## Updating dependencies
 
 **An `arrow`, `parquet` or `zstd` change is a dataset change.** It gets its own branch and review,
@@ -257,9 +251,7 @@ for anyone who wants the source.
 
 Per the OGL licence:
 - Report errors upstream when you find them,
-- Keep a record of which release you used.
-
-Our per release `_provenance.json` covers the second point, for every artefact `ods` makes.
+- Keep a record of which release you used. (Baked in to our parquet files metadata)
 
 ## Where next?
 

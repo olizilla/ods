@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{ods_binary, setup_find_test_workspace};
+use common::{ods_binary, setup_find_test_workspace_embedded};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -22,53 +22,29 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
     let ws_root = tmp.path().join("custom_workspace");
     fs::create_dir_all(&ws_root).unwrap();
 
-    let (_find_tmp, sample_parquet_dir) = setup_find_test_workspace();
+    // Each release's files carry its own provenance, as `ods make` writes them.
+    let release = |date: &str, sha: &str, version: &str| {
+        let embedded = ods::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 37983173, &[])
+            .unwrap()
+            .embedded(version)
+            .unwrap();
+        let (find_tmp, sample_parquet_dir) = setup_find_test_workspace_embedded(&embedded);
+        let rel = ws_root.join("releases").join(date);
+        fs::create_dir_all(&rel).unwrap();
+        for entry in fs::read_dir(&sample_parquet_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                fs::copy(entry.path(), rel.join(entry.file_name())).unwrap();
+            }
+        }
+        drop(find_tmp);
+    };
 
     // 1. Create release 2026-07-31
-    let rel_active = ws_root.join("releases").join("2026-07-31");
-    fs::create_dir_all(&rel_active).unwrap();
-    for entry in fs::read_dir(&sample_parquet_dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_file() {
-            fs::copy(entry.path(), rel_active.join(entry.file_name())).unwrap();
-        }
-    }
-    let mut active_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_active).unwrap_or_default();
-    active_prov.trud_release_date = Some("2026-07-31".to_string());
-    active_prov.trud_release_sha256 = Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    fs::write(
-        rel_active.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&active_prov).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        rel_active.join("datapackage.json"),
-        b"{\"name\": \"ods\", \"version\": \"1.0.1\"}",
-    )
-    .unwrap();
+    release("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1");
 
     // 2. Create release 2026-06-26 with slightly different provenance
-    let rel_older = ws_root.join("releases").join("2026-06-26");
-    fs::create_dir_all(&rel_older).unwrap();
-    for entry in fs::read_dir(&sample_parquet_dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_file() {
-            fs::copy(entry.path(), rel_older.join(entry.file_name())).unwrap();
-        }
-    }
-    let mut older_prov = ods::provenance::OdsProvenance::load_from_dir(&rel_older).unwrap_or_default();
-    older_prov.trud_release_date = Some("2026-06-26".to_string());
-    older_prov.trud_release_sha256 = Some("7151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string());
-    fs::write(
-        rel_older.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&older_prov).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        rel_older.join("datapackage.json"),
-        b"{\"name\": \"ods\", \"version\": \"1.0.0\"}",
-    )
-    .unwrap();
+    release("2026-06-26", "7151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.0");
 
     // 3. Setup workspace marker and pin current -> 2026-07-31
     let ws = ods::workspace::Workspace::open_or_create(Some(&ws_root)).unwrap();

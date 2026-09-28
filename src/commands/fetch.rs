@@ -52,7 +52,7 @@ pub struct Args {
     #[arg(long, env = "TRUD_API_KEY")]
     pub api_key: Option<String>,
 
-    /// Custom output directory for downloaded archive and provenance (defaults to workspace release dir ./ods_data/releases/<date>/)
+    /// Custom output directory for the downloaded archive and its record (defaults to workspace release dir ./ods_data/releases/<date>/)
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
 
@@ -560,14 +560,14 @@ fn pull_single_release<F: TrudFetcher>(
     // Rename .part to .zip once hash matches
     std::fs::rename(&part_path, &dest_path)?;
 
-    write_provenance_json(&dest_dir, &target_release, true)?;
+    let elapsed = start_time.elapsed();
+    let att_result = capture_attestations(&trud_dir, &target_release, fetcher, args.force);
+    // The record lists every file the pull left, so it's written once they're all on disk.
+    write_pull_record(&dest_dir, &target_release, &att_result, true)?;
     let mut pin_moved = false;
     if is_workspace {
         pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
     }
-
-    let elapsed = start_time.elapsed();
-    let att_result = capture_attestations(&trud_dir, &target_release, fetcher, args.force);
     let final_file_count = 2 + att_result.captured.len();
     let state = ReleaseBlockState::Done { elapsed };
     let link = if is_workspace {
@@ -985,8 +985,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                 }
                             } else {
                                 let _ = std::fs::rename(&part_path, &dest_path);
-                                let _ = write_provenance_json(&release_dir, release, true);
-                                capture_attestations(&trud_dir, release, fetcher, args.force);
+                                let captured = capture_attestations(&trud_dir, release, fetcher, args.force);
+                                let _ = write_pull_record(&release_dir, release, &captured, true);
 
                                 downloaded_count.fetch_add(1, Ordering::Relaxed);
                                 progress.remove_in_flight(&release.release_date);
@@ -1148,20 +1148,30 @@ fn mark_bad_sha_file(path: &Path) -> PathBuf {
     bad_path
 }
 
-/// Writes `_provenance.json` when it is missing, unreadable (an older format, say) or `force`d.
-/// Returns whether it wrote one.
-fn write_provenance_json(release_dir: &Path, release: &TrudReleaseItem, force: bool) -> Result<bool> {
-    let prov_path = release_dir.join(crate::provenance::PROVENANCE_FILENAME);
-    if prov_path.exists()
-        && !force
-        && matches!(
-            crate::provenance::OdsProvenance::load_from_file(&prov_path),
-            crate::provenance::ProvenanceLoad::Read(..)
-        )
-    {
+/// Writes the pull record, `trud/datapackage.json`: the archive from TRUD's listing, and NHS's
+/// other files as `captured` holds them. Written when it is missing, differs from what the files
+/// on disk make (an older format, `trud/_provenance.json` from an older `ods`, or a file fetched
+/// since), or `force`d. Returns whether it wrote one.
+fn write_pull_record(
+    release_dir: &Path,
+    release: &TrudReleaseItem,
+    captured: &AttestationCaptureResult,
+    force: bool,
+) -> Result<bool> {
+    let record = crate::provenance::PullRecord::for_trud_release(
+        &release.release_date,
+        &release.archive_file_name,
+        &release.archive_file_sha256,
+        release.archive_file_size,
+        &captured.files,
+    )?;
+    let path = crate::provenance::pull_record_path(release_dir);
+    let legacy = crate::provenance::pull_record_dir(release_dir).join(crate::provenance::LEGACY_PROVENANCE_FILENAME);
+    let current = std::fs::read_to_string(&path).ok().as_deref() == Some(record.to_json_string()?.as_str());
+    if current && !force && !legacy.exists() {
         return Ok(false);
     }
-    write_provenance_file(release_dir, release)?;
+    record.write_to_dir(release_dir)?;
     Ok(true)
 }
 
@@ -1612,11 +1622,13 @@ pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull
         std::fs::copy(&zip_file, &dest_path)?;
     }
 
-    let _prov = crate::provenance::write_provenance(
+    crate::provenance::write_pull_record(
         &dest_dir,
         &release_date,
+        &file_name,
         &matched.trud_release_sha256,
         matched.trud_release_filesize_bytes,
+        &[],
     )?;
 
     let mut pin_moved = false;
@@ -1760,16 +1772,6 @@ pub fn run_verify_only_with_fetchers<F: TrudFetcher, OF: crate::commands::pull::
     }
 }
 
-fn write_provenance_file(release_dir: &Path, release: &TrudReleaseItem) -> Result<()> {
-    crate::provenance::write_provenance(
-        release_dir,
-        &release.release_date,
-        &release.archive_file_sha256,
-        release.archive_file_size,
-    )?;
-    Ok(())
-}
-
 pub fn run_local_archive_with_progress(
     args: &Args,
     workspace_root: &Path,
@@ -1786,6 +1788,8 @@ pub struct AttestationCaptureResult {
     /// The subset of `captured` this call downloaded: the others were already on disk.
     pub fetched: Vec<&'static str>,
     pub missing_reasons: Vec<&'static str>,
+    /// Each captured file as the pull record lists it: `(name, mediatype, path)`.
+    pub files: Vec<(&'static str, &'static str, PathBuf)>,
 }
 
 impl AttestationCaptureResult {
@@ -1840,14 +1844,22 @@ pub fn capture_attestations<F: TrudFetcher>(
     remove_legacy_listing(trud_dir);
 
     // Fetches one of NHS's files unless it is already held (and not `force`d)
+    type Out = (
+        Vec<&'static str>,
+        Vec<&'static str>,
+        Vec<&'static str>,
+        Vec<(&'static str, &'static str, PathBuf)>,
+    );
+    #[allow(clippy::too_many_arguments)]
     fn take<F: TrudFetcher>(
         fetcher: &F,
         force: bool,
         name: &'static str,
+        record: (&'static str, &'static str),
         url: &str,
         dest: &Path,
         failed: &'static str,
-        out: &mut (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>),
+        out: &mut Out,
     ) {
         let need = force || !dest.exists();
         if !need || download_file_atomically(fetcher, url, dest).is_ok() {
@@ -1855,18 +1867,20 @@ pub fn capture_attestations<F: TrudFetcher>(
             if need {
                 out.1.push(name);
             }
+            out.3.push((record.0, record.1, dest.to_path_buf()));
         } else {
             out.2.push(failed);
         }
     }
-    let mut out = (Vec::new(), Vec::new(), Vec::new());
+    use crate::oci::source::{MEDIA_TYPE_PGP_KEYS, MEDIA_TYPE_PGP_SIGNATURE, MEDIA_TYPE_XML};
+    let mut out: Out = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
     // 1. Checksum file
     if let Some(ref url) = release.checksum_file_url {
         let filename = release.checksum_file_name.as_deref().unwrap_or_else(|| {
             url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("checksum.xml")
         });
-        take(fetcher, force, "checksum", url, &trud_dir.join(filename), "checksum download failed", &mut out);
+        take(fetcher, force, "checksum", ("checksum", MEDIA_TYPE_XML), url, &trud_dir.join(filename), "checksum download failed", &mut out);
     } else {
         out.2.push("checksum not offered for this release");
     }
@@ -1885,7 +1899,7 @@ pub fn capture_attestations<F: TrudFetcher>(
         } else {
             format!("{}.asc", release.checksum_file_name.as_deref().unwrap_or("checksum.xml"))
         };
-        take(fetcher, force, "signature", url, &trud_dir.join(filename), "signature download failed", &mut out);
+        take(fetcher, force, "signature", ("signature", MEDIA_TYPE_PGP_SIGNATURE), url, &trud_dir.join(filename), "signature download failed", &mut out);
     } else {
         out.2.push("signature not offered for this release");
     }
@@ -1895,16 +1909,17 @@ pub fn capture_attestations<F: TrudFetcher>(
         let filename = release.public_key_file_name.as_deref().unwrap_or_else(|| {
             url.split('?').next().unwrap_or(url).rsplit('/').next().unwrap_or("trud-public-key.pgp")
         });
-        take(fetcher, force, "public key", url, &trud_dir.join(filename), "public key download failed", &mut out);
+        take(fetcher, force, "public key", ("key", MEDIA_TYPE_PGP_KEYS), url, &trud_dir.join(filename), "public key download failed", &mut out);
     } else {
         out.2.push("public key not offered for this release");
     }
 
-    let (captured, fetched, missing_reasons) = out;
+    let (captured, fetched, missing_reasons, files) = out;
     AttestationCaptureResult {
         captured,
         fetched,
         missing_reasons,
+        files,
     }
 }
 
@@ -1940,8 +1955,8 @@ impl Healed {
 
 /// Makes a release directory whole from the zip it holds, never downloading the zip: fetches
 /// whichever of NHS's three files are missing (all three under `force`), writes
-/// `_provenance.json` if it is missing or unreadable (always under `force`), and removes a
-/// leftover TRUD listing.
+/// `trud/datapackage.json` if it is missing or out of date (always under `force`; an older
+/// workspace's `trud/_provenance.json` is replaced by it), and removes a leftover TRUD listing.
 fn heal_release_dir<F: TrudFetcher>(
     release_dir: &Path,
     trud_dir: &Path,
@@ -1951,7 +1966,7 @@ fn heal_release_dir<F: TrudFetcher>(
 ) -> Result<Healed> {
     let attestations = capture_attestations(trud_dir, release, fetcher, force);
     let mut done = attestations.fetched.clone();
-    if write_provenance_json(release_dir, release, force)? {
+    if write_pull_record(release_dir, release, &attestations, force)? {
         done.push("provenance");
     }
     Ok(Healed { done, attestations })

@@ -7,7 +7,7 @@ Publisher namespace for TRUD API interactions: list releases (`list`), download 
 | Subcommand | Description |
 | :--- | :--- |
 | **`ods trud list`** | List TRUD release archives, newest first, and show which are held in the workspace. |
-| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, generate `_provenance.json`, and set the active workspace release. |
+| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, write the pull record `trud/datapackage.json` for `ods make` to build from, and set the active workspace release. |
 | **`ods trud diff`** | Compare two TRUD ODS releases (or workspace versions) and print a structured diff report of entity changes. |
 | **`ods trud audit`** | Audit workspace Parquet projections against ground-truth TRUD XML/ZIP releases to detect data drift or compilation anomalies. |
 | **`ods trud verify`** | Check a TRUD archive you already have against the ods release index, then the TRUD API, without downloading it. |
@@ -116,7 +116,7 @@ NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) upda
 3. Checks for a cached local archive in `./ods_data/releases/<date>/trud/`.
 4. Downloads the archive ZIP if it isn't there. A ZIP that is there is never downloaded again while it matches TRUD's hash: the release directory is repaired from it instead (below).
 5. Computes the local SHA-256 hash and checks it against TRUD's published `archiveFileSha256`.
-6. Writes `_provenance.json` if it is missing or unreadable.
+6. Fetches NHS's checksum, signature and key, then writes `trud/datapackage.json`, the pull record, beside the archive it describes: the TRUD release as a Data Package, the archive's hash and size from TRUD's listing and the other three files' hashed from disk. It's never part of the dataset. `ods make` reads it and embeds the same facts in every Parquet file it writes (see [provenance.md](./provenance.md)).
 7. Updates the workspace active release symlink (`./ods_data/current -> releases/<date>`).
 
 ```mermaid
@@ -128,16 +128,16 @@ flowchart TD
     D -- No --> F[Download .zip Archive]
     F --> E
     E --> G{SHA-256 == Official TRUD Hash?}
-    G -- Match --> H[✓ Write provenance.json & update current symlink]
+    G -- Match --> H[✓ Write trud/datapackage.json & update current symlink]
     G -- Mismatch (Local) --> I[Refuse, naming both hashes -> --force renames the bad file to .zip.bad-sha and downloads again]
     G -- Mismatch (Remote) --> J[Retry download once -> Fail if 2nd mismatch]
 ```
 
 ### Repairing a release directory
 
-The ZIP is the expensive part, and the one thing TRUD vouches for. When a release directory already holds it and its SHA-256 matches TRUD's listing, `ods trud pull <date>` keeps the ZIP and makes the rest whole from it: it fetches whichever of NHS's checksum, signature and public key are missing, writes `_provenance.json` if it is missing or in an older format, and removes a TRUD listing an older pull saved in `trud/`. The release block names what it did (`repaired: checksum, signature, key`). `--all` does the same for every release the workspace holds.
+The ZIP is the expensive part, and the one thing TRUD vouches for. When a release directory already holds it and its SHA-256 matches TRUD's listing, `ods trud pull <date>` keeps the ZIP and makes the rest whole from it: it fetches whichever of NHS's checksum, signature and public key are missing, writes `trud/datapackage.json` if it is missing or no longer matches the files beside it (replacing the `trud/_provenance.json` an older `ods` wrote), and removes a TRUD listing an older pull saved in `trud/`. The release block names what it did (`repaired: checksum, signature, key, provenance`). `--all` does the same for every release the workspace holds.
 
-`--force` fetches NHS's three files again and rewrites `_provenance.json`, and still leaves a matching ZIP alone. A ZIP that doesn't match TRUD's hash is refused without `--force`, with both hashes named; with it, the ZIP is downloaded again.
+`--force` fetches NHS's three files again and rewrites `trud/datapackage.json`, and still leaves a matching ZIP alone. A ZIP that doesn't match TRUD's hash is refused without `--force`, with both hashes named; with it, the ZIP is downloaded again.
 
 ### API key security and redaction
 TRUD download URLs embed user API keys directly in their path parameters (`/keys/{api_key}/...`). `ods trud pull` automatically redacts secret API keys from:
@@ -160,7 +160,7 @@ Verify that derived workspace artefacts are a faithful, complete, and unmodified
 
 > **The audit contract**: Every check must have an expected value derivable from the release's own source archive, or be a fixed structural invariant such as zero.
 
-- **File and provenance integrity**: Verifies SHA-256 checksums, `_provenance.json`'s artefact map, and `datapackage.json` hashes.
+- **File and provenance integrity**: Verifies SHA-256 checksums against the pull record (`trud/datapackage.json`) and the provenance the Parquet files carry, that every file reads as Parquet, and, when the release index names the release, that the manifest the files rebuild has the digest it records.
 - **Source invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
 - **Record parity**: Checks 100% count equality between the release's XML files and `orgs.parquet` (every organisation, and the active count), `roles.parquet`, `relationships.parquet`, and `successions.parquet`. It reads both XML files as `ods make` does, sets aside each stub that repeats a complete record from the other file, and names the record count it compared.
 - **Field and derived column parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, role names and codes, normalised addresses).

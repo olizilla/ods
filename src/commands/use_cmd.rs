@@ -36,6 +36,14 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
         &crate::commands::pull::HttpOciFetcher,
     )?;
 
+    // The files are read before the pin moves: a release whose files can't say what it is
+    // (they disagree, or carry an object this ods can't read) isn't pinned.
+    let outcome = crate::workspace::verify_release_dir(&release_dir, &index);
+    if let crate::workspace::VerificationOutcome::Corrupted(ref block) = outcome {
+        writeln!(err_writer, "{}", block)?;
+        return Err(crate::commands::pull::AlreadyReported.into());
+    }
+
     let already_active = if let Ok((active_date, _)) = ws.active_release() {
         active_date == release_date
     } else {
@@ -51,7 +59,6 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
     }
     writeln!(err_writer, "  current → releases/{}", release_date)?;
 
-    let outcome = crate::workspace::verify_release_dir(&release_dir, &index);
     match outcome {
         crate::workspace::VerificationOutcome::VerifiedPublished { date, version, digest } => {
             writeln!(err_writer, "✓ reconstructed manifest {} matches the index for {} ({})", digest, date, version)?;
@@ -93,32 +100,31 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
                 release_date
             )?;
         }
-        crate::workspace::VerificationOutcome::ChangedSinceBuilt { file } => {
-            writeln!(
-                err_writer,
-                "! releases/{} can't be checked: datapackage resource {} hash mismatch\n  Repair it: ods pull --force {}",
-                release_date,
-                file,
-                release_date
-            )?;
-        }
         crate::workspace::VerificationOutcome::NoProvenance => {
             writeln!(
                 err_writer,
-                "! releases/{} can't be checked: Missing or unreadable _provenance.json\n  Repair it: ods pull --force {}",
+                "! releases/{} can't be checked: it has no provenance, built from an archive ods couldn't match to a TRUD release\n  Repair it: ods pull --force {}",
                 release_date,
                 release_date
             )?;
         }
-        crate::workspace::VerificationOutcome::Corrupted(err) => {
+        crate::workspace::VerificationOutcome::NotEmbedded => {
             writeln!(
                 err_writer,
-                "! releases/{} can't be checked: {}\n  Repair it: ods pull --force {}",
+                "! releases/{} can't be checked: its Parquet files carry no provenance, built by an older ods\n  Repair it: ods pull --force {}, or rebuild it with ods make",
                 release_date,
-                err,
                 release_date
             )?;
         }
+        crate::workspace::VerificationOutcome::NoFiles => {
+            writeln!(
+                err_writer,
+                "! releases/{} can't be checked: it holds no Parquet files\n  Repair it: ods pull --force {}",
+                release_date,
+                release_date
+            )?;
+        }
+        crate::workspace::VerificationOutcome::Corrupted(_) => unreachable!("refused before pinning"),
     }
 
     Ok(())

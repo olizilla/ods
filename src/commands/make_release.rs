@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::index::{parse_semver, Dataset, OdsReleaseIndex, Release, RELEASES_SCHEMA_V1_URL};
 use crate::oci::*;
-use crate::provenance::OdsProvenance;
+use crate::provenance::{ReleaseFacts, ReleaseRecord};
 
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
@@ -118,25 +118,12 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
         bail!("Release directory does not exist: {}", release_dir.display());
     }
 
-    let prov = match OdsProvenance::load_from_dir(&release_dir) {
-        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
-        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
-            bail!(
-                "{}",
-                crate::provenance::format_unreadable_provenance_error(&path, &date)
-            );
-        }
-        crate::provenance::ProvenanceLoad::Absent => {
-            bail!(
-                "{}",
-                crate::provenance::format_no_provenance_error(&release_dir)
-            );
-        }
+    // What the release is comes from its Parquet files: the object they all carry.
+    let facts = match crate::provenance::read_release(&release_dir)? {
+        ReleaseRecord::Provenanced(facts) => *facts,
+        other => bail!("{}", crate::provenance::format_record_refusal(&release_dir, &other).unwrap_or_default()),
     };
-
-    let version = crate::datapackage::read_dataset_version_from_dir(&release_dir).ok_or_else(|| {
-        anyhow::anyhow!("Missing version in datapackage.json\n  Run `ods make` to build the release directory.")
-    })?;
+    let version = facts.dataset_version.clone();
 
     let tool_repo = match args.tool_repo {
         Some(ref p) => {
@@ -233,7 +220,7 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
         ..Default::default()
     })?;
 
-    let date = prov.trud_release_date.as_deref().unwrap_or("unknown");
+    let date = facts.release_date.as_str();
 
     // 4. Read the manifest digest from oci/index.json: the entry whose ref name is
     // `<date>_<version>` names the manifest `ods make oci` just wrote, so there's no need to
@@ -280,12 +267,12 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
         OdsReleaseIndex::baked()?
     };
 
-    // Guarantee the built date's row from _provenance.json before reading TRUD response
+    // Guarantee the built date's row, from the source the files name
     if !index.releases.iter().any(|r| r.trud_release_date == date) {
         index.releases.push(Release {
             trud_release_date: date.to_string(),
-            trud_release_sha256: prov.trud_release_sha256.clone().unwrap_or_default().to_uppercase(),
-            trud_release_filesize_bytes: prov.trud_release_filesize_bytes.unwrap_or_default(),
+            trud_release_sha256: facts.source_sha256_upper(),
+            trud_release_filesize_bytes: facts.source.bytes,
             datasets: Vec::new(),
         });
     }
@@ -363,9 +350,17 @@ pub fn perform_all_release_checks(
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
-    let prov = match OdsProvenance::load_from_dir(release_dir).error_building()? {
-        Some(p) => p,
-        None => return Ok(vec!["Missing _provenance.json in release directory".to_string()]),
+    // The facts these checks validate (the archive's size, the dataset version, the date and
+    // SHA-256 the release row gets minted from) come from the object the Parquet files carry.
+    let facts: ReleaseFacts = match crate::provenance::read_release(release_dir) {
+        Ok(ReleaseRecord::Provenanced(facts)) => *facts,
+        Ok(other) => {
+            return Ok(vec![crate::provenance::format_record_refusal(release_dir, &other)
+                .unwrap_or_default()
+                .trim_start_matches("✖ ")
+                .to_string()])
+        }
+        Err(e) => return Ok(vec![format!("{:#}", e).trim_start_matches("✖ ").to_string()]),
     };
 
     let tag_name = format!("v{}", build.tool_version);
@@ -423,37 +418,27 @@ pub fn perform_all_release_checks(
         }
     }
 
-    // Check 12: the archive's size is present and plausible, so a synthetic or fixture zip is
-    // never recorded as a real release. Real archives are about 38 MB. This reads a source
-    // fact from provenance; it asks nobody whether TRUD published the archive.
-    match prov.trud_release_filesize_bytes {
-        Some(sz) if sz < 1_000_000 => {
-            failures.push(format!(
-                "trud_release_filesize_bytes is implausibly small ({} bytes, must be >= 1 MB)",
-                sz
-            ));
-        }
-        None => {
-            failures.push("Missing trud_release_filesize_bytes in _provenance.json".to_string());
-        }
-        _ => {}
+    // Check 12: the archive's size is plausible, so a synthetic or fixture zip is never
+    // recorded as a real release. Real archives are about 38 MB. This reads a source fact from
+    // the files; it asks nobody whether TRUD published the archive.
+    if facts.source.bytes < 1_000_000 {
+        failures.push(format!(
+            "the source archive's size is implausibly small ({} bytes, must be >= 1 MB)",
+            facts.source.bytes
+        ));
     }
 
-    // Check 13: datapackage.json version matches built-in constant and parses as semver
-    let dp_ver = crate::datapackage::read_dataset_version_from_dir(release_dir);
-    if let Some(ref ver) = dp_ver {
-        let tool_dataset_ver = crate::datapackage::DATASET_VERSION;
-        if ver != tool_dataset_ver {
-            failures.push(format!(
-                "datapackage.json version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
-                ver, tool_dataset_ver
-            ));
-        }
-        if let Err(e) = parse_semver(ver) {
-            failures.push(format!("Dataset version {} is not valid SemVer: {}", ver, e));
-        }
-    } else {
-        failures.push("datapackage.json missing version".to_string());
+    // Check 13: the files' dataset version matches this build's constant and parses as semver.
+    let ver = &facts.dataset_version;
+    let tool_dataset_ver = crate::datapackage::DATASET_VERSION;
+    if ver != tool_dataset_ver {
+        failures.push(format!(
+            "the Parquet files' dataset version ({}) does not match this build of ods ({})\n  The release was compiled by an older tool. Re-run `ods make`, or check out the\n  tool version that built it.",
+            ver, tool_dataset_ver
+        ));
+    }
+    if let Err(e) = parse_semver(ver) {
+        failures.push(format!("Dataset version {} is not valid SemVer: {}", ver, e));
     }
 
     // Index checks (Steps 1, 2, 3)
@@ -489,11 +474,11 @@ pub fn perform_all_release_checks(
 
     let mut candidate_index = previous_index.clone();
 
-    let date = prov.trud_release_date.as_deref().unwrap_or("");
-    let prov_sha = prov.trud_release_sha256.as_deref().unwrap_or("").to_uppercase();
-    let prov_size = prov.trud_release_filesize_bytes.unwrap_or(0);
+    let date = facts.release_date.as_str();
+    let prov_sha = facts.source_sha256_upper();
+    let prov_size = facts.source.bytes;
 
-    // Guarantee the built date's row from _provenance.json before the checks
+    // Guarantee the built date's row from the files' source before the checks
     if !date.is_empty() && !candidate_index.releases.iter().any(|r| r.trud_release_date == date) {
         candidate_index.releases.push(Release {
             trud_release_date: date.to_string(),
@@ -507,7 +492,7 @@ pub fn perform_all_release_checks(
     if let Some(rel_row) = candidate_index.releases.iter().find(|r| r.trud_release_date == date) {
         if !prov_sha.is_empty() && rel_row.trud_release_sha256.to_uppercase() != prov_sha {
             failures.push(format!(
-                "The release row's trud_release_sha256 ({}) does not match _provenance.json ({})",
+                "The release row's trud_release_sha256 ({}) does not match the Parquet files' source hash ({})",
                 rel_row.trud_release_sha256, prov_sha
             ));
         }
@@ -515,7 +500,7 @@ pub fn perform_all_release_checks(
 
     // Check 14: the append-only rule, via previous.merge(&candidate)
     let (candidate_manifest_digest, candidate_filesize_bytes) =
-        match crate::commands::make_oci::build_manifest_from_dir(release_dir, &prov, expected_version) {
+        match crate::oci::dataset::build(release_dir, &facts) {
             Ok((m, _)) => match m.digest() {
                 Ok(d) => (d, m.layers.iter().map(|l| l.size).sum::<u64>()),
                 Err(e) => {

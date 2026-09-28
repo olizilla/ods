@@ -9,7 +9,6 @@ use ods::commands::parquet::{
     export_relationships, export_roles, export_successions,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole};
-use ods::provenance::OdsProvenance;
 
 
 
@@ -90,10 +89,7 @@ fn setup_exact_in_workspace() -> (TempDir, PathBuf) {
 
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-08-28".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::fixture_embedded("2026-08-28");
 
     export_orgs(&parquet_dir, &records, &succ_closures, &pred_closures, Some(&prov)).unwrap();
     export_roles(&parquet_dir, &records, Some(&prov)).unwrap();

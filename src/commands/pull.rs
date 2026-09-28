@@ -591,27 +591,10 @@ fn update_active_release_link_if_changed(workspace_root: &Path, release_date: &s
     Ok(true)
 }
 
-/// Counts the files a pulled release directory holds, the way `build_manifest_from_dir`
-/// does when it reconstructs the manifest — hidden files and the `oci` staging dir don't
-/// count, so a cache-hit block reports the same file count a fresh pull would.
+/// Counts the files a pulled release directory holds, the way the manifest is rebuilt from it:
+/// its Parquet files, so a cache-hit block reports the same file count a fresh pull would.
 fn count_release_files(release_dir: &Path) -> usize {
-    fs::read_dir(release_dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| {
-                    let path = entry.path();
-                    if !path.is_file() {
-                        return false;
-                    }
-                    match path.file_name().and_then(|n| n.to_str()) {
-                        Some(name) => !name.starts_with('.') && name != "oci",
-                        None => false,
-                    }
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    crate::provenance::release_parquet_files(release_dir).map(|names| names.len()).unwrap_or(0)
 }
 
 struct PullContext<'a, F, W> {
@@ -1119,10 +1102,31 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             "bytes counted during download must equal the manifest's layer sizes"
         );
 
+        // The files carry their own provenance, so the manifest isn't stored: the release is
+        // verified by rebuilding it from the files, and every later reader does the same.
         let outcome = verify_release_dir(&temp_path, index);
-        if !outcome.is_verified() {
-            bail!("✖ Assembled release directory failed verification");
+        match outcome {
+            crate::workspace::VerificationOutcome::VerifiedPublished { .. } => {}
+            crate::workspace::VerificationOutcome::DifferentBytes { published_digest, reconstructed_digest, .. } => bail!(
+                "✖ {} ({}) failed verification: its files rebuild a different manifest\n  {:<10}  {}\n  {:<10}  {}\n  Report it: https://github.com/olizilla/ods/issues",
+                release.trud_release_date,
+                dataset.dataset_version,
+                "index",
+                published_digest,
+                "the files",
+                reconstructed_digest
+            ),
+            crate::workspace::VerificationOutcome::Corrupted(block) => bail!("{}", block),
+            other => bail!(
+                "✖ {} ({}) failed verification: its files don't name the release the index does ({:?})",
+                release.trud_release_date,
+                dataset.dataset_version,
+                other
+            ),
         }
+        // The readable view beside the files. `ods` never reads a value back from it.
+        crate::datapackage::write_view(&temp_path, Some(index))
+            .context("writing datapackage.json into the release directory")?;
 
         fs::create_dir_all(workspace_root.join("releases"))?;
         if rel_dir.exists() {

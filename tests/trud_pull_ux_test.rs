@@ -511,51 +511,29 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
         .expect("Failed to execute trud pull");
 
     assert!(output.status.success());
-    let prov_file = out_dir.join("_provenance.json");
-    assert!(prov_file.exists(), "_provenance.json must be written");
+    let record_file = ods::provenance::pull_record_path(&out_dir);
+    assert!(record_file.exists(), "trud/datapackage.json must be written");
 
-    let prov_content = fs::read_to_string(&prov_file).unwrap();
-    let prov: serde_json::Value = serde_json::from_str(&prov_content).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&fs::read_to_string(&record_file).unwrap()).unwrap();
 
-    assert!(prov.get("trud_schema_version").is_none());
+    // Ownership rule: trud pull writes the TRUD release as a Data Package, and nothing about
+    // the dataset built from it or the tool that pulled it.
+    let obj = record.as_object().unwrap();
+    let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
     assert_eq!(
-        prov.get("trud_release_date").and_then(|v| v.as_str()),
-        Some("2026-07-31")
+        keys,
+        vec!["$schema", "name", "version", "title", "homepage", "licenses", "contributors", "resources"]
     );
+    assert_eq!(record["name"], "nhs-ods-xml");
+    assert_eq!(record["version"], "2026-07-31");
+    assert_eq!(record["licenses"][0]["name"], ods::terms::LICENSE);
+    assert_eq!(record["licenses"][0]["attribution"], ods::terms::ATTRIBUTION);
+    let archive = &record["resources"][0];
+    assert_eq!(archive["name"], "archive");
+    assert_eq!(archive["bytes"], fs::metadata(&fixture_zip).unwrap().len());
     assert_eq!(
-        prov.get("license").and_then(|v| v.as_str()),
-        Some(ods::terms::LICENSE)
-    );
-    assert_eq!(
-        prov.get("attribution").and_then(|v| v.as_str()),
-        Some(ods::terms::ATTRIBUTION)
-    );
-
-    // Ownership rule: trud pull writes ONLY the six provenance keys
-    let obj = prov.as_object().unwrap();
-    let mut expected_keys = vec![
-        "$schema",
-        "attribution",
-        "license",
-        "trud_release_date",
-        "trud_release_filesize_bytes",
-        "trud_release_sha256",
-    ];
-    let mut actual_keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
-    actual_keys.sort();
-    expected_keys.sort();
-    assert_eq!(actual_keys, expected_keys);
-    assert!(
-        !obj.contains_key("tool_version"),
-        "tool_version must not exist after trud pull"
-    );
-    assert!(
-        !obj.contains_key("tool_git_sha"),
-        "tool_git_sha must not exist after trud pull"
-    );
-    assert!(
-        !obj.contains_key("dataset_version"),
-        "dataset_version must not exist after trud pull"
+        archive["hash"],
+        format!("sha256:{}", ods::provenance::compute_file_sha256(&fixture_zip).unwrap().to_lowercase())
     );
 }
 

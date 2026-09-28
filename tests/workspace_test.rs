@@ -152,16 +152,20 @@ fn test_tightened_workspace_discovery_rules() {
     // 3. start is a release dir: discovery ascends to enclosing workspace root with _releases.json
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-    let prov = ods::provenance::OdsProvenance::default();
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+ods::provenance::write_pull_record(
+        &rel_dir,
+        "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+        &[],
+    )
+    .unwrap();
 
     assert_eq!(
         ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(),
         Some(ws.clone()),
-        "release dir with _provenance.json must resolve to enclosing workspace root"
+        "release dir with a pull record must resolve to enclosing workspace root"
     );
 
     let ws_obj = ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap();
@@ -329,10 +333,10 @@ fn test_resolve_parquet_input_release_dir_honoured_over_active() {
     fs::create_dir_all(&rel1).unwrap();
     fs::create_dir_all(&rel2).unwrap();
 
-    fs::write(rel1.join(ods::provenance::PROVENANCE_FILENAME), b"{}").unwrap();
+    fs::write(rel1.join(ods::datapackage::DATAPACKAGE_FILENAME), b"{}").unwrap();
     fs::write(rel1.join("orgs.parquet"), b"rel1 parquet").unwrap();
 
-    fs::write(rel2.join(ods::provenance::PROVENANCE_FILENAME), b"{}").unwrap();
+    fs::write(rel2.join(ods::datapackage::DATAPACKAGE_FILENAME), b"{}").unwrap();
     fs::write(rel2.join("orgs.parquet"), b"rel2 parquet").unwrap();
 
     let ws = ods::workspace::Workspace::open_or_create(Some(&ws_dir)).unwrap();
@@ -436,11 +440,15 @@ fn test_workspace_discovered_by_release_dir_without_releases_json() {
     let ws = tmp.path().join("ws_without_marker");
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-    let prov = ods::provenance::OdsProvenance::default();
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
+ods::provenance::write_pull_record(
+        &rel_dir,
+        "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_983_173,
+        &[],
+    )
+    .unwrap();
 
     // Boundary .git prevents discovery from escaping to repo root
     fs::create_dir_all(tmp.path().join(".git")).unwrap();

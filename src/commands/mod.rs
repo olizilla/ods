@@ -5,6 +5,7 @@ pub mod fetch;
 pub mod find;
 pub mod info;
 pub mod make;
+pub mod make_datapackage;
 pub mod make_oci;
 pub mod make_release;
 pub mod parquet;

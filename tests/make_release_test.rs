@@ -1,12 +1,27 @@
 use anyhow::Result;
 use ods::commands::make_release::{perform_all_release_checks, run_as, Args, BuildIdentity};
-use ods::provenance::{OdsProvenance, PROVENANCE_FILENAME};
+use ods::provenance::{Embedded, ReleaseFacts};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 mod common;
 use common::{fixture_build_identity, setup_synthetic_repo_and_release};
+
+/// What the fixture release's Parquet files say it is.
+fn facts(rel_dir: &Path) -> ReleaseFacts {
+    ods::provenance::read_release(rel_dir).unwrap().facts().cloned().expect("the fixture carries provenance")
+}
+
+/// Rewrites the fixture's two Parquet files, same content, carrying the object `change` makes
+/// of the one they carry now: a release built with other provenance.
+fn rewrite_embedded(rel_dir: &Path, change: impl Fn(&mut Embedded)) {
+    let mut embedded = facts(rel_dir).embedded;
+    change(&mut embedded);
+    for (name, content) in [("orgs.parquet", "dummy orgs parquet content"), ("roles.parquet", "dummy roles parquet content")] {
+        ods::commands::parquet::write_stub_parquet(&rel_dir.join(name), Some(&embedded), content).unwrap();
+    }
+}
 
 // B6: the row records which ods built the dataset. `ods make release` reads no TRUD key and
 // makes no network call: nothing here provides one.
@@ -123,10 +138,9 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let ver = ods::datapackage::DATASET_VERSION;
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
-    let zip_sha = prov.trud_release_sha256.clone().unwrap();
+    let zip_sha = facts(&rel_dir).source_sha256_upper();
 
-    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, ver)?;
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir)?;
     let fixture_digest = manifest.digest()?;
 
     let mut index = ods::index::OdsReleaseIndex::baked().unwrap();
@@ -192,11 +206,8 @@ fn test_make_release_refuses_when_no_repo_found() {
 fn test_make_release_refuses_implausible_filesize() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    // Mutate provenance to 16 bytes
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_filesize_bytes = Some(16);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Files built from a 16-byte archive: the check reads the source's size from the files
+    rewrite_embedded(&rel_dir, |e| e.sources.as_mut().unwrap()[0].bytes = 16);
 
     let failures = perform_all_release_checks(
         &rel_dir,
@@ -207,7 +218,7 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
     )?;
 
     assert!(
-        failures.iter().any(|f| f.contains("trud_release_filesize_bytes is implausibly small")),
+        failures.iter().any(|f| f.contains("the source archive's size is implausibly small (16 bytes")),
         "Must refuse implausible filesize, got: {:?}",
         failures
     );
@@ -215,15 +226,18 @@ fn test_make_release_refuses_implausible_filesize() -> Result<()> {
     Ok(())
 }
 
+/// Rewrites `rel_dir`'s files carrying dataset `version`: what the version checks below read.
+fn repack_with_version(rel_dir: &Path, version: &str) -> Result<()> {
+    rewrite_embedded(rel_dir, |e| e.version = Some(format!("2026-07-31_{version}")));
+    Ok(())
+}
+
 #[test]
 fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    // Mutate datapackage.json to 1.0.0, differing from tool constant 0.1.0
-    let dp_path = rel_dir.join("datapackage.json");
-    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
-    dp["version"] = serde_json::json!("1.0.0");
-    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
+    // Repack with a version differing from this build's compiled constant
+    repack_with_version(&rel_dir, "1.0.0")?;
 
     let failures = perform_all_release_checks(
         &rel_dir,
@@ -236,7 +250,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
     let expected_ver = ods::datapackage::DATASET_VERSION;
     let mismatch_failure = failures
         .iter()
-        .find(|f| f.contains("datapackage.json version"))
+        .find(|f| f.contains("the Parquet files' dataset version"))
         .expect("must have dataset_version mismatch failure");
     assert!(mismatch_failure.contains("1.0.0"));
     assert!(mismatch_failure.contains(expected_ver));
@@ -251,7 +265,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
     }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
-    assert!(err.contains("datapackage.json version (1.0.0) does not match this build of ods"));
+    assert!(err.contains("the Parquet files' dataset version (1.0.0) does not match this build of ods"));
 
     Ok(())
 }
@@ -260,11 +274,8 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
 fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    // Mutate datapackage.json to remove version
-    let dp_path = rel_dir.join("datapackage.json");
-    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
-    dp.as_object_mut().unwrap().remove("version");
-    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
+    // Files whose `version` names no dataset version after the source release's
+    rewrite_embedded(&rel_dir, |e| e.version = Some("2026-07-31".to_string()));
 
     let res = run_as(Args {
         input: Some(rel_dir),
@@ -274,8 +285,9 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
     }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
-    assert!(err.contains("Missing version in datapackage.json"));
-    assert!(err.contains("ods make"));
+    // `run_as` reads the files' embedded object first, and refuses one it can't read.
+    assert!(err.contains("carry provenance this ods can't read"), "got error: {}", err);
+    assert!(err.contains("isn't <source release>_<dataset version>"), "got error: {}", err);
 
     Ok(())
 }
@@ -284,10 +296,7 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
 fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
-    let dp_path = rel_dir.join("datapackage.json");
-    let mut dp: serde_json::Value = serde_json::from_str(&fs::read_to_string(&dp_path)?)?;
-    dp["version"] = serde_json::json!("invalid-semver");
-    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
+    repack_with_version(&rel_dir, "invalid-semver")?;
 
     let failures = perform_all_release_checks(
         &rel_dir,
@@ -304,11 +313,13 @@ fn test_make_release_refuses_non_semver_dataset_version() -> Result<()> {
 #[test]
 fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
-    // Remove oci directory to verify make_release doesn't write it if checks fail
+    // `setup_synthetic_repo_and_release` already packed `oci/`: a failed check must leave it be.
     let oci_dir = rel_dir.join("oci");
-    if oci_dir.exists() {
-        fs::remove_dir_all(&oci_dir)?;
-    }
+    let mut before_oci_files: Vec<PathBuf> = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    before_oci_files.sort();
 
     // Record release directory entries and mtimes
     let before_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
@@ -326,7 +337,13 @@ fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
     assert!(res.is_err(), "make release must fail when the recording ods was built from a dirty tree");
     let err = format!("{:#}", res.unwrap_err());
     assert!(err.contains("this ods was built from a dirty working tree"));
-    assert!(!oci_dir.exists(), "oci/ must not be written when checks fail");
+
+    let mut after_oci_files: Vec<PathBuf> = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    after_oci_files.sort();
+    assert_eq!(before_oci_files, after_oci_files, "oci/ must not be rewritten when checks fail");
 
     let after_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
         .filter_map(|e| e.ok())
@@ -340,10 +357,15 @@ fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
 #[test]
 fn test_make_release_missing_index_writes_nothing() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    // `setup_synthetic_repo_and_release` already packed a stored manifest — `ods make release`
+    // only ever reads it, never writes it (`.agents/briefs/manifest-only.md`: packing is a
+    // separate, earlier step), so this test only needs to isolate the index-file failure, not
+    // an unpacked release.
     let oci_dir = rel_dir.join("oci");
-    if oci_dir.exists() {
-        fs::remove_dir_all(&oci_dir)?;
-    }
+    let before_oci_files: Vec<PathBuf> = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
 
     // Record release directory entries and mtimes before running
     let before_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
@@ -366,7 +388,14 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
         err.downcast_ref::<ods::commands::pull::AlreadyReported>().is_some(),
         "error must be AlreadyReported so main exits cleanly with code 1"
     );
-    assert!(!oci_dir.exists(), "oci/ must not be written when index cannot be read");
+    let mut after_oci_files: Vec<PathBuf> = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    let mut before_oci_files = before_oci_files;
+    before_oci_files.sort();
+    after_oci_files.sort();
+    assert_eq!(before_oci_files, after_oci_files, "oci/ must not be rewritten when index cannot be read");
 
     let after_files: Vec<(PathBuf, std::time::SystemTime)> = fs::read_dir(&rel_dir)?
         .filter_map(|e| e.ok())
@@ -394,18 +423,23 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
         "stderr must contain index path, got:\n{}",
         stderr
     );
-    assert!(!oci_dir.exists(), "oci/ must not exist after CLI run");
+    let mut cli_after_oci_files: Vec<PathBuf> = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    cli_after_oci_files.sort();
+    assert_eq!(before_oci_files, cli_after_oci_files, "oci/ must not be rewritten after the CLI run either");
 
     Ok(())
 }
 
-// R2: `ods make release` records the TRUD release it's recording, from `_provenance.json`, and
+// R2: `ods make release` records the TRUD release it's recording, from the Parquet files, and
 // reads no listing of other TRUD releases from disk. Every other date gets its row when a
 // dataset built from it is recorded.
 #[test]
 fn test_make_release_records_only_the_release_it_records() -> Result<()> {
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
+    let prov = facts(&rel_dir);
 
     run_as(Args {
         input: Some(rel_dir),
@@ -420,8 +454,8 @@ fn test_make_release_records_only_the_release_it_records() -> Result<()> {
     assert_eq!(index.releases.len(), 1, "the index gains exactly the release being recorded");
     let row = &index.releases[0];
     assert_eq!(row.trud_release_date, "2026-07-31");
-    assert_eq!(Some(row.trud_release_sha256.clone()), prov.trud_release_sha256);
-    assert_eq!(Some(row.trud_release_filesize_bytes), prov.trud_release_filesize_bytes);
+    assert_eq!(row.trud_release_sha256, prov.source_sha256_upper());
+    assert_eq!(row.trud_release_filesize_bytes, prov.source.bytes);
     println!("{}", serde_json::to_string(row)?);
     assert_eq!(row.datasets.len(), 1);
 
@@ -481,7 +515,7 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
         &fixture_build_identity(tmp.path()),
     )?;
 
-    assert!(failures.iter().any(|f| f.contains("The release row's trud_release_sha256") && f.contains("does not match _provenance.json")));
+    assert!(failures.iter().any(|f| f.contains("The release row's trud_release_sha256") && f.contains("does not match the Parquet files' source hash")));
 
     Ok(())
 }
@@ -491,8 +525,7 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(rel_dir.join(PROVENANCE_FILENAME))?)?;
-    let zip_sha = prov.trud_release_sha256.unwrap();
+    let zip_sha = facts(&rel_dir).source_sha256_upper();
 
     let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
     initial_index.releases.push(ods::index::Release {

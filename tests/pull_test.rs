@@ -29,21 +29,17 @@ impl OciBlobFetcher for MockOciFetcher {
 }
 
 fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTreeMap<String, Vec<u8>>) {
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
-    let prov_bytes = serde_json::to_vec_pretty(&prov).unwrap();
-    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
-
-    let orgs_bytes = b"mock orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes(
+        "2026-07-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        "1.0.1",
+        "mock orgs parquet content",
+    );
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let fixture_dir = tmp_dir.join("fixture");
     std::fs::create_dir_all(&fixture_dir).unwrap();
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes).unwrap();
 
     let dp = serde_json::json!({
         "name": "ods",
@@ -54,7 +50,7 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
     let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes).unwrap();
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1").unwrap();
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir).unwrap();
     let manifest_digest = manifest.digest().unwrap();
 
     let index = make_v1_index(&[(
@@ -66,7 +62,6 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
 
     let mut responses = BTreeMap::new();
     responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
-    responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
     responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes);
     responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
 
@@ -92,17 +87,12 @@ fn test_pull_latest_release_downloads_verifies_and_links() -> Result<()> {
         current_dir.join("orgs.parquet").exists(),
         "orgs.parquet must exist in current"
     );
-    assert!(
-        current_dir.join("_provenance.json").exists(),
-        "_provenance.json must exist in current"
-    );
+    // A pull writes the manifest's layers and the `datapackage.json` view, and stores no manifest
+    assert!(current_dir.join("datapackage.json").exists(), "current must have the datapackage.json view");
+    assert!(!current_dir.join("oci").exists(), "a pull stores no manifest");
     assert!(
         !current_dir.join("SHA256SUMS").exists(),
         "SHA256SUMS must not exist in current"
-    );
-    assert!(
-        !current_dir.join("oci").exists(),
-        "oci/ must not exist in current"
     );
 
     Ok(())

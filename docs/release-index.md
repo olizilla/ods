@@ -40,17 +40,17 @@ Every field and its constraints are defined in [releases.v1.json](https://ods.fy
 ## The rules
 
 - **Append-only releases.** A release date is never removed from the index. Once recorded, its hash and size can never change.
-- **Datasets are blessed; releases are recorded.** Trust rules — manifest digests, citations, withdrawal — apply to datasets. A release row records what TRUD published. A release may have no datasets yet, and every reader treats an empty list as normal. The index records a TRUD release when a dataset built from it is recorded: `ods make release` adds the row for the release it's recording, from `_provenance.json`, and reads no listing of other TRUD releases, so every other release gets its row with its first dataset.
+- **Datasets are blessed; releases are recorded.** Trust rules — manifest digests, citations, withdrawal — apply to datasets. A release row records what TRUD published. A release may have no datasets yet, and every reader treats an empty list as normal. The index records a TRUD release when a dataset built from it is recorded: `ods make release` adds the row for the release it's recording, from the object its Parquet files carry (see [provenance.md](./provenance.md)), and reads no listing of other TRUD releases, so every other release gets its row with its first dataset.
 - **Each dataset row names the `ods` that built it.** `tool_version` is the tool's tag without its `v`, and `tool_git_sha` the 40-character commit that tag points at. `ods make release` writes both once, from its own build, and refuses to record when that `ods` was built from a dirty tree, without a commit, or from a commit that isn't the one its tag names. They never change once written: `merge` refuses a contradiction like a contradicting digest, and an identical re-publish by another `ods` leaves the row as the first one wrote it. The pair is the convenient, git-reviewed pointer to which build made a dataset. The signed proof is the CI attestation for the same manifest digest. A dataset's bytes don't depend on the tool: any `ods` at the same `dataset_version` rebuilds them, so these fields are for tracing a dataset, not for identifying it.
 - **Mirrors are places to look.** They are an ordered list for the whole index. Content digests name the bytes wherever they're stored, so a miss on the first mirror falls through to the next.
 - **The selected index decides.** Commands select a single index by precedence: `--index`, then fetched from ods.fyi or GitHub, then the workspace cache (`_releases.json`), then the index built into `ods`. The signing-key fingerprints are the selected index's, with no separate compiled copy in `ods` to compare them against. The set names every key NHS England has signed with (ordered oldest first), and a signature from any key in the set is accepted; a key rotation is recorded by adding the new fingerprint to the set.
-- **Append-only enforced at publish time.** Contradiction checking moves to `ods make release`, where candidate release indexes may append rows and metadata but may never contradict existing TRUD hashes, sizes, or manifest digests. Clients trust the selected index; a local release directory's own manifest digest remains what catches a changed dataset locally.
+- **Append-only enforced at publish time.** `ods make release`, checks where candidate release indexes may append rows and metadata but may never contradict existing TRUD hashes, sizes, or manifest digests. Clients trust the selected index; the manifest a local release directory's files rebuild, compared with its row, is what catches a changed dataset locally.
 
 ## Naming
 
-Formats we own that travel alone carry `$schema` as their identifier. Facts carry namespace prefixes (`trud_`, `dataset_`, `tool_`). `datapackage.json` follows Data Package v2.
+Formats we own that travel alone carry `$schema` as their identifier. Facts carry namespace prefixes (`trud_`, `dataset_`, `tool_`). A generated `datapackage.json` view follows Data Package v2.
 
-A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes` — named identically to `_provenance.json`, so one fact has one name everywhere. Datasets carry `dataset_version`, `manifest_digest`, `dataset_filesize_bytes` (the sum of the manifest's layer sizes — what `ods pull` downloads), `tool_version` and `tool_git_sha` (the `ods` that built it), and optional `dataset_doi` and `withdrawn`.
+A release uses `trud_release_date`, `trud_release_sha256`, and `trud_release_filesize_bytes`: the same facts the Parquet files carry as their source's `version`, `hash` and `bytes`, and the manifest as `fyi.ods.source.version`, `.hash` and `.bytes`. The hash is upper-case hex here, as TRUD writes it, and `sha256:` with lower-case hex in the Data Package vocabulary. Datasets carry `dataset_version`, `manifest_digest`, `dataset_filesize_bytes` (the sum of the manifest's layer sizes — what `ods pull` downloads), `tool_version` and `tool_git_sha` (the `ods` that built it), and optional `dataset_doi` and `withdrawn`.
 
 ## How a dataset gets into the index
 
@@ -62,12 +62,13 @@ maintainer tries it with `ods pull --index`, mirrors it to ods.fyi, and commits 
 `data/releases.json`. That commit is what blesses a dataset. The steps are in
 [CONTRIBUTING.md](../CONTRIBUTING.md#dataset-releases).
 
-**Each fact has one home.**
+**Where facts live**
 
 | Where | What it holds |
 | :--- | :--- |
 | Blobs, by digest | the bytes |
-| The manifest's annotations | the TRUD release date and SHA-256, the dataset version, the licence and the source |
+| Each Parquet file's `datapackage` metadata | the dataset's name and version, the licence and attribution, and the TRUD release it came from, with its SHA-256 and size |
+| The manifest | nothing of its own: a pure function of the Parquet files, its annotations copied from their `datapackage` object |
 | The index row | that the dataset is blessed, whether it's withdrawn, its DOI, and the `ods` that built it |
 | The index's `mirrors` | where to fetch it |
 | Registry tags | a name for the dataset on that registry, for OCI tools |

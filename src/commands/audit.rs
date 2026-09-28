@@ -25,7 +25,6 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::provenance::OdsProvenance;
 use crate::roles;
 use crate::workspace::count_records_in_parquet;
 
@@ -330,22 +329,14 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         active_release_path.join("parquet")
     };
 
-    let workspace_prov_val = match OdsProvenance::load_from_dir(&active_release_path) {
-        crate::provenance::ProvenanceLoad::Read(p, _) => *p,
-        crate::provenance::ProvenanceLoad::Unreadable { path, date } => {
-            anyhow::bail!(
-                "{}",
-                crate::provenance::format_unreadable_provenance_error(&path, &date)
-            );
-        }
-        crate::provenance::ProvenanceLoad::Absent => {
-            anyhow::bail!(
-                "{}",
-                crate::provenance::format_no_provenance_error(&active_release_path)
-            );
-        }
+    // What the release is comes from the object its Parquet files carry.
+    let workspace_facts = match crate::provenance::read_release(&parquet_dir)? {
+        crate::provenance::ReleaseRecord::Provenanced(facts) => *facts,
+        other => anyhow::bail!(
+            "{}",
+            crate::provenance::format_record_refusal(&parquet_dir, &other).unwrap_or_default()
+        ),
     };
-    let workspace_prov = Some(workspace_prov_val);
 
     let mut warnings = Vec::new();
     let mut discrepancies = Vec::new();
@@ -354,11 +345,11 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // SECTION 1: File integrity
     // ------------------------------------------------------------------------
     let (input_sha256, input_date, input_size) =
-        if let Some(prov) = OdsProvenance::load_from_dir(&input_path).error_building()? {
+        if let Some((record, _)) = crate::provenance::PullRecord::load_from_dir(&input_path).error_building_with_path()? {
             (
-                prov.trud_release_sha256,
-                prov.trud_release_date,
-                prov.trud_release_filesize_bytes,
+                record.archive_sha256_upper(),
+                Some(record.version.clone()),
+                record.archive().map(|a| a.bytes),
             )
         } else if let Some(facts) = crate::provenance::try_extract_trud_zip_facts(&input_path) {
             let date = facts
@@ -372,24 +363,14 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
             (None, None, None)
         };
 
-    let workspace_sha256 = workspace_prov
-        .as_ref()
-        .and_then(|p| p.trud_release_sha256.clone());
-    let workspace_size = workspace_prov
-        .as_ref()
-        .and_then(|p| p.trud_release_filesize_bytes);
+    let workspace_sha256 = Some(workspace_facts.source_sha256_upper());
+    let workspace_size = Some(workspace_facts.source.bytes);
 
     let input_date = input_date.unwrap_or_else(|| workspace_date.clone());
 
     let matched_release = match (&input_sha256, &workspace_sha256) {
         (Some(i_sha), Some(w_sha)) => i_sha.eq_ignore_ascii_case(w_sha),
-        _ => {
-            let ws_date = workspace_prov
-                .as_ref()
-                .and_then(|p| p.trud_release_date.clone())
-                .unwrap_or_else(|| workspace_date.clone());
-            input_date == ws_date
-        }
+        _ => input_date == workspace_facts.release_date,
     };
 
     if !matched_release {
@@ -412,113 +393,71 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
     }
 
-    if let Some(ref prov) = workspace_prov {
-        if let Err(e) = prov.validate_baseline() {
-            discrepancies.push(format!("_provenance.json baseline invalid: {e}"));
-        }
-        for pub_warn in prov.validate_publishable() {
-            if !warnings.contains(&pub_warn) {
-                warnings.push(pub_warn);
-            }
-        }
-        if let Some(ref exp_sha) = prov.trud_release_sha256 {
-            let trud_dir = active_release_path.join("trud");
-            let (matched, zip_paths) = crate::provenance::find_archive_by_sha(&trud_dir, exp_sha);
-            if !zip_paths.is_empty() && matched.is_none() {
-                let file_names: Vec<_> = zip_paths
-                    .iter()
-                    .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-                    .collect();
-                discrepancies.push(format!(
-                    "Archive checksum mismatch: no archive in trud/ matches recorded SHA-256 {exp_sha} (found {})",
-                    file_names.join(", ")
-                ));
-            }
+    if workspace_facts.source.bytes < 1_000_000 {
+        warnings.push(format!(
+            "the source archive is implausibly small ({} bytes)",
+            workspace_facts.source.bytes
+        ));
+    }
+    {
+        let exp_sha = workspace_facts.source_sha256_upper();
+        let trud_dir = active_release_path.join("trud");
+        let (matched, zip_paths) = crate::provenance::find_archive_by_sha(&trud_dir, &exp_sha);
+        if !zip_paths.is_empty() && matched.is_none() {
+            let file_names: Vec<_> = zip_paths
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+                .collect();
+            discrepancies.push(format!(
+                "Archive checksum mismatch: no archive in trud/ matches recorded SHA-256 {exp_sha} (found {})",
+                file_names.join(", ")
+            ));
         }
     }
 
-    // Reconstruct manifest and verify layers
+    // Rebuild the manifest from the files and check every layer's file is readable Parquet.
+    // The files have nothing stored to be compared with; the release index does, when it
+    // names this release, and a rebuilt digest that differs from it is a discrepancy.
     let mut manifest_layers_count = 0;
     let mut manifest_matched_count = 0;
     let mut reconstructed_manifest_opt: Option<crate::oci::OciManifest> = None;
 
-    if let Some(ref prov) = workspace_prov {
-        let dataset_version_opt = crate::datapackage::read_dataset_version_from_dir(&active_release_path);
-        if let Some(version) = dataset_version_opt.as_deref() {
-            match crate::commands::make_oci::build_manifest_from_dir(&parquet_dir, prov, version) {
-                Ok((manifest, _)) => {
-                    manifest_layers_count = manifest.layers.len();
-                    for layer in &manifest.layers {
-                    let title = layer
-                        .annotations
-                        .as_ref()
-                        .and_then(|a| a.get(crate::oci::ANNOTATION_TITLE))
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    if title.is_empty() {
-                        continue;
-                    }
-                    let p_path = parquet_dir.join(title);
-                    if p_path.exists() {
-                        if title.ends_with(".parquet") {
-                            if let Err(e) = crate::workspace::count_records_in_parquet(&p_path) {
-                                discrepancies.push(format!("Corrupted Parquet file {title}: {e:#}"));
-                                continue;
-                            }
-                        }
-                        if let Ok(act_sha) = crate::provenance::compute_file_sha256(&p_path) {
-                            let exp_sha = layer.digest.trim_start_matches("sha256:").to_lowercase();
-                            if act_sha.to_lowercase() != exp_sha {
-                                discrepancies.push(format!(
-                                    "Digest mismatch for {title}: computed sha256:{act_sha} != layer digest {}",
-                                    layer.digest
-                                ));
-                                continue;
-                            }
-                        }
-                        manifest_matched_count += 1;
-                    } else {
-                        discrepancies.push(format!("Manifest layer file missing: {title}"));
-                    }
+    match crate::oci::dataset::build(&parquet_dir, &workspace_facts) {
+        Ok((manifest, _)) => {
+            manifest_layers_count = manifest.layers.len();
+            for layer in &manifest.layers {
+                let title = layer
+                    .annotations
+                    .as_ref()
+                    .and_then(|a| a.get(crate::oci::ANNOTATION_TITLE))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                if let Err(e) = crate::workspace::count_records_in_parquet(&parquet_dir.join(title)) {
+                    discrepancies.push(format!("Corrupted Parquet file {title}: {e:#}"));
+                    continue;
                 }
-                reconstructed_manifest_opt = Some(manifest);
+                manifest_matched_count += 1;
             }
-            Err(e) => {
-                discrepancies.push(format!("Failed to reconstruct manifest: {e}"));
+            let (index, _) = crate::commands::pull::resolve_index(
+                &workspace_root,
+                None,
+                false,
+                false,
+                &crate::commands::pull::HttpOciFetcher,
+            )?;
+            match crate::workspace::verify_release_dir(&parquet_dir, &index) {
+                crate::workspace::VerificationOutcome::DifferentBytes { published_digest, reconstructed_digest, .. } => {
+                    discrepancies.push(format!(
+                        "Manifest digest mismatch: rebuilt from the files {reconstructed_digest} != release index {published_digest}"
+                    ));
+                }
+                crate::workspace::VerificationOutcome::Corrupted(block) => discrepancies.push(block),
+                _ => {}
             }
+            reconstructed_manifest_opt = Some(manifest);
         }
-    } else {
-        discrepancies.push("datapackage.json missing version".to_string());
-    }
-} else {
-    discrepancies.push("Missing _provenance.json in release directory".to_string());
-}
-
-    // Cross-check datapackage.json resource hashes if datapackage.json is present
-    let dp_path = parquet_dir.join("datapackage.json");
-    if dp_path.exists() {
-        if let Ok(dp_bytes) = std::fs::read(&dp_path) {
-            if let Ok(dp) = serde_json::from_slice::<serde_json::Value>(&dp_bytes) {
-                if let Some(resources) = dp.get("resources").and_then(|r| r.as_array()) {
-                    for res in resources {
-                        let res_name = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                        let res_path = res.get("path").and_then(|p| p.as_str()).unwrap_or(res_name);
-                        if let Some(res_hash) = res.get("hash").and_then(|h| h.as_str()) {
-                            let clean_hash = res_hash.trim_start_matches("sha256:").to_lowercase();
-                            let target_file = parquet_dir.join(res_path);
-                            if target_file.exists() {
-                                if let Ok(act_sha) = crate::provenance::compute_file_sha256(&target_file) {
-                                    if act_sha.to_lowercase() != clean_hash {
-                                        discrepancies.push(format!(
-                                            "Checksum mismatch for {res_path}: computed {act_sha} != datapackage.json hash {res_hash}"
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        Err(e) => {
+            discrepancies.push(format!("Failed to reconstruct manifest: {e}"));
         }
     }
 
@@ -538,9 +477,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
         }
 
         if manifest_layers_count > 0 && manifest_matched_count == manifest_layers_count {
-            println!("     ✓ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files match reconstructed manifest");
+            println!("     ✓ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files readable in the rebuilt manifest");
         } else {
-            println!("     ✖ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files match reconstructed manifest");
+            println!("     ✖ Manifest Verification: {manifest_matched_count}/{manifest_layers_count} layer files readable in the rebuilt manifest");
         }
         println!();
     }
@@ -803,8 +742,8 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
 
     // Unaccounted files check: any file in release directory not in manifest layers
     let mut layer_titles: HashSet<String> = HashSet::new();
-    layer_titles.insert(crate::provenance::PROVENANCE_FILENAME.to_string());
-    layer_titles.insert("provenance.json".to_string());
+    // `datapackage.json` is never a layer: it's the release's view, a known file.
+    layer_titles.insert(crate::datapackage::DATAPACKAGE_FILENAME.to_string());
     if let Some(ref manifest) = reconstructed_manifest_opt {
         for layer in &manifest.layers {
             if let Some(ref ann) = layer.annotations {

@@ -45,20 +45,20 @@ fn test_baked_index_matches_its_schema() -> Result<()> {
 }
 
 #[test]
-fn test_built_provenance_matches_its_schema() -> Result<()> {
-    let schema_str = include_str!("../worker/schema/provenance.v1.json");
+fn test_built_pull_record_matches_its_schema() -> Result<()> {
+    let schema_str = include_str!("../worker/schema/datapackage.v1.json");
     let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
     let validator = jsonschema::validator_for(&schema_json)
         .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
 
-    // 1. Validate provenance of a release built by setup_synthetic_repo_and_release()
+    // 1. Validate the pull record of a release built by setup_synthetic_repo_and_release()
     let (_tmp, rel_dir) = common::setup_synthetic_repo_and_release();
-    let prov_str = std::fs::read_to_string(rel_dir.join("_provenance.json"))?;
+    let prov_str = std::fs::read_to_string(ods::provenance::pull_record_path(&rel_dir))?;
     let prov_json: serde_json::Value = serde_json::from_str(&prov_str)?;
     let errors: Vec<_> = validator.iter_errors(&prov_json).collect();
     assert!(errors.is_empty(), "Synthetic release provenance schema errors: {:?}", errors);
 
-    // 2. Validate provenance written by ods trud pull against the mock zip
+    // 2. Validate the pull record written by ods trud pull against the mock zip
     let tmp_pull = tempfile::TempDir::new()?;
     let fixture_zip = tmp_pull.path().join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -85,24 +85,16 @@ fn test_built_provenance_matches_its_schema() -> Result<()> {
         .arg(&pull_out)
         .status()?;
     assert!(status.success(), "trud pull must succeed");
-    let pull_prov_str = std::fs::read_to_string(pull_out.join("_provenance.json"))?;
+    let pull_prov_str = std::fs::read_to_string(ods::provenance::pull_record_path(&pull_out))?;
     let pull_prov_json: serde_json::Value = serde_json::from_str(&pull_prov_str)?;
     let pull_errors: Vec<_> = validator.iter_errors(&pull_prov_json).collect();
     assert!(pull_errors.is_empty(), "trud pull provenance schema errors: {:?}", pull_errors);
 
-    // 3. Verify that adding dropped keys causes validation to fail
-    let dropped_keys = [
-        "dataset_version",
-        "trud_release_name",
-        "trud_release_file",
-        "trud_schema_version",
-    ];
-    for key in dropped_keys {
-        let mut mutated = prov_json.clone();
-        mutated[key] = serde_json::json!("should_fail");
-        let errs: Vec<_> = validator.iter_errors(&mutated).collect();
-        assert!(!errs.is_empty(), "Schema validation must fail when dropped key '{}' is added back", key);
-    }
+    // 3. A record whose archive size isn't a number fails
+    let mut mutated = pull_prov_json.clone();
+    mutated["resources"][0]["bytes"] = serde_json::json!("big");
+    let errs: Vec<_> = validator.iter_errors(&mutated).collect();
+    assert!(!errs.is_empty(), "Schema validation must fail on a resource's bytes of \"big\"");
 
     Ok(())
 }

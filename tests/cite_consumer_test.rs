@@ -3,7 +3,7 @@ mod common;
 use common::{make_v1_index, setup_cite_case_workspace, setup_test_release_for_cite};
 use anyhow::Result;
 use ods::commands::cite::Args as CiteArgs;
-use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+use ods::provenance::compute_file_sha256;
 use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
@@ -324,19 +324,11 @@ fn test_cite_honours_withdrawn_release_from_cached_workspace_index() -> Result<(
     }
     let zip_sha256 = compute_file_sha256(&outer_zip_path)?;
 
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content")?;
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}")?;
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-08-31".to_string()),
-        trud_release_filesize_bytes: Some(37_983_173),
-        trud_release_sha256: Some(zip_sha256.clone()),
-        ..Default::default()
-    };
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-08-31", &zip_sha256, "1.0.1", "dummy orgs content");
+    // A datapackage.json view that says something else entirely: nothing reads it.
+    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"9.9.9\"}")?;
 
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
-    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1")?;
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let mut index = make_v1_index(&[(
@@ -380,17 +372,13 @@ fn test_cite_with_invalid_workspace_marker_stops_command() {
     let rel_dir = ws.join("releases").join("2026-08-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-08-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
-    fs::write(
-        rel_dir.join(PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    ).unwrap();
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.1.0\"}").unwrap();
+    common::write_fixture_parquet(
+        &rel_dir.join("orgs.parquet"),
+        "2026-08-31",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        "0.1.0",
+        "dummy content",
+    );
 
     // Invalid marker in enclosing workspace
     let marker_path = ws.join("_releases.json");
@@ -529,9 +517,12 @@ fn test_cite_exit_codes_and_warnings_for_all_cases() {
     let stdout_d = String::from_utf8_lossy(&out_d.stdout);
     assert!(!stdout_d.contains("How to Cite"), "Case D must refuse citation");
     let err_d = String::from_utf8_lossy(&out_d.stderr);
-    assert!(err_d.contains("✖ releases/2026-08-28 has changed since it was built"));
-    assert!(err_d.contains("orgs.parquet's SHA-256 isn't the one its datapackage.json records."));
-    assert!(err_d.contains("Pull it again: ods pull --force 2026-08-28"));
+    // The files don't agree on what release they are: refused, naming each file.
+    assert!(err_d.contains("✖ The Parquet files in "), "{err_d}");
+    assert!(err_d.contains("don't carry the same provenance"), "{err_d}");
+    assert!(err_d.contains("orgs.parquet   2026-08-28_0.1.0"), "{err_d}");
+    assert!(err_d.contains("roles.parquet  2026-08-28_9.9.9"), "{err_d}");
+    assert!(err_d.contains("Pull it again with `ods pull --force`"), "{err_d}");
 
     // Case F: exit 1
     let (tmp_f, dir_f) = setup_cite_case_workspace("F");
@@ -558,6 +549,8 @@ fn test_cite_exit_codes_and_warnings_for_all_cases() {
     let stdout_np = String::from_utf8_lossy(&out_np.stdout);
     assert!(!stdout_np.contains("How to Cite"), "No provenance must refuse citation");
     let err_np = String::from_utf8_lossy(&out_np.stderr);
+    // Genuinely no provenance anywhere (not just unpacked) gets the specific wording back: `ods
+    // make oci` wouldn't be a fix here, since there's nothing to pack from.
     assert!(err_np.contains("has no provenance: it was built from an archive ods couldn't match to a TRUD release"));
     assert!(err_np.contains("To cite or publish it, get the archive through ods trud pull."));
 }

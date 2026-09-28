@@ -68,33 +68,34 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       fs.mkdirSync(trudDir, { recursive: true });
       fs.mkdirSync(workspaceDir, { recursive: true });
 
-      // 1. Create source release files
-      const notesContent = '# Release Notes\nEnd-to-end seam test release notes.\n';
-      const datapackageContent = '{"name": "test-dataset", "version": "0.1.0"}';
-      const orgsContent = Buffer.from([0x50, 0x41, 0x52, 0x31, 0x01, 0x02, 0x03, 0x04, 0x50, 0x41, 0x52, 0x31]); // valid-ish parquet magic
-      const rolesContent = Buffer.from([0x50, 0x41, 0x52, 0x31, 0x05, 0x06, 0x07, 0x08, 0x50, 0x41, 0x52, 0x31]);
-
-      fs.writeFileSync(path.join(fixtureDir, 'NOTES.md'), notesContent);
-      fs.writeFileSync(path.join(fixtureDir, 'datapackage.json'), datapackageContent);
-      fs.writeFileSync(path.join(fixtureDir, 'orgs.parquet'), orgsContent);
-      fs.writeFileSync(path.join(fixtureDir, 'roles.parquet'), rolesContent);
-
-      // Create synthetic outer TRUD zip
+      // 1. Build a real release from a TRUD-shaped zip, the way a user would: the Parquet files
+      // carry the release's provenance in their `datapackage` metadata, and `ods make` writes
+      // the `datapackage.json` view beside them. NOTES.md sits there too. Neither is ever a layer:
+      // a dataset packs only its top-level *.parquet files.
       const zipPath = path.join(trudDir, 'hscorgrefdataxml_data_7.0.0_20260731000001.zip');
-      const dummyTxt = path.join(tmpDir, 'dummy.txt');
-      fs.writeFileSync(dummyTxt, 'dummy source zip');
-      execSync(`zip -j -q "${zipPath}" "${dummyTxt}"`);
-      const zipSha256 = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex').toUpperCase();
+      const xmlFixture = path.resolve(__dirname, '../../../tests/fixtures/mock_hscorgrefdata.xml');
+      const xmlCopy = path.join(tmpDir, 'HSCOrgRefData_Full_mock.xml');
+      fs.copyFileSync(xmlFixture, xmlCopy);
+      execSync(`zip -j -q -X "${zipPath}" "${xmlCopy}"`);
+      const zipBytes = fs.readFileSync(zipPath);
+      const zipSha256 = crypto.createHash('sha256').update(zipBytes).digest('hex').toUpperCase();
 
-      const provenanceObj = {
-        $schema: 'https://ods.fyi/schema/provenance.v1.json',
-        trud_release_date: '2026-07-31',
-        trud_release_sha256: zipSha256,
-        trud_release_filesize_bytes: 37983173,
-        license: 'OGL-UK-3.0',
-        attribution: 'Contains information from NHS England, licensed under the current version of the Open Government Licence.',
-      };
-      fs.writeFileSync(path.join(fixtureDir, '_provenance.json'), JSON.stringify(provenanceObj, null, 2));
+      // The index that vouches for the zip, so `ods make` embeds its provenance
+      const buildIndexPath = path.join(tmpDir, 'build-index.json');
+      fs.writeFileSync(
+        buildIndexPath,
+        JSON.stringify({
+          $schema: 'https://ods.fyi/schema/releases.v1.json',
+          trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+          mirrors: [],
+          releases: [
+            { trud_release_date: '2026-07-31', trud_release_sha256: zipSha256, trud_release_filesize_bytes: zipBytes.length, datasets: [] },
+          ],
+        }),
+      );
+      execFileSync(odsBin, ['make', '--input', zipPath, '--output', fixtureDir, '--index', buildIndexPath], { stdio: 'pipe' });
+      fs.writeFileSync(path.join(fixtureDir, 'NOTES.md'), '# Release Notes\nEnd-to-end seam test release notes.\n');
+      expect(fs.existsSync(path.join(fixtureDir, 'datapackage.json'))).toBe(true);
 
       // 2. Pack the release into an OCI layout. `ods make release` records the ods that runs it, and
       // must be built from a clean, tagged commit, so it can't run under the binary a test just built.
@@ -105,8 +106,17 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
 
       const blobsDir = path.join(fixtureDir, 'oci', 'blobs', 'sha256');
       const blobNames = fs.readdirSync(blobsDir);
-      // Layers are symlinks into the release directory; the manifest is the one regular file
-      const manifestName = blobNames.find((name) => !fs.lstatSync(path.join(blobsDir, name)).isSymbolicLink());
+      // Layers are symlinks into the release directory; the manifest and the fixed empty config
+      // (`{}`) are both regular files, so pick the one that actually parses as a manifest (has
+      // `layers`) rather than "the first regular file", which could just as easily be the config.
+      const manifestName = blobNames.find((name) => {
+        if (fs.lstatSync(path.join(blobsDir, name)).isSymbolicLink()) return false;
+        try {
+          return Array.isArray(JSON.parse(fs.readFileSync(path.join(blobsDir, name), 'utf-8')).layers);
+        } catch {
+          return false;
+        }
+      });
       expect(manifestName).toBeDefined();
       const manifestBytes = fs.readFileSync(path.join(blobsDir, manifestName!));
       const manifest = JSON.parse(fs.readFileSync(path.join(blobsDir, manifestName!), 'utf-8'));
@@ -133,7 +143,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
           {
             trud_release_date: '2026-07-31',
             trud_release_sha256: zipSha256,
-            trud_release_filesize_bytes: 37983173,
+            trud_release_filesize_bytes: zipBytes.length,
             datasets: [
               {
                 dataset_version: '0.1.0',
@@ -152,6 +162,9 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       // 4. Load every single object from dist/ into in-process Miniflare R2
       const bucket = await mf.getR2Bucket('BUCKET');
       const distKeys = walkDir(distDir);
+      // Only the four Parquet files are layers (NOTES.md and datapackage.json are never packed),
+      // so blobsDir holds 4 layer symlinks plus the real manifest and empty-config blobs: 6
+      // files, plus the 3 manifest tags.
       expect(distKeys.length).toBe(9);
 
       for (const relKey of distKeys) {
@@ -176,14 +189,15 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       const pulledDir = path.join(workspaceDir, 'ods_data', 'releases', '2026-07-31');
       expect(fs.existsSync(pulledDir)).toBe(true);
 
-      const filesToVerify = ['orgs.parquet', 'roles.parquet', 'datapackage.json', 'NOTES.md', '_provenance.json'];
+      // The Parquet layers arrive byte-identical, and the pull writes the same datapackage.json
+      // view the build did. It stores no manifest: the files carry their own provenance.
+      const filesToVerify = ['orgs.parquet', 'relationships.parquet', 'roles.parquet', 'successions.parquet', 'datapackage.json'];
       for (const file of filesToVerify) {
         const sourceBytes = fs.readFileSync(path.join(fixtureDir, file));
         const pulledBytes = fs.readFileSync(path.join(pulledDir, file));
         expect(pulledBytes).toEqual(sourceBytes);
       }
-
-      // Verify that pull never writes OCI metadata to client workspace
+      expect(fs.existsSync(path.join(pulledDir, 'NOTES.md'))).toBe(false);
       expect(fs.existsSync(path.join(pulledDir, 'oci'))).toBe(false);
       expect(fs.existsSync(path.join(pulledDir, '_release.json'))).toBe(false);
     } finally {

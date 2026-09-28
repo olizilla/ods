@@ -53,13 +53,14 @@ duckdb -c "
 
 Running more than a few queries? Fetch the parquet files for the release once with `ods pull`
 
-```shell
-ods pull
+```bash
+$ ods pull
   2026-08-28    ████████████████████  28MB   6 files  from ods.fyi  in 4.1s
   dataset       ods-data/2026-08-28_0.1.0
   verified      sha256 from releases.json
   linked        current → releases/2026-08-28
-ods find --gp --in SW9
+
+$ ods find --gp --in SW9
 * Source: releases/2026-08-28/orgs.parquet
 * --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
 ┌──────────┬──────────────────────────────┬──────────┬────────────────┬───────┬──────────┐
@@ -88,7 +89,7 @@ The `ods` CLI manages a local workspace directory called `ods_data` to keep a lo
 
 The NHS TRUD ODS service releases updates every month. The parquet files are reproducibly derived from the official NHS TRUD ODS XML data, and each month's release is built and attested in CI, by [`build-dataset.yml`](.github/workflows/build-dataset.yml).
 
-`ods pull` fetches the parquet files and `_provenance.json` metadata and verifies the data integrity. 
+`ods pull` fetches the parquet files by their release's manifest, and verifies every byte against it.
 
 Each release gets its own date stamped folder, and a symlink is set up to point `ods_data/current` to the last release you pulled.
 
@@ -98,13 +99,16 @@ ods_data/
 ├── current -> releases/2026-07-31/     # Active release pin (symlink)
 └── releases/
     └── 2026-07-31/                    # Release directory
-        ├── _provenance.json           # Source metadata from the NHS TRUD API
-        ├── datapackage.json           # The schema in https://datapackage.org/standard/data-package/
+        ├── datapackage.json           # Metadata as a standard [Data Package]
         ├── orgs.parquet               # Every org & site, active first (Primary analytical table)
         ├── relationships.parquet      # Target relationship links (ICB, Trust, PCN)
         ├── roles.parquet              # Primary & secondary roles (Holdings table)
         └── successions.parquet        # Entity successor chains
 ```
+
+Each Parquet file carries its own provenance, so a single copied file still says which release it
+is and whose data it holds. `datapackage.json` describes the release in the shape at
+<https://datapackage.org/standard/data-package/>. See [docs/provenance.md](./docs/provenance.md).
 
 See [docs/ods_data.md](./docs/ods_data.md) for full workspace specification details.
 
@@ -218,3 +222,6 @@ The ODS data is NHS England's, published under the [Open Government Licence (OGL
 `ods` is [MIT](./LICENSE). To cite `ods`, run `ods cite` or see: [CITATION.cff](./CITATION.cff).
 
 See: [CONTRIBUTING.md](./CONTRIBUTING.md#licensing) for more detail.
+
+
+[Data Package]: https://datapackage.org/overview/introduction/

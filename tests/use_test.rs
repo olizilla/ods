@@ -51,17 +51,7 @@ fn test_use_pins_mismatched_release_and_warns() {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy content");
 
     // Cache an index with a different manifest digest
     let index = make_v1_index(&[(
@@ -103,7 +93,7 @@ fn test_use_pins_corrupted_release_and_warns() {
     fs::create_dir_all(&rel_dir).unwrap();
     ods::workspace::ensure_workspace_marker(&workspace).unwrap();
 
-    // No _provenance.json -> Corrupted("Missing or unreadable _provenance.json")
+    // No Parquet files at all: pinned, and said so
     let output = ods_cmd()
         .current_dir(tmp.path())
         .args(["use", "2026-07-31"])
@@ -120,8 +110,16 @@ fn test_use_pins_corrupted_release_and_warns() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("✓ Active release set to 2026-07-31"), "got:\n{}", stderr);
     assert!(stderr.contains("  current → releases/2026-07-31"), "got:\n{}", stderr);
-    assert!(stderr.contains("! releases/2026-07-31 can't be checked: Missing or unreadable _provenance.json"), "got:\n{}", stderr);
-    assert!(stderr.contains("  Repair it: ods pull --force 2026-07-31"), "got:\n{}", stderr);
+    assert!(
+        stderr.contains("! releases/2026-07-31 can't be checked: it holds no Parquet files"),
+        "got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("  Repair it: ods pull --force 2026-07-31"),
+        "got:\n{}",
+        stderr
+    );
 }
 
 #[test]
@@ -131,18 +129,7 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov)?,
-    )?;
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}")?;
-
-    let orgs_bytes = b"sample orgs parquet bytes";
-    fs::write(rel_dir.join("orgs.parquet"), orgs_bytes)?;
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "sample orgs parquet bytes");
 
     // 1. Run with unpublished local release: outputs "* reconstructed manifest ... verified (unpublished local release)"
     let output1 = ods_cmd()
@@ -165,7 +152,7 @@ fn test_use_pins_verified_release_and_creates_current_link() -> Result<()> {
 
     // 2. Compute reconstructed manifest digest, add matching index entry, run again:
     // outputs "✓ reconstructed manifest ... matches the index for 2026-07-31 (1.0.1)"
-    let (m, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1")?;
+    let (m, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir)?;
     let digest = m.digest()?;
     let index = make_v1_index(&[(
         "2026-07-31",
@@ -206,17 +193,7 @@ fn test_use_different_archive_warns_when_version_published_and_verifies_when_not
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("1111111111111111111111111111111111111111111111111111111111111111".to_string()),
-        ..Default::default()
-    };
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .unwrap();
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    let other_sha = "1111111111111111111111111111111111111111111111111111111111111111";
 
     // Cache an index with a published version 1.0.1 for 2026-07-31
     let index = make_v1_index(&[(
@@ -229,7 +206,7 @@ fn test_use_different_archive_warns_when_version_published_and_verifies_when_not
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &workspace).unwrap();
 
     // 1. Version 1.0.1 is published: ods use must warn mismatch
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", other_sha, "1.0.1", "dummy content");
     let output1 = ods_cmd()
         .current_dir(tmp.path())
         .args(["use", "2026-07-31"])
@@ -242,7 +219,7 @@ fn test_use_different_archive_warns_when_version_published_and_verifies_when_not
     assert!(stderr1.contains("  Repair it: ods pull --force 2026-07-31"), "got:\n{}", stderr1);
 
     // 2. Version 0.9.0 is NOT published: ods use reports verified unpublished local release without warning
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"0.9.0\"}").unwrap();
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", other_sha, "0.9.0", "dummy content");
     let output2 = ods_cmd()
         .current_dir(tmp.path())
         .args(["use", "2026-07-31"])
@@ -263,7 +240,7 @@ fn test_use_latest_pins_newest_local_release() {
     for date in ["2026-07-31", "2026-08-28"] {
         let rel_dir = workspace.join("releases").join(date);
         fs::create_dir_all(&rel_dir).unwrap();
-        fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+        common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy content");
     }
     // A non-date directory under releases/ must be ignored when picking "latest".
     fs::create_dir_all(workspace.join("releases").join("scratch")).unwrap();
@@ -291,7 +268,7 @@ fn test_use_refuses_non_date_argument_and_leaves_current_unchanged() {
     let workspace = tmp.path().join("ods_data");
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy content").unwrap();
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy content");
     ods::workspace::ensure_workspace_marker(&workspace).unwrap();
 
     // Pin a release first, so we can assert "yesterday" leaves it unchanged.
@@ -339,4 +316,35 @@ fn test_use_latest_in_empty_workspace() {
     assert!(stderr.contains("✖ No releases in "), "got:\n{}", stderr);
     assert!(stderr.contains("ods_data"), "got:\n{}", stderr);
     assert!(stderr.contains("  Run: ods pull"), "got:\n{}", stderr);
+}
+
+/// Files that don't carry the same provenance can't say what release they are: `ods use`
+/// refuses, naming them, and leaves the pin where it was.
+#[test]
+fn test_use_refuses_files_that_disagree_and_leaves_current_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+    for date in ["2026-06-26", "2026-07-31"] {
+        let rel_dir = workspace.join("releases").join(date);
+        fs::create_dir_all(&rel_dir).unwrap();
+        common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "orgs");
+        common::write_fixture_parquet(&rel_dir.join("roles.parquet"), date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "roles");
+    }
+    let setup = ods_cmd().current_dir(tmp.path()).args(["use", "2026-06-26"]).output().unwrap();
+    assert!(setup.status.success(), "got: {:?}", setup);
+
+    // orgs.parquet rewritten carrying another dataset version
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "9.9.9", "orgs");
+
+    let output = ods_cmd().current_dir(tmp.path()).args(["use", "2026-07-31"]).output().unwrap();
+    assert!(!output.status.success(), "use must refuse, got: {:?}", output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("don't carry the same provenance"), "got:\n{}", stderr);
+    assert!(stderr.contains("orgs.parquet   2026-07-31_9.9.9"), "got:\n{}", stderr);
+    assert!(stderr.contains("roles.parquet  2026-07-31_1.0.1"), "got:\n{}", stderr);
+
+    let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
+    assert_eq!(ws.active_release().unwrap().0, "2026-06-26", "a refused release must not move the pin");
 }

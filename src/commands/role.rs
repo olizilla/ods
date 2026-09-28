@@ -84,10 +84,13 @@ pub fn run_with_writer_color_width(
     color: bool,
     explicit_width: Option<u16>,
 ) -> Result<()> {
-    let _ = crate::provenance::OdsProvenance::load_from_dir(parquet_dir).warn_reading(parquet_dir);
+    crate::workspace::check_release_provenance(parquet_dir)?;
     let path = parquet_dir.join("orgs.parquet");
     if !path.exists() {
-        if args.input.is_some() || parquet_dir.join(crate::provenance::PROVENANCE_FILENAME).exists() {
+        if args.input.is_some()
+            || parquet_dir.join(crate::datapackage::DATAPACKAGE_FILENAME).exists()
+            || parquet_dir.join("oci").is_dir()
+        {
             anyhow::bail!(
                 "✖ Parquet file 'orgs.parquet' not found in '{}'",
                 parquet_dir.display()

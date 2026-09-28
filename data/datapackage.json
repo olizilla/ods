@@ -1,6 +1,6 @@
 {
-  "$schema": "https://datapackage.org/profiles/2.0/datapackage.json",
-  "name": "ods-fyi",
+  "$schema": "https://ods.fyi/schema/datapackage.v1.json",
+  "name": "ods-data",
   "title": "ods: NHS Organisation Data as verifiable Parquet files",
   "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
   "version": "0.1.0",
@@ -12,10 +12,24 @@
       "attribution": "Contains information from NHS England, licensed under the current version of the Open Government Licence."
     }
   ],
+  "contributors": [
+    {
+      "title": "NHS England",
+      "roles": [
+        "rightsHolder"
+      ]
+    },
+    {
+      "title": "NHS TRUD",
+      "roles": [
+        "distributor"
+      ]
+    }
+  ],
   "sources": [
     {
-      "title": "NHS Organisation Data Service XML Data, NHS England",
-      "path": "https://isd.digital.nhs.uk/trud"
+      "title": "NHS Organisation Data Service XML Data",
+      "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases"
     }
   ],
   "resources": [

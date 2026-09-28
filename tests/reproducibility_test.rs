@@ -102,14 +102,8 @@ fn test_real_trud_parquet_hash_stability() {
         output: Some(tmp2.path().to_path_buf()), ..Default::default() })
     .expect("run 2 on real TRUD zip should succeed");
 
-    let all_files = vec![
-        "orgs.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-        "datapackage.json",
-        "_provenance.json",
-    ];
+    // The four Parquet tables are the dataset: each carries the release's provenance.
+    let all_files = vec!["orgs.parquet", "roles.parquet", "relationships.parquet", "successions.parquet"];
 
     for file_name in &all_files {
         let f1 = tmp1.path().join(file_name);
@@ -129,7 +123,7 @@ fn test_real_trud_parquet_hash_stability() {
         );
     }
 
-    // Context 2: Copy archive alone to an isolated TempDir without _provenance.json
+    // Context 2: Copy archive alone to an isolated TempDir without a pull-time record
     let isolated_zip_dir = TempDir::new().unwrap();
     let isolated_zip = isolated_zip_dir.path().join(zip_path.file_name().unwrap());
     std::fs::copy(&zip_path, &isolated_zip).unwrap();
@@ -140,8 +134,9 @@ fn test_real_trud_parquet_hash_stability() {
         output: Some(tmp_isolated.path().to_path_buf()), ..Default::default() })
     .expect("context 2 make should succeed");
 
-    // Every file must match across contexts, provenance included: it holds only the archive's
-    // facts, so a bare archive and a pulled one give the same bytes.
+    // Every file must match across contexts, provenance included: the embedded object holds
+    // only the source release's facts and the dataset version, so a bare archive and a pulled
+    // one give the same bytes.
     for file_name in all_files.iter() {
         let f1 = tmp1.path().join(file_name);
         let f2 = tmp_isolated.path().join(file_name);
@@ -150,13 +145,11 @@ fn test_real_trud_parquet_hash_stability() {
         assert_eq!(hash1, hash2, "File {} diverged across contexts", file_name);
     }
 
-    let prov1: ods::provenance::OdsProvenance =
-        serde_json::from_str(&std::fs::read_to_string(tmp1.path().join("_provenance.json")).unwrap()).unwrap();
-
     // Compare built manifest digest with the digest recorded in data/releases.json
-    let date = prov1.trud_release_date.as_deref().unwrap_or("");
-    let version = ods::datapackage::read_dataset_version_from_dir(tmp1.path())
-        .unwrap_or_else(|| "0.1.0".to_string());
+    let record = ods::provenance::read_release(tmp1.path()).unwrap();
+    let facts = record.facts().expect("the build carries provenance");
+    let date = facts.release_date.as_str();
+    let version = facts.dataset_version.clone();
 
     let releases_json_path = PathBuf::from("data/releases.json");
     let index = if releases_json_path.exists() {
@@ -166,12 +159,7 @@ fn test_real_trud_parquet_hash_stability() {
         ods::index::OdsReleaseIndex::baked().ok()
     };
 
-    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(
-        tmp1.path(),
-        &prov1,
-        &version,
-    )
-    .unwrap();
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(tmp1.path()).unwrap();
     let built_digest = manifest.digest().unwrap();
     println!("Built manifest digest: {}", built_digest);
 
@@ -253,133 +241,52 @@ fn test_real_trud_parquet_hash_stability() {
     }
 }
 
+/// The dataset version is in the Parquet files, inside `version`, so relabelling a release
+/// changes every file's bytes and the manifest's layer digests, while the data stays the same.
 #[test]
-fn test_relabel_dataset_version_leaves_parquet_bytes_unchanged() {
-    let xml_path = PathBuf::from("tests/fixtures/mock_hscorgrefdata.xml");
-    assert!(xml_path.exists(), "mock fixture missing");
+fn test_relabel_dataset_version_changes_parquet_bytes_not_data() {
+    use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    let tmp1 = TempDir::new().unwrap();
-    let tmp2 = TempDir::new().unwrap();
+    let embedded = |version: &str| {
+        ods::provenance::PullRecord::for_trud_release(
+            "2026-07-31",
+            "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+            37_983_173,
+            &[],
+        )
+        .unwrap()
+        .embedded(version)
+        .unwrap()
+    };
+    let (_tmp1, dir1) = common::setup_find_test_workspace_embedded(&embedded("0.1.0"));
+    let (_tmp2, dir2) = common::setup_find_test_workspace_embedded(&embedded("1.0.0"));
 
-    let zip1 = create_mock_trud_zip_from_xml(tmp1.path(), &xml_path);
-    let zip2 = create_mock_trud_zip_from_xml(tmp2.path(), &xml_path);
-
-    // Setup _provenance.json in both directories
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
+    let read_rows = |path: &Path| -> Vec<arrow::record_batch::RecordBatch> {
+        let file = std::fs::File::open(path).unwrap();
+        ParquetRecordBatchReaderBuilder::try_new(file).unwrap().build().unwrap().map(|b| b.unwrap()).collect()
     };
 
-    std::fs::write(
-        tmp1.path().join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .unwrap();
-
-    std::fs::write(
-        tmp2.path().join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .unwrap();
-
-    // Run parquet generation on both releases
-    parquet::run(parquet::Args {
-        input: Some(zip1),
-        output: Some(tmp1.path().to_path_buf()), force: true, ..Default::default() })
-    .expect("run 1 should succeed");
-
-    parquet::run(parquet::Args {
-        input: Some(zip2),
-        output: Some(tmp2.path().to_path_buf()), force: true, ..Default::default() })
-    .expect("run 2 should succeed");
-
-    // Relabel dataset_version in tmp2's datapackage.json: 0.1.0 -> 1.0.0
-    let mut dp2: serde_json::Value =
-        serde_json::from_reader(std::fs::File::open(tmp2.path().join("datapackage.json")).unwrap()).unwrap();
-    dp2["version"] = serde_json::json!("1.0.0");
-    std::fs::write(
-        tmp2.path().join("datapackage.json"),
-        serde_json::to_string_pretty(&dp2).unwrap(),
-    )
-    .unwrap();
-
-    // 1. The five Parquet files must be byte-identical
-    let parquet_files = vec![
-        "orgs.parquet",
-        "roles.parquet",
-        "relationships.parquet",
-        "successions.parquet",
-    ];
-
+    let parquet_files = ["orgs.parquet", "roles.parquet", "relationships.parquet", "successions.parquet"];
     for file_name in &parquet_files {
-        let f1 = tmp1.path().join(file_name);
-        let f2 = tmp2.path().join(file_name);
-
-        let hash1 = compute_file_sha256(&f1).unwrap();
-        let hash2 = compute_file_sha256(&f2).unwrap();
-
-        assert_eq!(
-            hash1, hash2,
-            "Parquet file {} differs between dataset versions ({} vs {})",
-            file_name, hash1, hash2
+        let f1 = dir1.join(file_name);
+        let f2 = dir2.join(file_name);
+        assert_ne!(
+            compute_file_sha256(&f1).unwrap(),
+            compute_file_sha256(&f2).unwrap(),
+            "{} must differ between dataset versions: it carries the version",
+            file_name
         );
+        assert_eq!(read_rows(&f1), read_rows(&f2), "{} must hold the same data in both versions", file_name);
     }
 
-    // 2. _provenance.json is unchanged; datapackage.json differs
-    let prov1_bytes = std::fs::read(tmp1.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-    let prov2_bytes = std::fs::read(tmp2.path().join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-    assert_eq!(prov1_bytes, prov2_bytes, "_provenance.json must not change on relabel");
-
-    let dp1_bytes = std::fs::read(tmp1.path().join("datapackage.json")).unwrap();
-    let dp2_bytes = std::fs::read(tmp2.path().join("datapackage.json")).unwrap();
-    assert_ne!(dp1_bytes, dp2_bytes, "datapackage.json must differ across dataset versions");
-
-    // 3. The two manifest digests differ, and share five layer digests
-    let prov1_loaded = ods::provenance::OdsProvenance::load_from_dir(tmp1.path()).unwrap();
-    let prov2_loaded = ods::provenance::OdsProvenance::load_from_dir(tmp2.path()).unwrap();
-
-    let (manifest1, _) = ods::commands::make_oci::build_manifest_from_dir(tmp1.path(), &prov1_loaded, "0.1.0").unwrap();
-    let (manifest2, _) = ods::commands::make_oci::build_manifest_from_dir(tmp2.path(), &prov2_loaded, "1.0.0").unwrap();
-
-    let digest1 = manifest1.digest().unwrap();
-    let digest2 = manifest2.digest().unwrap();
-    assert_ne!(digest1, digest2, "Manifest digests must differ across dataset versions");
-
-    // Find and compare layer digests for the five Parquet files
-    for file_name in &parquet_files {
-        let layer1 = manifest1
-            .layers
-            .iter()
-            .find(|l| {
-                l.annotations
-                    .as_ref()
-                    .and_then(|a| a.get("org.opencontainers.image.title"))
-                    .map(|t| t == file_name)
-                    .unwrap_or(false)
-            })
-            .unwrap_or_else(|| panic!("layer for {} missing in manifest 1", file_name));
-
-        let layer2 = manifest2
-            .layers
-            .iter()
-            .find(|l| {
-                l.annotations
-                    .as_ref()
-                    .and_then(|a| a.get("org.opencontainers.image.title"))
-                    .map(|t| t == file_name)
-                    .unwrap_or(false)
-            })
-            .unwrap_or_else(|| panic!("layer for {} missing in manifest 2", file_name));
-
-        assert_eq!(
-            layer1.digest, layer2.digest,
-            "Manifest layer digest for {} must match across dataset versions: {} vs {}",
-            file_name, layer1.digest, layer2.digest
-        );
+    let (manifest1, _) = ods::commands::make_oci::build_manifest_from_dir(&dir1).unwrap();
+    let (manifest2, _) = ods::commands::make_oci::build_manifest_from_dir(&dir2).unwrap();
+    assert_ne!(manifest1.digest().unwrap(), manifest2.digest().unwrap(), "manifest digests must differ across dataset versions");
+    for (layer1, layer2) in manifest1.layers.iter().zip(manifest2.layers.iter()) {
+        assert_ne!(layer1.digest, layer2.digest, "every layer digest changes on a relabel");
     }
 }
-
-
 
 struct MockTrudApiFetcher {
     releases: Vec<TrudReleaseItem>,
@@ -478,7 +385,7 @@ enum Route {
 
 // D1: a dataset's identity is the archive and the dataset version, not how the builder checked
 // the archive. One zip, confirmed once by the release index and once by the TRUD API, must
-// give the same `_provenance.json` and the same manifest digest.
+// give the same pull record, the same embedded object and the same manifest digest.
 #[test]
 fn test_same_zip_gives_same_provenance_and_manifest_however_it_was_checked() {
     let tmp = TempDir::new().unwrap();
@@ -493,18 +400,16 @@ fn test_same_zip_gives_same_provenance_and_manifest_however_it_was_checked() {
     let dir_index = pull_and_make(&zip, &via_index.join("ods_data"), Route::ReleaseIndex);
     let dir_api = pull_and_make(&zip, &via_api.join("ods_data"), Route::TrudApi);
 
-    let prov_index = std::fs::read_to_string(dir_index.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
-    let prov_api = std::fs::read_to_string(dir_api.join(ods::provenance::PROVENANCE_FILENAME)).unwrap();
+    let prov_index = std::fs::read_to_string(ods::provenance::pull_record_path(&dir_index)).unwrap();
+    let prov_api = std::fs::read_to_string(ods::provenance::pull_record_path(&dir_api)).unwrap();
     assert_eq!(
         prov_index, prov_api,
-        "_provenance.json depends on how the zip was checked:\n--- index ---\n{}\n--- TRUD API ---\n{}",
+        "the pull-time record depends on how the zip was checked:\n--- index ---\n{}\n--- TRUD API ---\n{}",
         prov_index, prov_api
     );
 
-    let version = ods::datapackage::DATASET_VERSION;
     let digest = |dir: &Path| {
-        let prov = ods::provenance::OdsProvenance::load_from_dir(dir).unwrap();
-        let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(dir, &prov, version).unwrap();
+        let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(dir).unwrap();
         manifest.digest().unwrap()
     };
     assert_eq!(

@@ -4,9 +4,9 @@ use ods::ods_xml::{
 };
 use ods::commands::parquet::{
     build_succession_edges, compute_transitive_closures, export_orgs,
-    export_relationships, export_roles, export_successions,
+    export_relationships, export_roles, export_successions, write_orgs, write_relationships,
+    write_roles, write_stub_parquet, write_successions,
 };
-use ods::provenance::OdsProvenance;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 pub struct OdsCommand {
@@ -56,8 +56,14 @@ pub fn ods_cmd() -> OdsCommand {
 #[allow(unused_imports, dead_code)]
 pub use ods_cmd as ods_binary;
 
-#[allow(clippy::vec_init_then_push, dead_code)]
+#[allow(dead_code)]
 pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
+    setup_find_test_workspace_embedded(&ods::provenance::fixture_embedded("2026-07-31"))
+}
+
+/// `setup_find_test_workspace`, with every table carrying `prov`.
+#[allow(clippy::vec_init_then_push, dead_code)]
+pub fn setup_find_test_workspace_embedded(prov: &ods::provenance::Embedded) -> (TempDir, PathBuf) {
     let tmp = TempDir::new().expect("create temp dir");
     let dir = tmp.path().to_path_buf();
 
@@ -1121,22 +1127,18 @@ pub fn setup_find_test_workspace() -> (TempDir, PathBuf) {
         });
     }
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
-
+    // Every table carries the object `ods make` embeds, as a release built from `ods trud
+    // pull` does: the files are the release's whole record.
+    // The `trud_release_date` column is the release the object names, or 2026-07-31 for a
+    // build without provenance, as `ods make --force` takes it from the zip's name.
+    let date = prov.sources.as_ref().and_then(|s| s.first()).map(|s| s.version.clone()).unwrap_or_else(|| "2026-07-31".to_string());
+    let date = Some(date.as_str());
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
-    export_orgs(&dir, &records, &succ_closures, &pred_closures, Some(&prov)).expect("export orgs");
-    export_roles(&dir, &records, Some(&prov)).expect("export roles");
-    export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
-    export_successions(&dir, &records, Some(&prov)).expect("export successions");
-    std::fs::write(
-        dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .expect("write _provenance.json");
+    write_orgs(&dir, &records, &succ_closures, &pred_closures, Some(prov), date, &|_| {}).expect("export orgs");
+    write_roles(&dir, &records, Some(prov), date, &|_| {}).expect("export roles");
+    write_relationships(&dir, &records, Some(prov), date, &|_| {}).expect("export relationships");
+    write_successions(&dir, &records, Some(prov), date, &|_| {}).expect("export successions");
 
     (tmp, dir)
 }
@@ -1189,10 +1191,7 @@ pub fn setup_large_find_workspace(count: usize) -> (TempDir, PathBuf) {
         })
         .collect();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::fixture_embedded("2026-07-31");
 
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
@@ -1200,11 +1199,6 @@ pub fn setup_large_find_workspace(count: usize) -> (TempDir, PathBuf) {
     export_roles(&dir, &records, Some(&prov)).expect("export roles");
     export_relationships(&dir, &records, Some(&prov)).expect("export relationships");
     export_successions(&dir, &records, Some(&prov)).expect("export successions");
-    std::fs::write(
-        dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
-    )
-    .expect("write _provenance.json");
 
     (tmp, dir)
 }
@@ -1409,12 +1403,12 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     }
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
-    std::fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
-    std::fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
-    std::fs::write(
-        rel_dir.join("datapackage.json"),
-        format!("{{\"name\": \"test\", \"version\": \"{}\"}}", ods::datapackage::DATASET_VERSION),
-    ).unwrap();
+    // The files carry the release's provenance, as `ods make` writes it after `ods trud pull`.
+    let embedded = ods::provenance::fixture_embedded_for("2026-07-31", &zip_sha256, 37_983_173);
+    write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), "dummy orgs parquet content").unwrap();
+    write_stub_parquet(&rel_dir.join("roles.parquet"), Some(&embedded), "dummy roles parquet content").unwrap();
+    // NOTES.md sits in the release directory but is never a layer, proving `ods make oci` below
+    // ignores everything but *.parquet.
     std::fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
     // Create Cargo.toml and git repo
@@ -1434,10 +1428,15 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
-    let prov = OdsProvenance::from_trud_statement("2026-07-31", &zip_sha256, 37_983_173);
-
-    let prov_path = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    std::fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+    ods::provenance::write_pull_record(
+        &rel_dir,
+        "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        &zip_sha256,
+        37_983_173,
+        &[],
+    )
+    .unwrap();
 
     // Create data/releases.json in repo
     std::fs::create_dir_all(tmp.path().join("data")).unwrap();
@@ -1478,15 +1477,21 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
     }
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
-    std::fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
-    std::fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"ods\", \"version\": \"1.0.1\"}").unwrap();
+    // The file carries the release's provenance at dataset "1.0.1", not this build's own
+    // `DATASET_VERSION`, as a release a later ods published would.
+    let embedded = ods::provenance::PullRecord::for_trud_release(
+        "2026-08-31",
+        "hscorgrefdataxml_data_7.0.0_20260831000001.zip",
+        &zip_sha256,
+        37_983_173,
+        &[],
+    )
+    .unwrap()
+    .embedded("1.0.1")
+    .unwrap();
+    write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), "dummy orgs content").unwrap();
 
-    let prov = OdsProvenance::from_trud_statement("2026-08-31", &zip_sha256, 37_983_173);
-
-    let prov_path = rel_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    std::fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
-
-    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir, &prov, "1.0.1").unwrap();
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir).unwrap();
     let manifest_digest = manifest.digest().unwrap();
 
     let mut index = make_v1_index(&[(
@@ -1513,7 +1518,7 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
 }
 
 /// A release directory holding NHS's four files for `date`, in the shape `ods trud pull` leaves
-/// them, with a `_provenance.json` that agrees with the zip: everything a source bundle checks.
+/// them, with a `trud/datapackage.json` that agrees with the zip: everything a source bundle checks.
 /// The bytes are fixed by `date`, so two calls for one date give the same files.
 #[allow(dead_code)]
 pub fn create_source_release(workspace: &Path, date: &str) -> PathBuf {
@@ -1544,22 +1549,22 @@ pub fn create_source_release_stamped(workspace: &Path, date: &str, stamp: &str) 
         ),
     )
     .unwrap();
-    std::fs::write(
-        trud_dir.join(format!("trud_hscorgrefdataxml_data_7.0.0_{compact}000001.xml.asc")),
-        format!("signature bytes for {date}"),
-    )
-    .unwrap();
-    std::fs::write(trud_dir.join("trud-public-key-2013-04-01.pgp"), b"NHS's public key bytes").unwrap();
+    let signature = trud_dir.join(format!("trud_hscorgrefdataxml_data_7.0.0_{compact}000001.xml.asc"));
+    std::fs::write(&signature, format!("signature bytes for {date}")).unwrap();
+    let key = trud_dir.join("trud-public-key-2013-04-01.pgp");
+    std::fs::write(&key, b"NHS's public key bytes").unwrap();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some(date.to_string()),
-        trud_release_sha256: Some(ods::provenance::compute_file_sha256(&trud_dir.join(&zip_name)).unwrap()),
-        trud_release_filesize_bytes: Some(zip_bytes.len() as u64),
-        ..Default::default()
-    };
-    std::fs::write(
-        release_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+    ods::provenance::write_pull_record(
+        &release_dir,
+        date,
+        &zip_name,
+        &ods::provenance::compute_file_sha256(&trud_dir.join(&zip_name)).unwrap(),
+        zip_bytes.len() as u64,
+        &[
+            ("checksum", "application/xml", trud_dir.join(format!("trud_hscorgrefdataxml_data_7.0.0_{compact}000001.xml"))),
+            ("signature", "application/pgp-signature", signature),
+            ("key", "application/pgp-keys", key),
+        ],
     )
     .unwrap();
     release_dir
@@ -1578,13 +1583,6 @@ pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
 
     let pub_archive_sha = "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801";
 
-    let orgs_bytes = match case_variant {
-        "F" => b"different orgs content for F".to_vec(),
-        _ => b"dummy orgs content".to_vec(),
-    };
-    std::fs::write(rel_dir.join("orgs.parquet"), &orgs_bytes).unwrap();
-    let orgs_sha256 = ods::provenance::compute_file_sha256(&rel_dir.join("orgs.parquet")).unwrap();
-
     let this_archive_sha = match case_variant {
         "B" => "1111111111111111111111111111111111111111111111111111111111111111",
         _ => pub_archive_sha,
@@ -1595,76 +1593,38 @@ pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
         _ => "0.1.0",
     };
 
-    if case_variant != "no_prov" {
-        let prov = ods::provenance::OdsProvenance {
-            schema: ods::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_date: Some("2026-08-28".to_string()),
-            trud_release_filesize_bytes: Some(38064419),
-            trud_release_sha256: Some(this_archive_sha.to_string()),
-            ..Default::default()
-        };
-        std::fs::write(
-            rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-            serde_json::to_string_pretty(&prov).unwrap(),
+    // The object each case's files carry; `no_prov` is a `--force` build's.
+    let embedded_at = |sha: &str, version: &str| {
+        ods::provenance::PullRecord::for_trud_release("2026-08-28", "archive.zip", sha, 38064419, &[])
+            .unwrap()
+            .embedded(version)
+            .unwrap()
+    };
+    let embedded = match case_variant {
+        "no_prov" => ods::provenance::Embedded::without_provenance(),
+        _ => embedded_at(this_archive_sha, this_dataset_version),
+    };
+    let orgs_content = match case_variant {
+        "F" => "different orgs content for F",
+        _ => "dummy orgs content",
+    };
+    write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), orgs_content).unwrap();
+    // Case D: a second file carrying a different object, so the files don't agree on what
+    // release they are.
+    if case_variant == "D" {
+        write_stub_parquet(
+            &rel_dir.join("roles.parquet"),
+            Some(&embedded_at(pub_archive_sha, "9.9.9")),
+            "dummy roles content",
         )
         .unwrap();
     }
 
-    let dp_resource_hash = match case_variant {
-        "D" => "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        _ => orgs_sha256.to_lowercase(),
-    };
-
-    let dp = serde_json::json!({
-        "name": "ods",
-        "version": this_dataset_version,
-        "resources": [
-            {
-                "name": "orgs.parquet",
-                "path": "orgs.parquet",
-                "hash": format!("sha256:{}", dp_resource_hash)
-            }
-        ]
-    });
-    std::fs::write(
-        rel_dir.join(ods::datapackage::DATAPACKAGE_FILENAME),
-        serde_json::to_vec_pretty(&dp).unwrap(),
-    )
-    .unwrap();
-
     // Reference published directory to compute published manifest digest
     let ref_dir = tmp.path().join("ref_dir");
     std::fs::create_dir_all(&ref_dir).unwrap();
-    std::fs::write(ref_dir.join("orgs.parquet"), b"dummy orgs content").unwrap();
-    let ref_prov = ods::provenance::OdsProvenance {
-        schema: ods::provenance::PROVENANCE_SCHEMA_V1_URL.to_string(),
-        trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_filesize_bytes: Some(38064419),
-        trud_release_sha256: Some(pub_archive_sha.to_string()),
-        ..Default::default()
-    };
-    let ref_dp = serde_json::json!({
-        "name": "ods",
-        "version": "0.1.0",
-        "resources": [
-            {
-                "name": "orgs.parquet",
-                "path": "orgs.parquet",
-                "hash": format!("sha256:{}", ods::provenance::compute_file_sha256(&ref_dir.join("orgs.parquet")).unwrap().to_lowercase())
-            }
-        ]
-    });
-    std::fs::write(
-        ref_dir.join(ods::datapackage::DATAPACKAGE_FILENAME),
-        serde_json::to_vec_pretty(&ref_dp).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        ref_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&ref_prov).unwrap(),
-    )
-    .unwrap();
-    let (ref_manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&ref_dir, &ref_prov, "0.1.0").unwrap();
+    write_stub_parquet(&ref_dir.join("orgs.parquet"), Some(&embedded_at(pub_archive_sha, "0.1.0")), "dummy orgs content").unwrap();
+    let (ref_manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&ref_dir).unwrap();
     let published_manifest_digest = ref_manifest.digest().unwrap();
 
     let mut index = make_v1_index(&[(
@@ -1683,4 +1643,25 @@ pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(&index_bytes, &ws_root).unwrap();
 
     (tmp, rel_dir)
+}
+
+/// The bytes of a stub Parquet file carrying the object `ods make` embeds for a release of
+/// `date`, built from an archive with SHA-256 `sha`, at dataset `version`; `content` makes the
+/// bytes differ between files.
+#[allow(dead_code)]
+pub fn fixture_parquet_bytes(date: &str, sha: &str, version: &str, content: &str) -> Vec<u8> {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("stub.parquet");
+    write_fixture_parquet(&path, date, sha, version, content);
+    std::fs::read(&path).unwrap()
+}
+
+/// Writes `fixture_parquet_bytes`' file to `path`.
+#[allow(dead_code)]
+pub fn write_fixture_parquet(path: &Path, date: &str, sha: &str, version: &str, content: &str) {
+    let embedded = ods::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 37_983_173, &[])
+        .unwrap()
+        .embedded(version)
+        .unwrap();
+    write_stub_parquet(path, Some(&embedded), content).unwrap();
 }

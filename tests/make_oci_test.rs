@@ -1,10 +1,28 @@
 use anyhow::Result;
 use ods::commands::make_oci::{perform_structural_checks, run, Args};
-use ods::provenance::{compute_file_sha256, OdsProvenance, PROVENANCE_FILENAME};
+use ods::provenance::compute_file_sha256;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+/// The fixture's files carry this build's dataset version, as `ods make` embeds it, so every
+/// structural check in this file expects it too.
+const EXPECTED_VERSION: &str = ods::datapackage::DATASET_VERSION;
+
+/// The object the fixture's files carry: a 2026-07-31 build from the fixture zip.
+fn embedded(zip_sha256: &str) -> ods::provenance::Embedded {
+    ods::provenance::fixture_embedded_for("2026-07-31", zip_sha256, 37_983_173)
+}
+
+/// Rewrites `rel_dir/name` as a stub Parquet file with new content, carrying the same object
+/// its sibling `orgs.parquet` or `roles.parquet` carries: a file changed after packing, still
+/// one release's file.
+fn rewrite(rel_dir: &Path, name: &str, content: &str) {
+    let record = ods::provenance::read_release(rel_dir).unwrap();
+    let embedded = record.facts().unwrap().embedded.clone();
+    ods::commands::parquet::write_stub_parquet(&rel_dir.join(name), Some(&embedded), content).unwrap();
+}
 
 /// Sets up a synthetic release directory ready for `ods make oci`.
 fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
@@ -26,21 +44,22 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     }
     let zip_sha256 = compute_file_sha256(&outer_zip_path).unwrap();
 
-    // Create synthetic Parquet tables and notes
-    fs::write(rel_dir.join("orgs.parquet"), b"dummy orgs parquet content").unwrap();
-    fs::write(rel_dir.join("roles.parquet"), b"dummy roles parquet content").unwrap();
-    fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
+    // Create synthetic Parquet tables, carrying the release's provenance, and notes
+    let embedded = embedded(&zip_sha256);
+    ods::commands::parquet::write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), "dummy orgs parquet content").unwrap();
+    ods::commands::parquet::write_stub_parquet(&rel_dir.join("roles.parquet"), Some(&embedded), "dummy roles parquet content").unwrap();
     fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_filesize_bytes: Some(37_983_173),
-        trud_release_sha256: Some(zip_sha256.clone()),
-        ..Default::default()
-    };
-
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+    // The pull record lives beside the archive it describes, not the release root.
+    ods::provenance::write_pull_record(
+        &rel_dir,
+        "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
+        &zip_sha256,
+        37_983_173,
+        &[],
+    )
+    .unwrap();
 
     (tmp, rel_dir)
 }
@@ -59,8 +78,9 @@ fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
 
     run(test_args(rel_dir.clone(), false))?;
 
-    // Verify root files exist
-    assert!(rel_dir.join("_provenance.json").exists());
+    // Verify the pull record stays where it was written (trud/), and nothing is added at the root
+    assert!(ods::provenance::pull_record_path(&rel_dir).exists());
+    assert!(!rel_dir.join("datapackage.json").exists(), "ods make oci writes only oci/");
     assert!(!rel_dir.join("_release.json").exists(), "ods make oci must not write _release.json");
     assert!(!rel_dir.join("SHA256SUMS").exists(), "ods make oci must not write SHA256SUMS");
 
@@ -73,7 +93,7 @@ fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
     assert!(blobs_dir.is_dir());
 
     // Verify symlinks resolve and point to release root files
-    let mut real_manifest_count = 0;
+    let mut real_file_count = 0;
     let mut symlink_count = 0;
     for entry in fs::read_dir(&blobs_dir)?.flatten() {
         let p = entry.path();
@@ -83,12 +103,15 @@ fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
             assert!(target.exists(), "Symlink target must exist: {}", target.display());
             assert_eq!(target.parent().unwrap(), fs::canonicalize(&rel_dir)?.as_path());
         } else if p.is_file() {
-            real_manifest_count += 1;
+            real_file_count += 1;
         }
     }
 
-    assert_eq!(real_manifest_count, 1, "Exactly one real manifest file in blobs/sha256/");
-    assert!(symlink_count >= 4, "Must have symlinks for all published layers");
+    // Manifest-only: the two real blobs are the manifest and the fixed empty config; every
+    // layer (one per top-level `*.parquet` file — `orgs.parquet` and `roles.parquet` here) is a
+    // symlink to the real file at the release root.
+    assert_eq!(real_file_count, 2, "Exactly the manifest and the empty config blob, both real files");
+    assert_eq!(symlink_count, 2, "One symlink per Parquet layer");
 
     // Verify index.json contents
     let index_bytes = fs::read(oci_dir.join("index.json"))?;
@@ -109,50 +132,16 @@ fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
         .get(ods::oci::ANNOTATION_REF_NAME)
         .unwrap();
     assert_eq!(ref0, "2026-07-31");
-    assert_eq!(ref1, "2026-07-31_1.0.1");
+    assert_eq!(ref1, &format!("2026-07-31_{EXPECTED_VERSION}"));
     assert_eq!(index.manifests[0].media_type, ods::oci::MEDIA_TYPE_MANIFEST);
-    assert_eq!(index.manifests[0].artifact_type, ods::oci::ARTIFACT_TYPE_DATASET);
+    assert_eq!(index.manifests[0].artifact_type.as_deref(), Some(ods::oci::ARTIFACT_TYPE_DATASET));
     assert_eq!(index.manifests[1].media_type, ods::oci::MEDIA_TYPE_MANIFEST);
-    assert_eq!(index.manifests[1].artifact_type, ods::oci::ARTIFACT_TYPE_DATASET);
+    assert_eq!(index.manifests[1].artifact_type.as_deref(), Some(ods::oci::ARTIFACT_TYPE_DATASET));
     assert_eq!(index.manifests[0].digest, index.manifests[1].digest);
 
     // Re-running with check = true must succeed
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
-    assert!(failures.is_empty(), "All structural checks must pass on cleanly generated layout");
-
-    Ok(())
-}
-
-#[test]
-fn test_make_oci_regenerates_datapackage_with_full_semver() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-    run(test_args(rel_dir.clone(), false))?;
-
-    let dp_content = fs::read_to_string(rel_dir.join("datapackage.json"))?;
-    let dp_val: serde_json::Value = serde_json::from_str(&dp_content)?;
-    assert_eq!(dp_val["version"], "1.0.1");
-
-    // Also verify manifest layer digest for datapackage.json matches the 1.0.1 file on disk
-    let dp_sha = compute_file_sha256(&rel_dir.join("datapackage.json"))?;
-    let oci_dir = rel_dir.join("oci");
-    let manifest_path = fs::read_dir(oci_dir.join("blobs").join("sha256"))?
-        .flatten()
-        .find(|e| e.path().is_file() && !e.path().is_symlink())
-        .unwrap()
-        .path();
-    let manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
-    let dp_layer = manifest
-        .layers
-        .iter()
-        .find(|l| {
-            l.annotations
-                .as_ref()
-                .and_then(|a| a.get("org.opencontainers.image.title"))
-                .map(|t| t == "datapackage.json")
-                .unwrap_or(false)
-        })
-        .unwrap();
-    assert_eq!(dp_layer.digest, format!("sha256:{}", dp_sha.to_lowercase()));
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
+    assert!(failures.is_empty(), "All structural checks must pass on cleanly generated layout: {:?}", failures);
 
     Ok(())
 }
@@ -177,24 +166,25 @@ fn test_make_oci_idempotent_repack_after_rebuilt_content() -> Result<()> {
     run(test_args(rel_dir.clone(), false))?;
 
     // Rebuild/modify a parquet file on disk
-    fs::write(rel_dir.join("orgs.parquet"), b"rebuilt parquet content with changed bytes")?;
+    rewrite(&rel_dir, "orgs.parquet", "rebuilt parquet content with changed bytes");
 
     // Second pack: must regenerate oci/ wholesale without stale blobs or symlinks
     let res = run(test_args(rel_dir.clone(), false));
     assert!(res.is_ok(), "Re-pack after changed content must succeed: {:?}", res.err());
 
-    // Verify exactly one real manifest blob in blobs/sha256/
+    // Verify exactly the manifest and the fixed empty config blob remain as real files — no
+    // stale manifest blob left behind from the first pack.
     let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
-    let mut real_manifests = 0;
+    let mut real_files = 0;
     for entry in fs::read_dir(&blobs_dir)?.flatten() {
         if entry.path().is_file() && !entry.path().is_symlink() {
-            real_manifests += 1;
+            real_files += 1;
         }
     }
-    assert_eq!(real_manifests, 1, "Exactly one real manifest file after re-pack");
+    assert_eq!(real_files, 2, "Exactly the manifest and the empty config blob after re-pack");
 
     // Verify all structural checks pass cleanly
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(failures.is_empty(), "All structural checks must pass on cleanly regenerated layout: {:?}", failures);
 
     Ok(())
@@ -208,30 +198,18 @@ fn test_determinism_two_different_working_directories_produce_identical_manifest
     run(test_args(rel_dir_a.clone(), false))?;
     run(test_args(rel_dir_b.clone(), false))?;
 
-    let prov_a = fs::read_to_string(rel_dir_a.join(PROVENANCE_FILENAME))?;
-    let prov_b = fs::read_to_string(rel_dir_b.join(PROVENANCE_FILENAME))?;
-    assert_eq!(prov_a, prov_b, "_provenance.json must be byte-identical regardless of working directory");
-
-    let dp_a = fs::read_to_string(rel_dir_a.join("datapackage.json"))?;
-    let dp_b = fs::read_to_string(rel_dir_b.join("datapackage.json"))?;
-    assert_eq!(dp_a, dp_b, "datapackage.json must be byte-identical regardless of working directory");
+    let prov_a = fs::read_to_string(ods::provenance::pull_record_path(&rel_dir_a))?;
+    let prov_b = fs::read_to_string(ods::provenance::pull_record_path(&rel_dir_b))?;
+    assert_eq!(prov_a, prov_b, "trud/datapackage.json must be byte-identical regardless of working directory");
 
     let tmp_a_path = tmp_a.path().to_str().unwrap();
     let tmp_b_path = tmp_b.path().to_str().unwrap();
-    assert!(!prov_a.contains(tmp_a_path), "no absolute path leaked in _provenance.json");
-    assert!(!dp_a.contains(tmp_a_path), "no absolute path leaked in datapackage.json");
-    assert!(!prov_b.contains(tmp_b_path), "no absolute path leaked in _provenance.json");
-    assert!(!dp_b.contains(tmp_b_path), "no absolute path leaked in datapackage.json");
+    assert!(!prov_a.contains(tmp_a_path), "no absolute path leaked in trud/datapackage.json");
+    assert!(!prov_b.contains(tmp_b_path), "no absolute path leaked in trud/datapackage.json");
 
     let get_manifest_bytes = |dir: &Path| -> Result<Vec<u8>> {
-        let blobs = dir.join("oci").join("blobs").join("sha256");
-        for entry in fs::read_dir(blobs)?.flatten() {
-            let path = entry.path();
-            if path.is_file() && !path.is_symlink() {
-                return Ok(fs::read(path)?);
-            }
-        }
-        anyhow::bail!("No manifest file found");
+        let (path, _) = find_manifest_blob_path(dir)?;
+        Ok(fs::read(path)?)
     };
 
     let bytes_a = get_manifest_bytes(&rel_dir_a)?;
@@ -247,9 +225,9 @@ fn test_refusal_repacking_from_disk_mismatch() -> Result<()> {
     run(test_args(rel_dir.clone(), false))?;
 
     // Tamper with a source file on disk after packaging
-    fs::write(rel_dir.join("orgs.parquet"), b"tampered content after packing")?;
+    rewrite(&rel_dir, "orgs.parquet", "tampered content after packing");
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
         failures.iter().any(|f| f.contains("Re-packing from source files yields non-identical manifest bytes")),
         "Must catch disk divergence during re-packing: {:?}",
@@ -264,12 +242,13 @@ fn test_refusal_baseline_invalid_before_disk_mutations() {
     let rel_dir = tmp.path().join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
 
-    // Create an invalid baseline provenance (missing publication fields, tool version, etc.)
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
-    fs::write(rel_dir.join(PROVENANCE_FILENAME), serde_json::to_string(&prov).unwrap()).unwrap();
+    // A file built without provenance: nothing to annotate a manifest with
+    ods::commands::parquet::write_stub_parquet(
+        &rel_dir.join("orgs.parquet"),
+        Some(&ods::provenance::Embedded::without_provenance()),
+        "orgs",
+    )
+    .unwrap();
 
     let res = run(test_args(rel_dir.clone(), false));
     assert!(res.is_err());
@@ -283,9 +262,9 @@ fn test_refusal_stale_symlink_target_modified() -> Result<()> {
     run(test_args(rel_dir.clone(), false))?;
 
     // Tamper with target file without updating symlink
-    fs::write(rel_dir.join("roles.parquet"), b"modified roles content")?;
+    rewrite(&rel_dir, "roles.parquet", "modified roles content");
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
         failures.iter().any(|f| f.contains("blob symlink stale")),
         "Must report stale symlink refusal: {:?}",
@@ -304,7 +283,7 @@ fn test_refusal_broken_symlink() -> Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::symlink("../../../nonexistent_file.parquet", &broken_link)?;
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
         failures.iter().any(|f| f.contains("blob symlink broken")),
         "Must report broken symlink refusal: {:?}",
@@ -323,7 +302,7 @@ fn test_refusal_tampered_index_json_digest() -> Result<()> {
     index.manifests[0].digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
     fs::write(&index_path, serde_json::to_vec_pretty(&index)?)?;
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
         failures.iter().any(|f| f.contains("index.json names manifest digest")),
         "Must report tampered index.json refusal: {:?}",
@@ -332,25 +311,35 @@ fn test_refusal_tampered_index_json_digest() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_refusal_config_digest_disagrees_with_provenance_layer() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-    run(test_args(rel_dir.clone(), false))?;
-
+/// The real manifest blob's path and parsed content — never the empty config blob, which sits
+/// beside it in `blobs/sha256/` as another real (non-symlink) file and doesn't parse as a
+/// manifest (it's just the two bytes `{}`), but which `fs::read_dir`'s arbitrary order could
+/// otherwise hand back first.
+fn find_manifest_blob_path(rel_dir: &Path) -> Result<(PathBuf, ods::oci::OciManifest)> {
     let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
     for entry in fs::read_dir(&blobs_dir)?.flatten() {
         let p = entry.path();
         if p.is_file() && !p.is_symlink() {
-            let mut manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(&p)?)?;
-            manifest.config.digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
-            fs::write(&p, manifest.to_canonical_bytes()?)?;
-            break;
+            if let Ok(m) = serde_json::from_slice::<ods::oci::OciManifest>(&fs::read(&p)?) {
+                return Ok((p, m));
+            }
         }
     }
+    anyhow::bail!("no manifest blob found under {}", blobs_dir.display());
+}
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+#[test]
+fn test_refusal_config_digest_isnt_the_fixed_empty_descriptor() -> Result<()> {
+    let (_tmp, rel_dir) = setup_synthetic_release_dir();
+    run(test_args(rel_dir.clone(), false))?;
+
+    let (manifest_path, mut manifest) = find_manifest_blob_path(&rel_dir)?;
+    manifest.config.digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
+    fs::write(&manifest_path, manifest.to_canonical_bytes()?)?;
+
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
-        failures.iter().any(|f| f.contains("config.digest") && f.contains("_provenance.json layer digest")),
+        failures.iter().any(|f| f.contains("config isn't the fixed empty descriptor")),
         "Must report config digest mismatch refusal: {:?}",
         failures
     );
@@ -362,19 +351,12 @@ fn test_refusal_uppercase_digest_in_manifest() -> Result<()> {
     let (_tmp, rel_dir) = setup_synthetic_release_dir();
     run(test_args(rel_dir.clone(), false))?;
 
-    let blobs_dir = rel_dir.join("oci").join("blobs").join("sha256");
-    for entry in fs::read_dir(&blobs_dir)?.flatten() {
-        let p = entry.path();
-        if p.is_file() && !p.is_symlink() {
-            let mut manifest: ods::oci::OciManifest = serde_json::from_slice(&fs::read(&p)?)?;
-            let hex_part = manifest.layers[0].digest.trim_start_matches("sha256:");
-            manifest.layers[0].digest = format!("sha256:{}", hex_part.to_uppercase());
-            fs::write(&p, manifest.to_canonical_bytes()?)?;
-            break;
-        }
-    }
+    let (manifest_path, mut manifest) = find_manifest_blob_path(&rel_dir)?;
+    let hex_part = manifest.layers[0].digest.trim_start_matches("sha256:");
+    manifest.layers[0].digest = format!("sha256:{}", hex_part.to_uppercase());
+    fs::write(&manifest_path, manifest.to_canonical_bytes()?)?;
 
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
+    let failures = perform_structural_checks(&rel_dir, EXPECTED_VERSION)?;
     assert!(
         failures.iter().any(|f| f.contains("digest is not lowercase hex")),
         "Must report uppercase digest refusal: {:?}",
@@ -384,117 +366,22 @@ fn test_refusal_uppercase_digest_in_manifest() -> Result<()> {
 }
 
 #[test]
-fn test_refusal_datapackage_resource_hash_disagrees_with_layers() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-    run(test_args(rel_dir.clone(), false))?;
-
-    // Tamper with datapackage.json resource hash
-    let dp_path = rel_dir.join("datapackage.json");
-    let mut dp: serde_json::Value = serde_json::from_slice(&fs::read(&dp_path)?)?;
-    dp["resources"][0]["hash"] = serde_json::json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
-    fs::write(&dp_path, serde_json::to_string_pretty(&dp)?)?;
-
-    let failures = perform_structural_checks(&rel_dir, "1.0.1")?;
-    assert!(
-        failures.iter().any(|f| f.contains("disagrees with layer digest")),
-        "Must report datapackage resource hash disagreement: {:?}",
-        failures
-    );
-    Ok(())
-}
-
-#[test]
-fn test_make_oci_refuses_missing_trud_release_sha256() -> Result<()> {
+fn test_make_oci_refuses_an_embedded_object_without_a_source_hash() -> Result<()> {
     let (_tmp, rel_dir) = setup_synthetic_release_dir();
 
-    // Remove trud_release_sha256 from provenance
-    let prov_path = rel_dir.join(PROVENANCE_FILENAME);
-    let mut prov: OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256 = None;
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
-
-    let result = run(test_args(rel_dir.clone(), false));
-    assert!(result.is_err(), "ods make oci must refuse provenance missing trud_release_sha256");
-    let err_str = format!("{:#}", result.unwrap_err());
-    assert!(
-        err_str.contains("trud_release_sha256"),
-        "error message must mention missing trud_release_sha256, got: {}",
-        err_str
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_make_oci_reads_version_from_datapackage_json() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-
-    // Set dataset_version to 1.2.3 in datapackage.json
-    let dp_path = rel_dir.join("datapackage.json");
-    fs::write(&dp_path, b"{\"name\": \"test\", \"version\": \"1.2.3\"}")?;
-
-    run(test_args(rel_dir.clone(), false))?;
-
-    // Verify manifest annotations
-    let oci_dir = rel_dir.join("oci");
-    let blobs_dir = oci_dir.join("blobs").join("sha256");
-    let mut manifest_path = None;
-    for entry in fs::read_dir(&blobs_dir)?.flatten() {
-        let p = entry.path();
-        if p.is_file() && !p.is_symlink() {
-            manifest_path = Some(p);
-            break;
-        }
+    // The files carry a source with no hash
+    let mut broken = embedded(&"0".repeat(64));
+    broken.sources.as_mut().unwrap()[0].hash = String::new();
+    for name in ["orgs.parquet", "roles.parquet"] {
+        ods::commands::parquet::write_stub_parquet(&rel_dir.join(name), Some(&broken), name)?;
     }
-    let manifest_bytes = fs::read(manifest_path.unwrap())?;
-    let manifest: ods::oci::OciManifest = serde_json::from_slice(&manifest_bytes)?;
-    let annotations = manifest.annotations.as_ref().unwrap();
-    assert_eq!(
-        annotations.get(ods::oci::ANNOTATION_VERSION).map(|s| s.as_str()),
-        Some("1.2.3")
-    );
-    assert_eq!(
-        annotations.get(ods::oci::ANNOTATION_FYI_DATASET_VERSION).map(|s| s.as_str()),
-        Some("1.2.3")
-    );
-
-    // Verify index.json has tag 2026-07-31_1.2.3
-    let index_bytes = fs::read(oci_dir.join("index.json"))?;
-    let index: ods::oci::OciIndex = serde_json::from_slice(&index_bytes)?;
-    let has_tagged_entry = index.manifests.iter().any(|m| {
-        m.annotations
-            .as_ref()
-            .and_then(|a| a.get(ods::oci::ANNOTATION_REF_NAME))
-            .map(|r| r == "2026-07-31_1.2.3")
-            .unwrap_or(false)
-    });
-    assert!(has_tagged_entry, "index.json must contain 2026-07-31_1.2.3 tag");
-
-    Ok(())
-}
-
-#[test]
-fn test_make_oci_refuses_when_missing_dataset_version() -> Result<()> {
-    let (_tmp, rel_dir) = setup_synthetic_release_dir();
-
-    // Remove version from datapackage.json
-    let dp_path = rel_dir.join("datapackage.json");
-    fs::write(&dp_path, b"{\"name\": \"test\"}")?;
 
     let result = run(test_args(rel_dir.clone(), false));
-    assert!(result.is_err(), "ods make oci must refuse when dataset_version is missing");
+    assert!(result.is_err(), "ods make oci must refuse files whose source has no hash");
     let err_str = format!("{:#}", result.unwrap_err());
-    assert!(
-        err_str.contains("Missing version in datapackage.json"),
-        "error must mention missing version in datapackage.json, got: {}",
-        err_str
-    );
-    assert!(
-        err_str.contains("ods make"),
-        "error must point at ods make as the fix, got: {}",
-        err_str
-    );
+    assert!(err_str.contains("carry provenance this ods can't read"), "got: {}", err_str);
+    assert!(err_str.contains("hash"), "error message must name the hash, got: {}", err_str);
+    assert!(!rel_dir.join("oci").exists(), "Must not create oci/ on refusal");
 
     Ok(())
 }
-

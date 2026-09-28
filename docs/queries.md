@@ -658,7 +658,9 @@ SELECT rel_status, count(*) FROM 'ods_data/current/relationships.parquet' GROUP 
 
 **Group by `trud_release_date` for release identity.** It aligns with the directory
 names and TRUD release distributions (e.g. `2026-05-29`, `2026-06-26`, `2026-07-31`, `2026-08-28`).
-The internal XML publication date is preserved in `_provenance.json`.
+It's TRUD's release date, recorded in every Parquet row and in each file's embedded
+provenance (`sources[0].version`), not the XML manifest's own internal publication date,
+which `ods` doesn't capture.
 
 **Add `union_by_name = true` when your releases span a schema change.** Missing
 columns read as NULL instead of failing the query. Pre-1.0 that's every schema

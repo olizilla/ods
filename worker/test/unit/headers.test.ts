@@ -43,28 +43,18 @@ describe('Derived Headers & Caching Policies', () => {
     await env.BUCKET.put('releases.json', new TextEncoder().encode('{"releases":[]}'));
   });
 
+  // A release's only real blobs are its Parquet layers and the manifest itself: the files
+  // carry their own provenance, and `datapackage.json` is never packed.
   const EXPECTED_CONTRACT: Record<string, { contentType: string; cacheControl: string }> = {
-    'v2/ods-data/blobs/sha256/0b19e9910a525c3ceb11ed7b821e1c390d1b18cac24be0f4ae5a477a9409690f': {
+    'v2/ods-data/blobs/sha256/8b985d948c34a6b32eaab68609f0f3e78c18cacb314eca5ad8329539837d42c0': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/3ca093a65eb11ec9233b6323b7c77b55ee05cdda6b0e301a6c66abecc77d3d57': {
+    'v2/ods-data/blobs/sha256/9a5cd71f11c63554c86c2a6c33c89d70e403f3e153975e5089fe5aa88863c913': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/efbe7b054cd97327468f776eaf6a93d16327bb49523730e4abc58aabca84d807': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/a49c48916f770919b0a926510dd9ad09425362b1c23efbbb8da2ce582fe6ab5c': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/5dd6b71bb3898e49df0c3653b6f8ad56ce5acc5ef6a24a69966b7371adb03381': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/f589910447402a3a1547051e3c30e4e94afee98e36fbd78230379b870d49cd0f': {
+    'v2/ods-data/blobs/sha256/e86ed21b58718bd0b4ae95ee071347256bab29f8a9599f30fa806dd31f80fa7c': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -202,5 +192,15 @@ describe('Derived Headers & Caching Policies', () => {
     const json = await res.json() as Record<string, unknown>;
     expect(json['$id']).toBe('https://ods.fyi/schema/provenance.v1.json');
     expect(json['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
+  });
+
+  it('serves /schema/datapackage.v1.json with application/schema+json and immutable cache-control', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/schema/datapackage.v1.json'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/schema+json');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    const json = await res.json() as Record<string, unknown>;
+    expect(json['$id']).toBe('https://ods.fyi/schema/datapackage.v1.json');
+    expect(json['$schema']).toBe('http://json-schema.org/draft-07/schema#');
   });
 });

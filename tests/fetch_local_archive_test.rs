@@ -57,11 +57,11 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     let canon_active_path = fs::canonicalize(&active_path)?;
     assert_eq!(canon_active_path, canon_rel_2025, "current release path must point to 2025 release dir");
 
-    let prov_path = rel_2025.join(ods::provenance::PROVENANCE_FILENAME);
-    let prov_content = fs::read_to_string(&prov_path)?;
-    let prov: ods::provenance::OdsProvenance = serde_json::from_str(&prov_content)?;
+    let record = ods::provenance::PullRecord::load_from_file(&ods::provenance::pull_record_path(&rel_2025))
+        .ok()
+        .expect("trud/datapackage.json is a readable pull record");
 
-    assert_eq!(prov.trud_release_date.as_deref(), Some("2025-05-01"));
+    assert_eq!(record.version, "2025-05-01");
 
     Ok(())
 }

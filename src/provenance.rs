@@ -1,3 +1,16 @@
+//! Provenance: what a release is, and where it came from.
+//!
+//! Every Parquet file a build writes carries one key-value metadata key, `datapackage`, holding
+//! the embedded object (`Embedded`): the dataset's name and version, its licence and attribution,
+//! who holds the rights and distributes, and the source release it was built from, with that
+//! release's hash and size. The keys are Data Package property names. Every command that says
+//! what a release is reads it from the files (`read_release`), so a copied file, or a directory
+//! holding only the Parquet files, says the same thing a workspace release does.
+//!
+//! `ods trud pull` records the TRUD release it downloaded as `trud/datapackage.json` (`PullRecord`):
+//! the upstream zip can't carry our metadata, so the release is described beside it. `ods make`
+//! reads it and derives the embedded object's `sources[0]` from it.
+
 use anyhow::{Context, Result};
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +19,18 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-pub const PROVENANCE_SCHEMA_V1_URL: &str = "https://ods.fyi/schema/provenance.v1.json";
+/// The Parquet key-value metadata key the embedded object lives under.
+pub const DATAPACKAGE_KEY: &str = "datapackage";
+
+/// The pull record's file name, under a release's `trud/`.
+pub const PULL_RECORD_FILENAME: &str = "datapackage.json";
+
+/// The pull record names the TRUD release as this Data Package `name`. `ods make` checks it to
+/// tell a source directory's record from a release's `datapackage.json` view.
+pub const SOURCE_NAME: &str = "nhs-ods-xml";
+
+/// The TRUD release's own title, as the pull record states it.
+pub const SOURCE_TITLE: &str = "NHS Organisation Data Service XML Data";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -17,114 +41,511 @@ pub enum TrudVerificationSource {
     Unverified,
 }
 
-/// What `_provenance.json` holds: facts about NHS's archive and nothing about who built the
-/// dataset or how the archive was checked, so a dataset's manifest digest is a function of the
-/// archive and the dataset version. The `ods` that built a published dataset is recorded in the
-/// release index, and the check that vouched for the archive is shown when it runs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct OdsProvenance {
-    /// JSON Schema URI identifying this provenance document format
-    #[serde(rename = "$schema")]
-    pub schema: String,
-
-    // --- Official TRUD API Release Metadata (trud_*) ---
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_date: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_filesize_bytes: Option<u64>,
-
-    // --- Terms ---
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub license: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attribution: Option<String>,
+/// A Data Package licence, with the attribution the licensor asks for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct License {
+    pub name: String,
+    pub path: String,
+    pub title: String,
+    pub attribution: String,
 }
 
-pub const PROVENANCE_FILENAME: &str = "_provenance.json";
+/// A Data Package contributor: who, in which DataCite roles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contributor {
+    pub title: String,
+    pub roles: Vec<String>,
+}
 
-impl Default for OdsProvenance {
-    fn default() -> Self {
+/// The source release a dataset was built from: a Data Package Source, with the release's hash
+/// and size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Source {
+    pub title: String,
+    pub version: String,
+    pub path: String,
+    pub hash: String,
+    pub bytes: u64,
+}
+
+/// The object every Parquet file carries under `datapackage`. Field order is the serialised
+/// order. A build without provenance (`ods make --force -o`) has no `version` and no `sources`:
+/// that absence is how every reader recognises it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Embedded {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub licenses: Vec<License>,
+    pub contributors: Vec<Contributor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<Source>>,
+}
+
+impl Embedded {
+    /// The embedded object for a build `ods` couldn't match to a source release.
+    pub fn without_provenance() -> Self {
         Self {
-            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_date: None,
-            trud_release_sha256: None,
-            trud_release_filesize_bytes: None,
-            license: None,
-            attribution: None,
+            name: crate::datapackage::NAME.to_string(),
+            version: None,
+            licenses: vec![crate::terms::license()],
+            contributors: crate::terms::contributors(),
+            sources: None,
         }
+    }
+
+    /// Compact JSON, as written into the Parquet metadata.
+    pub fn to_compact_json(&self) -> Result<String> {
+        serde_json::to_string(self).context("serialising the embedded datapackage object")
     }
 }
 
-impl OdsProvenance {
-    pub fn from_trud_statement(date: &str, sha256: &str, filesize_bytes: u64) -> Self {
-        Self {
-            schema: PROVENANCE_SCHEMA_V1_URL.to_string(),
-            trud_release_date: Some(date.to_string()),
-            trud_release_sha256: Some(sha256.to_string()),
-            trud_release_filesize_bytes: Some(filesize_bytes),
-            license: Some(crate::terms::LICENSE.to_string()),
-            attribution: Some(crate::terms::ATTRIBUTION.to_string()),
+/// One file of the TRUD release, as the pull record lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordResource {
+    pub name: String,
+    pub path: String,
+    pub mediatype: String,
+    pub bytes: u64,
+    pub hash: String,
+}
+
+/// `trud/datapackage.json`: the TRUD release `ods trud pull` downloaded, as a Data Package. The
+/// archive's hash and size are TRUD's word; the other files' are hashed from disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRecord {
+    #[serde(rename = "$schema")]
+    pub schema: String,
+    pub name: String,
+    pub version: String,
+    pub title: String,
+    pub homepage: String,
+    pub licenses: Vec<License>,
+    pub contributors: Vec<Contributor>,
+    pub resources: Vec<RecordResource>,
+}
+
+/// The `sha256:<lower-case hex>` form every hash in the Data Package vocabulary uses.
+pub fn prefixed_sha256(hex: &str) -> String {
+    format!("sha256:{}", hex.trim_start_matches("sha256:").to_lowercase())
+}
+
+impl PullRecord {
+    /// The record for a TRUD release: the archive from TRUD's word, then each of NHS's other
+    /// files (`(name, mediatype, path)`) hashed from disk.
+    pub fn for_trud_release(
+        date: &str,
+        archive_file_name: &str,
+        archive_sha256: &str,
+        archive_bytes: u64,
+        other_files: &[(&str, &str, PathBuf)],
+    ) -> Result<Self> {
+        let mut resources = vec![RecordResource {
+            name: "archive".to_string(),
+            path: archive_file_name.to_string(),
+            mediatype: crate::oci::source::MEDIA_TYPE_ZIP.to_string(),
+            bytes: archive_bytes,
+            hash: prefixed_sha256(archive_sha256),
+        }];
+        for (name, mediatype, path) in other_files {
+            let bytes = std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?.len();
+            resources.push(RecordResource {
+                name: name.to_string(),
+                path: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                mediatype: mediatype.to_string(),
+                bytes,
+                hash: prefixed_sha256(&compute_file_sha256(path)?),
+            });
         }
+        Ok(Self {
+            schema: crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL.to_string(),
+            name: SOURCE_NAME.to_string(),
+            version: date.to_string(),
+            title: SOURCE_TITLE.to_string(),
+            homepage: crate::terms::LANDING_PAGE.to_string(),
+            licenses: vec![crate::terms::license()],
+            contributors: crate::terms::contributors(),
+            resources,
+        })
+    }
+
+    /// The archive resource: the zip TRUD vouches for.
+    pub fn archive(&self) -> Option<&RecordResource> {
+        self.resources.iter().find(|r| r.name == "archive")
+    }
+
+    /// Upper-case hex of the archive's SHA-256, the form the release index uses.
+    pub fn archive_sha256_upper(&self) -> Option<String> {
+        self.archive().map(|a| a.hash.trim_start_matches("sha256:").to_uppercase())
     }
 
     pub fn to_json_string(&self) -> Result<String> {
-        serde_json::to_string_pretty(self).map_err(Into::into)
+        Ok(serde_json::to_string_pretty(self)? + "\n")
     }
 
-    pub fn write_to_dir(&self, release_dir: &Path) -> Result<()> {
-        let prov_path = release_dir.join(PROVENANCE_FILENAME);
-        let json = self.to_json_string()?;
-        std::fs::write(&prov_path, json).with_context(|| format!("writing {}", prov_path.display()))?;
+    /// Whether the record's licences are the ones this `ods` states.
+    pub fn has_current_terms(&self) -> bool {
+        self.licenses == vec![crate::terms::license()]
+    }
+
+    /// What `ods make` needs before it builds: a release date, and the archive's hash and size.
+    pub fn validate_baseline(&self) -> Result<()> {
+        if self.version.is_empty() {
+            anyhow::bail!("{} records no version (the TRUD release date)", PULL_RECORD_FILENAME);
+        }
+        let Some(archive) = self.archive() else {
+            anyhow::bail!("{} lists no archive resource", PULL_RECORD_FILENAME);
+        };
+        if !is_prefixed_sha256(&archive.hash) {
+            anyhow::bail!("{} records the archive's hash as '{}', not sha256:<hex>", PULL_RECORD_FILENAME, archive.hash);
+        }
         Ok(())
     }
 
-    pub fn has_current_terms(&self) -> bool {
-        self.license.as_deref() == Some(crate::terms::LICENSE)
-            && self.attribution.as_deref() == Some(crate::terms::ATTRIBUTION)
+    /// The embedded object a build from this release carries: `sources[0]` is derived from the
+    /// record (`title`, `version`, `path` ← `homepage`, `hash`/`bytes` ← the archive), each
+    /// verbatim. Who holds the rights is in `contributors`.
+    pub fn embedded(&self, dataset_version: &str) -> Result<Embedded> {
+        self.validate_baseline()?;
+        let archive = self.archive().expect("validate_baseline checked the archive");
+        Ok(Embedded {
+            name: crate::datapackage::NAME.to_string(),
+            version: Some(format!("{}_{}", self.version, dataset_version)),
+            licenses: self.licenses.clone(),
+            contributors: self.contributors.clone(),
+            sources: Some(vec![Source {
+                title: self.title.clone(),
+                version: self.version.clone(),
+                path: self.homepage.clone(),
+                hash: archive.hash.clone(),
+                bytes: archive.bytes,
+            }]),
+        })
     }
 
-    /// Declared Parquet key-value metadata subset:
-    /// - ods.trud_release_date
-    /// - ods.trud_release_sha256
-    ///
-    /// Nothing else is carried, so Parquet bytes are a function of the source archive and
-    /// survive a dataset relabel or tool re-tag.
-    pub fn to_parquet_declared_metadata(&self) -> std::collections::BTreeMap<String, String> {
-        let mut meta = std::collections::BTreeMap::new();
-        if let Some(ref d) = self.trud_release_date {
-            meta.insert("ods.trud_release_date".to_string(), d.clone());
+    /// Writes `release_dir/trud/datapackage.json`, and removes the `trud/_provenance.json` an
+    /// older `ods trud pull` wrote there, which this record replaces.
+    pub fn write_to_dir(&self, release_dir: &Path) -> Result<()> {
+        let path = pull_record_path(release_dir);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
-        if let Some(ref s) = self.trud_release_sha256 {
-            meta.insert("ods.trud_release_sha256".to_string(), s.clone());
+        std::fs::write(&path, self.to_json_string()?).with_context(|| format!("writing {}", path.display()))?;
+        let legacy = pull_record_dir(release_dir).join(LEGACY_PROVENANCE_FILENAME);
+        if legacy.is_file() {
+            let _ = std::fs::remove_file(legacy);
         }
-        meta
+        Ok(())
     }
+
+    /// Reads a pull record from `path`.
+    pub fn load_from_file(path: &Path) -> RecordLoad {
+        if !path.exists() {
+            return RecordLoad::Absent;
+        }
+        let unreadable = || RecordLoad::Unreadable {
+            path: path.to_path_buf(),
+            date: date_for_unreadable_record(path),
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return unreadable();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return unreadable();
+        };
+        // A `datapackage.json` that doesn't name the TRUD release is some other Data Package —
+        // a release's view — and not a pull record.
+        if value.get("name").and_then(|n| n.as_str()) != Some(SOURCE_NAME) {
+            return RecordLoad::NotARecord;
+        }
+        match serde_json::from_value::<Self>(value) {
+            Ok(record) if record.schema == crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL => {
+                RecordLoad::Read(Box::new(record), path.to_path_buf())
+            }
+            _ => unreadable(),
+        }
+    }
+
+    /// Finds the pull record from `dir` or one of up to 4 ancestors: at each level
+    /// `<level>/trud/datapackage.json`, then `<level>/datapackage.json` (an explicit `-i <dir>`
+    /// holding the zip and the record directly). A `datapackage.json` that names anything but
+    /// the TRUD release is a release's view, not a record, and is passed over.
+    pub fn load_from_dir(dir: &Path) -> RecordLoad {
+        let mut curr = if dir.is_file() { dir.parent().map(|p| p.to_path_buf()) } else { Some(dir.to_path_buf()) };
+        for _ in 0..4 {
+            let Some(ref path) = curr else { break };
+            for candidate in [pull_record_path(path), path.join(PULL_RECORD_FILENAME)] {
+                match Self::load_from_file(&candidate) {
+                    RecordLoad::Absent | RecordLoad::NotARecord => {}
+                    found => return found,
+                }
+            }
+            curr = path.parent().map(|p| p.to_path_buf());
+        }
+        RecordLoad::Absent
+    }
+}
+
+fn is_prefixed_sha256(s: &str) -> bool {
+    s.strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)))
+}
+
+/// What an older `ods trud pull` wrote beside the archive, before `trud/datapackage.json`.
+/// Nothing reads it; a repair removes it.
+pub const LEGACY_PROVENANCE_FILENAME: &str = "_provenance.json";
+
+/// The directory the pull record lives in: beside the archive it describes.
+pub fn pull_record_dir(release_dir: &Path) -> PathBuf {
+    release_dir.join("trud")
+}
+
+/// Where `ods trud pull` writes its pull record.
+pub fn pull_record_path(release_dir: &Path) -> PathBuf {
+    pull_record_dir(release_dir).join(PULL_RECORD_FILENAME)
 }
 
 #[derive(Debug, Clone)]
-pub enum ProvenanceLoad {
-    Read(Box<OdsProvenance>, PathBuf),
-    Unreadable {
-        path: PathBuf,
-        date: String,
-    },
+pub enum RecordLoad {
+    Read(Box<PullRecord>, PathBuf),
+    Unreadable { path: PathBuf, date: String },
+    /// A `datapackage.json` that is some other Data Package (a release's view).
+    NotARecord,
     Absent,
 }
 
-pub fn format_unreadable_provenance_error(path: &Path, date: &str) -> String {
-    let disp = format_provenance_display_path(path);
+impl RecordLoad {
+    pub fn ok(self) -> Option<PullRecord> {
+        match self {
+            Self::Read(record, _) => Some(*record),
+            _ => None,
+        }
+    }
+
+    pub fn error_building_with_path(self) -> Result<Option<(PullRecord, PathBuf)>> {
+        match self {
+            Self::Read(record, path) => Ok(Some((*record, path))),
+            Self::Unreadable { path, date } => anyhow::bail!("{}", format_unreadable_record_error(&path, &date)),
+            Self::NotARecord | Self::Absent => Ok(None),
+        }
+    }
+}
+
+fn date_for_unreadable_record(path: &Path) -> String {
+    if let Some(d) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("version").and_then(|d| d.as_str()).map(|d| d.to_string()))
+        .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+    {
+        return d;
+    }
+    // `<release>/trud/datapackage.json`: the release directory is named by its date.
+    for ancestor in path.ancestors().skip(1).take(2) {
+        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
+            if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() {
+                return name.to_string();
+            }
+        }
+    }
+    "<date>".to_string()
+}
+
+pub fn format_unreadable_record_error(path: &Path, date: &str) -> String {
     format!(
-        "✖ {} isn't provenance this ods can read\n  Expected $schema {}\n  Pull the archive again with `ods trud pull {} --force`, then run `ods make`.",
-        disp,
-        PROVENANCE_SCHEMA_V1_URL,
+        "✖ {} isn't a pull record this ods can read\n  Expected $schema {} and name {}\n  Write it again with `ods trud pull {}`, then run `ods make`.",
+        format_provenance_display_path(path),
+        crate::datapackage::DATAPACKAGE_SCHEMA_V1_URL,
+        SOURCE_NAME,
         date
     )
 }
+
+// ---------------------------------------------------------------------------------------------
+// Reading a release's provenance from its Parquet files
+// ---------------------------------------------------------------------------------------------
+
+/// The facts a release with provenance carries, read from its files' embedded object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseFacts {
+    pub embedded: Embedded,
+    /// The source release's version: TRUD's release date.
+    pub release_date: String,
+    /// The dataset version, parsed from after the `_` in `version`.
+    pub dataset_version: String,
+    /// `sources[0]`.
+    pub source: Source,
+}
+
+impl ReleaseFacts {
+    /// `version`: the OCI tag, `<source release>_<dataset version>`.
+    pub fn version(&self) -> &str {
+        self.embedded.version.as_deref().unwrap_or_default()
+    }
+
+    /// The source archive's SHA-256 as upper-case hex, the form the release index uses.
+    pub fn source_sha256_upper(&self) -> String {
+        self.source.hash.trim_start_matches("sha256:").to_uppercase()
+    }
+
+    pub fn license(&self) -> &License {
+        &self.embedded.licenses[0]
+    }
+
+    fn from_embedded(embedded: Embedded) -> std::result::Result<Self, String> {
+        let version = embedded.version.clone().ok_or("it has sources but no version")?;
+        let source = match embedded.sources.as_deref() {
+            Some([first, ..]) => first.clone(),
+            _ => return Err(format!("version {} names no source", version)),
+        };
+        if embedded.licenses.is_empty() {
+            return Err("it names no licence".to_string());
+        }
+        let Some((release, dataset_version)) = version.split_once('_') else {
+            return Err(format!("version {} isn't <source release>_<dataset version>", version));
+        };
+        if release != source.version {
+            return Err(format!("version {} doesn't start with its source's version {}", version, source.version));
+        }
+        if dataset_version.is_empty() {
+            return Err(format!("version {} has no dataset version after the _", version));
+        }
+        if !is_prefixed_sha256(&source.hash) {
+            return Err(format!("its source's hash '{}' isn't sha256:<hex>", source.hash));
+        }
+        Ok(Self {
+            release_date: source.version.clone(),
+            dataset_version: dataset_version.to_string(),
+            source,
+            embedded,
+        })
+    }
+}
+
+/// What a release's Parquet files say it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseRecord {
+    /// Every file carries the same embedded object, with a version and a source.
+    Provenanced(Box<ReleaseFacts>),
+    /// Every file carries the same embedded object, with no version and no source: a build
+    /// `ods` couldn't match to a source release.
+    NoProvenance(Box<Embedded>),
+    /// No file carries a `datapackage` key: an older `ods` built them.
+    NotEmbedded,
+    /// The directory holds no Parquet files.
+    NoFiles,
+}
+
+impl ReleaseRecord {
+    pub fn facts(&self) -> Option<&ReleaseFacts> {
+        match self {
+            Self::Provenanced(f) => Some(f),
+            _ => None,
+        }
+    }
+}
+
+/// The top-level `*.parquet` files in `dir`, sorted by name: the files a release is.
+pub fn release_parquet_files(dir: &Path) -> Result<Vec<String>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?.to_string();
+            (path.is_file() && name.ends_with(".parquet")).then_some(name)
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// The raw `datapackage` value from one Parquet file's footer, or `None` when it has none.
+/// Reads the footer only, never a data page.
+pub fn read_embedded_value(path: &Path) -> Result<Option<String>> {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let reader = SerializedFileReader::new(file).with_context(|| format!("reading {}'s Parquet footer", path.display()))?;
+    let kv = reader.metadata().file_metadata().key_value_metadata();
+    Ok(kv
+        .and_then(|kv| kv.iter().find(|item| item.key == DATAPACKAGE_KEY))
+        .map(|item| item.value.clone().unwrap_or_default()))
+}
+
+/// Reads the embedded object from every Parquet file in `dir` and says what the release is.
+/// Refuses, with a `✖` block naming the files, when a footer can't be read, when an object
+/// isn't one this `ods` can read, or when the files don't all carry the same object.
+pub fn read_release(dir: &Path) -> Result<ReleaseRecord> {
+    let names = release_parquet_files(dir)?;
+    if names.is_empty() {
+        return Ok(ReleaseRecord::NoFiles);
+    }
+    let dir_display = crate::workspace::relative_to_cwd(dir).display().to_string();
+
+    let mut values: Vec<(String, Option<String>)> = Vec::with_capacity(names.len());
+    for name in &names {
+        let value = read_embedded_value(&dir.join(name)).map_err(|e| {
+            anyhow::anyhow!(
+                "✖ {}/{} can't be read as a Parquet file\n  {:#}\n  Pull the release again with `ods pull --force`, or rebuild it with `ods make`.",
+                dir_display,
+                name,
+                e
+            )
+        })?;
+        values.push((name.clone(), value));
+    }
+
+    let first = &values[0].1;
+    if values.iter().any(|(_, v)| v != first) {
+        let width = names.iter().map(|n| n.len()).max().unwrap_or(0);
+        let mut msg = format!("✖ The Parquet files in {} don't carry the same provenance", dir_display);
+        for (name, value) in &values {
+            msg.push_str(&format!("\n  {:<width$}  {}", name, describe_embedded_value(value.as_deref()), width = width));
+        }
+        msg.push_str("\n  A release's files all come from one build. Pull it again with `ods pull --force`, or rebuild it with `ods make`.");
+        anyhow::bail!(msg);
+    }
+
+    let Some(raw) = first else {
+        return Ok(ReleaseRecord::NotEmbedded);
+    };
+    let unreadable = |why: String| {
+        anyhow::anyhow!(
+            "✖ The Parquet files in {} carry provenance this ods can't read\n  {}: {}\n  Pull the release again with `ods pull --force`, or rebuild it with `ods make`.",
+            dir_display,
+            DATAPACKAGE_KEY,
+            why
+        )
+    };
+    let embedded: Embedded = serde_json::from_str(raw).map_err(|e| unreadable(e.to_string()))?;
+    if embedded.version.is_none() && embedded.sources.is_none() {
+        return Ok(ReleaseRecord::NoProvenance(Box::new(embedded)));
+    }
+    ReleaseFacts::from_embedded(embedded)
+        .map(|facts| ReleaseRecord::Provenanced(Box::new(facts)))
+        .map_err(unreadable)
+}
+
+/// One file's line in the disagreement block: its version, and a short fingerprint of the whole
+/// value so two objects with one version still tell apart.
+fn describe_embedded_value(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return "no datapackage metadata".to_string();
+    };
+    let fingerprint = format!("{:x}", Sha256::digest(value.as_bytes()));
+    let version = serde_json::from_str::<serde_json::Value>(value)
+        .ok()
+        .map(|v| v.get("version").and_then(|v| v.as_str()).unwrap_or("no version").to_string())
+        .unwrap_or_else(|| "unreadable".to_string());
+    format!("{}  (datapackage sha256:{}…)", version, &fingerprint[..12])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------------------------
 
 pub fn format_no_provenance_error(dir: &Path) -> String {
     let dir_display = crate::workspace::relative_to_cwd(dir);
@@ -134,8 +555,30 @@ pub fn format_no_provenance_error(dir: &Path) -> String {
     )
 }
 
-pub fn format_older_terms_error(prov_path: &Path, date: &str) -> String {
-    let disp = format_provenance_display_path(prov_path);
+pub fn format_not_embedded_error(dir: &Path) -> String {
+    let dir_display = crate::workspace::relative_to_cwd(dir);
+    format!(
+        "✖ {}'s Parquet files carry no provenance: an older ods built them\n  Rebuild it with `ods make`, or pull it again with `ods pull --force`.",
+        dir_display.display()
+    )
+}
+
+/// The `✖` block for a release that can't be cited, published or verified because its files
+/// carry no provenance, whichever way.
+pub fn format_record_refusal(dir: &Path, record: &ReleaseRecord) -> Option<String> {
+    match record {
+        ReleaseRecord::Provenanced(_) => None,
+        ReleaseRecord::NoProvenance(_) => Some(format_no_provenance_error(dir)),
+        ReleaseRecord::NotEmbedded => Some(format_not_embedded_error(dir)),
+        ReleaseRecord::NoFiles => Some(format!(
+            "✖ No Parquet files found in {}",
+            crate::workspace::relative_to_cwd(dir).display()
+        )),
+    }
+}
+
+pub fn format_older_terms_error(record_path: &Path, date: &str) -> String {
+    let disp = format_provenance_display_path(record_path);
     format!(
         "✖ {} has older licence terms than this ods\n  Refresh it without downloading the archive: ods trud pull {} --force",
         disp, date
@@ -183,202 +626,9 @@ pub fn format_make_force_needs_output() -> String {
     "✖ --force builds outside the workspace only\n  Add -o <dir>: a workspace holds only releases with provenance.".to_string()
 }
 
-impl ProvenanceLoad {
-    pub fn ok(self) -> Option<OdsProvenance> {
-        match self {
-            Self::Read(prov, _) => Some(*prov),
-            _ => None,
-        }
-    }
-
-    pub fn ok_with_path(self) -> Option<(OdsProvenance, PathBuf)> {
-        match self {
-            Self::Read(prov, path) => Some((*prov, path)),
-            _ => None,
-        }
-    }
-
-    pub fn unwrap(self) -> OdsProvenance {
-        match self {
-            Self::Read(prov, _) => *prov,
-            Self::Unreadable { path, date } => {
-                panic!("unreadable provenance at {:?} (date: {})", path, date)
-            }
-            Self::Absent => panic!("expected provenance to be present, but was absent"),
-        }
-    }
-
-    pub fn unwrap_or_default(self) -> OdsProvenance {
-        self.ok().unwrap_or_default()
-    }
-
-    pub fn as_ref(&self) -> Option<&OdsProvenance> {
-        match self {
-            Self::Read(prov, _) => Some(prov.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn warn_reading(self, dir: &Path) -> Option<OdsProvenance> {
-        match self {
-            Self::Read(prov, _) => Some(*prov),
-            Self::Unreadable { path, .. } => {
-                let disp = format_provenance_display_path(&path);
-                eprintln!(
-                    "! {} isn't provenance this ods can read. Rebuild the release with `ods make`, or pull it again.",
-                    disp
-                );
-                None
-            }
-            Self::Absent => {
-                let disp = crate::workspace::relative_to_cwd(dir);
-                eprintln!(
-                    "! {} has no provenance: it was built from an archive ods couldn't match to a TRUD release",
-                    disp.display()
-                );
-                None
-            }
-        }
-    }
-
-    pub fn error_building(self) -> Result<Option<OdsProvenance>> {
-        match self {
-            Self::Read(prov, _) => Ok(Some(*prov)),
-            Self::Unreadable { path, date } => {
-                anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
-            }
-            Self::Absent => Ok(None),
-        }
-    }
-
-    pub fn error_building_with_path(self) -> Result<Option<(OdsProvenance, PathBuf)>> {
-        match self {
-            Self::Read(prov, path) => Ok(Some((*prov, path))),
-            Self::Unreadable { path, date } => {
-                anyhow::bail!("{}", format_unreadable_provenance_error(&path, &date));
-            }
-            Self::Absent => Ok(None),
-        }
-    }
-}
-
-fn extract_date_for_unreadable_provenance(prov_path: &Path, content: Option<&str>) -> String {
-    if let Some(s) = content {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
-            if let Some(d) = val.get("trud_release_date").and_then(|d| d.as_str()) {
-                if !d.is_empty() {
-                    return d.to_string();
-                }
-            }
-        }
-    }
-    if let Some(parent) = prov_path.parent() {
-        if let Some(name) = parent.file_name().and_then(|n| n.to_str()) {
-            if chrono::NaiveDate::parse_from_str(name, "%Y-%m-%d").is_ok() {
-                return name.to_string();
-            }
-        }
-    }
-    "<date>".to_string()
-}
-
-impl OdsProvenance {
-    pub fn load_from_file(prov_file: &Path) -> ProvenanceLoad {
-        if !prov_file.exists() {
-            return ProvenanceLoad::Absent;
-        }
-        let content = match std::fs::read_to_string(prov_file) {
-            Ok(c) => c,
-            Err(_) => {
-                let date = extract_date_for_unreadable_provenance(prov_file, None);
-                return ProvenanceLoad::Unreadable {
-                    path: prov_file.to_path_buf(),
-                    date,
-                };
-            }
-        };
-
-        match serde_json::from_str::<Self>(&content) {
-            Ok(prov) => {
-                if prov.schema == PROVENANCE_SCHEMA_V1_URL {
-                    ProvenanceLoad::Read(Box::new(prov), prov_file.to_path_buf())
-                } else {
-                    let date = extract_date_for_unreadable_provenance(prov_file, Some(&content));
-                    ProvenanceLoad::Unreadable {
-                        path: prov_file.to_path_buf(),
-                        date,
-                    }
-                }
-            }
-            Err(_) => {
-                let date = extract_date_for_unreadable_provenance(prov_file, Some(&content));
-                ProvenanceLoad::Unreadable {
-                    path: prov_file.to_path_buf(),
-                    date,
-                }
-            }
-        }
-    }
-
-    pub fn load_from_dir_with_path(dir: &Path) -> ProvenanceLoad {
-        let mut curr = if dir.is_file() {
-            dir.parent().map(|p| p.to_path_buf())
-        } else {
-            Some(dir.to_path_buf())
-        };
-
-        for _ in 0..4 {
-            if let Some(ref path) = curr {
-                let prov_file = path.join(PROVENANCE_FILENAME);
-                if prov_file.exists() {
-                    match Self::load_from_file(&prov_file) {
-                        ProvenanceLoad::Read(prov, prov_path) => {
-                            return ProvenanceLoad::Read(prov, prov_path);
-                        }
-                        ProvenanceLoad::Unreadable { path, date } => {
-                            return ProvenanceLoad::Unreadable { path, date };
-                        }
-                        ProvenanceLoad::Absent => {}
-                    }
-                }
-                curr = path.parent().map(|p| p.to_path_buf());
-            } else {
-                break;
-            }
-        }
-        ProvenanceLoad::Absent
-    }
-
-    pub fn load_from_dir(dir: &Path) -> ProvenanceLoad {
-        Self::load_from_dir_with_path(dir)
-    }
-
-    pub fn validate_baseline(&self) -> Result<()> {
-        let date = self.trud_release_date.as_deref().unwrap_or("");
-        if date.is_empty() {
-            anyhow::bail!("Missing trud_release_date in _provenance.json");
-        }
-        if self.trud_release_sha256.as_deref().unwrap_or("").is_empty() {
-            anyhow::bail!("Missing trud_release_sha256 in _provenance.json");
-        }
-
-        Ok(())
-    }
-
-    pub fn validate_publishable(&self) -> Vec<String> {
-        let mut failures = Vec::new();
-
-        if let Some(sz) = self.trud_release_filesize_bytes {
-            if sz < 1_000_000 {
-                failures.push(format!("trud_release_filesize_bytes is implausibly small ({} bytes)", sz));
-            }
-        } else {
-            failures.push("trud_release_filesize_bytes is missing in _provenance.json".to_string());
-        }
-
-        failures
-    }
-}
+// ---------------------------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct TrudZipFacts {
@@ -494,35 +744,98 @@ pub fn format_provenance_display_path(prov_path: &Path) -> String {
     prov_path.display().to_string()
 }
 
-pub fn write_provenance(
+/// Writes the pull record for a TRUD release into `release_dir/trud/`: the archive from TRUD's
+/// word, plus NHS's other files already on disk (`(name, mediatype, path)`).
+pub fn write_pull_record(
     release_dir: &Path,
     date: &str,
-    sha256: &str,
-    filesize_bytes: u64,
-) -> Result<OdsProvenance> {
-    let prov = OdsProvenance::from_trud_statement(date, sha256, filesize_bytes);
-    prov.write_to_dir(release_dir)?;
-    Ok(prov)
+    archive_file_name: &str,
+    archive_sha256: &str,
+    archive_bytes: u64,
+    other_files: &[(&str, &str, PathBuf)],
+) -> Result<PullRecord> {
+    let record = PullRecord::for_trud_release(date, archive_file_name, archive_sha256, archive_bytes, other_files)?;
+    record.write_to_dir(release_dir)?;
+    Ok(record)
+}
+
+/// The embedded object for a fixture release of `date` built from an archive with the given
+/// SHA-256 and size, at this build's dataset version: what `ods make` would embed after `ods
+/// trud pull`. For tests.
+#[doc(hidden)]
+pub fn fixture_embedded_for(date: &str, archive_sha256: &str, archive_bytes: u64) -> Embedded {
+    PullRecord::for_trud_release(
+        date,
+        &format!("hscorgrefdataxml_data_7.0.0_{}000001.zip", date.replace('-', "")),
+        archive_sha256,
+        archive_bytes,
+        &[],
+    )
+    .and_then(|record| record.embedded(crate::datapackage::DATASET_VERSION))
+    .expect("a fixture record always derives an embedded object")
+}
+
+/// `fixture_embedded_for` with a fixed archive hash and size. For tests.
+#[doc(hidden)]
+pub fn fixture_embedded(date: &str) -> Embedded {
+    fixture_embedded_for(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", 38_064_419)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn record() -> PullRecord {
+        PullRecord::for_trud_release(
+            "2026-09-25",
+            "hscorgrefdataxml_data_8.0.0_20260925000001.zip",
+            "CA0FEE7512F593ADA1FA9B95BF1372B41911167DA463A98FECF33ADFD86697E5",
+            38138574,
+            &[],
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn test_provenance_serde() {
-        let prov = OdsProvenance::from_trud_statement(
-            "2026-07-31",
-            "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-            38064419,
+    fn test_embedded_object_is_the_briefs_shape_in_its_key_order() {
+        let embedded = record().embedded("0.1.0").unwrap();
+        let json = embedded.to_compact_json().unwrap();
+        assert_eq!(
+            json,
+            concat!(
+                r#"{"name":"ods-data","version":"2026-09-25_0.1.0","#,
+                r#""licenses":[{"name":"OGL-UK-3.0","path":"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/","title":"Open Government Licence v3.0","attribution":"Contains information from NHS England, licensed under the current version of the Open Government Licence."}],"#,
+                r#""contributors":[{"title":"NHS England","roles":["rightsHolder"]},{"title":"NHS TRUD","roles":["distributor"]}],"#,
+                r#""sources":[{"title":"NHS Organisation Data Service XML Data","version":"2026-09-25","path":"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases","hash":"sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5","bytes":38138574}]}"#
+            )
         );
+    }
 
-        let json = serde_json::to_string(&prov).unwrap();
-        assert!(json.contains("https://ods.fyi/schema/provenance.v1.json"));
-        assert!(json.contains("2026-07-31"));
+    #[test]
+    fn test_without_provenance_has_no_version_and_no_sources() {
+        let json = Embedded::without_provenance().to_compact_json().unwrap();
+        assert!(!json.contains("\"version\""));
+        assert!(!json.contains("\"sources\""));
+        assert!(json.starts_with(r#"{"name":"ods-data","licenses":"#));
+    }
 
-        let parsed: OdsProvenance = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.trud_release_date, Some("2026-07-31".to_string()));
+    #[test]
+    fn test_facts_refuse_a_version_that_disagrees_with_its_source() {
+        let mut embedded = record().embedded("0.1.0").unwrap();
+        embedded.version = Some("2026-09-24_0.1.0".to_string());
+        let err = ReleaseFacts::from_embedded(embedded).unwrap_err();
+        assert!(err.contains("doesn't start with its source's version"), "{err}");
+    }
+
+    #[test]
+    fn test_pull_record_loader_passes_over_a_releases_view() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(PULL_RECORD_FILENAME), r#"{"name":"ods-data"}"#).unwrap();
+        assert!(matches!(PullRecord::load_from_dir(tmp.path()), RecordLoad::Absent));
+
+        record().write_to_dir(tmp.path()).unwrap();
+        let loaded = PullRecord::load_from_dir(tmp.path()).ok().expect("the record under trud/ is read");
+        assert_eq!(loaded, record());
     }
 
     #[test]
@@ -530,27 +843,6 @@ mod tests {
         let url = "https://isd.digital.nhs.uk/trud/api/v1/keys/SECRET123/items/341";
         let sanitized = sanitize_trud_url(url, Some("SECRET123"));
         assert_eq!(sanitized, "https://isd.digital.nhs.uk/trud/api/v1/keys/<REDACTED_API_KEY>/items/341");
-    }
-
-    #[test]
-    fn test_to_parquet_declared_metadata_pins_exact_two_keys() {
-        let prov = OdsProvenance {
-            trud_release_date: Some("2026-07-31".to_string()),
-            trud_release_sha256: Some(
-                "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string(),
-            ),
-            ..Default::default()
-        };
-
-        // The Parquet files carry two metadata keys: ods.trud_release_date and ods.trud_release_sha256.
-        // The rule is nothing that changes when a release is relabelled or the tool is re-tagged.
-        let meta = prov.to_parquet_declared_metadata();
-        let expected_keys = vec![
-            "ods.trud_release_date",
-            "ods.trud_release_sha256",
-        ];
-        let actual_keys: Vec<&String> = meta.keys().collect();
-        assert_eq!(actual_keys, expected_keys);
     }
 
     #[test]

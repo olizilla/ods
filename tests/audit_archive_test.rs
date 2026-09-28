@@ -78,14 +78,13 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
     let zip = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     common::create_nested_trud_zip(&zip, &[("fullfile.zip", &full), ("archive.zip", &archive)]);
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &release_dir,
         "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         &ods::provenance::compute_file_sha256(&zip).unwrap(),
         fs::metadata(&zip).unwrap().len(),
-    );
-    fs::write(
-        release_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
 
@@ -133,7 +132,10 @@ fn audit_fails_naming_the_code_when_an_archived_organisation_is_missing() {
         record_class: "org".to_string(),
         ..Default::default()
     };
-    let prov = ods::provenance::OdsProvenance::load_from_dir(&release.release_dir).ok();
+    // The rewritten table carries the same object the build embedded, so the release still
+    // reads as one release, and only the data differs.
+    let record = ods::provenance::read_release(&release.release_dir).unwrap();
+    let prov = record.facts().map(|f| f.embedded.clone());
     let no_closures = std::collections::HashMap::new();
     ods::commands::parquet::export_orgs(&release.release_dir, &[live_only], &no_closures, &no_closures, prov.as_ref())
         .unwrap();

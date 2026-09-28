@@ -209,7 +209,9 @@ EOF
 # (nhs-ods-xml), and compares the manifest digest with the one recorded for it, so a change to the
 # bytes without a dataset version bump fails here instead of at the pull request that caused it
 # (docs/tests.md D5). CI_REPRODUCE_INDEX reads another index in place of data/releases.json — this
-# brief's acceptance points it at a candidate.json from a rehearsal run.
+# brief's acceptance points it at a candidate.json from a rehearsal run. CI_REPRODUCE_ARCHIVE names a
+# local directory holding the release's four NHS files (a release's trud/, say) to build from in
+# place of pulling nhs-ods-xml, for a rehearsal with no registry credential.
 #
 # Prints one "RESULT:<skip|ok|fail>:<detail>" line; the caller below turns that into the row.
 # Skips, naming why, without oras or a working registry credential (a laptop gh token without
@@ -235,52 +237,36 @@ reproduce() {
     .releases[] | select(.trud_release_date == $d) | .datasets[] | select(.dataset_version == $v) | .manifest_digest
   ' "$index")
 
-  # This step needs no credential of its own: it logs in only if one is already sitting there,
-  # and a missing or under-scoped one turns into a skip when the pull below is refused.
-  if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
-    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_ACTOR:-}" ]; then
-      echo "$GITHUB_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null 2>&1
-    fi
-  elif has gh && gh auth status 2>&1 | grep -qE 'read:packages|write:packages'; then
-    gh auth token 2>/dev/null | oras login ghcr.io -u "$(gh api user -q .login 2>/dev/null)" --password-stdin >/dev/null 2>&1
-  else
-    echo "RESULT:skip:gh auth token without read:packages"
-    return 0
-  fi
-
-  local work pull_err
+  local work trud pull_err
   work=$(mktemp -d)
-  pull_err="$work/pull.err"
-  if ! oras pull "ghcr.io/olizilla/nhs-ods-xml:$date" -o "$work/trud" >/dev/null 2>"$pull_err"; then
-    if grep -qiE 'unauthorized|denied|forbidden|401|403' "$pull_err"; then
-      echo "RESULT:skip:registry refused the pull for $date"
-      rm -rf "$work"
-      return 0
-    fi
-    echo "reproduce: oras pull failed for $date:" >&2
-    cat "$pull_err" >&2
+  if [ -n "${CI_REPRODUCE_ARCHIVE:-}" ]; then
+    trud="$CI_REPRODUCE_ARCHIVE"
+  else
+    trud="$work/trud"
+    pull_archive "$date" "$trud"
+    case $? in
+      0) ;;
+      1) rm -rf "$work"; return 0 ;;
+      *) rm -rf "$work"; return 1 ;;
+    esac
+  fi
+
+  if ! scripts/verify-trud-bundle.sh "$trud"; then
     rm -rf "$work"
     return 1
   fi
 
-  if ! scripts/verify-trud-bundle.sh "$work/trud"; then
-    rm -rf "$work"
-    return 1
-  fi
-
-  local zip start elapsed
-  zip=$(find "$work/trud" -maxdepth 1 -name '*.zip' | head -n 1)
+  # The manifest digest comes from `ods make oci`'s own report, not from reading oci/: that holds
+  # the empty config blob as a real file too.
+  local zip start elapsed rebuilt_digest
+  zip=$(find "$trud" -maxdepth 1 -name '*.zip' | head -n 1)
   start=$(now)
   if ! ./target/debug/ods make -i "$zip" -o "$work/rebuilt" --index "$index" >/dev/null \
-    || ! ./target/debug/ods make oci -i "$work/rebuilt" >/dev/null; then
+    || ! rebuilt_digest=$(./target/debug/ods make oci -i "$work/rebuilt" --format json | jq -r .manifest_digest); then
     rm -rf "$work"
     return 1
   fi
   elapsed=$(awk -v a="$start" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }')
-
-  local manifest_path rebuilt_digest
-  manifest_path=$(find "$work/rebuilt/oci/blobs/sha256" -type f ! -type l | head -n 1)
-  rebuilt_digest="sha256:$(basename "$manifest_path")"
   rm -rf "$work"
 
   if [ "$rebuilt_digest" = "$row_digest" ]; then
@@ -293,6 +279,36 @@ reproduce() {
   echo "  rebuilt    $rebuilt_digest" >&2
   echo "RESULT:fail:$date rebuilt to $rebuilt_digest, the index has $row_digest"
   return 1
+}
+
+# pull_archive DATE DIR: pulls nhs-ods-xml:DATE into DIR and returns 0. Returns 1 for a skip (no
+# credential, or the registry refused), having printed the RESULT:skip line, and 2 for any other
+# failure, having printed why.
+pull_archive() {
+  local date="$1" dir="$2" pull_err
+  # This step needs no credential of its own: it logs in only if one is already sitting there,
+  # and a missing or under-scoped one turns into a skip when the pull below is refused.
+  if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_ACTOR:-}" ]; then
+      echo "$GITHUB_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null 2>&1
+    fi
+  elif has gh && gh auth status 2>&1 | grep -qE 'read:packages|write:packages'; then
+    gh auth token 2>/dev/null | oras login ghcr.io -u "$(gh api user -q .login 2>/dev/null)" --password-stdin >/dev/null 2>&1
+  else
+    echo "RESULT:skip:gh auth token without read:packages"
+    return 1
+  fi
+
+  pull_err="$dir.pull.err"
+  if ! oras pull "ghcr.io/olizilla/nhs-ods-xml:$date" -o "$dir" >/dev/null 2>"$pull_err"; then
+    if grep -qiE 'unauthorized|denied|forbidden|401|403' "$pull_err"; then
+      echo "RESULT:skip:registry refused the pull for $date"
+      return 1
+    fi
+    echo "reproduce: oras pull failed for $date:" >&2
+    cat "$pull_err" >&2
+    return 2
+  fi
 }
 
 lock_sha() { shasum -a 256 worker/package-lock.json | cut -d' ' -f1; }

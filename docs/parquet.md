@@ -1,9 +1,14 @@
 # Parquet schemas
 
-> _834MB of NHS XML, as four tables you can query from a laptop._
+- [`orgs.parquet`](#orgsparquet)
+- [`roles.parquet`](#rolesparquet)
+- [`relationships.parquet`](#relationshipsparquet)
+- [`successions.parquet`](#successionsparquet)
 
 `ods make` compiles the NHS Organisation Data Service release into four Parquet
 files. Point `duckdb` at them and go — no database, no server, no API key.
+
+> _834MB of NHS XML, become 28MB and four tables you can query from a laptop._
 
 ```console
 $ duckdb -c "SELECT ods_code, name, role_names
@@ -16,8 +21,6 @@ $ duckdb -c "SELECT ods_code, name, role_names
 │ 8GJ58     │ PARKER M JUNE (ACUPUNCURIST)             │ [Non-NHS Organisation]                 │
 │ A82608    │ SEDBERGH MEDICAL PRACTICE                │ [Prescribing Cost Centre, GP Practice] │
 │ A82608001 │ DR LUMB W & PARTNER                      │ [Branch Surgery]                       │
-│ D2E8H     │ AP SD THIRTEEN LIMITED                   │ [Pharmacy Headquarter]                 │
-│ EE112233  │ SEDBERGH PRIMARY SCHOOL                  │ [School, Community School]             │
 ...
 ```
 
@@ -72,7 +75,8 @@ SELECT trud_release_date, count(*) AS n_rows,
        count(*) FILTER (WHERE status = 'active') AS n_active
 FROM read_parquet('ods_data/releases/*/orgs.parquet')
 GROUP BY 1 ORDER BY 1;
-
+```
+```
 ┌───────────────────┬────────┬──────────┐
 │ trud_release_date │ n_rows │ n_active │
 │       date        │ int64  │  int64   │
@@ -305,37 +309,28 @@ need what ODS knew at the time, keep the release from the time — it's
 Keep the releases and that becomes the interesting part: closures, renames and
 reparenting are all recoverable [across an archive](./queries.md#across-releases).
 
-## Frictionless Data Package
+## Data Package
 
-`datapackage.json` is a [Data Package v2][datapackage] descriptor. It carries what a copied
-release needs to explain itself: the dataset `version`, the licence and attribution, each
-table's columns and types, the join keys between tables, and each file's size and SHA-256. The
-four list columns in `orgs` are declared as Table Schema's `array` type. Its `list` type, with
-`itemType: string`, is the closer fit for a Parquet `LIST<VARCHAR>`, but it's a delimited string
-in the spec's lexical form, and the published v2 profile (`datapackage.org/profiles/2.0`) has no
-`list` type, so a descriptor that used it would fail that profile. The fix is merged upstream,
-to be published as v2.1 ([datapackage#1089][dp-1089]). When a v2.1 profile is published, the four
-columns become `list` with `itemType: string`, `$schema` moves to 2.1, and the dataset version
-bumps.
+`ods make` and `ods pull` write a `datapackage.json` beside the Parquet files to surface the
+provenance, source license, and data schema in an open [Data Package v2][datapackage] format.
 
-The file is in every release because `ods` depends on it, not because Frictionless tools read
-it. It's where a release directory records its dataset version (`_provenance.json` holds only
-TRUD's facts), and it holds each file's hash. `ods cite`, `ods use`, `ods make oci`, `ods make
-release` and `ods trud audit` all read it. [Croissant] was considered as a replacement or an
-addition and not adopted: it could carry the same fields, but today only in `mlcroissant`'s
-dialect rather than the spec's, so the descriptor's bytes, and every manifest digest, would
-change as the library caught up.
+It's generated from metadata baked into the parquet files, to reduce the surface for determinism
+issue around canonical JSON formatting. Instead it's a view we generate during `ods pull`
 
-`frictionless validate` can't check a release yet. frictionless-py reads Parquet through pandas,
-which hands list cells over as NumPy arrays, so every list column reads as a type error. It also
-skips counting and hashing Parquet files, so every declared `bytes` and `hash` fails. Both are
-bugs in its Parquet reader, not in the release. It needs `pandas` installed alongside the
-`parquet` extra ([#1773][fl-1773]), and loads each file whole ([#1203][fl-1203]).
+The four list columns in `orgs` are declared as Table Schema's `array` type.
+Its `list` type, with `itemType: string`, is the closer fit for a Parquet `LIST<VARCHAR>`, but
+it's a delimited string in the spec's lexical form, and the published v2 profile
+(`datapackage.org/profiles/2.0`) has no `list` type, so a descriptor that used it would fail that
+profile. The fix is merged upstream, to be published as v2.1 ([datapackage#1089][dp-1089]). When
+a v2.1 profile is published, the view declares the four columns as `list` with `itemType:
+string`. The view isn't part of any digest, so that needs no dataset version bump.
+
+Note that at the time of writing frictionless-py reads Parquet through pandas, which hands list cells over as NumPy arrays, so every list column reads as a type error. It also skips counting and hashing Parquet files, so every declared `bytes` and `hash` fails. Both are bugs in its Parquet reader, not in the release. It needs `pandas` installed alongside the `parquet` extra ([#1773][fl-1773]), and loads each file whole ([#1203][fl-1203]).
 
 To check a release's files against its descriptor today:
 
 ```console
-$ jq -r '.resources[] | "\(.hash[7:])  \(.path)"' datapackage.json | shasum -a 256 -c
+$ ods make datapackage -o - | jq -r '.resources[] | "\(.hash[7:])  \(.path)"' | shasum -a 256 -c
 orgs.parquet: OK
 roles.parquet: OK
 relationships.parquet: OK
@@ -344,27 +339,38 @@ successions.parquet: OK
 
 ## Provenance
 
-Every release ships `_provenance.json` and Frictionless `datapackage.json`, recording the TRUD
-archive it came from, its SHA-256 and size, and NHS's licence and attribution. Hashes are uppercase throughout, matching TRUD.
-`_provenance.json` holds those six keys and nothing about who built the release or how the archive was checked. The `ods` that built a published dataset is recorded in its release index row (`tool_version` and `tool_git_sha`) and, as signed proof, in the CI attestation for the same manifest digest.
-`ods cite` renders it as a citation.
+Every Parquet file carries one key-value metadata key, `datapackage`, holding the release's
+provenance as compact JSON in Data Package vocabulary: the dataset's name and version, its licence
+and attribution, who holds the rights and distributes, and the TRUD release it was built from,
+with that release's SHA-256 and size. All four files carry the same object, and nothing else is
+added to the key-value metadata (Arrow writes its own `ARROW:schema` beside it, as it always has).
+Read it with DuckDB:
 
-Each Parquet file carries a deliberate subset of provenance in its key-value metadata:
-source identity only (`ods.trud_release_date` and `ods.trud_release_sha256`). The dataset
-version and everything about the builder are excluded, so the Parquet bytes
-depend only on the source archive and how it was derived. Relabelling a release with a new
-dataset version leaves its Parquet files byte-identical.
+```sql
+SELECT decode(key), decode(value) FROM parquet_kv_metadata('orgs.parquet');
+```
 
-To verify a release: rebuild from the TRUD archive, using any version of `ods` that builds the same dataset version, and compare
-the SHA-256 of the generated Parquet files against the hashes in the published
-`datapackage.json`. The data files will match byte for byte, and so will `_provenance.json` and the
-manifest digest: provenance holds only facts about the archive, so it doesn't differ between builders.
+The object holds nothing about who built the release or how the archive was checked. The `ods`
+that built a published dataset is recorded in its release index row (`tool_version` and
+`tool_git_sha`) and, as signed proof, in the CI attestation for the same manifest digest. `ods
+cite` renders it as a citation. [provenance.md](./provenance.md) has every field, and whose word
+each is.
+
+The dataset version is part of the object, inside `version`, so every file says which cut it is.
+That's a deliberate cost: relabelling a release with a new dataset version (the 1.0.0 republish,
+say) changes every Parquet file's bytes, even though the rows are the same, and the release is
+downloaded again.
+
+To verify a release: rebuild from the TRUD archive, using any version of `ods` that builds the
+same dataset version, and compare. The Parquet files match byte for byte, and so do the manifests
+`ods` rebuilds from them, and their digests: the object holds only facts about the archive and
+the dataset version, so it doesn't differ between builders.
 
 ## Versioning
 
 Three numbers, three jobs:
-- `trud_release_date` — which source? (recorded in `_provenance.json` and every Parquet row).
-- `dataset_version` — which cut, and which attempt at it? (SemVer recorded in `datapackage.json`, the manifest, and release index).
+- `trud_release_date` — which source? (every Parquet row, the embedded object's `sources[0].version`, and the manifest's `fyi.ods.source.version` annotation).
+- `dataset_version` — which cut, and which attempt at it? (SemVer, after the `_` in the embedded object's `version` and the manifest's `org.opencontainers.image.version`, and on the release index row).
 - `ods` crate version — which tool? (`Cargo.toml`; for a published dataset, the `tool_version` on its release index row).
 
 `dataset_version` is global and monotonic. It identifies a *cut* — the state of the tool and rules at the moment of packing — so once it moves, every release packed afterwards carries the new number.
@@ -380,8 +386,9 @@ What each part of `dataset_version` promises, and what `ods` does with a release
 **0.x is for iterating.** A breaking change may land in any 0.x release, and `ods` reads
 0.x releases without version warnings. **1.0.0 is a statement of intent** to support the
 schema from then on. It is identical to the last 0.x, and every release date is republished
-as 1.0.0. The Parquet files keep their bytes, so `ods pull` fetches only the small files that
-changed.
+as 1.0.0. Every Parquet file carries its dataset version, so the republished files' bytes differ
+from the 0.x ones and `ods pull` downloads them again: the rows are the same, the provenance each
+file carries isn't.
 
 - `ods pull` installs the newest release at the major version it reads, and says when a newer major exists.
 - A workspace holds one version per release date, in `releases/<date>/`, so `releases/*/` queries count each release once. Pulling a new version of a date replaces it, reusing any file whose bytes haven't changed.

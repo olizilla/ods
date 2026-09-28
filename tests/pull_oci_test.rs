@@ -63,15 +63,11 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -85,10 +81,10 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_1");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let remote_index = make_v1_index(&[(
@@ -122,10 +118,12 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists());
     assert!(rel_dir.join("orgs.parquet").exists());
-    assert!(rel_dir.join("_provenance.json").exists());
+    // A pull writes the manifest's layers and the `datapackage.json` view, and no `oci/`: the
+    // files carry their own provenance, and the manifest is rebuilt from them to verify.
+    assert!(rel_dir.join("datapackage.json").exists(), "pulled release must have the datapackage.json view");
+    assert!(!rel_dir.join("oci").exists(), "a pull stores no manifest");
 
-    // Assert that ods pull NEVER writes OCI artefacts or _release.json or SHA256SUMS
-    assert!(!rel_dir.join("oci").exists(), "ods pull must never write oci/");
+    // A pulled release never gets `_release.json` or `SHA256SUMS`.
     assert!(!rel_dir.join("_release.json").exists(), "ods pull must never write _release.json");
     assert!(!rel_dir.join("SHA256SUMS").exists(), "ods pull must never write SHA256SUMS");
 
@@ -182,15 +180,11 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -204,10 +198,10 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_2");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     // Mirror 1 fails, Mirror 2 succeeds
@@ -250,7 +244,10 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists());
     assert!(rel_dir.join("orgs.parquet").exists());
-    assert!(rel_dir.join("_provenance.json").exists());
+    // A pull writes the manifest's layers and the `datapackage.json` view, and no `oci/`: the
+    // files carry their own provenance, and the manifest is rebuilt from them to verify.
+    assert!(rel_dir.join("datapackage.json").exists(), "pulled release must have the datapackage.json view");
+    assert!(!rel_dir.join("oci").exists(), "a pull stores no manifest");
 
     Ok(())
 }
@@ -260,15 +257,11 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"legitimate orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "legitimate orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -282,10 +275,10 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_heal");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let remote_index = make_v1_index(&[(
@@ -373,23 +366,19 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let fixture_dir = tmp.path().join("fixture_fail");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let remote_index = make_v1_index(&[(
@@ -449,15 +438,11 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -471,10 +456,10 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_success");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.1")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let remote_index = make_v1_index(&[(
@@ -530,15 +515,11 @@ fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
     let workspace = tmp.path().join("ods_data");
 
     // Prepare layer files
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": "2026-07-31" });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
     let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
 
-    let orgs_bytes = b"dummy orgs parquet content".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.0", "dummy orgs parquet content");
     let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
 
     let dp = serde_json::json!({
@@ -552,10 +533,10 @@ fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
     let fixture_dir = tmp.path().join("fixture_withdrawn");
     std::fs::create_dir_all(&fixture_dir)?;
     std::fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
-    std::fs::write(fixture_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    std::fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
     std::fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir, &prov, "1.0.0")?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let mut remote_index = make_v1_index(&[(
@@ -618,31 +599,15 @@ fn test_pull_cli_named_withdrawn_and_bare_pull_acceptance() -> Result<()> {
     // Create 2026-08-28 release
     let rel_28 = workspace.join("releases").join("2026-08-28");
     std::fs::create_dir_all(&rel_28)?;
-    std::fs::write(rel_28.join("orgs.parquet"), b"dummy 28")?;
-    let prov_28 = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-08-28".to_string()),
-        trud_release_sha256: Some("ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801".to_string()),
-        ..Default::default()
-    };
-    std::fs::write(rel_28.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_vec_pretty(&prov_28)?)?;
-    let dp_28 = serde_json::json!({ "name": "ods", "version": "1.0.0", "resources": [] });
-    std::fs::write(rel_28.join(ods::datapackage::DATAPACKAGE_FILENAME), serde_json::to_vec_pretty(&dp_28)?)?;
-    let (m_28, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_28, &prov_28, "1.0.0")?;
+    common::write_fixture_parquet(&rel_28.join("orgs.parquet"), "2026-08-28", "ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801", "1.0.0", "dummy 28");
+    let (m_28, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_28)?;
     let digest_28 = m_28.digest()?;
 
     // Create 2026-07-31 release
     let rel_31 = workspace.join("releases").join("2026-07-31");
     std::fs::create_dir_all(&rel_31)?;
-    std::fs::write(rel_31.join("orgs.parquet"), b"dummy 31")?;
-    let prov_31 = ods::provenance::OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
-    std::fs::write(rel_31.join(ods::provenance::PROVENANCE_FILENAME), serde_json::to_vec_pretty(&prov_31)?)?;
-    let dp_31 = serde_json::json!({ "name": "ods", "version": "1.0.0", "resources": [] });
-    std::fs::write(rel_31.join(ods::datapackage::DATAPACKAGE_FILENAME), serde_json::to_vec_pretty(&dp_31)?)?;
-    let (m_31, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_31, &prov_31, "1.0.0")?;
+    common::write_fixture_parquet(&rel_31.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.0", "dummy 31");
+    let (m_31, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_31)?;
     let digest_31 = m_31.digest()?;
 
     // Build supplied index with 2026-08-28 withdrawn
@@ -701,15 +666,11 @@ struct StandardFixture {
     pub files: Vec<(String, String, Vec<u8>)>, // (filename, digest, bytes)
 }
 
-fn make_standard_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<StandardFixture> {
+fn make_standard_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<StandardFixture> {
     let fix_dir = tmp.join(format!("fix_{}_{}", date, version));
     fs::create_dir_all(&fix_dir)?;
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some(date.to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": date });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
 
     let dp = serde_json::json!({
@@ -719,19 +680,19 @@ fn make_standard_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result
     });
     let dp_bytes = serde_json::to_vec_pretty(&dp)?;
 
-    let orgs_bytes = b"sample parquet orgs 123".to_vec();
-    let rel_bytes = b"sample parquet rel 123".to_vec();
-    let roles_bytes = b"sample parquet roles 123".to_vec();
-    let succ_bytes = b"sample parquet succ 123".to_vec();
+    let orgs_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, "sample parquet orgs 123");
+    let rel_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, "sample parquet rel 123");
+    let roles_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, "sample parquet roles 123");
+    let succ_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, "sample parquet succ 123");
 
-    fs::write(fix_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    fs::write(fix_dir.join("_provenance.json"), &prov_bytes)?;
     fs::write(fix_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
     fs::write(fix_dir.join("orgs.parquet"), &orgs_bytes)?;
     fs::write(fix_dir.join("relationships.parquet"), &rel_bytes)?;
     fs::write(fix_dir.join("roles.parquet"), &roles_bytes)?;
     fs::write(fix_dir.join("successions.parquet"), &succ_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fix_dir, &prov, version)?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fix_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let mut files = Vec::new();
@@ -743,7 +704,7 @@ fn make_standard_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result
             .cloned()
             .unwrap();
         let bytes = match title.as_str() {
-            ods::provenance::PROVENANCE_FILENAME => prov_bytes.clone(),
+            "_provenance.json" => prov_bytes.clone(),
             ods::datapackage::DATAPACKAGE_FILENAME => dp_bytes.clone(),
             "orgs.parquet" => orgs_bytes.clone(),
             "relationships.parquet" => rel_bytes.clone(),
@@ -766,7 +727,7 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "1.0.1")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "1.0.1")?;
 
     let m1_base = "https://mirror1.example.com/v2/ods-data";
     let m2_base = "https://mirror2.example.com/v2/ods-data";
@@ -879,7 +840,7 @@ fn test_pull_bad_layer_installs_as_bad_sha_and_leaves_current_untouched() -> Res
     fs::write(rel_28.join("dummy.txt"), b"active release 28")?;
     ws.set_active("2026-08-28")?;
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
     let m1_base = "https://ods.fyi/v2/ods-data";
 
     let mut remote_index = make_v1_index(&[(
@@ -933,9 +894,8 @@ fn test_pull_bad_layer_installs_as_bad_sha_and_leaves_current_untouched() -> Res
     let rel_dir = workspace.join("releases").join("2026-07-31");
     assert!(rel_dir.exists(), "releases/2026-07-31 must exist");
 
-    // Assert 5 verified files exist under their standard names
-    assert!(rel_dir.join(ods::provenance::PROVENANCE_FILENAME).exists());
-    assert!(rel_dir.join(ods::datapackage::DATAPACKAGE_FILENAME).exists());
+    // Assert the 3 verified Parquet files exist under their standard names — manifest-only, so
+    // the fixture's only real layers are the 4 Parquet files (`.agents/briefs/manifest-only.md`)
     assert!(rel_dir.join("orgs.parquet").exists());
     assert!(rel_dir.join("relationships.parquet").exists());
     assert!(rel_dir.join("roles.parquet").exists());
@@ -952,12 +912,12 @@ fn test_pull_bad_layer_installs_as_bad_sha_and_leaves_current_untouched() -> Res
 
     // Assert stderr output
     let stderr = String::from_utf8(stderr_buf)?;
-    assert!(stderr.contains("✖ 2026-07-31 (0.1.0) arrived incomplete: 1 of 6 files failed verification on every mirror"));
+    assert!(stderr.contains("✖ 2026-07-31 (0.1.0) arrived incomplete: 1 of 4 files failed verification on every mirror"));
     assert!(stderr.contains("successions.parquet → releases/2026-07-31/successions.parquet.bad-sha"));
     assert!(stderr.contains(&format!("expected  {}", bad_layer_digest)));
     let computed_bad_sha = format!("sha256:{:x}", sha2::Sha256::digest(&bad_bytes));
     assert!(stderr.contains(&format!("ods.fyi   {}", computed_bad_sha)));
-    assert!(stderr.contains("The other 5 files are verified, in releases/2026-07-31/"));
+    assert!(stderr.contains("The other 3 files are verified, in releases/2026-07-31/"));
     assert!(stderr.contains("current is still releases/2026-08-28"));
     assert!(stderr.contains("Retry: ods pull 2026-07-31"));
     assert!(stderr.contains("Use it anyway: ods use 2026-07-31"));
@@ -971,7 +931,7 @@ fn test_pull_layer_404_on_all_mirrors_not_downloaded() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
     let m1_base = "https://ods.fyi/v2/ods-data";
     let m2_base = "https://ghcr.io/v2/olizilla/ods-data";
 
@@ -1044,7 +1004,7 @@ fn test_pull_force_over_verified_release_with_bad_layer_keeps_verified_copy() ->
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
     let m1_base = "https://ods.fyi/v2/ods-data";
 
     let mut remote_index = make_v1_index(&[(
@@ -1055,7 +1015,7 @@ fn test_pull_force_over_verified_release_with_bad_layer_keeps_verified_copy() ->
     )]);
     remote_index.mirrors = vec![MirrorEntry { url: m1_base.to_string() }];
 
-    // Pre-install verified release 2026-07-31
+    // Pre-install verified release 2026-07-31: its files rebuild the published manifest.
     let rel_dir = workspace.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir)?;
     let mut orig_hashes = BTreeMap::new();
@@ -1120,7 +1080,7 @@ fn test_pull_force_over_verified_release_with_bad_layer_keeps_verified_copy() ->
     }
 
     let stderr = String::from_utf8(stderr_buf)?;
-    assert!(stderr.contains("✖ 2026-07-31 (0.1.0) arrived incomplete: 1 of 6 files failed verification on every mirror"));
+    assert!(stderr.contains("✖ 2026-07-31 (0.1.0) arrived incomplete: 1 of 4 files failed verification on every mirror"));
     assert!(stderr.contains("successions.parquet\n    expected  "));
     assert!(stderr.contains("Kept the verified copy already in releases/2026-07-31/"));
     assert!(stderr.contains("Report it: https://github.com/olizilla/ods/issues"));
@@ -1133,7 +1093,7 @@ fn test_pull_recovers_from_partial_install_when_upstream_fixed() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
     let m1_base = "https://ods.fyi/v2/ods-data";
 
     let mut remote_index = make_v1_index(&[(
@@ -1219,7 +1179,7 @@ fn test_pull_withdrawn_release_with_bad_layer_prints_both_and_exits_1() -> Resul
     fs::write(rel_28.join("dummy.txt"), b"active release 28")?;
     ws.set_active("2026-08-28")?;
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
     let m1_base = "https://ods.fyi/v2/ods-data";
 
     let mut remote_index = make_v1_index(&[(
@@ -1268,7 +1228,7 @@ fn test_pull_withdrawn_release_with_bad_layer_prints_both_and_exits_1() -> Resul
     let stderr = String::from_utf8(stderr_buf)?;
 
     // Assert both blocks printed, with incomplete block first, then withdrawal line
-    let incomplete_idx = stderr.find("arrived incomplete: 1 of 6 files failed verification").expect("incomplete block");
+    let incomplete_idx = stderr.find("arrived incomplete: 1 of 4 files failed verification").expect("incomplete block");
     let withdrawn_idx = stderr.find("was withdrawn: orgs.parquet lost the Welsh sites").expect("withdrawal block");
     assert!(incomplete_idx < withdrawn_idx, "incomplete block must print before withdrawal line");
 
@@ -1298,7 +1258,7 @@ fn test_pull_bad_layer_real_http_integration() -> Result<()> {
     fs::write(rel_28.join("dummy.txt"), b"active release 28")?;
     ws.set_active("2026-08-28")?;
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
 
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -1392,7 +1352,7 @@ fn test_pull_bad_layer_real_http_integration() -> Result<()> {
 
     assert_eq!(out.status.code(), Some(1), "must exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("arrived incomplete: 1 of 6 files failed verification on every mirror"));
+    assert!(stderr.contains("arrived incomplete: 1 of 4 files failed verification on every mirror"));
     assert!(stderr.contains("successions.parquet → releases/2026-07-31/successions.parquet.bad-sha"));
 
     let rel_dir = workspace.join("releases").join("2026-07-31");
@@ -1411,7 +1371,7 @@ fn test_pull_all_records_arrived_incomplete_in_ledger() -> Result<()> {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix = make_standard_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix = make_standard_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
 
     let remote_index = make_v1_index(&[(
         "2026-07-31",
@@ -1459,7 +1419,7 @@ fn test_pull_all_records_arrived_incomplete_in_ledger() -> Result<()> {
     );
 
     let stderr = String::from_utf8_lossy(&stderr_buf);
-    assert!(stderr.contains("arrived incomplete: 1 of 6 files failed verification"));
+    assert!(stderr.contains("arrived incomplete: 1 of 4 files failed verification"));
     assert!(
         stderr.contains("pulled        0 releases · 1 failed · 0B"),
         "ledger must report the failure in the pulled row, got:\n{}",
@@ -1469,37 +1429,33 @@ fn test_pull_all_records_arrived_incomplete_in_ledger() -> Result<()> {
     Ok(())
 }
 
-/// `make_standard_6_file_fixture`'s file bytes are fixed strings, so three releases built
+/// `make_standard_4_file_fixture`'s file bytes are fixed strings, so three releases built
 /// from it share the same digest for `successions.parquet` — corrupting one corrupts all
 /// three. This variant folds `date` into every file's bytes so three releases in the same
 /// test never collide on a blob digest.
-fn make_unique_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<StandardFixture> {
+fn make_unique_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<StandardFixture> {
     let fix_dir = tmp.join(format!("uniq_{}_{}", date, version));
     fs::create_dir_all(&fix_dir)?;
 
-    let prov = ods::provenance::OdsProvenance {
-        trud_release_date: Some(date.to_string()),
-        trud_release_sha256: Some("8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933".to_string()),
-        ..Default::default()
-    };
+    let prov = serde_json::json!({ "trud_release_date": date });
     let prov_bytes = serde_json::to_vec_pretty(&prov)?;
 
     let dp = serde_json::json!({ "name": "ods", "version": version, "resources": [] });
     let dp_bytes = serde_json::to_vec_pretty(&dp)?;
 
-    let orgs_bytes = format!("sample parquet orgs 123 {}", date).into_bytes();
-    let rel_bytes = format!("sample parquet rel 123 {}", date).into_bytes();
-    let roles_bytes = format!("sample parquet roles 123 {}", date).into_bytes();
-    let succ_bytes = format!("sample parquet succ 123 {}", date).into_bytes();
+    let orgs_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, &format!("sample parquet orgs 123 {}", date));
+    let rel_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, &format!("sample parquet rel 123 {}", date));
+    let roles_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, &format!("sample parquet roles 123 {}", date));
+    let succ_bytes = common::fixture_parquet_bytes(date, "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", version, &format!("sample parquet succ 123 {}", date));
 
-    fs::write(fix_dir.join(ods::provenance::PROVENANCE_FILENAME), &prov_bytes)?;
+    fs::write(fix_dir.join("_provenance.json"), &prov_bytes)?;
     fs::write(fix_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
     fs::write(fix_dir.join("orgs.parquet"), &orgs_bytes)?;
     fs::write(fix_dir.join("relationships.parquet"), &rel_bytes)?;
     fs::write(fix_dir.join("roles.parquet"), &roles_bytes)?;
     fs::write(fix_dir.join("successions.parquet"), &succ_bytes)?;
 
-    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fix_dir, &prov, version)?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fix_dir)?;
     let manifest_digest = manifest.digest()?;
 
     let mut files = Vec::new();
@@ -1511,7 +1467,7 @@ fn make_unique_6_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<S
             .cloned()
             .unwrap();
         let bytes = match title.as_str() {
-            ods::provenance::PROVENANCE_FILENAME => prov_bytes.clone(),
+            "_provenance.json" => prov_bytes.clone(),
             ods::datapackage::DATAPACKAGE_FILENAME => dp_bytes.clone(),
             "orgs.parquet" => orgs_bytes.clone(),
             "relationships.parquet" => rel_bytes.clone(),
@@ -1530,9 +1486,9 @@ fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
-    let fix1 = make_unique_6_file_fixture(tmp.path(), "2026-06-26", "0.1.0")?;
-    let fix2 = make_unique_6_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
-    let fix3 = make_unique_6_file_fixture(tmp.path(), "2026-08-28", "0.1.0")?;
+    let fix1 = make_unique_4_file_fixture(tmp.path(), "2026-06-26", "0.1.0")?;
+    let fix2 = make_unique_4_file_fixture(tmp.path(), "2026-07-31", "0.1.0")?;
+    let fix3 = make_unique_4_file_fixture(tmp.path(), "2026-08-28", "0.1.0")?;
 
     let remote_index = make_v1_index(&[
         (
@@ -1617,7 +1573,7 @@ fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()
     let stderr = ods::ansi::strip_ansi(&raw_stderr);
     let pulled_idx = stderr.find("pulled        2 releases").expect("pulled row");
     let linked_idx = stderr.find("linked        current → releases/2026-08-28").expect("linked row");
-    let incomplete_idx = stderr.find("arrived incomplete: 1 of 6 files failed verification").expect("incomplete block");
+    let incomplete_idx = stderr.find("arrived incomplete: 1 of 4 files failed verification").expect("incomplete block");
     assert!(pulled_idx < linked_idx, "pulled must print before linked");
     assert!(linked_idx < incomplete_idx, "the pin must move, and linked print, before the failure block");
     assert!(

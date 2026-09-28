@@ -19,7 +19,7 @@ How to Cite
 Data availability
   ods-data/2026-08-31_1.0.1 is available from https://ods.fyi. This OCI manifest
   digest identifies its exact files:
-    sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272
+    sha256:234a966ab79c5e6960cb6eaafb0ddefc19ad778bb3fe2e124ef02b2eeffe702a
 
   ods/v0.4.3 built it from nhs-ods-xml/2026-08-31, the TRUD archive with SHA-256:
     665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2
@@ -51,7 +51,7 @@ $ ods cite -f bibtex
   version = {1.0.1},
   howpublished = {ods.fyi},
   url = {https://ods.fyi},
-  note = {Manifest: sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
+  note = {Manifest: sha256:234a966ab79c5e6960cb6eaafb0ddefc19ad778bb3fe2e124ef02b2eeffe702a. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
 }
 
 @misc{ods/v0.4.3,
@@ -109,7 +109,7 @@ $ ods cite -f csljson
     "publisher": "ods.fyi",
     "URL": "https://ods.fyi",
     "version": "1.0.1",
-    "note": "Manifest: sha256:82c0c140fde1cea6a824ace0b21ef37c80522c334c29bd4007d4d7acf5a4b272. Contains information from NHS England, licensed under the current version of the Open Government Licence."
+    "note": "Manifest: sha256:234a966ab79c5e6960cb6eaafb0ddefc19ad778bb3fe2e124ef02b2eeffe702a. Contains information from NHS England, licensed under the current version of the Open Government Licence."
   },
   {
     "type": "software",
@@ -154,7 +154,7 @@ How to Cite
 Data availability
   ods-data/2026-08-28_0.1.0 isn't in the release index this ods read, so where to get
   it is unknown. This OCI manifest digest identifies its exact files:
-    sha256:c9056e64082522546cdc92992bee80b389aee4c5c1870483df90ac0d66ba30c9
+    sha256:a780a5da1bee82b7d30b759c3ef7f59fc28d5ad572be6fa311ea68a7f3681878
 
   It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
     ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
@@ -185,7 +185,7 @@ Data availability
   ods-data/2026-08-28_0.1.0 was built from a different TRUD archive than the one
   published for 2026-08-28, so it isn't the published dataset. This OCI manifest digest
   identifies its exact files:
-    sha256:ce237015df5351e645a45fda82db55e10bf7062ed74e03aa6dbe8e36390db1d9
+    sha256:1c9b7b075f6be94b86b0c754dfa3f8ccf528203b764cdb5f25298e9b31408a70
 
   It was built from the TRUD archive with SHA-256:
     1111111111111111111111111111111111111111111111111111111111111111
@@ -218,7 +218,7 @@ Data availability
   ods-data/2026-08-28_0.3.0 hasn't been published. The published release for
   2026-08-28 is ods-data/2026-08-28_0.1.0. This OCI manifest digest identifies its
   exact files:
-    sha256:39b5f5ae4907592b85c46c36ffa2fb3661154b6822156b42607bafa707f7bfba
+    sha256:b16186c14648d72159762d889cb162e604f16ec6ee4fec016536c2319d2261e2
 
   It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
     ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
@@ -227,9 +227,10 @@ Data availability
 
 $ ods cite
 --- stderr
-✖ releases/2026-08-28 has changed since it was built
-  orgs.parquet's SHA-256 isn't the one its datapackage.json records.
-  Pull it again: ods pull --force 2026-08-28
+✖ The Parquet files in ods_data/releases/2026-08-28 don't carry the same provenance
+  orgs.parquet   2026-08-28_0.1.0  (datapackage sha256:d136003bec4f…)
+  roles.parquet  2026-08-28_9.9.9  (datapackage sha256:72303eb72fd9…)
+  A release's files all come from one build. Pull it again with `ods pull --force`, or rebuild it with `ods make`.
 --- exit 1
 
 $ ods cite
@@ -253,14 +254,14 @@ How to Cite
 Data availability
   ods-data/2026-08-28_0.1.0 as built here differs from the published dataset of that
   name. This OCI manifest digest identifies the files here:
-    sha256:ae66bb22b9030b7cc8308ece03a7b00c9981ed955c41943620ea01bd5813a132
+    sha256:845c3e4a660d16c58535e2e6ba80ce6b1735b0d51914a9e03321e9eaebfa6e56
 
   It was built from nhs-ods-xml/2026-08-28, the TRUD archive with SHA-256:
     ABDD194B1569D5FF3CDD81D618847F05642BD43C5B15D6CD43D8289B7466D801
 --- stderr
 ✖ releases/2026-08-28 doesn't match the published ods-data/2026-08-28_0.1.0
-  published   sha256:c9056e64082522546cdc92992bee80b389aee4c5c1870483df90ac0d66ba30c9
-  this build  sha256:ae66bb22b9030b7cc8308ece03a7b00c9981ed955c41943620ea01bd5813a132
-  Its files match its own datapackage.json, so it was built by an ods that doesn't
-  reproduce dataset 0.1.0. Cite the published release: ods pull 2026-08-28
+  published   sha256:a780a5da1bee82b7d30b759c3ef7f59fc28d5ad572be6fa311ea68a7f3681878
+  this build  sha256:845c3e4a660d16c58535e2e6ba80ce6b1735b0d51914a9e03321e9eaebfa6e56
+  Its files name that release but aren't its files: an ods that doesn't reproduce
+  dataset 0.1.0 built them, or they've changed since. Cite the published release: ods pull 2026-08-28
 --- exit 1

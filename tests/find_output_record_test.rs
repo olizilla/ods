@@ -19,7 +19,6 @@ use ods::commands::parquet::{
     export_relationships, export_roles, export_successions, orgs_schema,
 };
 use ods::ods_xml::{Location, OdsRecord, OdsRole, OdsSuccessor};
-use ods::provenance::OdsProvenance;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -381,10 +380,7 @@ fn setup_two_hop_chain_workspace() -> (TempDir, PathBuf) {
     let edges = build_succession_edges(&records);
     let (succ_closures, pred_closures) = compute_transitive_closures(&records, &edges);
 
-    let prov = OdsProvenance {
-        trud_release_date: Some("2026-07-31".to_string()),
-        ..Default::default()
-    };
+    let prov = ods::provenance::fixture_embedded("2026-07-31");
 
     export_orgs(
         &parquet_dir,

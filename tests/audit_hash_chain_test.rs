@@ -93,14 +93,13 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &rel_dir,
         "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         &zip_sha256,
         fs::metadata(&outer_zip_path).unwrap().len(),
-    );
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
 
@@ -111,6 +110,19 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
         input: Some(rel_dir.clone()),
         output: Some(rel_dir.clone()), ..Default::default() })
     .unwrap();
+
+    // Record the build in the workspace's release index, as a published release is, so audit
+    // has a genuine baseline to verify the files against: the manifest rebuilt from them must
+    // have the digest the index row names.
+    let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir).unwrap();
+    let index = common::make_v1_index(&[(
+        "2026-07-31",
+        &zip_sha256,
+        fs::metadata(&outer_zip_path).unwrap().len(),
+        &[(ods::datapackage::DATASET_VERSION, &manifest.digest().unwrap())],
+    )]);
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(&serde_json::to_vec_pretty(&index).unwrap(), &workspace_root)
+        .unwrap();
 
     (tmp, workspace_root, outer_zip_path)
 }
@@ -126,6 +138,17 @@ fn setup_valid_workspace_with_provenance() -> (TempDir, std::path::PathBuf, std:
         .join("trud")
         .join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     (tmp, workspace_root, outer_zip_path)
+}
+
+/// Writer properties carrying the `datapackage` object `rel_dir`'s files carry now.
+fn same_provenance(rel_dir: &std::path::Path) -> parquet::file::properties::WriterProperties {
+    let value = ods::provenance::read_embedded_value(&rel_dir.join("roles.parquet")).unwrap();
+    parquet::file::properties::WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue {
+            key: ods::provenance::DATAPACKAGE_KEY.to_string(),
+            value,
+        }]))
+        .build()
 }
 
 fn create_inner_zip(filename: &str, content: &str) -> Vec<u8> {
@@ -189,13 +212,11 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
-    // Mutate trud_release_sha256 in _provenance.json
-    let prov_path = active_dir.join(ods::provenance::PROVENANCE_FILENAME);
-    let mut prov: ods::provenance::OdsProvenance =
-        serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
-    prov.trud_release_sha256 =
-        Some("0000000000000000000000000000000000000000000000000000000000000000".to_string());
-    fs::write(&prov_path, serde_json::to_string_pretty(&prov)?)?;
+    // Mutate the archive's hash in the pull record, trud/datapackage.json
+    let prov_path = ods::provenance::pull_record_path(&active_dir);
+    let mut prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    prov.resources[0].hash = format!("sha256:{}", "0".repeat(64));
+    fs::write(&prov_path, prov.to_json_string()?)?;
 
     let args = ods::commands::audit::Args {
         input: Some(zip_path),
@@ -209,7 +230,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -
     let result = ods::commands::audit::run(args);
     assert!(
         result.is_err(),
-        "audit must fail on corrupted trud_release_sha256 in _provenance.json"
+        "audit must fail on a corrupted archive hash in trud/datapackage.json"
     );
     Ok(())
 }
@@ -260,7 +281,8 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
 
     // Overwrite successions.parquet with empty/different file
     let empty_records: Vec<ods::ods_xml::OdsRecord> = Vec::new();
-    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    let release_record = ods::provenance::read_release(&active_dir)?;
+    let prov = release_record.facts().map(|f| f.embedded.clone());
     ods::commands::parquet::export_successions(&active_dir, &empty_records, prov.as_ref())?;
 
     let args = ods::commands::audit::Args {
@@ -307,7 +329,8 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
         }],
         ..Default::default()
     };
-    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    let release_record = ods::provenance::read_release(&active_dir)?;
+    let prov = release_record.facts().map(|f| f.embedded.clone());
     ods::commands::parquet::export_successions(&active_dir, &[record_with_orphan], prov.as_ref())?;
 
     let args = ods::commands::audit::Args {
@@ -352,7 +375,8 @@ fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
     };
 
     let empty_closures = std::collections::HashMap::new();
-    let prov = ods::provenance::OdsProvenance::load_from_dir(&active_dir);
+    let release_record = ods::provenance::read_release(&active_dir)?;
+    let prov = release_record.facts().map(|f| f.embedded.clone());
     // Export with empty closures when XML has a predecessor edge
     ods::commands::parquet::export_orgs(
         &active_dir,
@@ -426,14 +450,13 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &rel_dir,
         "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         &ods::provenance::compute_file_sha256(&outer_zip_path).unwrap(),
         fs::metadata(&outer_zip_path).unwrap().len(),
-    );
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
 
@@ -470,17 +493,16 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 fn test_audit_all_skips_unmade_releases() -> Result<()> {
     let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
 
-    // Create a second release that has trud/ and _provenance.json but NO derived parquet files
+    // Create a second release that has trud/ and its pull record but NO derived parquet files
     let unmade_dir = workspace_root.join("releases").join("2020-01-01");
     fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &unmade_dir,
         "2020-01-01",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         "0000000000000000000000000000000000000000000000000000000000000000",
         0,
-    );
-    fs::write(
-        unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
 
@@ -504,18 +526,17 @@ fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
     let workspace_root = tmp.path().join("ods_data");
     ods::workspace::ensure_workspace_root(&workspace_root).unwrap();
 
-    // Create 2 releases that both have trud/ and _provenance.json but NO derived parquet files
+    // Create 2 releases that both have trud/ and a pull record but NO derived parquet files
     for date in &["2020-01-01", "2020-02-01"] {
         let unmade_dir = workspace_root.join("releases").join(date);
         fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-        let prov = ods::provenance::OdsProvenance::from_trud_statement(
+        ods::provenance::write_pull_record(
+            &unmade_dir,
             date,
+            "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
             "0000000000000000000000000000000000000000000000000000000000000000",
             0,
-        );
-        fs::write(
-            unmade_dir.join(ods::provenance::PROVENANCE_FILENAME),
-            serde_json::to_string_pretty(&prov).unwrap(),
+            &[],
         )
         .unwrap();
     }
@@ -587,14 +608,13 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    let prov = ods::provenance::OdsProvenance::from_trud_statement(
+    ods::provenance::write_pull_record(
+        &rel_dir,
         "2026-07-31",
+        "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         &ods::provenance::compute_file_sha256(&outer_zip_path).unwrap(),
         fs::metadata(&outer_zip_path).unwrap().len(),
-    );
-    fs::write(
-        rel_dir.join(ods::provenance::PROVENANCE_FILENAME),
-        serde_json::to_string_pretty(&prov).unwrap(),
+        &[],
     )
     .unwrap();
 
@@ -656,7 +676,8 @@ fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
     // Write back modified orgs.parquet
     {
         let out_file = File::create(&orgs_file)?;
-        let mut writer = ArrowWriter::try_new(out_file, schema, None)?;
+        // The rewritten table keeps the provenance the build embedded: only its rows change.
+        let mut writer = ArrowWriter::try_new(out_file, schema, Some(same_provenance(&rel_dir)))?;
         for b in &batches {
             writer.write(b)?;
         }
@@ -720,7 +741,8 @@ fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
     // Write back modified orgs.parquet
     {
         let out_file = File::create(&orgs_file)?;
-        let mut writer = ArrowWriter::try_new(out_file, schema, None)?;
+        // The rewritten table keeps the provenance the build embedded: only its rows change.
+        let mut writer = ArrowWriter::try_new(out_file, schema, Some(same_provenance(&rel_dir)))?;
         for b in &batches {
             writer.write(b)?;
         }

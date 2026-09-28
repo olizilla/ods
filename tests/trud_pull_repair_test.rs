@@ -8,7 +8,7 @@ mod common;
 
 use ods::commands::fetch::{run_with_fetcher, Args, TrudApiResponse, TrudFetcher, TrudReleaseItem};
 use ods::progress::{Progress, ProgressCaps};
-use ods::provenance::{compute_file_sha256, OdsProvenance, ProvenanceLoad, PROVENANCE_FILENAME};
+use ods::provenance::{compute_file_sha256, PullRecord, RecordLoad, LEGACY_PROVENANCE_FILENAME};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -126,7 +126,8 @@ fn trud_dir(ws: &Path, date: &str) -> PathBuf {
     ws.join("releases").join(date).join("trud")
 }
 
-/// Puts a release's zip where a pull would, with the `_provenance.json` an old `ods` wrote.
+/// Puts a release's zip where a pull would, with the `trud/_provenance.json` an older `ods`
+/// wrote instead of `trud/datapackage.json`.
 fn hold_zip(ws: &Path, release: &TrudReleaseItem, bytes: &[u8]) -> PathBuf {
     let dir = trud_dir(ws, &release.release_date);
     fs::create_dir_all(&dir).unwrap();
@@ -137,8 +138,8 @@ fn hold_zip(ws: &Path, release: &TrudReleaseItem, bytes: &[u8]) -> PathBuf {
     file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000))
         .unwrap();
     fs::write(
-        dir.parent().unwrap().join(PROVENANCE_FILENAME),
-        r#"{"_type":"ods.provenance","trud_release_date":"old","trud_release_sha256_verified":true}"#,
+        dir.join(LEGACY_PROVENANCE_FILENAME),
+        r#"{"$schema":"https://ods.fyi/schema/provenance.v1.json","trud_release_date":"old"}"#,
     )
     .unwrap();
     zip
@@ -170,8 +171,8 @@ fn mtime(path: &Path) -> std::time::SystemTime {
 }
 
 fn readable_provenance(ws: &Path, date: &str) -> bool {
-    let path = ws.join("releases").join(date).join(PROVENANCE_FILENAME);
-    matches!(OdsProvenance::load_from_file(&path), ProvenanceLoad::Read(..))
+    let path = ods::provenance::pull_record_path(&ws.join("releases").join(date));
+    matches!(PullRecord::load_from_file(&path), RecordLoad::Read(..))
 }
 
 // A directory with only a zip and an old-format provenance is made whole from the zip.
@@ -196,7 +197,11 @@ fn test_pull_repairs_a_directory_from_the_zip_it_holds() {
     assert_eq!(mtime(&zip), mtime_before, "the zip was rewritten");
     assert_eq!(trud.archives(), 0, "the zip was downloaded");
     assert_eq!(trud.files(), 3, "NHS's checksum, signature and key are fetched");
-    assert!(readable_provenance(&ws, &release.release_date), "provenance is written again");
+    assert!(readable_provenance(&ws, &release.release_date), "the pull record is written");
+    assert!(
+        !trud_dir(&ws, &release.release_date).join(LEGACY_PROVENANCE_FILENAME).exists(),
+        "the older _provenance.json it replaces is removed"
+    );
     assert!(!listing.exists(), "the leftover TRUD listing is removed");
     assert!(
         first.output.contains("repaired: checksum, signature, key, provenance"),
@@ -495,9 +500,10 @@ fn test_ndjson_of_a_batch_with_a_download_names_the_repair_and_the_download() {
 // A repair that fails is `failed` with its error, as a failed download is; the pull carries on with the rest, then
 // exits 1.
 
-/// Makes a release's repair fail: `_provenance.json` is a directory, so it can't be rewritten.
+/// Makes a release's repair fail: `trud/datapackage.json` is a directory, so it can't be
+/// rewritten.
 fn break_repair(ws: &Path, date: &str) {
-    let path = ws.join("releases").join(date).join(PROVENANCE_FILENAME);
+    let path = ods::provenance::pull_record_path(&ws.join("releases").join(date));
     let _ = fs::remove_file(&path);
     fs::create_dir_all(&path).unwrap();
 }

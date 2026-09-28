@@ -24,10 +24,11 @@ Compile TRUD XML into Parquet tables
 Usage: ods make [OPTIONS] [COMMAND]
 
 Commands:
-  parquet  Generate target projections (Parquet tables) from XML
-  oci      Generate OCI image layout for a compiled release
-  release  Cut and validate a publishable release row for data/releases.json
-  help     Print this message or the help of the given subcommand(s)
+  parquet      Generate target projections (Parquet tables) from XML
+  oci          Write the OCI image layout for a compiled release, for publishing
+  release      Cut and validate a publishable release row for data/releases.json
+  datapackage  Write datapackage.json, the release's Data Package view, from its Parquet files
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
   -i, --input <INPUT>    TRUD XML file or ZIP archive input path [default: active release in workspace]
@@ -69,7 +70,7 @@ Options:
       --no-progress                    Disable interactive live progress animations
       --format <FORMAT>                Output format (ndjson for pull outcomes, json for release list)
       --api-key <API_KEY>              TRUD API Key [env: TRUD_API_KEY=]
-  -o, --output <OUTPUT>                Custom output directory for downloaded archive and provenance (defaults to workspace release dir ./ods_data/releases/<date>/)
+  -o, --output <OUTPUT>                Custom output directory for the downloaded archive and its record (defaults to workspace release dir ./ods_data/releases/<date>/)
       --verify-only <VERIFY_ONLY>      Verify local archive file checksum against TRUD API without downloading
       --local-archive <LOCAL_ARCHIVE>  Local archive or directory containing canned TRUD response.json & ZIP for offline testing
   -w, --workspace <WORKSPACE>          Workspace directory (default: the one found from the current directory)

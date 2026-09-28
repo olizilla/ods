@@ -6,7 +6,14 @@ use ods::commands::fetch::{
     run_local_archive_with_fetchers, Args as FetchArgs, TrudFetcher, TrudReleaseItem,
 };
 use ods::progress::{Progress, ProgressCaps};
-use ods::provenance::{compute_file_sha256, PROVENANCE_FILENAME};
+use ods::provenance::{compute_file_sha256, PULL_RECORD_FILENAME};
+
+/// The `datapackage` object `dir`'s `orgs.parquet` carries, as raw JSON.
+fn embedded_of(dir: &std::path::Path) -> String {
+    ods::provenance::read_embedded_value(&dir.join("orgs.parquet"))
+        .unwrap()
+        .expect("orgs.parquet carries a datapackage object")
+}
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -100,11 +107,9 @@ fn test_make_zip_absent_from_index_is_unverified() {
     );
     assert!(stderr.contains("Built without provenance. You can explore it with find, info and role, but not cite or publish it."));
 
-    let prov_file = out_dir.join(PROVENANCE_FILENAME);
-    assert!(
-        !prov_file.exists(),
-        "_provenance.json must NOT be written for unmatched archive"
-    );
+    assert!(!out_dir.join("trud").exists(), "nothing is written under trud/ for a build");
+    let embedded: serde_json::Value = serde_json::from_str(&embedded_of(&out_dir)).unwrap();
+    assert!(embedded.get("version").is_none() && embedded.get("sources").is_none(), "no provenance embedded: {embedded}");
 }
 
 #[test]
@@ -144,7 +149,7 @@ fn test_trud_pull_local_archive_in_index_is_verified_by_the_index() {
         stderr
     );
 
-    let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
+    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(PULL_RECORD_FILENAME);
     assert!(prov_file.exists());
 }
 
@@ -189,8 +194,9 @@ fn test_make_zip_in_index_is_verified_by_the_index() {
         stderr
     );
 
-    let prov_file = out_dir.join(PROVENANCE_FILENAME);
-    assert!(prov_file.exists());
+    // The files carry the provenance the index vouched for; a bare zip gets no trud/ record.
+    let record = ods::provenance::read_release(&out_dir).unwrap();
+    assert_eq!(record.facts().expect("provenance embedded").release_date, "2026-07-31");
 }
 
 #[test]
@@ -262,7 +268,7 @@ fn test_trud_pull_local_archive_absent_from_index_matching_trud_api_is_verified_
         output
     );
 
-    let prov_file = ws.join("releases").join("2026-07-31").join(PROVENANCE_FILENAME);
+    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(PULL_RECORD_FILENAME);
     assert!(prov_file.exists());
 }
 
@@ -488,7 +494,7 @@ fn test_trud_pull_local_archive_failing_trud_api_stays_unverified_and_prints_war
     let prov_file = ws
         .join("releases")
         .join("2026-07-31")
-        .join(PROVENANCE_FILENAME);
+        .join("trud").join(PULL_RECORD_FILENAME);
     assert!(
         !prov_file.exists(),
         "pull must refuse and write no provenance"
@@ -586,14 +592,13 @@ fn test_r11_zip_matched_by_hash_across_all_release_rows_not_filename() {
         .expect("execute ods make");
 
     assert!(output.status.success(), "ods make must succeed, stderr:\n{}", String::from_utf8_lossy(&output.stderr));
-    let prov_file = out_dir.join(PROVENANCE_FILENAME);
-    assert!(prov_file.exists(), "_provenance.json must exist");
-    let prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    assert_eq!(prov.trud_release_date.as_deref(), Some("2026-07-31"));
-    assert_eq!(prov.trud_release_sha256.as_deref(), Some(sha256.as_str()));
-    assert_eq!(prov.trud_release_filesize_bytes, Some(file_size));
-    assert_eq!(prov.license.as_deref(), Some(ods::terms::LICENSE));
-    assert_eq!(prov.attribution.as_deref(), Some(ods::terms::ATTRIBUTION));
+    let record = ods::provenance::read_release(&out_dir).unwrap();
+    let facts = record.facts().expect("the index vouched for the zip, so the files carry provenance");
+    assert_eq!(facts.release_date, "2026-07-31");
+    assert_eq!(facts.source_sha256_upper(), sha256);
+    assert_eq!(facts.source.bytes, file_size);
+    assert_eq!(facts.license().name, ods::terms::LICENSE);
+    assert_eq!(facts.license().attribution, ods::terms::ATTRIBUTION);
 }
 
 #[test]
@@ -642,9 +647,7 @@ fn test_r11_same_zip_renamed_archive_zip_matches_with_byte_identical_provenance(
         .expect("execute ods make");
     assert!(output2.status.success(), "ods make on archive.zip must succeed, stderr:\n{}", String::from_utf8_lossy(&output2.stderr));
 
-    let prov1_bytes = fs::read(out1.join(PROVENANCE_FILENAME)).unwrap();
-    let prov2_bytes = fs::read(out2.join(PROVENANCE_FILENAME)).unwrap();
-    assert_eq!(prov1_bytes, prov2_bytes, "provenance bytes must be identical for renamed archive");
+    assert_eq!(embedded_of(&out1), embedded_of(&out2), "the embedded object must be identical for a renamed archive");
 }
 
 fn serve_mock_trud(key: &str, date: &str, zip_name: &str, zip_sha256: &str, zip_size: u64) -> String {
@@ -732,11 +735,28 @@ fn test_r11_provenance_byte_identical_across_all_four_paths() {
         .output()
         .unwrap();
     assert!(out1.status.success(), "make failed: {}", String::from_utf8_lossy(&out1.stderr));
-    let prov_make = fs::read(make_out.join(PROVENANCE_FILENAME)).unwrap();
+    let prov_make = embedded_of(&make_out);
 
-    // Route 2: ods trud pull --local-archive <zip> into workspace
+    // Route 2: ods trud pull --local-archive <zip> into workspace, then ods make
     let ws2 = tmp.path().join("ws2");
     fs::create_dir_all(&ws2).unwrap();
+    // Builds the release a pull left in `ws2`, and returns the object its files carry.
+    let build_ws2 = |label: &str| -> String {
+        let release_dir = ws2.join("releases/2026-07-31");
+        let out = ods_binary()
+            .arg("make")
+            .arg("-i")
+            .arg(&release_dir)
+            .arg("-o")
+            .arg(&release_dir)
+            .arg("--index")
+            .arg(&index_file)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "make after {label} failed: {}", String::from_utf8_lossy(&out.stderr));
+        embedded_of(&release_dir)
+    };
+
     let out2 = ods_binary()
         .arg("trud")
         .arg("pull")
@@ -749,9 +769,9 @@ fn test_r11_provenance_byte_identical_across_all_four_paths() {
         .output()
         .unwrap();
     assert!(out2.status.success(), "local-archive pull failed: {}", String::from_utf8_lossy(&out2.stderr));
-    let prov_local = fs::read(ws2.join("releases/2026-07-31").join(PROVENANCE_FILENAME)).unwrap();
+    let prov_local = build_ws2("the local-archive pull");
 
-    // Route 3: heal_release_dir's refresh via ods trud pull --force
+    // Route 3: heal_release_dir's refresh via ods trud pull --force, then ods make
     let out3 = ods_binary()
         .arg("trud")
         .arg("pull")
@@ -766,34 +786,25 @@ fn test_r11_provenance_byte_identical_across_all_four_paths() {
         .output()
         .unwrap();
     assert!(out3.status.success(), "force pull failed: {}", String::from_utf8_lossy(&out3.stderr));
-    let prov_force = fs::read(ws2.join("releases/2026-07-31").join(PROVENANCE_FILENAME)).unwrap();
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(ws2.join("releases/2026-07-31").join("trud").join(PULL_RECORD_FILENAME)).unwrap(),
+    )
+    .unwrap();
+    let names: Vec<&str> = record["resources"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["archive", "checksum", "signature", "key"], "the TRUD API pull records all four files");
+    let prov_force = build_ws2("the force refresh");
 
-    // Route 4: write_provenance_file (direct function test)
-    let direct_dir = tmp.path().join("direct_fn");
-    fs::create_dir_all(&direct_dir).unwrap();
-    let _prov_fn = ods::provenance::write_provenance(
-        &direct_dir,
-        "2026-07-31",
-        &sha256,
-        file_size,
-    ).unwrap();
-    let prov_direct = fs::read(direct_dir.join(PROVENANCE_FILENAME)).unwrap();
+    // Route 4: the pull record's derivation, directly
+    let prov_direct = ods::provenance::PullRecord::for_trud_release("2026-07-31", zip_name, &sha256, file_size, &[])
+        .unwrap()
+        .embedded(ods::datapackage::DATASET_VERSION)
+        .unwrap()
+        .to_compact_json()
+        .unwrap();
 
-    assert_eq!(
-        String::from_utf8_lossy(&prov_make),
-        String::from_utf8_lossy(&prov_local),
-        "make and local-archive provenance must be byte-identical"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&prov_local),
-        String::from_utf8_lossy(&prov_force),
-        "local-archive and force refresh provenance must be byte-identical"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&prov_force),
-        String::from_utf8_lossy(&prov_direct),
-        "force refresh and write_provenance must be byte-identical"
-    );
+    assert_eq!(prov_make, prov_local, "make and local-archive provenance must be byte-identical");
+    assert_eq!(prov_local, prov_force, "local-archive and force refresh provenance must be byte-identical");
+    assert_eq!(prov_force, prov_direct, "force refresh and the direct derivation must be byte-identical");
 }
 
 #[test]
@@ -813,7 +824,7 @@ fn test_make_release_refuses_unprovenanced_build() {
         .output()
         .unwrap();
     assert!(make_out.status.success());
-    assert!(!out_dir.join(PROVENANCE_FILENAME).exists());
+    assert!(!out_dir.join("trud").exists());
 
     // Try ods make release -i <dir>
     let rel_out = ods_binary()
@@ -836,16 +847,21 @@ fn test_trud_audit_refuses_unprovenanced_release() {
     let rel_2026 = releases_dir.join("2026-07-31");
     fs::create_dir_all(&rel_2026).unwrap();
 
-    // Create a dummy parquet and releases.json marker so workspace is valid
-    fs::write(rel_2026.join("orgs.parquet"), b"dummy parquet").unwrap();
+    // A Parquet file built without provenance, and a releases.json marker so workspace is valid
+    ods::commands::parquet::write_stub_parquet(
+        &rel_2026.join("orgs.parquet"),
+        Some(&ods::provenance::Embedded::without_provenance()),
+        "dummy parquet",
+    )
+    .unwrap();
     let index = make_v1_index(&[]);
     fs::write(ws.join("_releases.json"), serde_json::to_string_pretty(&index).unwrap()).unwrap();
     // Set active release symlink
     #[cfg(unix)]
     std::os::unix::fs::symlink("2026-07-31", releases_dir.join("current")).unwrap();
 
-    // Active release has orgs.parquet but NO _provenance.json
-    assert!(!rel_2026.join(PROVENANCE_FILENAME).exists());
+    // Active release has orgs.parquet but no provenance in it, and no pull record
+    assert!(!rel_2026.join("trud").join(PULL_RECORD_FILENAME).exists());
 
     // An input zip with XML
     let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
@@ -902,12 +918,12 @@ fn test_stale_terms_repair_with_force_pull_enables_make() {
     assert!(pull_out.status.success(), "local-archive pull failed: {}", String::from_utf8_lossy(&pull_out.stderr));
 
     let release_dir = ws.join("releases/2026-07-31");
-    let prov_file = release_dir.join(PROVENANCE_FILENAME);
+    let prov_file = release_dir.join("trud").join(PULL_RECORD_FILENAME);
 
     // Tamper with terms to simulate stale terms
-    let mut prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
-    prov.license = Some("Old Stale Licence".to_string());
-    fs::write(&prov_file, serde_json::to_string_pretty(&prov).unwrap()).unwrap();
+    let mut prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    prov.licenses[0].name = "Old Stale Licence".to_string();
+    fs::write(&prov_file, prov.to_json_string().unwrap()).unwrap();
 
     // ods make must refuse
     let make_fail = ods_binary()
@@ -939,7 +955,7 @@ fn test_stale_terms_repair_with_force_pull_enables_make() {
     assert!(force_out.status.success(), "force pull must succeed: {}", String::from_utf8_lossy(&force_out.stderr));
 
     // Provenance now has current terms
-    let refreshed_prov: ods::provenance::OdsProvenance = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    let refreshed_prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
     assert!(refreshed_prov.has_current_terms());
 
     // ods make now succeeds!

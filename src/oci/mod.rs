@@ -1,3 +1,4 @@
+pub mod dataset;
 pub mod source;
 
 use anyhow::{Context, Result};
@@ -7,7 +8,6 @@ use std::collections::BTreeMap;
 pub const MEDIA_TYPE_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 pub const MEDIA_TYPE_INDEX: &str = "application/vnd.oci.image.index.v1+json";
 pub const ARTIFACT_TYPE_DATASET: &str = "application/vnd.fyi.ods.dataset.v1";
-pub const MEDIA_TYPE_PROVENANCE: &str = "application/vnd.fyi.ods.provenance.v1+json";
 pub const MEDIA_TYPE_PARQUET: &str = "application/vnd.apache.parquet";
 pub const MEDIA_TYPE_JSON: &str = "application/json";
 pub const MEDIA_TYPE_TEXT_PLAIN: &str = "text/plain";
@@ -20,9 +20,18 @@ pub const ANNOTATION_LICENSES: &str = "org.opencontainers.image.licenses";
 pub const ANNOTATION_SOURCE: &str = "org.opencontainers.image.source";
 pub const ANNOTATION_VERSION: &str = "org.opencontainers.image.version";
 
+/// The `nhs-ods-xml` source bundles' own annotations (`src/oci/source.rs`). A dataset manifest
+/// doesn't carry them: its source is named in the generic `fyi.ods.source.*` keys below.
 pub const ANNOTATION_FYI_TRUD_RELEASE_DATE: &str = "fyi.ods.trud-release-date";
-pub const ANNOTATION_FYI_DATASET_VERSION: &str = "fyi.ods.dataset-version";
 pub const ANNOTATION_FYI_TRUD_RELEASE_SHA256: &str = "fyi.ods.trud-release-sha256";
+
+/// A dataset manifest's source release, from the embedded object's `sources[0]`: the keys
+/// every dataset uses, whatever its source. Annotation values are strings, so `bytes` is
+/// decimal text.
+pub const ANNOTATION_FYI_SOURCE_TITLE: &str = "fyi.ods.source.title";
+pub const ANNOTATION_FYI_SOURCE_VERSION: &str = "fyi.ods.source.version";
+pub const ANNOTATION_FYI_SOURCE_HASH: &str = "fyi.ods.source.hash";
+pub const ANNOTATION_FYI_SOURCE_BYTES: &str = "fyi.ods.source.bytes";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciDescriptor {
@@ -123,8 +132,12 @@ impl OciIndex {
 pub struct OciIndexManifestEntry {
     #[serde(rename = "mediaType")]
     pub media_type: String,
-    #[serde(rename = "artifactType")]
-    pub artifact_type: String,
+    /// Optional per the OCI image spec — a stock OCI client's index entry (`oras copy
+    /// --to-oci-layout`, say) may not set it, even when the manifest it points at does. A reader
+    /// that needs to know a manifest's artifact type falls back to the manifest blob's own
+    /// `artifactType` when this is `None`.
+    #[serde(rename = "artifactType", default, skip_serializing_if = "Option::is_none")]
+    pub artifact_type: Option<String>,
     pub digest: String,
     pub size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,25 +164,8 @@ impl OciLayout {
     }
 }
 
-/// Derives media type for a given file name in the release directory.
-pub fn media_type_for_file(filename: &str) -> &'static str {
-    if filename.ends_with(".parquet") {
-        MEDIA_TYPE_PARQUET
-    } else if filename == crate::provenance::PROVENANCE_FILENAME || filename == "provenance.json" {
-        MEDIA_TYPE_PROVENANCE
-    } else if filename.ends_with(".json") {
-        MEDIA_TYPE_JSON
-    } else if filename.ends_with(".md") {
-        MEDIA_TYPE_MARKDOWN
-    } else if filename.ends_with(".txt") {
-        MEDIA_TYPE_TEXT_PLAIN
-    } else {
-        "application/octet-stream"
-    }
-}
-
-/// Derives `org.opencontainers.image.created` timestamp strictly from `trud_release_date`.
-/// Never calls wall clock APIs.
+/// Derives `org.opencontainers.image.created` from a source release's date: midnight UTC, as an
+/// RFC 3339 date-time. Never calls wall clock APIs.
 pub fn derive_created_timestamp(release_date: &str) -> String {
     format!("{}T00:00:00Z", release_date)
 }
