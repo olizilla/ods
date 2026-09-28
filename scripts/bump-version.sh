@@ -72,8 +72,8 @@ report_leftovers() {
 update_expected_keys() {
   local before after
   before=$(shasum -a 256 "$EXPECTED_KEYS" 2>/dev/null | cut -d' ' -f1)
-  UPDATE_EXPECTED_KEYS=1 cargo test --quiet --test mirror_to_ods_fyi_test \
-    mirror_dry_run_keys_match_expected_keys_json >/dev/null
+  UPDATE_EXPECTED_KEYS=1 cargo test --quiet --test it \
+    mirror_to_ods_fyi_test::mirror_dry_run_keys_match_expected_keys_json >/dev/null
   after=$(shasum -a 256 "$EXPECTED_KEYS" 2>/dev/null | cut -d' ' -f1)
   if [[ "$before" != "$after" ]]; then
     ok "$EXPECTED_KEYS regenerated"
@@ -118,7 +118,7 @@ case "$KIND" in
     else
       perl -0pi -e 's/^pub const DATASET_VERSION: &str = "\Q'"$OLD"'\E";/pub const DATASET_VERSION: &str = "'"$NEW"'";/m' "$DATASET_RS"
       [[ "$(dataset_version)" == "$NEW" ]] || die "failed to set $DATASET_RS to $NEW"
-      UPDATE_SCHEMA=1 cargo test --quiet --test schema_contract_test >/dev/null
+      UPDATE_SCHEMA=1 cargo test --quiet --test it schema_contract_test:: >/dev/null
       ok "dataset $OLD → $NEW  $DATASET_RS, $DATAPACKAGE_JSON"
       update_expected_keys
       note "Every manifest built from now on has a new digest: datapackage.json is a layer."

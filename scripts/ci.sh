@@ -112,9 +112,9 @@ clippy_check() { cargo clippy --all-targets -- -D warnings; }
 
 rust_tests() {
   local leaks
-  leaks=$(grep -rn 'CARGO_BIN_EXE_ods' tests/ | grep -v '^tests/common/mod\.rs:' || true)
+  leaks=$(grep -rn 'CARGO_BIN_EXE_ods' tests/ | grep -v '^tests/it/common/mod\.rs:' || true)
   if [ -n "$leaks" ]; then
-    echo "CARGO_BIN_EXE_ods used outside tests/common/mod.rs:" >&2
+    echo "CARGO_BIN_EXE_ods used outside tests/it/common/mod.rs:" >&2
     echo "$leaks" >&2
     return 1
   fi
