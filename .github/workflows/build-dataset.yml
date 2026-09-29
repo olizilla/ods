@@ -202,8 +202,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: oras login ghcr.io --username "${{ github.actor }}" --password-stdin <<<"$GITHUB_TOKEN"
 
-      - name: Install gnupg (gpgv)
-        run: brew install gnupg
+      # macOS ships bash 3.2 (no mapfile); the Ubuntu jobs run bash 5. Homebrew's bash comes first
+      # on PATH, so every later step and script here runs the same bash as Ubuntu.
+      - name: Install gnupg (gpgv) and bash 5
+        run: |
+          brew install gnupg bash
+          if (( $(bash -c 'echo "${BASH_VERSINFO[0]}"') < 5 )); then
+            echo "✖ bash 5 isn't first on PATH: $(command -v bash)" >&2
+            exit 1
+          fi
+          echo "✓ $(command -v bash): $(bash -c 'echo "$BASH_VERSION"')"
 
       - name: Build every date
         id: build
