@@ -1224,12 +1224,16 @@ pub fn create_inner_zip(filename: &str, content: &[u8]) -> Vec<u8> {
 }
 
 /// Creates a flat mock TRUD zip with HSCOrgRefData_Full_mock.xml at `dir.join(filename)`.
+///
+/// The entry is `Stored`, so the zip's bytes (and the SHA-256 snapshots print) don't depend on
+/// which deflate backend `zip` was built with.
 #[allow(dead_code)]
 pub fn create_mock_trud_zip(dir: &Path, filename: &str) -> PathBuf {
     let zip_path = dir.join(filename);
     let zip_file = std::fs::File::create(&zip_path).unwrap();
     let mut zip_writer = zip::ZipWriter::new(zip_file);
     let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
         .last_modified_time(zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0).unwrap());
     zip_writer
         .start_file("HSCOrgRefData_Full_mock.xml", options)

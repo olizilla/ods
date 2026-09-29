@@ -21,7 +21,7 @@ quick-xml = { version = "0.31", features = ["serialize"] }
 arrow = { version = "60", default-features = false }
 parquet = { version = "60", features = ["arrow"] }
 walkdir = "2.4"
-zip = "1.0"
+zip = { version = "1.0", default-features = false, features = ["deflate"] }
 rayon = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
