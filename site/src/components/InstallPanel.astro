@@ -8,19 +8,23 @@ const command = 'cargo install --locked --git https://github.com/olizilla/ods.gi
     <h3>Install ods</h3>
     <span class="platforms">macOS & Linux</span>
   </div>
+  <p>Use Homebrew. It packs things into OCI Images too!</p>
   <div class="command-row">
     <div class="command"><span class="prompt">❯ </span>{brewCmd}</div>
     <button type="button" class="copy" data-command={brewCmd}>Copy</button>
   </div>
-  <p class="note">
-    Check it worked with <code>ods --version</code>,
-    then run <code>ods pull</code>.
-    <br/>
-    Need windows support? <a href="https://github.com/olizilla/ods/issues">Open an issue</a>
+  <p class="source">Or install from source with <code>{command}</code></p>
+  <p>
+    Need <code>ods</code> on windows? <a href="https://github.com/olizilla/ods/issues">Open an issue</a>
   </p>
 </div>
 
 <style>
+  .source code{
+    user-select: all;
+    display: block;
+    padding-top: 16px;
+  }
   .panel {
     background: var(--panel);
     border-top: 4px solid var(--blue);
@@ -81,6 +85,9 @@ const command = 'cargo install --locked --git https://github.com/olizilla/ods.gi
     user-select: none;
   }
   @media (max-width: 800px) {
+    .source{
+      display: none;
+    }
     .panel {
       margin-inline: calc(var(--gutter) * -1);
       padding-inline: 16px;
