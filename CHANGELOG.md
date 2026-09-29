@@ -2,6 +2,13 @@
 
 All notable changes to the `ods` tool will be documented in this file.
 
+## [0.2.2] - 2026-09-29
+
+Builds dataset 0.2.0.
+
+### Fixed
+- CI tags a dataset with its dataset version, not the tool's.
+
 ## [0.2.1] - 2026-09-29
 
 Builds dataset 0.2.0.

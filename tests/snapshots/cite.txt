@@ -148,7 +148,7 @@ How to Cite
     release 2026-08-28 (Version 0.1.0) [Data set].
 
   The tool:
-    Evans, O. (2026). ods (Version 0.2.1) [Computer software].
+    Evans, O. (2026). ods (Version 0.2.2) [Computer software].
     https://github.com/olizilla/ods
 
 Data availability
@@ -178,7 +178,7 @@ How to Cite
     release 2026-08-28 (Version 0.1.0) [Data set].
 
   The tool:
-    Evans, O. (2026). ods (Version 0.2.1) [Computer software].
+    Evans, O. (2026). ods (Version 0.2.2) [Computer software].
     https://github.com/olizilla/ods
 
 Data availability
@@ -211,7 +211,7 @@ How to Cite
     release 2026-08-28 (Version 0.3.0) [Data set].
 
   The tool:
-    Evans, O. (2026). ods (Version 0.2.1) [Computer software].
+    Evans, O. (2026). ods (Version 0.2.2) [Computer software].
     https://github.com/olizilla/ods
 
 Data availability
@@ -248,7 +248,7 @@ How to Cite
     release 2026-08-28 (Version 0.1.0) [Data set].
 
   The tool:
-    Evans, O. (2026). ods (Version 0.2.1) [Computer software].
+    Evans, O. (2026). ods (Version 0.2.2) [Computer software].
     https://github.com/olizilla/ods
 
 Data availability
