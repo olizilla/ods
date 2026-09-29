@@ -1,24 +1,22 @@
 ---
+const brewCmd = 'brew install olizilla/tap/ods'
 const command = 'cargo install --locked --git https://github.com/olizilla/ods.git';
 ---
 
 <div id="install" class="panel">
   <div class="heading-row">
     <h3>Install ods</h3>
-    <span class="platforms">macOS, Linux and Windows</span>
+    <span class="platforms">macOS & Linux</span>
   </div>
-  <p class="note">
-    A single binary, built from source with Cargo. You will need a Rust toolchain; <a href="#top"
-      >rustup.rs</a
-    > sets one up.
-  </p>
   <div class="command-row">
-    <div class="command"><span class="prompt">❯ </span>{command}</div>
-    <button type="button" class="copy" data-command={command}>Copy</button>
+    <div class="command"><span class="prompt">❯ </span>{brewCmd}</div>
+    <button type="button" class="copy" data-command={brewCmd}>Copy</button>
   </div>
   <p class="note">
-    Homebrew and prebuilt binaries will follow. Check it worked with <code>ods --version</code>,
+    Check it worked with <code>ods --version</code>,
     then run <code>ods pull</code>.
+    <br/>
+    Need windows support? <a href="https://github.com/olizilla/ods/issues">Open an issue</a>
   </p>
 </div>
 

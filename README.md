@@ -2,15 +2,14 @@
 
 All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files.
 
-The NHS Organisation Data Service (ODS) publishes reference data for every health and social care site. This project provides deterministic projections of that data to static Parquet files you can query offline with SQL, reproduce them yourself to verify, or rehost the data on any OCI container registry.
+The NHS Organisation Data Service (ODS) publishes reference data for every health and social care site. This project provides deterministic projections of that data to static Parquet files you can query offline with SQL, reproduce yourself to verify them, or rehost on any OCI container registry.
 
 - `ods` is a Rust CLI that makes the ODS data easy to fetch, query, cite, and reproduce.
 - [`ods.fyi`](https://ods.fyi) hosts the data as verifiable OCI Images. Republished to ghcr.io for resilience.
 
+Inspired by [@pacharanero](https://github.com/pacharanero)'s [`sct`][sct] CLI for SNOMED data. Borrows ideas from [@andrew](https://github.com/andrew) and [@homebrew](https://github.com/homebrew).
+
 > **NOTE** this is an independent project not commissioned by the NHS. The goal is to provide reliable and useful projections of NHS data, to aid research and to demonstrate the value of open formats, content-addressing and good UX.
-
-
-Inspired by [`sct`][sct], the [SNOMED CT CLI][sct]. `ods` aims to provide an open, resilient, academically citable and easy to use source for NHS Org structure data.
 
 **Best bits**
 
@@ -31,34 +30,33 @@ Use the data in multiple ways:
 | _See what changed_         | Diff trud ods releases | `ods trud diff` |
 | _Know how it works_        | See the SQL queries    | `ods find --sql` |
 
+## Install
+
+```bash
+brew install olizilla/tap/ods
+``` 
+
+- Use `ods pull` to fetch the latest release.
+- Use `ods find` to explore the data without SQL.
 
 ## Query the data
 
-- Install with `cargo install --locked --git https://github.com/olizilla/ods.git`.
-- Use `duckdb` to query the hosted parquet files directly. 
-- Use `ods pull` to fetch the data to your computer.
-- Use `ods find` to explore the data without SQL.
-
-### Try it out
+You can use `duckdb` to query the local parquet files with SQL, _or the hosted parquet files directly!_
 
 `https://ods.fyi/orgs.parquet` is a convenience URL that follows the newest release.
-Query the hosted Parquet files directly with `duckdb` without installing `ods`:
 
 ```shell
-duckdb -c "
-  SELECT ods_code, name, postcode, role_names
-    FROM 'https://ods.fyi/orgs.parquet'
-   WHERE status = 'active'
-     AND (legal_end IS NULL OR legal_end > publication_date)
-   AND list_contains(role_names, 'GP Practice')
-   AND postcode LIKE 'SW9%';"
+# Query the Parquet files over http (for fun!)
+duckdb -c "SELECT count(*) FROM 'https://ods.fyi/orgs.parquet' WHERE status = 'active'"
 ```
 
-### Local-first
+## Local-first
 
-Running more than a few queries? Fetch the parquet files for the release once with `ods pull`. Local queries on static parquet files are _fast_, and **reliable**. 
+Local queries on static parquet files are _fast_, and **reliable**. 
 
-Datasets are published as a content-addressed [OCI Images](https://opencontainers.org/faq/), and `ods pull` verifies the file integrity for you.
+Datasets are published as content-addressed [OCI Images](https://opencontainers.org/faq/), like homebrew or docker for data.
+
+Run `ods pull` to fetch and verify, then explore it with `ods find`. 
 
 ```console
 $ ods pull
@@ -86,6 +84,20 @@ $ ods find --gp --in SW9
 ├──────────┴──────────────────────────────┴──────────┴────────────────┴───────┴──────────┤
 │ 10 open                                                    Use --all to include closed │
 └────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+`ods pull` saves the parquet in `ods_data`. 
+
+You can run SQL on your local files:
+
+```sql
+-- run me in duckdb, or anything that speaks parquet.
+SELECT *
+  FROM 'ods_data/current/orgs.parquet'
+ WHERE status = 'active'
+   AND (legal_end IS NULL OR legal_end > publication_date)
+ AND list_contains(role_names, 'GP Practice')
+ AND postcode LIKE 'SW9%';"
 ```
 
 ## ODS data directory
