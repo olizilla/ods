@@ -46,15 +46,15 @@ describe('Derived Headers & Caching Policies', () => {
   // A release's only real blobs are its Parquet layers and the manifest itself: the files
   // carry their own provenance, and `datapackage.json` is never packed.
   const EXPECTED_CONTRACT: Record<string, { contentType: string; cacheControl: string }> = {
-    'v2/ods-data/blobs/sha256/8b985d948c34a6b32eaab68609f0f3e78c18cacb314eca5ad8329539837d42c0': {
+    'v2/ods-data/blobs/sha256/79ac6fbed4cd89c89131b15d2de2ec70bb0b93c1d670eced8815968f80a5e939': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/9a5cd71f11c63554c86c2a6c33c89d70e403f3e153975e5089fe5aa88863c913': {
+    'v2/ods-data/blobs/sha256/808218098d6e10d5f78a833ee83721947f6dce919b89fbfbbd0e54f796f311e4': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
-    'v2/ods-data/blobs/sha256/ebcebc09cf38dd3ea3964d602060f2b5fb01a1e8215adb43edc1df8a80d49a32': {
+    'v2/ods-data/blobs/sha256/e29eb919a8e47ea4365eaaa6a780020a48ea06e96bc32013ffc2ce25c3a4876d': {
       contentType: 'application/octet-stream',
       cacheControl: 'public, max-age=31536000, immutable',
     },
@@ -62,7 +62,7 @@ describe('Derived Headers & Caching Policies', () => {
       contentType: 'application/vnd.oci.image.manifest.v1+json',
       cacheControl: 'no-cache',
     },
-    'v2/ods-data/manifests/2026-07-31_0.1.0': {
+    'v2/ods-data/manifests/2026-07-31_0.2.0': {
       contentType: 'application/vnd.oci.image.manifest.v1+json',
       cacheControl: 'public, max-age=31536000, immutable',
     },

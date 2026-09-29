@@ -22,6 +22,11 @@ function walkDir(base: string, current: string = base): string[] {
 }
 
 // The source every release index here lists releases of: the header data/releases.json has.
+// The dataset version this ods builds (data/datapackage.json), so a dataset bump needs no edit here.
+const datasetVersion: string = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../../data/datapackage.json'), 'utf8'),
+).version;
+
 const indexSource = {
   title: 'NHS Organisation Data Service XML Data',
   path: 'https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases',
@@ -136,7 +141,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       }
       const manifestsDir = path.join(distDir, 'v2', 'ods-data', 'manifests');
       fs.mkdirSync(manifestsDir, { recursive: true });
-      for (const tag of ['2026-07-31_0.1.0', '2026-07-31', 'latest']) {
+      for (const tag of [`2026-07-31_${datasetVersion}`, '2026-07-31', 'latest']) {
         fs.writeFileSync(path.join(manifestsDir, tag), manifestBytes);
       }
 
@@ -151,7 +156,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
             source: { version: '2026-07-31', hash: zipHash, bytes: zipBytes.length },
             datasets: [
               {
-                version: '2026-07-31_0.1.0',
+                version: `2026-07-31_${datasetVersion}`,
                 manifest_digest: `sha256:${manifestDigest}`,
                 bytes: datasetFilesize,
                 tool_version: '0.1.0',

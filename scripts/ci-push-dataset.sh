@@ -9,7 +9,8 @@
 #
 # Push only, under the tag rule — a pushed versioned tag is never moved. `oras repo tags` lists
 # what's already there; membership in that list is the only thing that means "exists" — a failing
-# call is a failure, never read as "absent":
+# call is a failure, never read as "absent", except the registry's own NAME_UNKNOWN for a
+# repository that doesn't exist yet (its first push):
 #   - the versioned tag is listed, and resolves to the gated digest   → already pushed, skip
 #   - the versioned tag is listed, and resolves to something else    → refused, a ✖ block, exit 1
 #   - the versioned tag isn't listed                                 → pushed
@@ -42,10 +43,21 @@ command -v oras >/dev/null 2>&1 || { echo "✖ oras is needed and isn't installe
 VERSIONED_TAG="${DATE}_${VERSION}"
 REF="ghcr.io/olizilla/$REPOSITORY"
 
-existing_tags="$(oras repo tags "$REF")" || {
-  echo "✖ $DATE  listing tags for $REF failed, so whether $VERSIONED_TAG exists is unknown" >&2
-  exit 1
-}
+# A repository nobody has pushed to yet doesn't exist: ghcr.io creates it on the first push, and
+# until then the registry answers NAME_UNKNOWN ("name unknown"). That answer, and only that one,
+# means there are no tags. Every other failure stays a failure.
+list_err="$(mktemp)"
+if ! existing_tags="$(oras repo tags "$REF" 2>"$list_err")"; then
+  if grep -q "name unknown" "$list_err"; then
+    echo "* $DATE  $REF doesn't exist yet: this push creates it"
+    existing_tags=""
+  else
+    cat "$list_err" >&2
+    echo "✖ $DATE  listing tags for $REF failed, so whether $VERSIONED_TAG exists is unknown" >&2
+    exit 1
+  fi
+fi
+rm -f "$list_err"
 
 if grep -qx "$VERSIONED_TAG" <<<"$existing_tags"; then
   remote_digest="$(oras resolve "$REF:$VERSIONED_TAG")"
