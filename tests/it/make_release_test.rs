@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ods::commands::make_release::{perform_all_release_checks, run_as, Args, BuildIdentity};
+use ods::commands::make_release::{perform_all_release_checks, perform_release_checks, run_as, Args, BuildIdentity, TagCheck};
 use ods::provenance::{Embedded, ReleaseFacts};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &build)?;
 
     let index_file = tmp.path().join("data").join("releases.json");
@@ -110,6 +111,32 @@ fn test_make_release_refuses_an_ods_that_is_not_the_commit_its_tag_names() -> Re
         "{:?}",
         failures
     );
+    Ok(())
+}
+
+#[test]
+fn test_a_rehearsal_skips_only_the_tag_check() -> Result<()> {
+    let (tmp, rel_dir) = setup_synthetic_repo_and_release();
+    let other_commit = "0000000000000000000000000000000000000000".to_string();
+    let build = BuildIdentity { git_sha: Some(other_commit), ..fixture_build_identity(tmp.path()) };
+
+    let failures = perform_release_checks(
+        &rel_dir,
+        ods::datapackage::DATASET_VERSION,
+        Some(tmp.path()),
+        None,
+        &build,
+        TagCheck::Skipped,
+    )?;
+    assert!(!failures.iter().any(|f| f.contains("points at")), "{:?}", failures);
+
+    // Still refused: a dirty tree, and a build with no commit.
+    let dirty = BuildIdentity { dirty: true, ..build.clone() };
+    let failures = perform_release_checks(&rel_dir, ods::datapackage::DATASET_VERSION, Some(tmp.path()), None, &dirty, TagCheck::Skipped)?;
+    assert!(failures.iter().any(|f| f.contains("dirty working tree")), "{:?}", failures);
+    let no_commit = BuildIdentity { git_sha: None, ..build };
+    let failures = perform_release_checks(&rel_dir, ods::datapackage::DATASET_VERSION, Some(tmp.path()), None, &no_commit, TagCheck::Skipped)?;
+    assert!(failures.iter().any(|f| f.contains("without a git commit")), "{:?}", failures);
     Ok(())
 }
 
@@ -199,6 +226,7 @@ fn test_make_release_refuses_when_no_repo_found() {
         doi: None,
         tool_repo: Some(not_a_repo),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()));
 
     assert!(res.is_err(), "Must refuse when tool_repo is not a repo");
@@ -266,6 +294,7 @@ fn test_make_release_fails_on_dataset_version_mismatch_with_tool() -> Result<()>
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
@@ -286,6 +315,7 @@ fn test_make_release_refuses_missing_dataset_version() -> Result<()> {
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err());
     let err = format!("{:#}", res.unwrap_err());
@@ -337,6 +367,7 @@ fn test_make_release_checks_before_writing_dirty_tree() -> Result<()> {
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &dirty);
     assert!(res.is_err(), "make release must fail when the recording ods was built from a dirty tree");
     let err = format!("{:#}", res.unwrap_err());
@@ -385,6 +416,7 @@ fn test_make_release_missing_index_writes_nothing() -> Result<()> {
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: Some(non_existent_index.clone()),
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()));
     assert!(res.is_err(), "make release must fail when index cannot be read");
     let err = res.unwrap_err();
@@ -450,6 +482,7 @@ fn test_make_release_records_only_the_release_it_records() -> Result<()> {
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     let index_file = tmp.path().join("data").join("releases.json");
@@ -488,6 +521,7 @@ fn test_make_release_leaves_another_recorded_date_byte_for_byte() -> Result<()> 
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     let content = fs::read_to_string(&index_file)?;
@@ -562,6 +596,7 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     let content = fs::read_to_string(&index_file)?;
@@ -587,6 +622,7 @@ fn test_make_release_identical_republish_is_noop_leaving_index_byte_identical() 
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     let bytes_after_first = fs::read(&index_file)?;
@@ -597,6 +633,7 @@ fn test_make_release_identical_republish_is_noop_leaving_index_byte_identical() 
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     let bytes_after_second = fs::read(&index_file)?;
@@ -628,6 +665,7 @@ fn test_make_release_republish_by_another_ods_keeps_the_first_row() -> Result<()
         doi: None,
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     };
     run_as(args(&rel_dir), &first)?;
     let after_first = fs::read(&index_file)?;
@@ -676,6 +714,7 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
         doi: Some("10.5281/zenodo.12345".to_string()),
         tool_repo: Some(tmp.path().to_path_buf()),
         index: None,
+        rehearsal: false,
     }, &fixture_build_identity(tmp.path()))?;
 
     assert!(

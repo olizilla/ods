@@ -148,10 +148,12 @@ When shipping a new version of the `ods` binary:
 ### Dataset releases
 When publishing a monthly dataset cut, or rebuilding the back catalogue after a schema change:
 
-1. Dispatch `build-dataset.yml` from the tool tag `v<version>`; it refuses to run from anywhere
-   else. Set `dates` to `latest` for a new TRUD release, to one or more `YYYY-MM-DD` dates, or to
-   `all` to rebuild the back catalogue. `repository` defaults to `ods-data-rehearsal`: dispatch
-   there first to try the whole run, then again with `ods-data` to publish for real.
+1. Rehearse, then release. `repository` defaults to `ods-data-rehearsal`: dispatch there first
+   to try the whole run, from any ref (`main` included, so a CI fix can be tried before it's
+   tagged); its `ods make release --rehearsal` skips only the check that the tag points at the
+   commit. Then dispatch from the tool tag `v<version>` with `ods-data` to publish for real: a
+   release refuses to run from anywhere else. Set `dates` to `latest` for a new TRUD release, to
+   one or more `YYYY-MM-DD` dates, or to `all` to rebuild the back catalogue.
 2. The workflow fetches any archive not yet cached in `ghcr.io/olizilla/nhs-ods-xml` from TRUD,
    checks NHS's signature, and caches it there. It then builds each date on `macos-latest` and
    `ubuntu-latest`, and refuses to go on if their manifest digests disagree. The Ubuntu build

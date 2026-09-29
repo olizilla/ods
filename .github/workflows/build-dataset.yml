@@ -50,16 +50,23 @@ jobs:
       - &checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # A release runs from the tag v<version>. A rehearsal (repository=ods-data-rehearsal) may run
+      # from any ref, e.g. main, so a CI fix can be tried before it's tagged.
       - name: Check the tag, and read the tool version
         id: tag
+        env:
+          REPOSITORY: ${{ inputs.repository }}
         run: |
           version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
-          if [[ "${GITHUB_REF_TYPE:-}" != "tag" || "${GITHUB_REF_NAME:-}" != "v$version" ]]; then
-            echo "✖ this workflow only runs from the tag v$version (Cargo.toml's version), workflow_dispatch only" >&2
-            echo "  it ran from ${GITHUB_REF_TYPE:-<unset>} '${GITHUB_REF_NAME:-<unset>}'" >&2
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == "v$version" ]]; then
+            echo "✓ running from tag v$version"
+          elif [[ "$REPOSITORY" == "ods-data-rehearsal" ]]; then
+            echo "* rehearsal from ${GITHUB_REF_TYPE:-<unset>} '${GITHUB_REF_NAME:-<unset>}', not tag v$version"
+          else
+            echo "✖ a release runs only from the tag v$version (Cargo.toml's version), workflow_dispatch only" >&2
+            echo "  it ran from ${GITHUB_REF_TYPE:-<unset>} '${GITHUB_REF_NAME:-<unset>}'; only repository=ods-data-rehearsal runs from any ref" >&2
             exit 1
           fi
-          echo "✓ running from tag v$version"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
       - &install_rust_toolchain
@@ -187,7 +194,13 @@ jobs:
       - *cache_rust_build
       - *cargo_build
       - *install_oras
-      - *login_to_ghcr
+
+      # oras, not docker/login-action: the macOS runners have no docker. This job only reads
+      # from ghcr.io, with oras; the token goes in on stdin.
+      - name: Log in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: oras login ghcr.io --username "${{ github.actor }}" --password-stdin <<<"$GITHUB_TOKEN"
 
       - name: Install gnupg (gpgv)
         run: brew install gnupg
@@ -277,7 +290,11 @@ jobs:
           jq --arg a "https://ods.fyi/v2/$REPOSITORY" --arg b "https://ghcr.io/v2/olizilla/$REPOSITORY" \
             '.mirrors = [{url: $a}, {url: $b}]' \
             data/releases.json >candidate-full.json
-          ods make release --input "release/$DATE" --index candidate-full.json
+          if [[ "$REPOSITORY" == "ods-data-rehearsal" ]]; then
+            ods make release --input "release/$DATE" --index candidate-full.json --rehearsal
+          else
+            ods make release --input "release/$DATE" --index candidate-full.json
+          fi
           jq --arg d "$DATE" '[.releases[] | select(.source.version == $d)][0]' candidate-full.json >"candidate-$DATE.json"
 
       - name: Re-verify with ods pull

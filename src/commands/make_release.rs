@@ -25,6 +25,21 @@ pub struct Args {
     /// Path to release index file (defaults to data/releases.json)
     #[arg(long)]
     pub index: Option<PathBuf>,
+
+    /// A rehearsal: record the row without checking that this ods is the commit its tag
+    /// v<version> points at, so CI can rehearse from a branch. Only for a rehearsal package's
+    /// candidate index, never for data/releases.json.
+    #[arg(long)]
+    pub rehearsal: bool,
+}
+
+/// Whether the release checks require this ods to be the commit its tag points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagCheck {
+    /// A release: the tag `v<tool_version>` must point at this ods's commit.
+    Required,
+    /// A rehearsal (`--rehearsal`): any commit, still from a clean tree.
+    Skipped,
 }
 
 /// The `ods` that is recording a release: the build that runs `ods make release`. The index
@@ -151,12 +166,20 @@ pub fn run_as(args: Args, build: &BuildIdentity) -> Result<()> {
     };
 
     // 2. Run Checks 10-14 before any writes
-    let failures = perform_all_release_checks(
+    let tag_check = if args.rehearsal { TagCheck::Skipped } else { TagCheck::Required };
+    if args.rehearsal {
+        eprintln!(
+            "* rehearsal: not checking that v{} points at this ods's commit",
+            build.tool_version
+        );
+    }
+    let failures = perform_release_checks(
         &release_dir,
         &version,
         tool_repo.as_deref(),
         custom_index.as_ref(),
         build,
+        tag_check,
     )?;
 
     if !failures.is_empty() {
@@ -328,12 +351,26 @@ fn release_row_for(facts: &ReleaseFacts) -> Release {
     }
 }
 
+/// The checks for a release, the tag check included.
 pub fn perform_all_release_checks(
     release_dir: &Path,
     expected_version: &str,
     tool_repo: Option<&Path>,
     custom_index: Option<&OdsReleaseIndex>,
     build: &BuildIdentity,
+) -> Result<Vec<String>> {
+    perform_release_checks(release_dir, expected_version, tool_repo, custom_index, build, TagCheck::Required)
+}
+
+/// The checks before any writes; `tag_check` says whether this ods must be the commit its tag
+/// points at (a release) or may be any commit (a rehearsal).
+pub fn perform_release_checks(
+    release_dir: &Path,
+    expected_version: &str,
+    tool_repo: Option<&Path>,
+    custom_index: Option<&OdsReleaseIndex>,
+    build: &BuildIdentity,
+    tag_check: TagCheck,
 ) -> Result<Vec<String>> {
     let mut failures = Vec::new();
 
@@ -367,8 +404,10 @@ pub fn perform_all_release_checks(
     let repo_dir = tool_repo.unwrap_or(release_dir);
     let repo_dir_str = repo_dir.to_string_lossy();
 
-    // Check 11: it has a commit, and that commit is the one v<tool_version> points at
+    // Check 11: it has a commit, and (unless this is a rehearsal) that commit is the one
+    // v<tool_version> points at
     match build.git_sha {
+        Some(_) if tag_check == TagCheck::Skipped => {}
         None => {
             failures.push(format!(
                 "this ods was built without a git commit, so it can't say which commit built the dataset\n  Data must be recorded by a tagged tool version, so `cargo install --git … --tag {}` reproduces it.",
