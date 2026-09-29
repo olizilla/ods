@@ -27,7 +27,7 @@ Inside this ZIP container are two zipped XML files:
 
 2. **`archive.zip`** (`HSCOrgRefData_Archive_*.xml`):
    - Everything with an operational close date on or before the published cut-off (currently 31 March 2017): organisations closed decades ago, with their roles, relationships and successions.
-   - Read by `ods make` alongside `fullfile.zip`. See [nhs.md](./nhs.md#the-archive-product).
+   - Read by `ods make` alongside `fullfile.zip`.
    - Merged with `fullfile.zip`'s successions into `successions.parquet` — see [parquet.md](./parquet.md#successionsparquet) for its row count.
 
 The two files have the same shape. Each `<Manifest>` declares schema `Version` `2-0-0` and
@@ -35,10 +35,7 @@ The two files have the same shape. Each `<Manifest>` declares schema `Version` `
 `ContentDescription` (`HSCOrgRefData_Full_20260827`, `HSCOrgRefData_Archive_20260827`), and in
 `RecordCount`. Neither is a delta: each release is complete on its own.
 
-The split follows NHS England's cut-off date, and the cut-off moves. [nhs.md](./nhs.md#the-archive-product)
-has the rule, the `refOnly` stubs that keep each file self-consistent, and what moving the
-cut-off did in April 2023. One more fact from the 2026-08-28 release: an organisation found only
-in the archive is the target of no active relationship.
+One more fact from the 2026-08-28 release: an organisation found only in the archive is the target of no active relationship.
 
 ## Core XML element hierarchy
 

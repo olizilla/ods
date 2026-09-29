@@ -24,8 +24,10 @@ $ duckdb -c "SELECT ods_code, name, role_names
 ...
 ```
 
-Every query needs that `status = 'active'` unless it means to include closed
-organisations: `orgs.parquet` holds all of them, and `status` is the filter.
+Every query needs a status filter: `orgs.parquet` holds closed organisations too.
+`status = 'active'` is NHS's active, which includes organisations legally closed but kept
+open for migration. For what is open, add the legal end clause in
+[Status: active, and open](#status-active-and-open).
 
 The source is one large XML document which is awkward to query. These tables are that document, rearranged.
 NHS England documents the model behind it in the [ODS data model reference][ods-model].
@@ -59,7 +61,7 @@ a status column so you choose what to ask: `orgs.status`, `roles.role_status` an
 The tables cover every organisation in both files of a TRUD release: `fullfile.zip`,
 NHS England's live product, and `archive.zip`, which holds what it has moved out once
 an organisation closed before the published cut-off (currently 31 March 2017).
-[docs/nhs.md](./nhs.md#the-archive-product) explains the split, and `ods make` merges it away.
+[xml.md](./xml.md#the-archive-product) explains the split, and `ods make` merges it away.
 That is why `orgs` matches the manifests' `RecordCount` totals (392,906) less the
 21,989 stubs that repeat a record the other file holds in full.
 
@@ -94,13 +96,13 @@ GROUP BY 1 ORDER BY 1;
 One row per organisation or site, active or not, sorted by `status` (`active` first) then `ods_code`.
 `ods_code` is unique. Where the source published two complete records for one code, `ods`
 keeps the full file's over the archive's, and within one file the one whose operational
-period starts later; [nhs.md](./nhs.md#a-code-published-twice) names the two cases.
+period starts later; [source-issues](./source-issues/README.md) names the two cases.
 
 | Column | Type | Null | Description |
 | :--- | :--- | :--- | :--- |
 | `ods_code` | `VARCHAR` | no | The ODS code. Join on this. |
 | `name` | `VARCHAR` | no | Verbatim from ODS, which publishes in upper case |
-| `status` | `VARCHAR` | no | `active` or `inactive`. Filter on it: `WHERE status = 'active'` is what's open today |
+| `status` | `VARCHAR` | no | `active` or `inactive`, NHS's status verbatim. `active` includes organisations legally closed but kept open for migration; [Status: active, and open](#status-active-and-open) has the open filter |
 | `record_class` | `VARCHAR` | no | `org` or `site` |
 | `role_codes` | `VARCHAR[]` | no | Sorted and deduplicated. An active organisation lists its active roles; an inactive one lists every role it held |
 | `role_names` | `VARCHAR[]` | no | Curated names, aligned position-for-position with `role_codes` |
@@ -306,7 +308,7 @@ It's a few days before the TRUD release date. Of the 98 releases from June 2018 
 2026, NHS published 58 four days before TRUD's date, and the rest between 1 and 7 days before.
 The 2026-09-25 release was published on 2026-09-21. The full file and archive file `ods` builds
 from always share one date; 2019-05-31 holds a second, older full file, and
-[nhs.md](./nhs.md#a-zip-holding-two-full-files) says which is read.
+[two-full-files-2019-05](./source-issues/two-full-files-2019-05.md) says which is read.
 
 ## Status: active, and open
 
@@ -418,8 +420,7 @@ and NHS ODS has marked it legacy: *"not part of the formal documentation or
 specification for the FHIR R4 ODS API"*. They direct developers to postcode
 geography data instead ([ODS relationships reference][ods-relationships]).
 
-_TODO: JOIN from `orgs.postcode` to geography. The magic of parquet is can link to
-other databases rather than make this one capture everything._
+Postcode geography isn't in this dataset. `orgs.postcode` is the join key to a postcode directory of your own; Parquet makes that a join to another file, so this one needn't carry it.
 
 **Filter on `status`, not on `operational_end IS NULL`.** 603 active
 organisations already have a closure date scheduled. Treating a null end date as
@@ -434,6 +435,5 @@ Join on `ods_code`, always — [worked through here](./queries.md#names-are-not-
 
 [queries.md]: ./queries.md
 [datapackage]: https://datapackage.org/
-[Croissant]: https://docs.mlcommons.org/croissant/
 [ods-model]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Data-Model_571324843.html
 [ods-relationships]: https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Relationships_571324965.html

@@ -38,7 +38,7 @@ A release's full and archive files are published together, so `ods make` builds 
 and archive file whose `PublicationDate` is the same, and names every file it skipped. When more
 than one pair shares a date, it takes the one published nearest TRUD's release date. A `--force`
 build has no TRUD date to go by, so there it refuses rather than guess, and so does a zip with no
-full file and archive file of the same date. The rule is in [nhs.md](../nhs.md#a-zip-holding-two-full-files).
+full file and archive file of the same date.
 
 This release has no dataset in the index yet: its row records the issue, with TRUD's hash and size
 for the archive.

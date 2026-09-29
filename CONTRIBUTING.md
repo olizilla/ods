@@ -4,24 +4,24 @@ How to build `ods`, the principles behind it, and the sharp edges to avoid.
 
 ## Getting started
 
-The quick path, pulling published data from github:
+The quick path, pulling published data from ods.fyi:
 
 - Install the `duckdb` CLI (v1.4.1+) to run SQL equivalence tests and query Parquet files
 - `cargo test` - Run the tests 
 - `cargo install --path .` build the bin and add to your path
-- `ods pull` pull the latest data from a github release
+- `ods pull` pull the latest release from ods.fyi
 - `ods find sedbergh` - find active nhs entities in Sedbergh
 
 ```console
 # Run the tests
 $ cargo test
-...test result: ok. 77 passed; 0 failed
+...test result: ok.
 
 # build the bin and add to your path
 $ cargo install --path .
 ...Finished `release` profile [optimized] target(s) in 22.43s
 
-# pull the latest data from a github release
+# pull the latest release from ods.fyi
 $ ods pull
 
 # find active nhs entities in Sedbergh
@@ -48,13 +48,9 @@ $ ods find --in sedbergh
 
 ## Who is this for?
 
-Three audiences, wanting different things:
-
-1. Most folks will want a low friction path to query the data.
-2. Some folks will verify our claims by recreating the parquet files from the source XML.
-3. Us, to publish the artefacts. Folks can fetch them from multiple sources: the published hashes means `ods` can verify the output is identical.
-
-Most trade-offs come down to those three. 
+Three audiences, wanting different things: people who query, people who verify by rebuilding,
+and the maintainer who publishes. [docs/cli.md](./docs/cli.md#who-this-is-for) describes each
+and the commands they use. Most trade-offs come down to those three.
 
 ## What we're building
 

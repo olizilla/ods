@@ -4,7 +4,7 @@ Some interesting queries with real output. The schema and the reasoning behind i
 
 You can point `duckdb` at the parquet files and go. Local-first! All examples here show the output given from the `2026-08-28` release. `orgs.parquet` holds every organisation, closed ones too, so most queries below filter with `WHERE status = 'active'`.
 
-`status = 'active'` alone isn't the same question as "is this open": NHS keeps a legally dissolved organisation `active` for a migration window that's meant to be six months and often runs years over (see [nhs.md](./parquet.md#status-active-and-open)). What `ods find` and `ods role` actually filter on, and what a query should use if it means the same thing, is:
+`status = 'active'` alone isn't the same question as "is this open": NHS keeps a legally dissolved organisation `active` for a migration window that's meant to be six months and often runs years over (see [Status: active, and open](./parquet.md#status-active-and-open)). What `ods find` and `ods role` actually filter on, and what a query should use if it means the same thing, is:
 
 ```sql
 WHERE status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)
@@ -341,7 +341,7 @@ the ones that are actually there:
 - `legal_start` — 19% of rows. 5.8% of the active ones.
 - `legal_end` — 17% of rows
 
-Use `status = 'active'` to find what's open today, not `operational_end IS NULL`,
+Use `status = 'active'` to find NHS's active organisations, not `operational_end IS NULL`,
 which drops those 623.
 
 **For experts only.** Legal dates are reliable for organisations created by
@@ -681,7 +681,7 @@ SELECT * FROM read_parquet([
 ]);
 ```
 
-**`WHERE operational_end IS NULL` does not equal `status = 'active'`.** Upstream TRUD ODS contains 623 organisations that are `Active` while carrying an `Operational` end date. Anyone filtering `WHERE operational_end IS NULL` to mean "currently open" silently drops those 623 active organisations. Always use `WHERE status = 'active'` to filter currently open organisations.
+**`WHERE operational_end IS NULL` does not equal `status = 'active'`.** Upstream TRUD ODS contains 623 organisations that are `Active` while carrying an `Operational` end date. Anyone filtering `WHERE operational_end IS NULL` to mean "open" silently drops those 623 active organisations. Always use `WHERE status = 'active'` to filter active organisations. For open, add the legal end clause from the top of this page.
 
 **Active relationships on inactive organisations.** Upstream TRUD ODS contains 3 relationships marked `Active` associated with `Inactive` organisations.
 
