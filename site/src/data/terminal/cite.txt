@@ -5,10 +5,7 @@ How to Cite
   The source:
     NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-09-25
     [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
-    Contains information from NHS England, licensed under the current version of the
-    Open Government Licence.
 
   The data:
     Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
     release 2026-09-25 (Version 0.2.0) [Data set]. ods.fyi. https://ods.fyi
-...

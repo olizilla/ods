@@ -47,20 +47,6 @@ describe('Router & Path-to-Key Mapping', () => {
     ).toBe('v2/homebrew/core/jq/blobs/sha256/1111111111111111111111111111111111111111111111111111111111111111');
   });
 
-  it('serves GET / root text/plain landing page', async () => {
-    const res = await worker.fetch(new Request('https://ods.fyi/'), env);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/plain');
-    const text = await res.text();
-    expect(text).toContain(
-      'ods.fyi — All the organisations and sites in the NHS Organisation Data Service,\nas queryable & verifiable Parquet files. An independent project.'
-    );
-    expect(text).toContain('duckdb -c');
-    expect(text).toContain('Releases:  https://ods.fyi/releases.json');
-    expect(text).toContain('Code:      https://github.com/olizilla/ods');
-    expect(text).toContain('Data from: NHS England, via NHS TRUD, under the Open Government Licence');
-  });
-
   it('serves GET /v2/ returning 200 and {} unauthenticated', async () => {
     const res = await worker.fetch(new Request('https://ods.fyi/v2/'), env);
     expect(res.status).toBe(200);
@@ -69,11 +55,8 @@ describe('Router & Path-to-Key Mapping', () => {
     expect(body).toEqual({});
   });
 
-  it('serves GET / as the site page when Accept includes text/html', async () => {
-    const res = await worker.fetch(
-      new Request('https://ods.fyi/', { headers: { Accept: 'text/html' } }),
-      env
-    );
+  it('serves GET / as the site page', async () => {
+    const res = await worker.fetch(new Request('https://ods.fyi/'), env);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(res.headers.get('cache-control')).toBe('public, max-age=300');
@@ -82,16 +65,19 @@ describe('Router & Path-to-Key Mapping', () => {
     expect(text).toContain(siteRelease.release.date);
   });
 
-  it('serves GET / as ROOT_TEXT when Accept is */*', async () => {
-    const res = await worker.fetch(
-      new Request('https://ods.fyi/', { headers: { Accept: '*/*' } }),
-      env
-    );
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/plain');
-    const text = await res.text();
-    expect(text).toContain('Releases:  https://ods.fyi/releases.json');
-  });
+  it.each(['*/*', 'text/html', 'facebookexternalhit/1.1', 'WhatsApp/2.24.1.78 A'])(
+    'serves GET / as the site page regardless of Accept or User-Agent (%s)',
+    async (headerValue) => {
+      const res = await worker.fetch(
+        new Request('https://ods.fyi/', { headers: { Accept: '*/*', 'User-Agent': headerValue } }),
+        env
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/html');
+      const text = await res.text();
+      expect(text).toContain('property="og:image"');
+    }
+  );
 
   it('serves /_astro/ files through ASSETS, with their own type, ahead of the dataset lookup', async () => {
     // The hashed filename changes whenever the styles do, so read it from the page itself.

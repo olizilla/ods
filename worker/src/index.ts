@@ -26,21 +26,6 @@ const SCHEMAS: Record<string, unknown> = {
 import siteRootFiles from './site-root-files.json';
 const SITE_ROOT_FILES = new Set(siteRootFiles as string[]);
 
-const ROOT_TEXT = `ods.fyi — All the organisations and sites in the NHS Organisation Data Service,
-as queryable & verifiable Parquet files. An independent project.
-
-  duckdb -c "SELECT * FROM 'https://ods.fyi/orgs.parquet' LIMIT 5"
-
-Running more than a few queries? Fetch it once and query locally:
-
-  cargo install --locked --git https://github.com/olizilla/ods.git
-  ods pull
-
-Releases:  https://ods.fyi/releases.json
-Code:      https://github.com/olizilla/ods
-Data from: NHS England, via NHS TRUD, under the Open Government Licence
-`;
-
 /**
  * Pure function mapping request path to R2 object key.
  */
@@ -300,24 +285,12 @@ export default {
       return new Response(assetRes.body, { status: assetRes.status, headers });
     }
 
-    // Root endpoint
+    // Root endpoint: the site's homepage
     if (pathname === '/' || pathname === '') {
-      const accept = request.headers.get('accept') ?? '';
-      if (accept.includes('text/html')) {
-        const assetRes = await env.ASSETS.fetch(request);
-        const headers = new Headers(assetRes.headers);
-        headers.set('Cache-Control', 'public, max-age=300');
-        return new Response(assetRes.body, { status: assetRes.status, headers });
-      }
-      if (request.method === 'HEAD') {
-        const headers = new Headers(CORS_HEADERS);
-        headers.set('Content-Type', 'text/plain; charset=utf-8');
-        headers.set('Content-Length', new TextEncoder().encode(ROOT_TEXT).length.toString());
-        return new Response(null, { status: 200, headers });
-      }
-      const headers = new Headers(CORS_HEADERS);
-      headers.set('Content-Type', 'text/plain; charset=utf-8');
-      return new Response(ROOT_TEXT, { status: 200, headers });
+      const assetRes = await env.ASSETS.fetch(request);
+      const headers = new Headers(assetRes.headers);
+      headers.set('Cache-Control', 'public, max-age=300');
+      return new Response(assetRes.body, { status: assetRes.status, headers });
     }
 
     // OCI V2 Ping endpoint
