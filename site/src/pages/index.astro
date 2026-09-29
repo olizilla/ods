@@ -104,8 +104,9 @@ const duckdbHttpQuery = `duckdb -c "
       <Section tag="Local first" title="Download the files" id="download">
         <p class="body-text">
           Each release is 4 Parquet files, each carrying its own provenance, published as an OCI
-          image and stored by the hash of the data. <code>ods</code> writes a Frictionless
-          <code>datapackage.json</code> beside them, describing their schema.
+          image and stored by the hash of the data. <code>ods</code> writes a
+          Frictionless <code>datapackage.json</code> beside them, describing their schema, source and licence,
+          and frictionless-ts can validate a release against it, files and all.
         </p>
         <p class="body-text">
           <code>ods</code> (or any OCI client) can download a release to your machine and verify the
@@ -121,8 +122,6 @@ const duckdbHttpQuery = `duckdb -c "
           <Card
             variant="bordered"
             title="From the mirror"
-            muted
-            tag="Coming soon"
             command="ghcr.io/olizilla/ods-data"
           >
             Same OCI image, byte for byte

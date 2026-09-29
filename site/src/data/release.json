@@ -1,12 +1,12 @@
 {
   "release": {
-    "date": "2026-08-28",
-    "datasetVersion": "0.1.0",
-    "totalSizeBytes": 29538054,
-    "orgsRecordCount": 370917
+    "date": "2026-09-25",
+    "datasetVersion": "0.2.0",
+    "totalSizeBytes": 29604347,
+    "orgsRecordCount": 371569
   },
   "gpPractices": {
-    "total": 7941,
+    "total": 7940,
     "byCountry": [
       {
         "country": "ENGLAND",
@@ -14,7 +14,7 @@
       },
       {
         "country": "SCOTLAND",
-        "count": 1011
+        "count": 1010
       },
       {
         "country": "WALES",
@@ -38,18 +38,18 @@
   "files": [
     {
       "name": "orgs.parquet",
-      "records": 370917,
-      "sizeBytes": 16355724
+      "records": 371569,
+      "sizeBytes": 16393148
     },
     {
       "name": "relationships.parquet",
-      "records": 769527,
-      "sizeBytes": 7801934
+      "records": 770509,
+      "sizeBytes": 7821937
     },
     {
       "name": "roles.parquet",
-      "records": 529348,
-      "sizeBytes": 5062655
+      "records": 530351,
+      "sizeBytes": 5071521
     },
     {
       "name": "successions.parquet",
@@ -57,6 +57,6 @@
       "sizeBytes": 317741
     }
   ],
-  "provenance": "{\"name\":\"ods-data\",\"version\":\"2026-08-28_0.1.0\",\"licenses\":[{\"name\":\"OGL-UK-3.0\",\"path\":\"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/\",\"title\":\"Open Government Licence v3.0\",\"attribution\":\"Contains information from NHS England, licensed under the current version of the Open Government Licence.\"}],\"contributors\":[{\"title\":\"NHS England\",\"roles\":[\"rightsHolder\"]},{\"title\":\"NHS TRUD\",\"roles\":[\"distributor\"]}],\"sources\":[{\"title\":\"NHS Organisation Data Service XML Data\",\"version\":\"2026-08-28\",\"path\":\"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases\",\"hash\":\"sha256:abdd194b1569d5ff3cdd81d618847f05642bd43c5b15d6cd43d8289b7466d801\",\"bytes\":38064419}]}",
+  "provenance": "{\"name\":\"ods-data\",\"version\":\"2026-09-25_0.2.0\",\"licenses\":[{\"name\":\"OGL-UK-3.0\",\"path\":\"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/\",\"title\":\"Open Government Licence v3.0\",\"attribution\":\"Contains information from NHS England, licensed under the current version of the Open Government Licence.\"}],\"contributors\":[{\"title\":\"NHS England\",\"roles\":[\"rightsHolder\"]},{\"title\":\"NHS TRUD\",\"roles\":[\"distributor\"]}],\"sources\":[{\"title\":\"NHS Organisation Data Service XML Data\",\"version\":\"2026-09-25\",\"path\":\"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases\",\"hash\":\"sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5\",\"bytes\":38138574}]}",
   "provenanceSql": "SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WHERE decode(key) = 'datapackage'"
 }

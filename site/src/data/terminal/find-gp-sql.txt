@@ -1,6 +1,6 @@
 ❯ ods find --gp --sql
 SELECT *
-FROM 'ods_data/releases/2026-08-28/orgs.parquet'
+FROM 'ods_data/releases/2026-09-25/orgs.parquet'
 WHERE status = 'active'
   AND (legal_end IS NULL OR legal_end > publication_date)
   AND list_has_any(role_codes, ['RO76', 'RO227', 'RO315'])
