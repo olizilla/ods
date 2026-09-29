@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# scripts/ci-push-dataset.sh <repository> <version> <date> <gated-digest> <oci-layout-dir> <digest-out>
+# scripts/ci-push-dataset.sh <repository> <dataset-version> <date> <gated-digest> <oci-layout-dir> <digest-out>
 #
 # build-dataset.yml's primary job, one date at a time, right after primary has checked its own
 # digest equals the witness's. Pushes <oci-layout-dir>'s manifest — the primary's own build,
-# already gated equal to the witness's — to ghcr.io/olizilla/<repository>:<date>_<version> and
+# already gated equal to the witness's — to ghcr.io/olizilla/<repository>:<date>_<dataset-version> and
 # :<date>.
 #
 # Push only, under the tag rule — a pushed versioned tag is never moved. `oras repo tags` lists
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/ci-push-dataset.sh <repository> <version> <date> <gated-digest> <oci-layout-dir> <digest-out>" >&2
+  echo "usage: scripts/ci-push-dataset.sh <repository> <dataset-version> <date> <gated-digest> <oci-layout-dir> <digest-out>" >&2
   exit 2
 }
 

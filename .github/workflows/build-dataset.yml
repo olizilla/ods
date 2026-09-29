@@ -41,8 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
-      # The tool version this run is tagged with, for the dataset's versioned tag
-      version: ${{ steps.tag.outputs.version }}
     permissions:
       contents: read
       packages: write
@@ -67,7 +65,6 @@ jobs:
             echo "  it ran from ${GITHUB_REF_TYPE:-<unset>} '${GITHUB_REF_NAME:-<unset>}'; only repository=ods-data-rehearsal runs from any ref" >&2
             exit 1
           fi
-          echo "version=$version" >>"$GITHUB_OUTPUT"
 
       - &install_rust_toolchain
         name: Install the pinned Rust toolchain (rust-toolchain.toml)
@@ -283,11 +280,13 @@ jobs:
         id: push
         env:
           REPOSITORY: ${{ inputs.repository }}
-          VERSION: ${{ needs.archive.outputs.version }}
           DATE: ${{ matrix.date }}
         run: |
+          # The dataset's tag is <date>_<dataset version> (data/datapackage.json), not the tool's
+          # version: v0.2.1 builds dataset 0.2.0.
+          dataset_version="$(jq -r .version data/datapackage.json)"
           gated_digest="$(cat digest.txt)"
-          scripts/ci-push-dataset.sh "$REPOSITORY" "$VERSION" "$DATE" "$gated_digest" "release/$DATE/oci" pushed-digest.txt
+          scripts/ci-push-dataset.sh "$REPOSITORY" "$dataset_version" "$DATE" "$gated_digest" "release/$DATE/oci" pushed-digest.txt
           echo "digest=$(cat pushed-digest.txt)" >>"$GITHUB_OUTPUT"
 
       - name: Record
