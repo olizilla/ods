@@ -6,7 +6,7 @@ use ods::commands::fetch::{
     run_local_archive_with_fetchers, Args as FetchArgs, TrudFetcher, TrudReleaseItem,
 };
 use ods::progress::{Progress, ProgressCaps};
-use ods::provenance::{compute_file_sha256, PULL_RECORD_FILENAME};
+use ods::provenance::{compute_file_sha256, TRUD_ARCHIVE_PACKAGE_FILENAME};
 
 /// The `datapackage` object `dir`'s `orgs.parquet` carries, as raw JSON.
 fn embedded_of(dir: &std::path::Path) -> String {
@@ -157,7 +157,7 @@ fn test_trud_pull_local_archive_in_index_is_verified_by_the_index() {
         stderr
     );
 
-    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(PULL_RECORD_FILENAME);
+    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME);
     assert!(prov_file.exists());
 }
 
@@ -276,7 +276,7 @@ fn test_trud_pull_local_archive_absent_from_index_matching_trud_api_is_verified_
         output
     );
 
-    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(PULL_RECORD_FILENAME);
+    let prov_file = ws.join("releases").join("2026-07-31").join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME);
     assert!(prov_file.exists());
 }
 
@@ -502,7 +502,7 @@ fn test_trud_pull_local_archive_failing_trud_api_stays_unverified_and_prints_war
     let prov_file = ws
         .join("releases")
         .join("2026-07-31")
-        .join("trud").join(PULL_RECORD_FILENAME);
+        .join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME);
     assert!(
         !prov_file.exists(),
         "pull must refuse and write no provenance"
@@ -795,15 +795,15 @@ fn test_r11_provenance_byte_identical_across_all_four_paths() {
         .unwrap();
     assert!(out3.status.success(), "force pull failed: {}", String::from_utf8_lossy(&out3.stderr));
     let record: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(ws2.join("releases/2026-07-31").join("trud").join(PULL_RECORD_FILENAME)).unwrap(),
+        &fs::read_to_string(ws2.join("releases/2026-07-31").join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME)).unwrap(),
     )
     .unwrap();
     let names: Vec<&str> = record["resources"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["archive", "checksum", "signature", "key"], "the TRUD API pull records all four files");
     let prov_force = build_ws2("the force refresh");
 
-    // Route 4: the pull record's derivation, directly
-    let prov_direct = ods::provenance::PullRecord::for_trud_release("2026-07-31", zip_name, &sha256, file_size, &[])
+    // Route 4: the TRUD archive package's derivation, directly
+    let prov_direct = ods::provenance::TrudArchivePackage::for_trud_release("2026-07-31", zip_name, &sha256, file_size, &[])
         .unwrap()
         .embedded(ods::datapackage::DATASET_VERSION)
         .unwrap()
@@ -868,8 +868,8 @@ fn test_trud_audit_refuses_unprovenanced_release() {
     #[cfg(unix)]
     std::os::unix::fs::symlink("2026-07-31", releases_dir.join("current")).unwrap();
 
-    // Active release has orgs.parquet but no provenance in it, and no pull record
-    assert!(!rel_2026.join("trud").join(PULL_RECORD_FILENAME).exists());
+    // Active release has orgs.parquet but no provenance in it, and no TRUD archive package
+    assert!(!rel_2026.join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME).exists());
 
     // An input zip with XML
     let zip_path = create_mock_trud_zip(tmp.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip");
@@ -926,10 +926,10 @@ fn test_stale_terms_repair_with_force_pull_enables_make() {
     assert!(pull_out.status.success(), "local-archive pull failed: {}", String::from_utf8_lossy(&pull_out.stderr));
 
     let release_dir = ws.join("releases/2026-07-31");
-    let prov_file = release_dir.join("trud").join(PULL_RECORD_FILENAME);
+    let prov_file = release_dir.join("trud").join(TRUD_ARCHIVE_PACKAGE_FILENAME);
 
     // Tamper with terms to simulate stale terms
-    let mut prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    let mut prov: ods::provenance::TrudArchivePackage = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
     prov.licenses[0].name = "Old Stale Licence".to_string();
     fs::write(&prov_file, prov.to_json_string().unwrap()).unwrap();
 
@@ -963,7 +963,7 @@ fn test_stale_terms_repair_with_force_pull_enables_make() {
     assert!(force_out.status.success(), "force pull must succeed: {}", String::from_utf8_lossy(&force_out.stderr));
 
     // Provenance now has current terms
-    let refreshed_prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
+    let refreshed_prov: ods::provenance::TrudArchivePackage = serde_json::from_str(&fs::read_to_string(&prov_file).unwrap()).unwrap();
     assert!(refreshed_prov.has_current_terms());
 
     // ods make now succeeds!

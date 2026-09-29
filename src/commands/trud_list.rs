@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::commands::fetch::{fetch_trud_releases, ReleaseListItemJson, TrudReleaseItem};
+use crate::commands::fetch::{fetch_trud_releases, OutcomeSource, ReleaseListItemJson, TrudReleaseItem};
 use crate::progress::format_size;
 
 #[derive(Parser, Debug, Default, Clone)]
@@ -72,9 +72,11 @@ pub fn run_with_writer<W: Write>(args: Args, writer: &mut W, color: bool) -> Res
             .map(|r| {
                 let is_pulled = held_dates.contains(&r.release_date);
                 ReleaseListItemJson {
-                    date: r.release_date.clone(),
-                    sha256: r.archive_file_sha256.clone(),
-                    size_bytes: r.archive_file_size,
+                    source: OutcomeSource::new(
+                        Some(r.release_date.clone()),
+                        Some(r.archive_file_sha256.clone()),
+                        Some(r.archive_file_size),
+                    ),
                     status: if is_pulled {
                         "pulled".to_string()
                     } else {
@@ -383,9 +385,11 @@ mod tests {
             .map(|r| {
                 let is_pulled = held_dates.contains(&r.release_date);
                 ReleaseListItemJson {
-                    date: r.release_date.clone(),
-                    sha256: r.archive_file_sha256.clone(),
-                    size_bytes: r.archive_file_size,
+                    source: OutcomeSource::new(
+                        Some(r.release_date.clone()),
+                        Some(r.archive_file_sha256.clone()),
+                        Some(r.archive_file_size),
+                    ),
                     status: if is_pulled { "pulled".to_string() } else { "remote".to_string() },
                 }
             })
@@ -393,7 +397,7 @@ mod tests {
         let json = serde_json::to_string(&json_items).unwrap();
         assert_eq!(
             json,
-            r#"[{"date":"2026-07-31","sha256":"dummy_sha","size_bytes":37983173,"status":"remote"}]"#
+            r#"[{"source":{"version":"2026-07-31","hash":"sha256:dummy_sha","bytes":37983173},"status":"remote"}]"#
         );
     }
 

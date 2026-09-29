@@ -6,8 +6,8 @@ use tempfile::TempDir;
 
 const SHA: &str = "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933";
 
-fn record() -> ods::provenance::PullRecord {
-    ods::provenance::PullRecord::for_trud_release(
+fn record() -> ods::provenance::TrudArchivePackage {
+    ods::provenance::TrudArchivePackage::for_trud_release(
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         SHA,
@@ -18,7 +18,7 @@ fn record() -> ods::provenance::PullRecord {
 }
 
 #[test]
-fn test_pull_record_validate_baseline() -> Result<()> {
+fn test_trud_archive_package_validate_baseline() -> Result<()> {
     assert!(record().validate_baseline().is_ok(), "a record from TRUD's word passes");
 
     let mut no_date = record();
@@ -41,10 +41,10 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
     let input_dir = temp_dir.path().join("input");
     fs::create_dir_all(&input_dir)?;
 
-    // A pull record whose archive has no hash
+    // A TRUD archive package whose archive has no hash
     let mut bad = record();
     bad.resources[0].hash = String::new();
-    fs::write(input_dir.join(ods::provenance::PULL_RECORD_FILENAME), bad.to_json_string()?)?;
+    fs::write(input_dir.join(ods::provenance::TRUD_ARCHIVE_PACKAGE_FILENAME), bad.to_json_string()?)?;
 
     let zip_path = input_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let zip_file = fs::File::create(&zip_path)?;
@@ -58,27 +58,27 @@ fn test_make_fails_without_valid_provenance() -> Result<()> {
         output: Some(temp_dir.path().join("output")), ..Default::default() };
 
     let result = ods::commands::parquet::run(args);
-    assert!(result.is_err(), "ods make/parquet must fail when the pull record is invalid");
+    assert!(result.is_err(), "ods make/parquet must fail when the TRUD archive package is invalid");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("pull record"), "error message must name the pull record, got: {}", err_msg);
+    assert!(err_msg.contains("TRUD archive package"), "error message must name the TRUD archive package, got: {}", err_msg);
 
     Ok(())
 }
 
 #[test]
-fn test_pull_record_is_the_trud_release_as_a_data_package() -> Result<()> {
+fn test_trud_archive_package_is_the_trud_release_as_a_data_package() -> Result<()> {
     let saved: serde_json::Value = serde_json::from_str(&record().to_json_string()?)?;
     let keys: Vec<&str> = saved.as_object().unwrap().keys().map(|k| k.as_str()).collect();
     assert_eq!(
         keys,
         vec!["$schema", "name", "version", "title", "homepage", "licenses", "contributors", "resources"],
-        "the pull record holds Data Package properties, in this order"
+        "the TRUD archive package holds Data Package properties, in this order"
     );
     assert_eq!(saved["name"], "nhs-ods-xml");
     assert_eq!(saved["version"], "2026-07-31", "the version is the TRUD release date, never a dataset version");
     let text = saved.to_string();
     for absent in ["tool_version", "tool_git_sha", "dataset_version", "_0.1.0", "trud_release_url"] {
-        assert!(!text.contains(absent), "the pull record must not name {absent}: {text}");
+        assert!(!text.contains(absent), "the TRUD archive package must not name {absent}: {text}");
     }
     Ok(())
 }
@@ -148,7 +148,7 @@ fn test_make_fails_when_provenance_has_older_terms() -> Result<()> {
     let zip_sha256 = ods::provenance::compute_file_sha256(&fixture_zip)?;
     let zip_size = fs::metadata(&fixture_zip)?.len();
 
-    let mut record = ods::provenance::PullRecord::for_trud_release(
+    let mut record = ods::provenance::TrudArchivePackage::for_trud_release(
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
         &zip_sha256,
@@ -259,16 +259,35 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
         common::write_fixture_parquet(&output_dir.join(format!("{f}.parquet")), "2026-07-31", SHA, "1.0.1", f);
     }
     let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(output_dir)?;
-    let mut index = common::make_v1_index(&[("2026-07-31", SHA, 37_983_173, &[("1.0.1", &manifest.digest()?)])]);
-    index.releases[0].datasets[0].dataset_doi = Some("10.5281/zenodo.1234567".to_string());
 
-    let release_pkg = ods::datapackage::generate_view(output_dir, Some(&index))?;
+    let release_pkg = ods::datapackage::generate_view(output_dir)?;
 
-    assert_eq!(release_pkg["id"], "10.5281/zenodo.1234567");
+    // The package is named by the purl of the manifest its files rebuild, links to ods.fyi, and
+    // carries no `id`: the DOI, when there is one, lives in the release index.
+    let keys: Vec<&str> = release_pkg.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["$schema", "purl", "name", "version", "title", "description", "homepage", "licenses", "contributors", "sources", "resources"]
+    );
+    assert!(release_pkg.get("id").is_none(), "the view writes no id: {release_pkg}");
+    assert_eq!(
+        release_pkg["purl"],
+        format!(
+            "pkg:oci/ods-data@sha256%3A{}?repository_url=ods.fyi%2Fods-data",
+            manifest.digest()?.trim_start_matches("sha256:")
+        )
+    );
+    assert_eq!(release_pkg["homepage"], "https://ods.fyi");
     assert_eq!(release_pkg["name"], "ods-data");
     assert_eq!(release_pkg["version"], "2026-07-31_1.0.1");
     let sources = release_pkg["sources"].as_array().expect("sources must be array");
     assert_eq!(sources.len(), 1);
+    let source_keys: Vec<&str> = sources[0].as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    assert_eq!(source_keys, ["purl", "title", "version", "path", "hash", "bytes", "_cache"]);
+    assert_eq!(
+        sources[0]["purl"],
+        "pkg:oci/nhs-ods-xml?repository_url=ghcr.io%2Folizilla%2Fnhs-ods-xml&tag=2026-07-31"
+    );
     assert_eq!(sources[0]["title"], "NHS Organisation Data Service XML Data");
     assert_eq!(sources[0]["path"], ods::terms::LANDING_PAGE);
     assert_eq!(sources[0]["_cache"][0], format!("https://ghcr.io/v2/olizilla/nhs-ods-xml/blobs/sha256:{}", SHA.to_lowercase()));
@@ -282,16 +301,6 @@ fn test_release_datapackage_contains_enriched_fields() -> Result<()> {
         let hash_str = res["hash"].as_str().unwrap();
         assert!(hash_str.starts_with("sha256:"), "hash format must be sha256:<hex>, got: {}", hash_str);
     }
-
-    // Without a DOI on the row, `id` is the release's oci purl, from the rebuilt manifest.
-    let no_doi = ods::datapackage::generate_view(output_dir, None)?;
-    assert_eq!(
-        no_doi["id"],
-        format!(
-            "pkg:oci/ods-data@sha256%3A{}?repository_url=ods.fyi%2Fods-data",
-            manifest.digest()?.trim_start_matches("sha256:")
-        )
-    );
 
     Ok(())
 }

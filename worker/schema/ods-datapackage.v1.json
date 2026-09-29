@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ods.fyi/schema/ods-datapackage.v1.json",
   "title": "ods datapackage.json",
-  "description": "A dataset's Data Package descriptor: the `datapackage.json` view `ods` writes beside a release's Parquet files, and the `trud/datapackage.json` record of a source release. allOf the published Data Package v2 package profile (fetched verbatim, not reconstructed, with the List Field from the upstream dictionary added ahead of 2.0.1) plus ods's own mixin: licenses[].attribution, and the Source properties hash, bytes and _cache. Nothing in it is specific to one dataset or one source.",
+  "description": "A dataset's Data Package descriptor: the `datapackage.json` view `ods` writes beside a release's Parquet files, and the TRUD archive package, `trud/datapackage.json`. allOf the published Data Package v2 package profile (fetched verbatim, not reconstructed, with the List Field from the upstream dictionary added ahead of 2.0.1) plus ods's own mixin: licenses[].attribution, purl on the package and on a Source, and the Source properties hash, bytes and _cache. Nothing in it is specific to one dataset or one source.",
   "$comment": "draft-07, as the Data Package spec itself requires (its own JSON Schema keywords are draft-07 vocabulary). JSON Schema draft-07 has no $defs -- only draft 2019-09 and later do -- so both blocks below use #/definitions/<name>, the draft-07 form.",
   "allOf": [
     {
@@ -3314,10 +3314,18 @@
         }
       }
     },
+    "purl": {
+      "type": "string",
+      "pattern": "^pkg:[a-z][a-z0-9.+-]*/",
+      "description": "A package URL (purl) naming a package, by digest where it can; not a link."
+    },
     "odsMixin": {
-      "$comment": "ods's own extension on top of core v2: licenses[].attribution, and the Source properties hash, bytes and _cache. No requirement beyond core v2 except the hash pattern: core v2 leaves a Source hash undefined; ods writes the Data Resource hash convention, an algorithm prefix and lower-case hex, and always sha256.",
+      "$comment": "ods's own extension on top of core v2: purl on the package and on a Source, licenses[].attribution, and the Source properties hash, bytes and _cache. No requirement beyond core v2 except the purl and hash patterns: core v2 leaves a Source hash undefined; ods writes the Data Resource hash convention, an algorithm prefix and lower-case hex, and always sha256.",
       "type": "object",
       "properties": {
+        "purl": {
+          "$ref": "#/definitions/purl"
+        },
         "licenses": {
           "type": "array",
           "items": {
@@ -3334,6 +3342,9 @@
           "items": {
             "type": "object",
             "properties": {
+              "purl": {
+                "$ref": "#/definitions/purl"
+              },
               "hash": {
                 "type": "string",
                 "pattern": "^sha256:[a-f0-9]{64}$",

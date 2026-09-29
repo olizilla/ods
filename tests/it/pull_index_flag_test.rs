@@ -122,7 +122,7 @@ fn run_routed_mock_server(routes: BTreeMap<String, Vec<u8>>) -> (String, mpsc::S
 }
 
 /// Builds a real, tiny release (three files) on disk and its OCI manifest, returning the
-/// manifest's digest, the total layer size (`dataset_filesize_bytes`), and the routes a
+/// manifest's digest, the total layer size (a dataset row's `bytes`), and the routes a
 /// `run_routed_mock_server` needs to serve it at `/v2/ods-data/manifests/<digest>` and
 /// `/v2/ods-data/blobs/<digest>`.
 fn build_pull_fixture(tmp: &std::path::Path, release_date: &str, version: &str) -> (String, u64, BTreeMap<String, Vec<u8>>) {
@@ -290,13 +290,35 @@ fn test_index_flag_cannot_parse_error_verbatim() {
     );
 }
 
+// An index in the old format is refused by name, never read as some other failure.
+#[test]
+fn test_index_flag_refuses_an_old_format_index() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("old.json"), common::OLD_FORMAT_INDEX).unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .args(["pull", "--index", "./old.json", "--list"])
+        .output()
+        .expect("execute ods pull --index ./old.json --list");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("{stderr}");
+    assert!(
+        stderr.contains("✖ Cannot read release index './old.json': it's in the old format, with trud_release_date and dataset_version"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("  This ods reads the current format: name, source, and releases[].source.version, .hash and .bytes"), "{stderr}");
+}
+
 #[test]
 fn test_empty_releases_index_prints_message_and_exits_zero() {
     let tmp = TempDir::new().unwrap();
     let empty_file = tmp.path().join("empty.json");
     fs::write(
         &empty_file,
-        b"{\"$schema\":\"https://ods.fyi/schema/releases.v1.json\",\"trud_signing_key_fingerprints\":[\"71ED5964BAE53E83556320A42BE59DADEE84BEB0\"],\"mirrors\":[],\"releases\":[]}",
+        serde_json::to_vec(&ods::index::OdsReleaseIndex { mirrors: vec![], ..ods::index::OdsReleaseIndex::default() }).unwrap(),
     )
     .unwrap();
 
@@ -351,7 +373,7 @@ fn test_index_flag_env_var_and_flag_precedence() {
     let mut index = sample_release_index();
     index.mirrors = vec![ods::index::MirrorEntry { url: format!("{}/v2/ods-data", base_url) }];
     index.releases[0].datasets[0].manifest_digest = manifest_digest;
-    index.releases[0].datasets[0].dataset_filesize_bytes = total_size;
+    index.releases[0].datasets[0].bytes = total_size;
 
     let myindex_file = tmp.path().join("myindex.json");
     fs::write(&myindex_file, serde_json::to_vec_pretty(&index).unwrap()).unwrap();
@@ -520,7 +542,10 @@ fn test_pull_index_flag_does_not_mutate_cached_workspace_index() -> Result<()> {
 
     // Create a different index for --index
     let mut supplied_index = sample_release_index();
-    supplied_index.releases[0].trud_release_date = "2026-08-31".to_string();
+    supplied_index.releases[0].source.version = "2026-08-31".to_string();
+    for ds in &mut supplied_index.releases[0].datasets {
+        ds.version = format!("2026-08-31_{}", ds.dataset_version());
+    }
     let supplied_file = tmp.path().join("supplied_releases.json");
     fs::write(&supplied_file, serde_json::to_vec_pretty(&supplied_index)?)?;
 
@@ -554,7 +579,7 @@ fn test_ods_release_index_url_is_used_and_saves_exact_bytes_and_names_it_verifie
     let mut index = sample_release_index();
     index.mirrors = vec![ods::index::MirrorEntry { url: format!("{}/v2/ods-data", base_url) }];
     index.releases[0].datasets[0].manifest_digest = manifest_digest;
-    index.releases[0].datasets[0].dataset_filesize_bytes = total_size;
+    index.releases[0].datasets[0].bytes = total_size;
     let index_bytes = serde_json::to_vec_pretty(&index)?;
     routes.insert("/releases.json".to_string(), index_bytes.clone());
 
@@ -623,4 +648,29 @@ fn test_pull_index_fetch_invalid_json_does_not_mutate_workspace_index() -> Resul
     );
 
     Ok(())
+}
+
+// `ods pull --list --format json` names each dataset as the release index does.
+#[test]
+fn test_pull_list_json_speaks_the_index_vocabulary() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("index.json"), serde_json::to_vec_pretty(&sample_release_index()).unwrap()).unwrap();
+
+    let output = ods_binary()
+        .current_dir(tmp.path())
+        .args(["pull", "--index", "./index.json", "--list", "--format", "json"])
+        .output()
+        .expect("execute ods pull --list --format json");
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let items: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert_eq!(
+        items,
+        serde_json::json!([{
+            "source_version": "2026-07-31",
+            "version": "2026-07-31_1.0.1",
+            "status": "remote",
+            "manifest_digest": "sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"
+        }])
+    );
 }

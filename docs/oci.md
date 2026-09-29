@@ -78,7 +78,7 @@ annotations name the TRUD release, and were frozen when the first bundle was pus
 
 | Annotation | Value |
 | :--- | :--- |
-| `fyi.ods.trud-release-date` | TRUD's release date, from the pull record, not the date in the zip's name |
+| `fyi.ods.trud-release-date` | TRUD's release date, from the TRUD archive package, `trud/datapackage.json`, not the date in the zip's name |
 | `fyi.ods.trud-release-sha256` | the zip layer's digest, upper-case, as TRUD writes it: a convenience copy, not a second hash |
 | `fyi.ods.attribution` | NHS England's attribution statement |
 | `org.opencontainers.image.licenses` | `OGL-UK-3.0` |
@@ -116,7 +116,7 @@ $ ods make oci -i releases/2026-09-25
 A dataset id is its manifest digest. The digest covers every layer's digest, so it names the exact
 bytes of all four files, and `ods cite` puts it in every citation.
 
-As a [package URL][purl], which is how the `datapackage.json` view names the release in its `id`
+As a [package URL][purl], which is how the `datapackage.json` view names the release in its `purl`
 ([datapackage.md](./datapackage.md)):
 
 ```text

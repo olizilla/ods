@@ -151,7 +151,7 @@ fn test_trud_pull_captures_all_attestations_offline() {
     assert!(trud_dir.join("trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml").exists());
     assert!(trud_dir.join("trud_hscorgrefdataxml_data_7.0.0_20260731000001.xml.asc").exists());
     assert!(trud_dir.join("trud-public-key-2013-04-01.pgp").exists());
-    // R4: `trud/` holds what NHS published, the zip, and ods's own pull record
+    // R4: `trud/` holds what NHS published, the zip, and ods's own TRUD archive package
     // (`trud/datapackage.json`), never any other listing saved from the pull.
     let mut names: Vec<String> = fs::read_dir(&trud_dir)
         .unwrap()
@@ -300,12 +300,12 @@ fn test_provenance_json_untouched_by_attestations() {
     let res = run_with_fetcher(args, &ws, &fetcher, &progress);
     assert!(res.is_ok());
 
-    let prov_path = ods::provenance::pull_record_path(&ws.join("releases/2026-07-31"));
+    let prov_path = ods::provenance::trud_archive_package_path(&ws.join("releases/2026-07-31"));
     assert!(prov_path.exists());
     let prov_text = fs::read_to_string(prov_path).unwrap();
     let prov: serde_json::Value = serde_json::from_str(&prov_text).unwrap();
 
-    // The pull record lists NHS's files by name, hash and size, and never TRUD's URLs
+    // The TRUD archive package lists NHS's files by name, hash and size, and never TRUD's URLs
     assert_eq!(prov["$schema"], ods::datapackage::ODS_DATAPACKAGE_SCHEMA_URL);
     assert_eq!(prov["version"], "2026-07-31");
     assert!(!prov_text.contains("FileUrl") && !prov_text.contains("/download/"), "no TRUD URL: {prov_text}");

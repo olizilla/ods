@@ -49,6 +49,6 @@ See [provenance.md](./provenance.md) for more details
 | **`pull`** | Pulls pre-built dataset release or switches active release pin to target release date. |
 | **`find`** | Queries active workspace Parquet tables in `ods_data/current/orgs.parquet` automatically. |
 | **`cite`** | Displays active release pin, provenance metadata, local release versions, disk space, and SHA-256 verification status. |
-| **`trud pull`** | Queries TRUD API, downloads ZIP into `releases/<date>/trud/`, verifies SHA-256, writes the pull record `trud/datapackage.json` for `ods make` to build from, and updates `current` symlink. |
+| **`trud pull`** | Queries TRUD API, downloads ZIP into `releases/<date>/trud/`, verifies SHA-256, writes the TRUD archive package, `trud/datapackage.json`, for `ods make` to build from, and updates `current` symlink. |
 | **`trud audit`** | Validates workspace Parquet tables against ground-truth TRUD XML/ZIP archives and verifies release provenance alignment. |
 

@@ -57,9 +57,9 @@ fn test_fetch_local_archive_isolates_release_dir_and_updates_current_link() -> R
     let canon_active_path = fs::canonicalize(&active_path)?;
     assert_eq!(canon_active_path, canon_rel_2025, "current release path must point to 2025 release dir");
 
-    let record = ods::provenance::PullRecord::load_from_file(&ods::provenance::pull_record_path(&rel_2025))
+    let record = ods::provenance::TrudArchivePackage::load_from_file(&ods::provenance::trud_archive_package_path(&rel_2025))
         .ok()
-        .expect("trud/datapackage.json is a readable pull record");
+        .expect("trud/datapackage.json is a readable TRUD archive package");
 
     assert_eq!(record.version, "2025-05-01");
 

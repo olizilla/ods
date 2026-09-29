@@ -7,8 +7,8 @@
 #
 #   1. `oras cp ghcr.io/olizilla/<repository>:<date>_<version> --to-oci-layout` into a scratch
 #      directory, or use an already-pulled layout with --from-oci-layout <dir>;
-#   2. check the manifest digest against the row in --index <file>'s (<date>, <version>) dataset,
-#      if given, or just print it;
+#   2. check the manifest digest against --index <file>'s dataset row <date>_<version>, if given,
+#      or just print it;
 #   3. lay the layout out as bucket keys — the one place this repo lays out bucket keys:
 #        v2/<repository>/blobs/sha256/<hex>
 #        v2/<repository>/manifests/{<date>_<version>, <date>, latest}
@@ -73,20 +73,20 @@ digest="$(jq -r --arg ref "$TAGGED" \
 
 if [[ -n "$INDEX" ]]; then
   [[ -f "$INDEX" ]] || { echo "✖ $INDEX isn't a file" >&2; exit 2; }
-  row_digest="$(jq -r --arg d "$DATE" --arg v "$VERSION" \
-    '[.releases[] | select(.trud_release_date == $d) | .datasets[] | select(.dataset_version == $v)][0].manifest_digest // empty' \
+  row_digest="$(jq -r --arg d "$DATE" --arg v "$TAGGED" \
+    '[.releases[] | select(.source.version == $d) | .datasets[] | select(.version == $v)][0].manifest_digest // empty' \
     "$INDEX")"
   if [[ -z "$row_digest" ]]; then
-    echo "✖ $INDEX has no row for ($DATE, $VERSION)" >&2
+    echo "✖ $INDEX has no row for $TAGGED" >&2
     exit 1
   fi
   if [[ "$row_digest" != "$digest" ]]; then
-    echo "✖ the manifest digest doesn't match $INDEX's row for ($DATE, $VERSION)" >&2
+    echo "✖ the manifest digest doesn't match $INDEX's row for $TAGGED" >&2
     echo "  the layout  $digest" >&2
     echo "  the index   $row_digest" >&2
     exit 1
   fi
-  echo "✓ manifest $digest matches $INDEX's row for ($DATE, $VERSION)"
+  echo "✓ manifest $digest matches $INDEX's row for $TAGGED"
 else
   echo "* manifest $digest"
 fi

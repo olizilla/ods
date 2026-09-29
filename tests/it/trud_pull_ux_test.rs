@@ -511,7 +511,7 @@ fn test_provenance_json_carries_manifest_fields_on_trud_pull() {
         .expect("Failed to execute trud pull");
 
     assert!(output.status.success());
-    let record_file = ods::provenance::pull_record_path(&out_dir);
+    let record_file = ods::provenance::trud_archive_package_path(&out_dir);
     assert!(record_file.exists(), "trud/datapackage.json must be written");
 
     let record: serde_json::Value = serde_json::from_str(&fs::read_to_string(&record_file).unwrap()).unwrap();

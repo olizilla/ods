@@ -115,14 +115,14 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     let ws_root = tmp.path().join("workspace");
     fs::create_dir_all(&ws_root).unwrap();
 
-    // Setup releases/2026-08-28 directory with trud zip and its pull record
+    // Setup releases/2026-08-28 directory with trud zip and its TRUD archive package
     let rel_dir = ws_root.join("releases").join("2026-08-28");
     let trud_dir = rel_dir.join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     let zip_path = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-08-28",
         "hscorgrefdataxml_data_8.0.0_20260828000001.zip",
@@ -156,10 +156,10 @@ fn test_make_names_its_source_and_says_nothing_of_the_release_dirs_own_provenanc
     );
     assert!(!stderr.contains("→"), "no '<date> (current) → <dir>' line, got:\n{}", stderr);
 
-    // 2. The release directory's own pull record is the expected one, so it goes unnamed
+    // 2. The release directory's own TRUD archive package is the expected one, so it goes unnamed
     assert!(
         ws_root.join("releases/2026-08-28/trud/datapackage.json").exists(),
-        "the release's own pull record exists on disk"
+        "the release's own TRUD archive package exists on disk"
     );
     assert!(!stderr.contains("* Provenance:"), "the release's own provenance isn't named, got:\n{}", stderr);
 
@@ -188,7 +188,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
     let zip_path = create_mock_zip(&zip_dir, "hscorgrefdataxml_data_8.0.0_20260828000001.zip");
     let zip_sha256 = ods::provenance::compute_file_sha256(&zip_path).unwrap();
 
-    let record = ods::provenance::PullRecord::for_trud_release(
+    let record = ods::provenance::TrudArchivePackage::for_trud_release(
         "2026-08-28",
         "hscorgrefdataxml_data_8.0.0_20260828000001.zip",
         &zip_sha256,
@@ -196,7 +196,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
         &[],
     )
     .unwrap();
-    fs::write(zip_dir.join(ods::provenance::PULL_RECORD_FILENAME), record.to_json_string().unwrap()).unwrap();
+    fs::write(zip_dir.join(ods::provenance::TRUD_ARCHIVE_PACKAGE_FILENAME), record.to_json_string().unwrap()).unwrap();
 
     let out_dir = tmp.path().join("out");
     fs::create_dir_all(&out_dir).unwrap();
@@ -224,7 +224,7 @@ fn test_make_after_trud_pull_prints_no_warning() {
     assert!(!stderr.contains("! No provenance info found"));
 }
 
-/// A release an older `ods trud pull` left holds `trud/_provenance.json` and no pull record:
+/// A release an older `ods trud pull` left holds `trud/_provenance.json` and no TRUD archive package:
 /// `ods make` names it and the command that replaces it, without reading it.
 #[test]
 fn test_directory_with_an_older_record_names_the_repair() {
@@ -255,7 +255,7 @@ fn test_directory_with_an_older_record_names_the_repair() {
     assert!(stderr.contains("ods trud pull 2026-08-28 --force && ods make"), "got:\n{stderr}");
 }
 
-/// A release directory's zip is the one its pull record names, whatever date TRUD stamped in its
+/// A release directory's zip is the one its TRUD archive package names, whatever date TRUD stamped in its
 /// name: 2022-05-30's zip is `…_20220527000001.zip`. The SHA-256 and size tie it to the record.
 #[test]
 fn test_release_dir_builds_the_zip_its_record_names_whatever_date_its_name_carries() {
@@ -266,7 +266,7 @@ fn test_release_dir_builds_the_zip_its_record_names_whatever_date_its_name_carri
     let zip = create_mock_zip(&trud_dir, "hscorgrefdataxml_data_5.0.0_20220527000001.zip");
     let sha = ods::provenance::compute_file_sha256(&zip).unwrap();
     let bytes = fs::metadata(&zip).unwrap().len();
-    ods::provenance::write_pull_record(&release_dir, "2022-05-30", "hscorgrefdataxml_data_5.0.0_20220527000001.zip", &sha, bytes, &[]).unwrap();
+    ods::provenance::write_trud_archive_package(&release_dir, "2022-05-30", "hscorgrefdataxml_data_5.0.0_20220527000001.zip", &sha, bytes, &[]).unwrap();
 
     let out = tmp.path().join("out");
     let output = ods_binary().arg("make").arg("-i").arg(&release_dir).arg("-o").arg(&out).output().expect("execute ods make");
@@ -284,7 +284,7 @@ fn test_release_dir_refuses_a_record_naming_a_missing_zip_with_the_repair() {
     let tmp = TempDir::new().unwrap();
     let release_dir = tmp.path().join("releases").join("2022-05-30");
     fs::create_dir_all(release_dir.join("trud")).unwrap();
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &release_dir,
         "2022-05-30",
         "hscorgrefdataxml_data_5.0.0_20220527000001.zip",

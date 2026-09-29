@@ -101,7 +101,7 @@ jobs:
           DATES_INPUT: ${{ inputs.dates }}
         run: |
           if [[ "$DATES_INPUT" == "latest" ]]; then
-            jq -r '.[0].date' listing.json >dates.txt
+            jq -r '.[0].source.version' listing.json >dates.txt
           elif [[ "$DATES_INPUT" == "all" ]]; then
             oras repo tags ghcr.io/olizilla/nhs-ods-xml | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' | sort >dates.txt
           else
@@ -278,7 +278,7 @@ jobs:
             '.mirrors = [{url: $a}, {url: $b}]' \
             data/releases.json >candidate-full.json
           ods make release --input "release/$DATE" --index candidate-full.json
-          jq --arg d "$DATE" '[.releases[] | select(.trud_release_date == $d)][0]' candidate-full.json >"candidate-$DATE.json"
+          jq --arg d "$DATE" '[.releases[] | select(.source.version == $d)][0]' candidate-full.json >"candidate-$DATE.json"
 
       - name: Re-verify with ods pull
         env:
@@ -323,16 +323,16 @@ jobs:
       - name: Merge every date's row
         run: |
           rows_json="$(jq -s '.' rows/*.json)"
-          dup="$(jq -r '[.[].trud_release_date] | group_by(.) | map(select(length > 1)) | flatten | unique | .[]' <<<"$rows_json")"
+          dup="$(jq -r '[.[].source.version] | group_by(.) | map(select(length > 1)) | flatten | unique | .[]' <<<"$rows_json")"
           if [[ -n "$dup" ]]; then
             echo "✖ more than one primary recorded the same date:" >&2
             while IFS= read -r date; do echo "  $date" >&2; done <<<"$dup"
             exit 1
           fi
           jq --argjson rows "$rows_json" '
-            ($rows | map(.trud_release_date)) as $recorded_dates
-            | .releases = ([.releases[] | select(.trud_release_date as $d | ($recorded_dates | index($d)) == null)] + $rows
-                           | sort_by(.trud_release_date) | reverse)
+            ($rows | map(.source.version)) as $recorded_dates
+            | .releases = ([.releases[] | select(.source.version as $d | ($recorded_dates | index($d)) == null)] + $rows
+                           | sort_by(.source.version) | reverse)
           ' data/releases.json >"$RUNNER_TEMP/candidate.json"
 
       - name: Write the job summary
@@ -347,7 +347,7 @@ jobs:
 
           mapfile -t dates < <(jq -r '.[].date' <<<"$MATRIX")
           for date in "${dates[@]}"; do
-            digest="$(jq -r --arg d "$date" '[.releases[] | select(.trud_release_date == $d) | .datasets[]][0].manifest_digest' "$RUNNER_TEMP/candidate.json")"
+            digest="$(jq -r --arg d "$date" '[.releases[] | select(.source.version == $d) | .datasets[]][0].manifest_digest' "$RUNNER_TEMP/candidate.json")"
             echo "| $date | \`$digest\` |" >>"$GITHUB_STEP_SUMMARY"
           done
 

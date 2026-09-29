@@ -65,7 +65,9 @@ pub struct Args {
 
 #[derive(Debug, Serialize)]
 pub struct ReleaseListItemJson {
-    pub date: String,
+    /// The release's `source.version`: TRUD's release date.
+    pub source_version: String,
+    /// The dataset's `version`, `<source version>_<dataset version>`.
     pub version: String,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,7 +136,7 @@ pub trait OciBlobFetcher: Send + Sync {
     }
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
         if let Some((bytes, _)) = self.fetch_release_index_raw()? {
-            if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+            if let Ok(idx) = OdsReleaseIndex::from_slice(&bytes) {
                 return Ok(Some(idx));
             }
         }
@@ -173,11 +175,13 @@ impl OciBlobFetcher for HttpOciFetcher {
         }
         for url in &index_urls {
             if let Ok(bytes) = download_bytes_with_auth(url, None) {
-                let valid = serde_json::from_slice::<OdsReleaseIndex>(&bytes)
+                let valid = OdsReleaseIndex::from_slice(&bytes)
                     .map(|idx| idx.validate().is_ok())
                     .unwrap_or(false);
                 if valid {
                     return Ok(Some((bytes, url.to_string())));
+                } else if crate::index::is_old_format(&bytes) {
+                    eprintln!("! Ignoring {}: {}", url, crate::index::OldFormatIndex);
                 } else {
                     eprintln!("! Ignoring {}: it isn't a release index this ods can read", url);
                 }
@@ -188,7 +192,7 @@ impl OciBlobFetcher for HttpOciFetcher {
 
     fn fetch_release_index(&self) -> Result<Option<OdsReleaseIndex>> {
         if let Some((bytes, _)) = self.fetch_release_index_raw()? {
-            if let Ok(idx) = serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+            if let Ok(idx) = OdsReleaseIndex::from_slice(&bytes) {
                 return Ok(Some(idx));
             }
         }
@@ -380,10 +384,10 @@ pub fn run_with_fetcher_and_writer<F: OciBlobFetcher, W: Write>(
         writeln!(
             ctx.writer,
             "! {} ({}) was withdrawn: {}\n  Pulling {} instead",
-            skipped_rel.trud_release_date,
-            skipped_ds.dataset_version,
+            skipped_rel.source.version,
+            skipped_ds.dataset_version(),
             reason,
-            resolved.release.trud_release_date,
+            resolved.release.source.version,
         )?;
     }
     pull_single_release(
@@ -425,8 +429,12 @@ pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
             }
         };
 
-        let fetched_index: OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+        let fetched_index: OdsReleaseIndex = match OdsReleaseIndex::from_slice(&bytes) {
             Ok(idx) => idx,
+            Err(e) if e.downcast_ref::<crate::index::OldFormatIndex>().is_some() => {
+                eprintln!("{}", format_old_format_index_flag(val));
+                return Err(AlreadyReported.into());
+            }
             Err(_) => {
                 eprintln!("✖ Cannot parse release index '{}' as an ODS release index", val);
                 eprintln!("  Expected $schema https://ods.fyi/schema/releases.v1.json");
@@ -450,7 +458,7 @@ pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
     // 2. Remote fetch (if allowed)
     if allow_fetch {
         if let Ok(Some((raw_bytes, url))) = fetcher.fetch_release_index_raw() {
-            if let Ok(fetched) = serde_json::from_slice::<OdsReleaseIndex>(&raw_bytes) {
+            if let Ok(fetched) = OdsReleaseIndex::from_slice(&raw_bytes) {
                 if fetched.validate().is_ok() {
                     if create {
                         let _ = crate::index::OdsReleaseIndex::save_to_workspace_bytes(&raw_bytes, workspace_root);
@@ -466,12 +474,17 @@ pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
     // 3. Workspace cache
     let cache_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
     if cache_path.exists() {
-        let valid_cache = match fs::read(&cache_path) {
-            Ok(bytes) => match serde_json::from_slice::<OdsReleaseIndex>(&bytes) {
+        let cache_bytes = fs::read(&cache_path).ok();
+        if cache_bytes.as_deref().is_some_and(crate::index::is_old_format) {
+            eprintln!("{}", format_old_format_cache(&cache_path));
+            return Err(AlreadyReported.into());
+        }
+        let valid_cache = match cache_bytes {
+            Some(bytes) => match OdsReleaseIndex::from_slice(&bytes) {
                 Ok(idx) if idx.validate().is_ok() => Some(idx),
                 _ => None,
             },
-            Err(_) => None,
+            None => None,
         };
         if let Some(loaded) = valid_cache {
             return Ok((loaded, IndexOrigin::WorkspaceCache(cache_path)));
@@ -486,6 +499,22 @@ pub fn resolve_index<F: OciBlobFetcher + ?Sized>(
     }
     let baked = OdsReleaseIndex::baked()?;
     Ok((baked, IndexOrigin::BuiltIn))
+}
+
+/// The refusal for `--index <file>` in the old format.
+pub fn format_old_format_index_flag(val: &str) -> String {
+    format!(
+        "✖ Cannot read release index '{}': it's in the old format, with trud_release_date and dataset_version\n  This ods reads the current format: name, source, and releases[].source.version, .hash and .bytes",
+        val
+    )
+}
+
+/// The refusal for a workspace cache in the old format: `ods pull` replaces it.
+pub fn format_old_format_cache(path: &Path) -> String {
+    format!(
+        "✖ Cannot read {}: it's a release index in the old format\n  Refresh it: ods pull",
+        crate::workspace::relative_to_cwd(path).display()
+    )
 }
 
 fn list_releases_cmd(
@@ -506,8 +535,8 @@ fn list_releases_cmd(
 
     for r in &index.releases {
         for ds in &r.datasets {
-            let is_act = !active_date.is_empty() && active_date == r.trud_release_date;
-            let is_loc = local_releases.iter().any(|lr| lr.date == r.trud_release_date);
+            let is_act = !active_date.is_empty() && active_date == r.source.version;
+            let is_loc = local_releases.iter().any(|lr| lr.date == r.source.version);
             let status = if let Some(ref reason) = ds.withdrawn {
                 format!("withdrawn ({})", reason)
             } else if is_act {
@@ -519,8 +548,8 @@ fn list_releases_cmd(
             };
 
             items.push(ReleaseListItemJson {
-                date: r.trud_release_date.clone(),
-                version: ds.dataset_version.clone(),
+                source_version: r.source.version.clone(),
+                version: ds.version.clone(),
                 status,
                 manifest_digest: Some(ds.manifest_digest.clone()),
             });
@@ -545,7 +574,8 @@ fn list_releases_cmd(
             } else {
                 "○"
             };
-            println!("  {} {:10}  v{:6}  {}", icon, item.date, item.version, item.status);
+            let dataset_version = item.version.split_once('_').map_or(item.version.as_str(), |(_, v)| v);
+            println!("  {} {:10}  v{:6}  {}", icon, item.source_version, dataset_version, item.status);
         }
     }
 
@@ -574,6 +604,15 @@ fn write_block<W: Write>(writer: &mut W, progress: &Progress, lines: &[String]) 
     progress.clear_live();
     for line in lines {
         writeln!(writer, "{}", line)?;
+    }
+    Ok(())
+}
+
+/// Names each known issue with a release's source under its block, with the page that says
+/// how `ods` resolves it (docs/source-issues/).
+fn write_source_issues<W: Write>(writer: &mut W, release: &Release) -> Result<()> {
+    for id in &release.source.issues {
+        writeln!(writer, "{}", crate::index::source_issue_line(id))?;
     }
     Ok(())
 }
@@ -612,7 +651,7 @@ fn release_is_cached(workspace_root: &Path, index: &OdsReleaseIndex, rel: &Relea
     if force {
         return false;
     }
-    let rel_dir = workspace_root.join("releases").join(&rel.trud_release_date);
+    let rel_dir = workspace_root.join("releases").join(&rel.source.version);
     if !rel_dir.exists() {
         return false;
     }
@@ -671,14 +710,12 @@ fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
         bail!("No valid releases available to pull");
     }
 
-    // Sort by trud_release_date and dataset_version ascending
+    // Sort by source version, then dataset version, ascending
     valid_releases.sort_by(|(r_a, ds_a), (r_b, ds_b)| {
-        r_a.trud_release_date
-            .cmp(&r_b.trud_release_date)
+        r_a.source.version
+            .cmp(&r_b.source.version)
             .then_with(|| {
-                crate::index::parse_semver(&ds_a.dataset_version)
-                    .ok()
-                    .cmp(&crate::index::parse_semver(&ds_b.dataset_version).ok())
+                ds_a.semver().cmp(&ds_b.semver())
             })
     });
 
@@ -692,7 +729,7 @@ fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
         .iter()
         .zip(&cached_flags)
         .filter(|(_, cached)| !**cached)
-        .map(|((_, ds), _)| ds.dataset_filesize_bytes)
+        .map(|((_, ds), _)| ds.bytes)
         .sum();
 
     writeln!(
@@ -723,11 +760,11 @@ fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
         let text = String::from_utf8_lossy(&buffer).into_owned();
         match result {
             Ok(()) => {
-                succeeded.push(rel.trud_release_date.clone());
+                succeeded.push(rel.source.version.clone());
                 if !text.is_empty() {
                     write!(ctx.writer, "{}", text)?;
                     pulled_count += 1;
-                    pulled_bytes += ds.dataset_filesize_bytes;
+                    pulled_bytes += ds.bytes;
                 }
             }
             Err(e) => {
@@ -735,7 +772,7 @@ fn pull_all_releases_cmd<F: OciBlobFetcher, W: Write>(
                     failures.push(BatchFailure::Incomplete { text });
                 } else {
                     failures.push(BatchFailure::Unreachable {
-                        date: rel.trud_release_date.clone(),
+                        date: rel.source.version.clone(),
                         message: e.to_string(),
                     });
                 }
@@ -803,9 +840,9 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     ctx: &mut PullContext<'_, F, W>,
 ) -> Result<()> {
     let progress = ctx.progress;
-    let rel_dir = workspace_root.join("releases").join(&release.trud_release_date);
-    let link_target = format!("releases/{}", release.trud_release_date);
-    let dataset_coord = format!("ods-data/{}_{}", release.trud_release_date, dataset.dataset_version);
+    let rel_dir = workspace_root.join("releases").join(&release.source.version);
+    let link_target = format!("releases/{}", release.source.version);
+    let dataset_coord = format!("ods-data/{}", dataset.version);
     let color = progress.caps().is_tty && !progress.caps().no_color;
 
     // Cache hit & self-healing check
@@ -819,13 +856,13 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                     let pin_moved = if ctx.args.all {
                         false
                     } else {
-                        update_active_release_link_if_changed(workspace_root, &release.trud_release_date)?
+                        update_active_release_link_if_changed(workspace_root, &release.source.version)?
                     };
                     if !ctx.args.all {
                         let hash_opt = if ctx.args.verbose { Some(dataset.manifest_digest.as_str()) } else { None };
                         let lines = render_release_block(&ReleaseBlockParams {
-                            date: &release.trud_release_date,
-                            archive_size: dataset.dataset_filesize_bytes,
+                            date: &release.source.version,
+                            archive_size: dataset.bytes,
                             file_count: count_release_files(&rel_dir),
                             state: &ReleaseBlockState::Cached,
                             dataset: Some(&dataset_coord),
@@ -837,13 +874,14 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                             color,
                         });
                         write_block(ctx.writer, progress, &lines)?;
+                        write_source_issues(ctx.writer, release)?;
                     }
                     if let Some(ref reason) = dataset.withdrawn {
                         writeln!(
                             ctx.writer,
                             "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
-                            release.trud_release_date,
-                            dataset.dataset_version,
+                            release.source.version,
+                            dataset.dataset_version(),
                             reason
                         )?;
                         return Err(AlreadyReported.into());
@@ -853,7 +891,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                     writeln!(
                         ctx.writer,
                         "* existing releases/{} digest mismatch; re-fetching from registry...",
-                        release.trud_release_date
+                        release.source.version
                     )?;
                     let _ = fs::remove_dir_all(&rel_dir);
                 }
@@ -862,7 +900,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                 writeln!(
                     ctx.writer,
                     "* existing releases/{} corrupted or invalid; re-fetching from registry...",
-                    release.trud_release_date
+                    release.source.version
                 )?;
                 let _ = fs::remove_dir_all(&rel_dir);
             }
@@ -889,7 +927,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_path = scratch_dir.join(format!("pull_{}_{}", release.trud_release_date, timestamp));
+    let temp_path = scratch_dir.join(format!("pull_{}_{}", release.source.version, timestamp));
     if temp_path.exists() {
         let _ = fs::remove_dir_all(&temp_path);
     }
@@ -918,8 +956,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
 
     for mirror in mirrors {
         let lines = render_release_block(&ReleaseBlockParams {
-            date: &release.trud_release_date,
-            archive_size: dataset.dataset_filesize_bytes,
+            date: &release.source.version,
+            archive_size: dataset.bytes,
             file_count: 0,
             state: &ReleaseBlockState::Preparing {
                 what: format!("fetching manifest from {}…", mirror.host()),
@@ -972,8 +1010,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         _ => {
             bail!(
                 "✖ All mirrors failed to pull release {} ({}): {}",
-                release.trud_release_date,
-                dataset.dataset_version,
+                release.source.version,
+                dataset.dataset_version(),
                 manifest_err.unwrap_or_else(|| "no reachable mirrors".to_string())
             );
         }
@@ -1026,14 +1064,14 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                 let cur = bytes_downloaded.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
                 let elapsed = download_start.elapsed().as_secs_f64();
                 let rate = if elapsed > 0.0 { cur as f64 / elapsed } else { 0.0 };
-                let total = dataset.dataset_filesize_bytes;
+                let total = dataset.bytes;
                 let eta = if rate > 0.0 && total > cur {
                     Some(std::time::Duration::from_secs_f64((total - cur) as f64 / rate))
                 } else {
                     None
                 };
                 let lines = render_release_block(&ReleaseBlockParams {
-                    date: &release.trud_release_date,
+                    date: &release.source.version,
                     archive_size: total,
                     file_count,
                     state: &ReleaseBlockState::Downloading {
@@ -1109,8 +1147,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             crate::workspace::VerificationOutcome::VerifiedPublished { .. } => {}
             crate::workspace::VerificationOutcome::DifferentBytes { published_digest, reconstructed_digest, .. } => bail!(
                 "✖ {} ({}) failed verification: its files rebuild a different manifest\n  {:<10}  {}\n  {:<10}  {}\n  Report it: https://github.com/olizilla/ods/issues",
-                release.trud_release_date,
-                dataset.dataset_version,
+                release.source.version,
+                dataset.dataset_version(),
                 "index",
                 published_digest,
                 "the files",
@@ -1119,13 +1157,13 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             crate::workspace::VerificationOutcome::Corrupted(block) => bail!("{}", block),
             other => bail!(
                 "✖ {} ({}) failed verification: its files don't name the release the index does ({:?})",
-                release.trud_release_date,
-                dataset.dataset_version,
+                release.source.version,
+                dataset.dataset_version(),
                 other
             ),
         }
         // The readable view beside the files. `ods` never reads a value back from it.
-        crate::datapackage::write_view(&temp_path, Some(index))
+        crate::datapackage::write_view(&temp_path)
             .context("writing datapackage.json into the release directory")?;
 
         fs::create_dir_all(workspace_root.join("releases"))?;
@@ -1140,7 +1178,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         let pin_moved = if ctx.args.all {
             false
         } else {
-            update_active_release_link_if_changed(workspace_root, &release.trud_release_date)?
+            update_active_release_link_if_changed(workspace_root, &release.source.version)?
         };
 
         let mut unique_hosts: Vec<String> = Vec::new();
@@ -1155,7 +1193,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         };
         let hash_opt = if ctx.args.verbose { Some(dataset.manifest_digest.as_str()) } else { None };
         let lines = render_release_block(&ReleaseBlockParams {
-            date: &release.trud_release_date,
+            date: &release.source.version,
             archive_size: expected_total,
             file_count: manifest.layers.len(),
             state: &ReleaseBlockState::Done { elapsed: download_start.elapsed() },
@@ -1169,6 +1207,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         });
         let out_lines: &[String] = if ctx.args.all { &lines[..1] } else { &lines };
         write_block(ctx.writer, progress, out_lines)?;
+        write_source_issues(ctx.writer, release)?;
 
         // `--verbose` names the host that served each layer once more than one mirror was
         // needed — the tail's `from 2 mirrors` says that happened, but not which layer went
@@ -1190,8 +1229,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             writeln!(
                 ctx.writer,
                 "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
-                release.trud_release_date,
-                dataset.dataset_version,
+                release.source.version,
+                dataset.dataset_version(),
                 reason
             )?;
             return Err(AlreadyReported.into());
@@ -1228,8 +1267,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         writeln!(
             ctx.writer,
             "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
-            release.trud_release_date,
-            dataset.dataset_version,
+            release.source.version,
+            dataset.dataset_version(),
             failed_layers.len(),
             manifest.layers.len()
         )?;
@@ -1255,7 +1294,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         writeln!(
             ctx.writer,
             "  Kept the verified copy already in releases/{}/",
-            release.trud_release_date
+            release.source.version
         )?;
         writeln!(
             ctx.writer,
@@ -1266,8 +1305,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             writeln!(
                 ctx.writer,
                 "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
-                release.trud_release_date,
-                dataset.dataset_version,
+                release.source.version,
+                dataset.dataset_version(),
                 reason
             )?;
         }
@@ -1287,8 +1326,8 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
     writeln!(
         ctx.writer,
         "✖ {} ({}) arrived incomplete: {} of {} files failed verification on every mirror",
-        release.trud_release_date,
-        dataset.dataset_version,
+        release.source.version,
+        dataset.dataset_version(),
         failed_layers.len(),
         manifest.layers.len()
     )?;
@@ -1297,7 +1336,7 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
             writeln!(
                 ctx.writer,
                 "  {} → releases/{}/{}.bad-sha",
-                failed.filename, release.trud_release_date, failed.filename
+                failed.filename, release.source.version, failed.filename
             )?;
         } else {
             writeln!(ctx.writer, "  {}  not downloaded", failed.filename)?;
@@ -1325,13 +1364,13 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         writeln!(
             ctx.writer,
             "  The other 1 file is verified, in releases/{}/",
-            release.trud_release_date
+            release.source.version
         )?;
     } else if verified_count > 1 {
         writeln!(
             ctx.writer,
             "  The other {} files are verified, in releases/{}/",
-            verified_count, release.trud_release_date
+            verified_count, release.source.version
         )?;
     }
 
@@ -1345,16 +1384,16 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
         "  current is not set".to_string()
     };
     writeln!(ctx.writer, "{}", current_line)?;
-    writeln!(ctx.writer, "  Retry: ods pull {}", release.trud_release_date)?;
-    writeln!(ctx.writer, "  Use it anyway: ods use {}", release.trud_release_date)?;
+    writeln!(ctx.writer, "  Retry: ods pull {}", release.source.version)?;
+    writeln!(ctx.writer, "  Use it anyway: ods use {}", release.source.version)?;
     writeln!(ctx.writer, "  Report it: https://github.com/olizilla/ods/issues")?;
 
     if let Some(ref reason) = dataset.withdrawn {
         writeln!(
             ctx.writer,
             "✖ {} ({}) was withdrawn: {}\n  Pull a valid release: ods pull",
-            release.trud_release_date,
-            dataset.dataset_version,
+            release.source.version,
+            dataset.dataset_version(),
             reason
         )?;
     }

@@ -61,7 +61,7 @@ fn make_parquet_produces_tables_with_correct_records() {
     let record = ods::provenance::read_release(&parquet_dir).unwrap();
     let facts = record.facts().expect("the files carry provenance");
     assert_eq!(facts.release_date, "2026-07-31");
-    assert!(!ods::provenance::pull_record_path(&parquet_dir).exists(), "no trud/ record for a bare zip");
+    assert!(!ods::provenance::trud_archive_package_path(&parquet_dir).exists(), "no trud/ record for a bare zip");
 }
 
 

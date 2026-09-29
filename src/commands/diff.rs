@@ -253,10 +253,10 @@ fn load_ndjson(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
 }
 
 /// A release's XML, from a zip, a directory or a bare XML file: both files, the pair `ods make`
-/// builds from, chosen by TRUD's release date when a pull record beside the input names it.
+/// builds from, chosen by TRUD's release date when a TRUD archive package beside the input names it.
 /// Labelled by the XML's own PublicationDate.
 fn load_xml(path: &Path) -> Result<(AsOf, HashMap<String, OdsRecord>)> {
-    let trud_date = crate::provenance::PullRecord::load_from_dir(path).ok().map(|record| record.version);
+    let trud_date = crate::provenance::TrudArchivePackage::load_from_dir(path).ok().map(|record| record.version);
     let release_xml = crate::ods_xml::find_release_xml(path, trud_date.as_deref())?;
     for line in &release_xml.skipped {
         eprintln!("{line}");

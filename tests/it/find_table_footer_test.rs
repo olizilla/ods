@@ -26,7 +26,7 @@ fn setup_two_release_workspace() -> (TempDir, PathBuf) {
 
     // Each release's files carry its own provenance, as `ods make` writes them.
     let release = |date: &str, sha: &str, version: &str| {
-        let embedded = ods::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 37983173, &[])
+        let embedded = ods::provenance::TrudArchivePackage::for_trud_release(date, "archive.zip", sha, 37983173, &[])
             .unwrap()
             .embedded(version)
             .unwrap();

@@ -81,7 +81,7 @@ fn build_release_from(full_xml: &str, archive_xml: &str) -> Release {
     let zip = trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     common::create_nested_trud_zip(&zip, &[("fullfile.zip", &full), ("archive.zip", &archive)]);
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &release_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",

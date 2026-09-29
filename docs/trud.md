@@ -7,7 +7,7 @@ Publisher namespace for TRUD API interactions: list releases (`list`), download 
 | Subcommand | Description |
 | :--- | :--- |
 | **`ods trud list`** | List TRUD release archives, newest first, and show which are held in the workspace. |
-| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, write the pull record `trud/datapackage.json` for `ods make` to build from, and set the active workspace release. |
+| **`ods trud pull`** | Download official release archives from TRUD REST API, verify SHA-256 checksums, write the TRUD archive package, `trud/datapackage.json`, for `ods make` to build from, and set the active workspace release. |
 | **`ods trud diff`** | Compare two TRUD ODS releases (or workspace versions) and print a structured diff report of entity changes. |
 | **`ods trud audit`** | Audit workspace Parquet projections against ground-truth TRUD XML/ZIP releases to detect data drift or compilation anomalies. |
 | **`ods trud verify`** | Check a TRUD archive you already have against the ods release index, then the TRUD API, without downloading it. |
@@ -43,6 +43,23 @@ ods trud list
 ```
 
 Pass `--all` to list every release without truncating.
+
+With `--format json`, each release is one item: its `source`, named as a
+[release index](./release-index.md) row names it, and whether the workspace holds it:
+```console
+$ ods trud list --format json
+[
+  {
+    "source": {
+      "version": "2026-07-31",
+      "hash": "sha256:8151248ddc290f3affdabae22d88e0bbd118947d948ab7bdd37e74088cfba933",
+      "bytes": 37983173
+    },
+    "status": "pulled"
+  },
+  …
+]
+```
 
 ## `ods trud pull`
 
@@ -96,6 +113,15 @@ With the key read from 1Password:
 op run --env-file=.env -- ods trud pull
 ```
 
+With `--format ndjson`, each release is one line on stdout. Its `source` names the release as a
+[release index](./release-index.md) row does, each part present when known, and
+`hash_verified_by` says who vouched for the hash (`trud_api`, `published_release` or
+`unverified`):
+```console
+$ ods trud pull 2026-09-25 --format ndjson
+{"source":{"version":"2026-09-25","hash":"sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5","bytes":38138574},"hash_verified_by":"trud_api","status":"downloaded","path":"ods_data/releases/2026-09-25"}
+```
+
 A specific release date, with verbose logging:
 ```bash
 ods trud pull 2026-07-31 --api-key $TRUD_API_KEY --verbose
@@ -116,7 +142,7 @@ NHS Digital / NHS England publishes monthly Organisation Data Service (ODS) upda
 3. Checks for a cached local archive in `./ods_data/releases/<date>/trud/`.
 4. Downloads the archive ZIP if it isn't there. A ZIP that is there is never downloaded again while it matches TRUD's hash: the release directory is repaired from it instead (below).
 5. Computes the local SHA-256 hash and checks it against TRUD's published `archiveFileSha256`.
-6. Fetches NHS's checksum, signature and key, then writes `trud/datapackage.json`, the pull record, beside the archive it describes: the TRUD release as a Data Package, the archive's hash and size from TRUD's listing and the other three files' hashed from disk. It's never part of the dataset. `ods make` reads it and embeds the same facts in every Parquet file it writes ([datapackage.md](./datapackage.md#truddatapackagejson-the-pull-record) describes it).
+6. Fetches NHS's checksum, signature and key, then writes the TRUD archive package, `trud/datapackage.json`, beside the archive it describes: the TRUD release as a Data Package, the archive's hash and size from TRUD's listing and the other three files' hashed from disk. It's never part of the dataset. `ods make` reads it and embeds the same facts in every Parquet file it writes ([datapackage.md](./datapackage.md#truddatapackagejson-the-trud-archive-package) describes it).
 7. Updates the workspace active release symlink (`./ods_data/current -> releases/<date>`).
 
 ```mermaid
@@ -160,7 +186,7 @@ Verify that derived workspace artefacts are a faithful, complete, and unmodified
 
 > **The audit contract**: Every check must have an expected value derivable from the release's own source archive, or be a fixed structural invariant such as zero.
 
-- **File and provenance integrity**: Verifies SHA-256 checksums against the pull record (`trud/datapackage.json`) and the provenance the Parquet files carry, that every file reads as Parquet, and, when the release index names the release, that the manifest the files rebuild has the digest it records.
+- **File and provenance integrity**: Verifies SHA-256 checksums against the TRUD archive package (`trud/datapackage.json`) and the provenance the Parquet files carry, that every file reads as Parquet, and, when the release index names the release, that the manifest the files rebuild has the digest it records.
 - **Source invariants**: Asserts global ID uniqueness (`uniqueRoleId`, `uniqueRelId`), 0 dangling references, `<CodeSystem>` integrity, date bounds, and verifies that redundant `<Rel><Target><PrimaryRoleId uniqueRoleId="..."/></Target></Rel>` match joined primary roles.
 - **Record parity**: Checks 100% count equality between the release's XML files and `orgs.parquet` (every organisation, and the active count), `roles.parquet`, `relationships.parquet`, and `successions.parquet`. It reads both XML files as `ods make` does, sets aside each stub that repeats a complete record from the other file, and names the record count it compared.
 - **Field and derived column parity**: Verifies verbatim source fields and recomputes derived columns (transitive closures, resolved hierarchies, role names and codes, normalised addresses).

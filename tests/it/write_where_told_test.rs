@@ -270,7 +270,7 @@ fn trud_pull_local_archive_with_output_creates_only_that_directory() {
         "`-o` must be the only thing created, found: {:?}",
         entries
     );
-    assert!(ods::provenance::pull_record_path(&cwd.path().join("out")).exists());
+    assert!(ods::provenance::trud_archive_package_path(&cwd.path().join("out")).exists());
 }
 
 #[test]

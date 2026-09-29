@@ -58,7 +58,6 @@ pub fn run(args: MakeArgs) -> Result<()> {
         Some(MakeCommand::Release(release_args)) => crate::commands::make_release::run(release_args),
         Some(MakeCommand::Datapackage(dp_args)) => crate::commands::make_datapackage::run(dp_args),
         None => {
-            let index = args.index.clone();
             let release_dir = run_make_parquet(crate::commands::parquet::Args {
                 input: args.input,
                 output: args.output,
@@ -71,15 +70,9 @@ pub fn run(args: MakeArgs) -> Result<()> {
             // The readable view beside the files, for people and Frictionless tools. `ods`
             // never reads a value back from it; nothing is packed (`ods make oci` does that,
             // for publishing).
-            write_release_view(&release_dir, index.as_deref())
+            crate::datapackage::write_view(&release_dir)
         }
     }
-}
-
-/// Writes `datapackage.json` into a release directory just built.
-fn write_release_view(release_dir: &std::path::Path, index_arg: Option<&str>) -> Result<()> {
-    let index = crate::commands::make_datapackage::index_for_view(release_dir, index_arg)?;
-    crate::datapackage::write_view(release_dir, Some(&index))
 }
 
 pub fn run_make_parquet(args: crate::commands::parquet::Args) -> Result<PathBuf> {

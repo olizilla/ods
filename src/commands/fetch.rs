@@ -126,16 +126,41 @@ pub struct TrudApiResponse {
     pub releases: Vec<TrudReleaseItem>,
 }
 
+/// A source release in an ndjson outcome, named as a release index row names it: its `version`
+/// (TRUD's release date), its `hash` (`sha256:` and lower-case hex) and its `bytes`, each present
+/// when known.
+#[derive(Debug, Serialize, Clone, Default, PartialEq, Eq)]
+pub struct OutcomeSource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
+impl OutcomeSource {
+    /// `hash` is hex in either case, with or without `sha256:`, as TRUD or a file hash gives it.
+    pub fn new(version: Option<String>, hash: Option<String>, bytes: Option<u64>) -> Self {
+        Self {
+            version,
+            hash: hash.map(|h| crate::provenance::prefixed_sha256(&h)),
+            bytes,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ReleaseOutcome {
+    #[serde(skip_serializing_if = "OutcomeSource::is_empty")]
+    pub source: OutcomeSource,
+    /// Who vouched for `source.hash`: TRUD's API, a published release index, or nobody.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_filesize_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trud_release_sha256_verified: Option<crate::provenance::TrudVerificationSource>,
+    pub hash_verified_by: Option<crate::provenance::TrudVerificationSource>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -145,10 +170,9 @@ pub struct ReleaseOutcome {
 
 #[derive(Debug, Serialize)]
 pub struct ReleaseListItemJson {
-    pub date: String,
-    /// TRUD's `archiveFileSha256`, upper case, as TRUD writes it.
-    pub sha256: String,
-    pub size_bytes: u64,
+    /// The release as a release index row names it: TRUD's release date as `version`, its
+    /// `archiveFileSha256` as `hash` (`sha256:` and lower case), and its size as `bytes`.
+    pub source: OutcomeSource,
     pub status: String,
 }
 
@@ -435,10 +459,8 @@ fn pull_single_release<F: TrudFetcher>(
 
             if args.format.as_deref() == Some("ndjson") {
                 emit_ndjson_outcome(&ReleaseOutcome {
-                    trud_release_date: Some(target_release.release_date.clone()),
-                    trud_release_filesize_bytes: Some(target_release.archive_file_size),
-                    trud_release_sha256: Some(target_release.archive_file_sha256.clone()),
-                    trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
+                    source: OutcomeSource::new(Some(target_release.release_date.clone()), Some(target_release.archive_file_sha256.clone()), Some(target_release.archive_file_size)),
+                    hash_verified_by: Some(crate::provenance::TrudVerificationSource::TrudApi),
                     status: healed.status(args.force).to_string(),
                     path: Some(dest_dir.display().to_string()),
                     error: None,
@@ -563,7 +585,7 @@ fn pull_single_release<F: TrudFetcher>(
     let elapsed = start_time.elapsed();
     let att_result = capture_attestations(&trud_dir, &target_release, fetcher, args.force);
     // The record lists every file the pull left, so it's written once they're all on disk.
-    write_pull_record(&dest_dir, &target_release, &att_result, true)?;
+    write_trud_archive_package(&dest_dir, &target_release, &att_result, true)?;
     let mut pin_moved = false;
     if is_workspace {
         pin_moved = update_active_release_link_if_changed(workspace_root, &target_release.release_date)?;
@@ -610,10 +632,8 @@ fn pull_single_release<F: TrudFetcher>(
 
     if args.format.as_deref() == Some("ndjson") {
         emit_ndjson_outcome(&ReleaseOutcome {
-            trud_release_date: Some(target_release.release_date.clone()),
-            trud_release_filesize_bytes: Some(target_release.archive_file_size),
-            trud_release_sha256: Some(local_sha256),
-            trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
+            source: OutcomeSource::new(Some(target_release.release_date.clone()), Some(local_sha256), Some(target_release.archive_file_size)),
+            hash_verified_by: Some(crate::provenance::TrudVerificationSource::TrudApi),
             status: "downloaded".to_string(),
             path: Some(dest_dir.display().to_string()),
             error: None,
@@ -855,10 +875,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                             let entry = SettledEntry {
                                 line: format!("✖ {}  failed to prepare release directory — {}", release.release_date, e),
                                 outcome: ReleaseOutcome {
-                                    trud_release_date: Some(release.release_date.clone()),
-                                    trud_release_filesize_bytes: Some(release.archive_file_size),
-                                    trud_release_sha256: None,
-                                    trud_release_sha256_verified: None,
+                                    source: OutcomeSource::new(Some(release.release_date.clone()), None, Some(release.archive_file_size)),
+                                    hash_verified_by: None,
                                     status: "failed".to_string(),
                                     path: None,
                                     error: Some(e.to_string()),
@@ -915,10 +933,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                             SettledEntry {
                                 line: format!("✖ {}  download failed after 2 attempts — {}", release.release_date, e),
                                 outcome: ReleaseOutcome {
-                                    trud_release_date: Some(release.release_date.clone()),
-                                    trud_release_filesize_bytes: Some(release.archive_file_size),
-                                    trud_release_sha256: None,
-                                    trud_release_sha256_verified: None,
+                                    source: OutcomeSource::new(Some(release.release_date.clone()), None, Some(release.archive_file_size)),
+                                    hash_verified_by: None,
                                     status: "failed".to_string(),
                                     path: None,
                                     error: Some(e.to_string()),
@@ -937,10 +953,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                     let entry = SettledEntry {
                                         line: format!("✖ {}  SHA-256 compute failed — {}", release.release_date, e),
                                         outcome: ReleaseOutcome {
-                                            trud_release_date: Some(release.release_date.clone()),
-                                            trud_release_filesize_bytes: Some(release.archive_file_size),
-                                            trud_release_sha256: None,
-                                            trud_release_sha256_verified: None,
+                                            source: OutcomeSource::new(Some(release.release_date.clone()), None, Some(release.archive_file_size)),
+                                            hash_verified_by: None,
                                             status: "failed".to_string(),
                                             path: None,
                                             error: Some(e.to_string()),
@@ -973,10 +987,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         bad_path.file_name().and_then(|s| s.to_str()).unwrap_or("")
                                     ),
                                     outcome: ReleaseOutcome {
-                                        trud_release_date: Some(release.release_date.clone()),
-                                        trud_release_filesize_bytes: Some(release.archive_file_size),
-                                        trud_release_sha256: Some(local_sha),
-                                        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::Unverified),
+                                        source: OutcomeSource::new(Some(release.release_date.clone()), Some(local_sha), Some(release.archive_file_size)),
+                                        hash_verified_by: Some(crate::provenance::TrudVerificationSource::Unverified),
                                         status: "failed".to_string(),
                                         path: None,
                                         error: Some("SHA-256 checksum mismatch".to_string()),
@@ -986,7 +998,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                             } else {
                                 let _ = std::fs::rename(&part_path, &dest_path);
                                 let captured = capture_attestations(&trud_dir, release, fetcher, args.force);
-                                let _ = write_pull_record(&release_dir, release, &captured, true);
+                                let _ = write_trud_archive_package(&release_dir, release, &captured, true);
 
                                 downloaded_count.fetch_add(1, Ordering::Relaxed);
                                 progress.remove_in_flight(&release.release_date);
@@ -1003,10 +1015,8 @@ fn pull_all_trud_releases<F: TrudFetcher>(
                                         format_size(release.archive_file_size)
                                     ),
                                     outcome: ReleaseOutcome {
-                                        trud_release_date: Some(release.release_date.clone()),
-                                        trud_release_filesize_bytes: Some(release.archive_file_size),
-                                        trud_release_sha256: Some(local_sha),
-                                        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
+                                        source: OutcomeSource::new(Some(release.release_date.clone()), Some(local_sha), Some(release.archive_file_size)),
+                                        hash_verified_by: Some(crate::provenance::TrudVerificationSource::TrudApi),
                                         status: "downloaded".to_string(),
                                         path: Some(workspace_root.join("releases").join(&release.release_date).display().to_string()),
                                         error: None,
@@ -1044,7 +1054,7 @@ fn pull_all_trud_releases<F: TrudFetcher>(
     let elapsed = batch_start.elapsed();
 
     // Total size landed (cached bytes + downloaded bytes)
-    let successful_downloaded_bytes = outcomes.lock().unwrap().iter().filter_map(|o| o.trud_release_filesize_bytes).sum::<u64>();
+    let successful_downloaded_bytes = outcomes.lock().unwrap().iter().filter_map(|o| o.source.bytes).sum::<u64>();
     let landed_bytes: u64 = cached_bytes + successful_downloaded_bytes;
 
     progress.clear_live();
@@ -1122,10 +1132,8 @@ fn held_zip_outcome(
 ) -> ReleaseOutcome {
     let failure = heal_failures.iter().find(|(date, _)| *date == release.release_date);
     ReleaseOutcome {
-        trud_release_date: Some(release.release_date.clone()),
-        trud_release_filesize_bytes: Some(release.archive_file_size),
-        trud_release_sha256: Some(release.archive_file_sha256.clone()),
-        trud_release_sha256_verified: Some(crate::provenance::TrudVerificationSource::TrudApi),
+        source: OutcomeSource::new(Some(release.release_date.clone()), Some(release.archive_file_sha256.clone()), Some(release.archive_file_size)),
+        hash_verified_by: Some(crate::provenance::TrudVerificationSource::TrudApi),
         status: match failure {
             Some(_) => "failed",
             None => heal_status.get(&release.release_date).copied().unwrap_or("cached"),
@@ -1148,25 +1156,25 @@ fn mark_bad_sha_file(path: &Path) -> PathBuf {
     bad_path
 }
 
-/// Writes the pull record, `trud/datapackage.json`: the archive from TRUD's listing, and NHS's
+/// Writes the TRUD archive package, `trud/datapackage.json`: the archive from TRUD's listing, and NHS's
 /// other files as `captured` holds them. Written when it is missing, differs from what the files
 /// on disk make (an older format, `trud/_provenance.json` from an older `ods`, or a file fetched
 /// since), or `force`d. Returns whether it wrote one.
-fn write_pull_record(
+fn write_trud_archive_package(
     release_dir: &Path,
     release: &TrudReleaseItem,
     captured: &AttestationCaptureResult,
     force: bool,
 ) -> Result<bool> {
-    let record = crate::provenance::PullRecord::for_trud_release(
+    let record = crate::provenance::TrudArchivePackage::for_trud_release(
         &release.release_date,
         &release.archive_file_name,
         &release.archive_file_sha256,
         release.archive_file_size,
         &captured.files,
     )?;
-    let path = crate::provenance::pull_record_path(release_dir);
-    let legacy = crate::provenance::pull_record_dir(release_dir).join(crate::provenance::LEGACY_PROVENANCE_FILENAME);
+    let path = crate::provenance::trud_archive_package_path(release_dir);
+    let legacy = crate::provenance::trud_archive_package_dir(release_dir).join(crate::provenance::LEGACY_PROVENANCE_FILENAME);
     let current = std::fs::read_to_string(&path).ok().as_deref() == Some(record.to_json_string()?.as_str());
     if current && !force && !legacy.exists() {
         return Ok(false);
@@ -1353,7 +1361,7 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
                 false,
                 oci,
             )?;
-            if offline_idx.releases.iter().any(|r| r.trud_release_date == release_date) {
+            if offline_idx.release(release_date).is_some() {
                 Ok(Some(offline_idx))
             } else {
                 // Fetch published index
@@ -1382,16 +1390,18 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
     };
 
     if let Ok(Some(index)) = index_res {
-        if let Some(rel) = index.releases.iter().find(|r| r.trud_release_date == release_date) {
-            if local_sha256.eq_ignore_ascii_case(&rel.trud_release_sha256) {
+        if let Some(rel) = index.release(release_date) {
+            // The outcome carries upper-case hex, as TRUD's API gives it, whichever vouched.
+            let expected_sha256 = rel.source.sha256_hex().to_uppercase();
+            if rel.source.hash_matches(local_sha256) {
                 return Ok(ArchiveVerificationOutcome::VerifiedPublished {
-                    expected_sha256: rel.trud_release_sha256.clone(),
-                    file_size: rel.trud_release_filesize_bytes,
+                    expected_sha256,
+                    file_size: rel.source.bytes,
                 });
             } else {
                 return Ok(ArchiveVerificationOutcome::Mismatch {
                     source_name: "Index",
-                    expected_sha256: rel.trud_release_sha256.clone(),
+                    expected_sha256,
                     actual_sha256: local_sha256.to_string(),
                 });
             }
@@ -1434,8 +1444,9 @@ pub fn verify_archive<F: TrudFetcher, OF: crate::commands::pull::OciBlobFetcher>
 #[derive(Debug, Clone)]
 pub struct MatchedTrudArchive {
     pub release_date: String,
-    pub trud_release_sha256: String,
-    pub trud_release_filesize_bytes: u64,
+    /// The archive's SHA-256 as upper-case hex, as TRUD's API gives it.
+    pub sha256: String,
+    pub bytes: u64,
     pub trud_name: Option<String>,
     pub source: crate::provenance::TrudVerificationSource,
 }
@@ -1478,7 +1489,7 @@ pub fn match_archive_by_hash<F: TrudFetcher, OF: crate::commands::pull::OciBlobF
             if offline_idx
                 .releases
                 .iter()
-                .any(|r| r.trud_release_sha256.eq_ignore_ascii_case(local_sha256))
+                .any(|r| r.source.hash_matches(local_sha256))
             {
                 Ok(Some(offline_idx))
             } else {
@@ -1505,12 +1516,12 @@ pub fn match_archive_by_hash<F: TrudFetcher, OF: crate::commands::pull::OciBlobF
         if let Some(rel) = index
             .releases
             .iter()
-            .find(|r| r.trud_release_sha256.eq_ignore_ascii_case(local_sha256))
+            .find(|r| r.source.hash_matches(local_sha256))
         {
             return Ok(Some(MatchedTrudArchive {
-                release_date: rel.trud_release_date.clone(),
-                trud_release_sha256: rel.trud_release_sha256.clone(),
-                trud_release_filesize_bytes: rel.trud_release_filesize_bytes,
+                release_date: rel.source.version.clone(),
+                sha256: rel.source.sha256_hex().to_uppercase(),
+                bytes: rel.source.bytes,
                 trud_name: None,
                 source: crate::provenance::TrudVerificationSource::PublishedRelease,
             }));
@@ -1529,8 +1540,8 @@ pub fn match_archive_by_hash<F: TrudFetcher, OF: crate::commands::pull::OciBlobF
                 {
                     return Ok(Some(MatchedTrudArchive {
                         release_date: trud_rel.release_date,
-                        trud_release_sha256: trud_rel.archive_file_sha256,
-                        trud_release_filesize_bytes: trud_rel.archive_file_size,
+                        sha256: trud_rel.archive_file_sha256,
+                        bytes: trud_rel.archive_file_size,
                         trud_name: trud_rel.name,
                         source: crate::provenance::TrudVerificationSource::TrudApi,
                     }));
@@ -1622,12 +1633,12 @@ pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull
         std::fs::copy(&zip_file, &dest_path)?;
     }
 
-    crate::provenance::write_pull_record(
+    crate::provenance::write_trud_archive_package(
         &dest_dir,
         &release_date,
         &file_name,
-        &matched.trud_release_sha256,
-        matched.trud_release_filesize_bytes,
+        &matched.sha256,
+        matched.bytes,
         &[],
     )?;
 
@@ -1664,10 +1675,8 @@ pub fn run_local_archive_with_fetchers<F: TrudFetcher, OF: crate::commands::pull
 
     if args.format.as_deref() == Some("ndjson") {
         emit_ndjson_outcome(&ReleaseOutcome {
-            trud_release_date: Some(release_date),
-            trud_release_filesize_bytes: Some(file_size),
-            trud_release_sha256: Some(local_sha256),
-            trud_release_sha256_verified: Some(matched.source),
+            source: OutcomeSource::new(Some(release_date), Some(local_sha256), Some(file_size)),
+            hash_verified_by: Some(matched.source),
             status: "local".to_string(),
             path: Some(dest_dir.display().to_string()),
             error: None,
@@ -1788,7 +1797,7 @@ pub struct AttestationCaptureResult {
     /// The subset of `captured` this call downloaded: the others were already on disk.
     pub fetched: Vec<&'static str>,
     pub missing_reasons: Vec<&'static str>,
-    /// Each captured file as the pull record lists it: `(name, mediatype, path)`.
+    /// Each captured file as the TRUD archive package lists it: `(name, mediatype, path)`.
     pub files: Vec<(&'static str, &'static str, PathBuf)>,
 }
 
@@ -1966,7 +1975,7 @@ fn heal_release_dir<F: TrudFetcher>(
 ) -> Result<Healed> {
     let attestations = capture_attestations(trud_dir, release, fetcher, force);
     let mut done = attestations.fetched.clone();
-    if write_pull_record(release_dir, release, &attestations, force)? {
+    if write_trud_archive_package(release_dir, release, &attestations, force)? {
         done.push("provenance");
     }
     Ok(Healed { done, attestations })

@@ -8,9 +8,11 @@ use ods::index::OdsReleaseIndex;
 fn test_baked_index_parses_and_validates() -> Result<()> {
     let index = OdsReleaseIndex::baked()?;
     assert_eq!(index.schema, ods::index::RELEASES_SCHEMA_V1_URL);
+    assert_eq!(index.name, "ods-data");
+    assert_eq!(index.source.title, "NHS Organisation Data Service XML Data");
     assert_eq!(
-        index.trud_signing_key_fingerprints,
-        vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0"]
+        index.source.signing_key_fingerprints,
+        Some(vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()])
     );
     assert_eq!(index.mirrors.len(), 2);
     Ok(())
@@ -41,24 +43,53 @@ fn test_baked_index_matches_its_schema() -> Result<()> {
     let built_errors: Vec<_> = validator.iter_errors(&built_json).collect();
     assert!(built_errors.is_empty(), "Built index schema errors: {:?}", built_errors);
 
+    // 3. A source hash in upper case, as TRUD writes it, fails: the index writes sha256: + lower
+    let mut upper = built_json.clone();
+    let hash = upper["releases"][0]["source"]["hash"].as_str().unwrap().to_string();
+    upper["releases"][0]["source"]["hash"] = serde_json::json!(format!("sha256:{}", hash["sha256:".len()..].to_uppercase()));
+    let upper_errors: Vec<_> = validator.iter_errors(&upper).collect();
+    assert!(!upper_errors.is_empty(), "Schema validation must fail on an upper-case source hash");
+
+    // 4. A dataset version without its source version fails
+    let mut bare = built_json.clone();
+    bare["releases"][0]["datasets"][0]["version"] = serde_json::json!("1.0.0");
+    assert!(validator.iter_errors(&bare).next().is_some(), "Schema validation must fail on a bare dataset version");
+
+    Ok(())
+}
+
+// docs/release-index.md's example is an index both the schema and ods accept.
+#[test]
+fn test_the_documented_example_is_a_valid_index() -> Result<()> {
+    let doc = include_str!("../../docs/release-index.md");
+    let after = doc.split("## Example").nth(1).expect("an Example section");
+    let example = after.split("```json").nth(1).and_then(|b| b.split("```").next()).expect("a json block");
+
+    let schema_json: serde_json::Value = serde_json::from_str(include_str!("../../worker/schema/releases.v1.json"))?;
+    let validator = jsonschema::validator_for(&schema_json).map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
+    let example_json: serde_json::Value = serde_json::from_str(example)?;
+    let errors: Vec<_> = validator.iter_errors(&example_json).collect();
+    assert!(errors.is_empty(), "docs/release-index.md example schema errors: {:?}", errors);
+
+    OdsReleaseIndex::from_slice(example.as_bytes())?.validate()?;
     Ok(())
 }
 
 #[test]
-fn test_built_pull_record_matches_its_schema() -> Result<()> {
+fn test_built_trud_archive_package_matches_its_schema() -> Result<()> {
     let schema_str = include_str!("../../worker/schema/ods-datapackage.v1.json");
     let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
     let validator = jsonschema::validator_for(&schema_json)
         .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
 
-    // 1. Validate the pull record of a release built by setup_synthetic_repo_and_release()
+    // 1. Validate the TRUD archive package of a release built by setup_synthetic_repo_and_release()
     let (_tmp, rel_dir) = common::setup_synthetic_repo_and_release();
-    let prov_str = std::fs::read_to_string(ods::provenance::pull_record_path(&rel_dir))?;
+    let prov_str = std::fs::read_to_string(ods::provenance::trud_archive_package_path(&rel_dir))?;
     let prov_json: serde_json::Value = serde_json::from_str(&prov_str)?;
     let errors: Vec<_> = validator.iter_errors(&prov_json).collect();
     assert!(errors.is_empty(), "Synthetic release provenance schema errors: {:?}", errors);
 
-    // 2. Validate the pull record written by ods trud pull against the mock zip
+    // 2. Validate the TRUD archive package written by ods trud pull against the mock zip
     let tmp_pull = tempfile::TempDir::new()?;
     let fixture_zip = tmp_pull.path().join("hscorgrefdataxml_data_7.0.0_20260731000001.zip");
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -85,7 +116,7 @@ fn test_built_pull_record_matches_its_schema() -> Result<()> {
         .arg(&pull_out)
         .status()?;
     assert!(status.success(), "trud pull must succeed");
-    let pull_prov_str = std::fs::read_to_string(ods::provenance::pull_record_path(&pull_out))?;
+    let pull_prov_str = std::fs::read_to_string(ods::provenance::trud_archive_package_path(&pull_out))?;
     let pull_prov_json: serde_json::Value = serde_json::from_str(&pull_prov_str)?;
     let pull_errors: Vec<_> = validator.iter_errors(&pull_prov_json).collect();
     assert!(pull_errors.is_empty(), "trud pull provenance schema errors: {:?}", pull_errors);
@@ -103,27 +134,34 @@ fn test_built_pull_record_matches_its_schema() -> Result<()> {
 fn test_index_rejects_duplicate_version_in_release() {
     let json = r#"{
       "$schema": "https://ods.fyi/schema/releases.v1.json",
-      "trud_signing_key_fingerprints": [
-        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
-      ],
+      "name": "ods-data",
+      "source": {
+        "title": "NHS Organisation Data Service XML Data",
+        "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+        "signing_key_fingerprints": [
+          "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+        ]
+      },
       "mirrors": [],
       "releases": [
         {
-          "trud_release_date": "2026-07-31",
-          "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "trud_release_filesize_bytes": 37983173,
+          "source": {
+            "version": "2026-07-31",
+            "hash": "sha256:8151248ddc290f3affdabae22d88e0bbd118947d948ab7bdd37e74088cfba933",
+            "bytes": 37983173
+          },
           "datasets": [
             {
-              "dataset_version": "1.0.0",
+              "version": "2026-07-31_1.0.0",
               "manifest_digest": "sha256:0f2a000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000,
+              "bytes": 29700000,
               "tool_version": "0.1.0",
               "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             },
             {
-              "dataset_version": "1.0.0",
+              "version": "2026-07-31_1.0.0",
               "manifest_digest": "sha256:7c4a000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000,
+              "bytes": 29700000,
               "tool_version": "0.1.0",
               "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             }
@@ -136,27 +174,34 @@ fn test_index_rejects_duplicate_version_in_release() {
     let result = index.validate();
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Duplicate dataset_version '1.0.0'"));
+    assert!(err.contains("Duplicate dataset version '2026-07-31_1.0.0'"));
 }
 
 #[test]
 fn test_index_rejects_uppercase_manifest_digest() {
     let json = r#"{
       "$schema": "https://ods.fyi/schema/releases.v1.json",
-      "trud_signing_key_fingerprints": [
-        "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
-      ],
+      "name": "ods-data",
+      "source": {
+        "title": "NHS Organisation Data Service XML Data",
+        "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+        "signing_key_fingerprints": [
+          "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+        ]
+      },
       "mirrors": [],
       "releases": [
         {
-          "trud_release_date": "2026-07-31",
-          "trud_release_sha256": "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
-          "trud_release_filesize_bytes": 37983173,
+          "source": {
+            "version": "2026-07-31",
+            "hash": "sha256:8151248ddc290f3affdabae22d88e0bbd118947d948ab7bdd37e74088cfba933",
+            "bytes": 37983173
+          },
           "datasets": [
             {
-              "dataset_version": "1.0.0",
+              "version": "2026-07-31_1.0.0",
               "manifest_digest": "sha256:0F2A000000000000000000000000000000000000000000000000000000000000",
-              "dataset_filesize_bytes": 29700000,
+              "bytes": 29700000,
               "tool_version": "0.1.0",
               "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
             }
@@ -237,8 +282,8 @@ fn test_resolve_prefers_highest_non_withdrawn_semver() -> Result<()> {
     index.releases[0].datasets[0].withdrawn = Some("roles table truncated".to_string());
 
     let res = index.resolve(Some("2026-07-31"))?;
-    assert_eq!(res.release.trud_release_date, "2026-07-31");
-    assert_eq!(res.dataset.dataset_version, "1.0.1");
+    assert_eq!(res.release.source.version, "2026-07-31");
+    assert_eq!(res.dataset.dataset_version(), "1.0.1");
     Ok(())
 }
 
@@ -254,8 +299,8 @@ fn test_resolve_delivers_withdrawn_when_all_versions_for_date_withdrawn() -> Res
         Some("roles table truncated at 65535 rows by a bad build".to_string());
 
     let res = index.resolve(Some("2026-07-31"))?;
-    assert_eq!(res.release.trud_release_date, "2026-07-31");
-    assert_eq!(res.dataset.dataset_version, "1.0.0");
+    assert_eq!(res.release.source.version, "2026-07-31");
+    assert_eq!(res.dataset.dataset_version(), "1.0.0");
     assert!(res.dataset.is_withdrawn());
     assert_eq!(
         res.dataset.withdrawn.as_deref(),
@@ -305,11 +350,11 @@ fn test_resolve_none_skips_withdrawn_newest_date() -> Result<()> {
     index.releases[0].datasets[0].withdrawn = Some("critical corruption in roles".to_string());
 
     let res = index.resolve(None)?;
-    assert_eq!(res.release.trud_release_date, "2026-05-29");
-    assert_eq!(res.dataset.dataset_version, "1.0.0");
+    assert_eq!(res.release.source.version, "2026-05-29");
+    assert_eq!(res.dataset.dataset_version(), "1.0.0");
     assert_eq!(res.skipped.len(), 1);
-    assert_eq!(res.skipped[0].0.trud_release_date, "2026-07-31");
-    assert_eq!(res.skipped[0].1.dataset_version, "1.0.0");
+    assert_eq!(res.skipped[0].0.source.version, "2026-07-31");
+    assert_eq!(res.skipped[0].1.dataset_version(), "1.0.0");
     Ok(())
 }
 
@@ -367,8 +412,8 @@ fn test_workspace_release_index_save_and_load() -> Result<()> {
     let loaded = ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.unwrap();
     assert_eq!(loaded.schema, baked.schema);
     assert_eq!(
-        loaded.trud_signing_key_fingerprints,
-        baked.trud_signing_key_fingerprints
+        loaded.source.signing_key_fingerprints,
+        baked.source.signing_key_fingerprints
     );
     Ok(())
 }
@@ -413,20 +458,20 @@ fn test_select_dataset_helper() {
 
     // With all active: returns highest active (1.0.2, false)
     let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
-    assert_eq!(ds.dataset_version, "1.0.2");
+    assert_eq!(ds.dataset_version(), "1.0.2");
     assert!(!is_withdrawn);
 
     // With 1.0.2 withdrawn: returns highest active (1.0.1, false)
     index.releases[0].datasets[2].withdrawn = Some("bug in 1.0.2".to_string());
     let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
-    assert_eq!(ds.dataset_version, "1.0.1");
+    assert_eq!(ds.dataset_version(), "1.0.1");
     assert!(!is_withdrawn);
 
     // With all withdrawn: returns highest withdrawn (1.0.2, true)
     index.releases[0].datasets[0].withdrawn = Some("bug in 1.0.0".to_string());
     index.releases[0].datasets[1].withdrawn = Some("bug in 1.0.1".to_string());
     let (ds, is_withdrawn) = ods::index::select_dataset(&index.releases[0]).unwrap();
-    assert_eq!(ds.dataset_version, "1.0.2");
+    assert_eq!(ds.dataset_version(), "1.0.2");
     assert!(is_withdrawn);
 
     // With empty datasets: returns None
@@ -577,6 +622,40 @@ fn test_precedence_workspace_cache_wins_over_baked() -> Result<()> {
     Ok(())
 }
 
+// A workspace cache in the old format is refused by name, pointing at `ods pull`, which
+// replaces it with the index built into ods.
+#[test]
+fn test_an_old_format_workspace_cache_is_refused_and_ods_pull_replaces_it() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("ods_data");
+    std::fs::create_dir_all(&workspace)?;
+    let cache_path = workspace.join("_releases.json");
+    std::fs::write(&cache_path, common::OLD_FORMAT_INDEX)?;
+
+    let fetcher = MockPrecedenceFetcher { raw_response: None };
+    let err = resolve_index(&workspace, None, false, false, &fetcher).unwrap_err();
+    assert!(err.downcast_ref::<AlreadyReported>().is_some(), "{err}");
+
+    let list = common::ods_cmd()
+        .current_dir(tmp.path())
+        .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9/unreachable.json")
+        .args(["pull", "--list"])
+        .output()?;
+    let stderr = String::from_utf8_lossy(&list.stderr);
+    println!("{stderr}");
+    assert_eq!(list.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("✖ Cannot read ods_data/_releases.json: it's a release index in the old format\n  Refresh it: ods pull"), "{stderr}");
+
+    let pull = common::ods_cmd()
+        .current_dir(tmp.path())
+        .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9/unreachable.json")
+        .arg("pull")
+        .output()?;
+    println!("{}", String::from_utf8_lossy(&pull.stderr));
+    assert_eq!(std::fs::read(&cache_path)?, ods::index::BAKED_RELEASES_JSON_BYTES, "ods pull replaces the old cache");
+    Ok(())
+}
+
 #[test]
 fn test_precedence_baked_is_fallback() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -697,10 +776,15 @@ fn test_invalid_remote_fetch_warns_and_falls_back_to_cache() -> Result<()> {
 fn test_index_with_multiple_fingerprints_roundtrips_in_order() -> Result<()> {
     let json = r#"{
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
-    "0123456789ABCDEF0123456789ABCDEF01234567"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+      "0123456789ABCDEF0123456789ABCDEF01234567"
+    ]
+  },
   "mirrors": [],
   "releases": []
 }"#;
@@ -708,11 +792,11 @@ fn test_index_with_multiple_fingerprints_roundtrips_in_order() -> Result<()> {
     let index: OdsReleaseIndex = serde_json::from_str(json)?;
     index.validate()?;
     assert_eq!(
-        index.trud_signing_key_fingerprints,
-        vec![
-            "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
-            "0123456789ABCDEF0123456789ABCDEF01234567",
-        ]
+        index.source.signing_key_fingerprints,
+        Some(vec![
+            "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+            "0123456789ABCDEF0123456789ABCDEF01234567".to_string(),
+        ])
     );
 
     let roundtrip = serde_json::to_string_pretty(&index)?;
@@ -724,7 +808,12 @@ fn test_index_with_multiple_fingerprints_roundtrips_in_order() -> Result<()> {
 fn test_index_rejects_empty_fingerprints() {
     let json = r#"{
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": []
+  },
   "mirrors": [],
   "releases": []
 }"#;
@@ -732,7 +821,7 @@ fn test_index_rejects_empty_fingerprints() {
     let index: OdsReleaseIndex = serde_json::from_str(json).unwrap();
     let err = index.validate().unwrap_err().to_string();
     assert!(
-        err.contains("Invalid trud_signing_key_fingerprints: expected at least one entry"),
+        err.contains("Invalid source.signing_key_fingerprints: expected at least one entry"),
         "Unexpected error: {}",
         err
     );
@@ -742,10 +831,15 @@ fn test_index_rejects_empty_fingerprints() {
 fn test_index_rejects_duplicate_fingerprint() {
     let json = r#"{
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
-    "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+    ]
+  },
   "mirrors": [],
   "releases": []
 }"#;
@@ -753,7 +847,7 @@ fn test_index_rejects_duplicate_fingerprint() {
     let index: OdsReleaseIndex = serde_json::from_str(json).unwrap();
     let err = index.validate().unwrap_err().to_string();
     assert!(
-        err.contains("Duplicate trud_signing_key_fingerprints in index: '71ED5964BAE53E83556320A42BE59DADEE84BEB0'"),
+        err.contains("Duplicate source.signing_key_fingerprints in index: '71ED5964BAE53E83556320A42BE59DADEE84BEB0'"),
         "Unexpected error: {}",
         err
     );
@@ -764,9 +858,14 @@ fn test_index_rejects_invalid_fingerprint_length_or_charset() {
     // 39-character entry
     let json_39 = r#"{
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "71ED5964BAE53E83556320A42BE59DADEE84BEB"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB"
+    ]
+  },
   "mirrors": [],
   "releases": []
 }"#;
@@ -774,7 +873,7 @@ fn test_index_rejects_invalid_fingerprint_length_or_charset() {
     let index_39: OdsReleaseIndex = serde_json::from_str(json_39).unwrap();
     let err_39 = index_39.validate().unwrap_err().to_string();
     assert!(
-        err_39.contains("Invalid trud_signing_key_fingerprints: expected 40 upper-case hex characters, got '71ED5964BAE53E83556320A42BE59DADEE84BEB'"),
+        err_39.contains("Invalid source.signing_key_fingerprints: expected 40 upper-case hex characters, got '71ED5964BAE53E83556320A42BE59DADEE84BEB'"),
         "Unexpected error: {}",
         err_39
     );
@@ -782,9 +881,14 @@ fn test_index_rejects_invalid_fingerprint_length_or_charset() {
     // lowercase entry
     let json_lower = r#"{
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "71ed5964bae53e83556320a42be59dadee84beb0"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ed5964bae53e83556320a42be59dadee84beb0"
+    ]
+  },
   "mirrors": [],
   "releases": []
 }"#;
@@ -792,36 +896,26 @@ fn test_index_rejects_invalid_fingerprint_length_or_charset() {
     let index_lower: OdsReleaseIndex = serde_json::from_str(json_lower).unwrap();
     let err_lower = index_lower.validate().unwrap_err().to_string();
     assert!(
-        err_lower.contains("Invalid trud_signing_key_fingerprints: expected 40 upper-case hex characters, got '71ed5964bae53e83556320a42be59dadee84beb0'"),
+        err_lower.contains("Invalid source.signing_key_fingerprints: expected 40 upper-case hex characters, got '71ed5964bae53e83556320a42be59dadee84beb0'"),
         "Unexpected error: {}",
         err_lower
     );
 }
 
 #[test]
-fn test_schema_rejects_old_singular_fingerprint() -> Result<()> {
+fn test_schema_rejects_an_old_format_index() -> Result<()> {
     let schema_str = include_str!("../../worker/schema/releases.v1.json");
     let schema_json: serde_json::Value = serde_json::from_str(schema_str)?;
     let validator = jsonschema::validator_for(&schema_json)
         .map_err(|e| anyhow::anyhow!("Invalid schema: {}", e))?;
 
-    let old_prop = format!("trud_signing_key_{}", "fingerprint");
-    let mut old_json = serde_json::json!({
-        "$schema": "https://ods.fyi/schema/releases.v1.json",
-        "mirrors": [],
-        "releases": []
-    });
-    old_json[old_prop] = serde_json::json!("71ED5964BAE53E83556320A42BE59DADEE84BEB0");
-
+    let old_json: serde_json::Value = serde_json::from_slice(common::OLD_FORMAT_INDEX)?;
     let errors: Vec<_> = validator.iter_errors(&old_json).collect();
-    println!("Schema validation rejected old singular property with {} errors:", errors.len());
+    println!("Schema validation rejected the old format with {} errors:", errors.len());
     for err in &errors {
         println!("  - {}", err);
     }
-    assert!(
-        !errors.is_empty(),
-        "Schema must reject index with old singular property"
-    );
+    assert!(!errors.is_empty(), "Schema must reject an index in the old format");
     Ok(())
 }
 
@@ -829,19 +923,51 @@ fn test_schema_rejects_old_singular_fingerprint() -> Result<()> {
 fn test_merge_fingerprints_takes_candidate_when_non_empty() -> Result<()> {
     let base = OdsReleaseIndex::baked()?;
     let mut candidate = OdsReleaseIndex::baked()?;
-    candidate.trud_signing_key_fingerprints = vec![
+    candidate.source.signing_key_fingerprints = Some(vec![
         "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
         "0123456789ABCDEF0123456789ABCDEF01234567".to_string(),
-    ];
+    ]);
 
     let merged = base.merge(&candidate)?;
     assert_eq!(
-        merged.trud_signing_key_fingerprints,
-        vec![
-            "71ED5964BAE53E83556320A42BE59DADEE84BEB0",
-            "0123456789ABCDEF0123456789ABCDEF01234567",
-        ]
+        merged.source.signing_key_fingerprints,
+        Some(vec![
+            "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
+            "0123456789ABCDEF0123456789ABCDEF01234567".to_string(),
+        ])
     );
     Ok(())
 }
 
+
+// A release the built-in index records only for its known source issue is refused as having no
+// dataset yet, naming the issue and how to build it; a date with no row is refused as unknown.
+#[test]
+fn test_pull_of_a_release_with_no_dataset_says_so() -> Result<()> {
+    let pull = |date: &str| -> Result<std::process::Output> {
+        let tmp = TempDir::new()?;
+        Ok(common::ods_cmd()
+            .current_dir(tmp.path())
+            .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9/unreachable.json")
+            .args(["pull", date])
+            .output()?)
+    };
+
+    let recorded = pull("2019-05-31")?;
+    let stderr = String::from_utf8_lossy(&recorded.stderr);
+    println!("{stderr}");
+    assert_eq!(recorded.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.trim_end(),
+        "✖ 2019-05-31 is in the release index, but no dataset has been published for it yet\n  \
+         * known source issue: two-full-files-2019-05  https://github.com/olizilla/ods/blob/main/docs/source-issues/two-full-files-2019-05.md\n  \
+         Build it yourself: ods trud pull 2019-05-31 && ods make"
+    );
+
+    let unknown = pull("2019-06-27")?;
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    println!("{stderr}");
+    assert_eq!(unknown.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.trim_end(), "✖ Release date '2019-06-27' is not known to the release index");
+    Ok(())
+}

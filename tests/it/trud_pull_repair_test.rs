@@ -8,7 +8,7 @@ use crate::common;
 
 use ods::commands::fetch::{run_with_fetcher, Args, TrudApiResponse, TrudFetcher, TrudReleaseItem};
 use ods::progress::{Progress, ProgressCaps};
-use ods::provenance::{compute_file_sha256, PullRecord, RecordLoad, LEGACY_PROVENANCE_FILENAME};
+use ods::provenance::{compute_file_sha256, TrudArchivePackage, RecordLoad, LEGACY_PROVENANCE_FILENAME};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -168,8 +168,8 @@ fn mtime(path: &Path) -> std::time::SystemTime {
 }
 
 fn readable_provenance(ws: &Path, date: &str) -> bool {
-    let path = ods::provenance::pull_record_path(&ws.join("releases").join(date));
-    matches!(PullRecord::load_from_file(&path), RecordLoad::Read(..))
+    let path = ods::provenance::trud_archive_package_path(&ws.join("releases").join(date));
+    matches!(TrudArchivePackage::load_from_file(&path), RecordLoad::Read(..))
 }
 
 // A directory with only a zip and an old-format provenance is made whole from the zip.
@@ -194,7 +194,7 @@ fn test_pull_repairs_a_directory_from_the_zip_it_holds() {
     assert_eq!(mtime(&zip), mtime_before, "the zip was rewritten");
     assert_eq!(trud.archives(), 0, "the zip was downloaded");
     assert_eq!(trud.files(), 3, "NHS's checksum, signature and key are fetched");
-    assert!(readable_provenance(&ws, &release.release_date), "the pull record is written");
+    assert!(readable_provenance(&ws, &release.release_date), "the TRUD archive package is written");
     assert!(
         !trud_dir(&ws, &release.release_date).join(LEGACY_PROVENANCE_FILENAME).exists(),
         "the older _provenance.json it replaces is removed"
@@ -439,7 +439,7 @@ fn pull_ndjson_exit(ws: &Path, base: &str, args: &[&str]) -> (std::process::Exit
 fn status_of<'a>(lines: &'a [serde_json::Value], date: &str) -> &'a str {
     let line = lines
         .iter()
-        .find(|l| l["trud_release_date"] == date)
+        .find(|l| l["source"]["version"] == date)
         .unwrap_or_else(|| panic!("no ndjson line for {date}: {lines:?}"));
     line["status"].as_str().unwrap()
 }
@@ -500,13 +500,13 @@ fn test_ndjson_of_a_batch_with_a_download_names_the_repair_and_the_download() {
 /// Makes a release's repair fail: `trud/datapackage.json` is a directory, so it can't be
 /// rewritten.
 fn break_repair(ws: &Path, date: &str) {
-    let path = ods::provenance::pull_record_path(&ws.join("releases").join(date));
+    let path = ods::provenance::trud_archive_package_path(&ws.join("releases").join(date));
     let _ = fs::remove_file(&path);
     fs::create_dir_all(&path).unwrap();
 }
 
 fn line_for<'a>(lines: &'a [serde_json::Value], date: &str) -> &'a serde_json::Value {
-    lines.iter().find(|l| l["trud_release_date"] == date).unwrap_or_else(|| panic!("no line for {date}: {lines:?}"))
+    lines.iter().find(|l| l["source"]["version"] == date).unwrap_or_else(|| panic!("no line for {date}: {lines:?}"))
 }
 
 #[test]

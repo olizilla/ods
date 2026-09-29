@@ -164,6 +164,10 @@ ods pull --list           # List all remote and local release versions (-l)
 ods pull 2026-06-22       # Switch workspace pin or pull specific release
 ```
 
+`ods pull --list --format json` lists each published dataset as `{"source_version", "version",
+"status", "manifest_digest"}`, with `version` the dataset's `<source version>_<dataset version>`,
+as the [release index](./docs/release-index.md) names it.
+
 ### cite
 
 Shows how to cite the data, the `ods` tool and the NHS England source, with release provenance and SHA-256 hashes.

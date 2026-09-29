@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ods.fyi/schema/releases.v1.json",
-  "title": "ODS Release Index",
-  "description": "The release index lists TRUD's releases and the datasets built from each. Schema rules that JSON Schema cannot express — that release dates are unique and ordered newest first, that dataset versions within a release are unique SemVer strings ordered oldest first, and that merge operations refuse contradicted digests, hashes, or sizes — are enforced by ods itself as the authority.",
+  "title": "ods Release Index",
+  "description": "The release index lists one dataset family's source releases and the datasets built from each. Its names are the Data Package vocabulary the Parquet metadata and the datapackage.json view use: a source's version, hash and bytes, a dataset's name and version. Rules JSON Schema cannot express — that source versions are unique and ordered newest first, that each dataset version starts with its release's source version and dataset versions within a release are unique and ordered oldest first, and that merge operations refuse contradicted digests, hashes, or sizes — are enforced by ods itself as the authority.",
   "type": "object",
   "required": [
     "$schema",
-    "trud_signing_key_fingerprints",
+    "name",
+    "source",
     "mirrors",
     "releases"
   ],
@@ -17,16 +18,42 @@
       "const": "https://ods.fyi/schema/releases.v1.json",
       "description": "URI of the JSON Schema describing this release index format."
     },
-    "trud_signing_key_fingerprints": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": {
-        "type": "string",
-        "pattern": "^[0-9A-F]{40}$"
-      },
-      "description": "Upper-case 40-character hexadecimal SHA-1 fingerprints of NHS England TRUD PGP signing keys used to verify release archives, ordered oldest first. A signature from any key in the set is accepted.",
-      "$comment": "NHS England publishes key files with dates and no expiry dates; the set lists keys known to have been used to sign TRUD releases. Per-release attestations record the specific key that signed each archive."
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "The dataset family this index lists, e.g. ods-data: the same name as the Parquet files' embedded datapackage object, the datapackage.json view, and the OCI repository."
+    },
+    "source": {
+      "type": "object",
+      "description": "The source family every release in this index comes from, constant across releases: its title and landing page as the view's sources[0] has them, and the publisher's signing keys when it signs.",
+      "required": [
+        "title",
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The source's title, e.g. NHS Organisation Data Service XML Data."
+        },
+        "path": {
+          "type": "string",
+          "format": "uri",
+          "description": "The source's landing page: where to find its releases. Not a hash-stable URL."
+        },
+        "signing_key_fingerprints": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9A-F]{40}$"
+          },
+          "description": "Upper-case 40-character hexadecimal SHA-1 fingerprints of the PGP keys the source publisher signs its releases with, ordered oldest first. A signature from any key in the set is accepted. A source that signs nothing omits it.",
+          "$comment": "NHS England publishes key files with dates and no expiry dates; for TRUD the set lists keys known to have been used to sign TRUD releases. Per-release attestations record the specific key that signed each archive."
+        }
+      }
     },
     "mirrors": {
       "type": "array",
@@ -48,58 +75,78 @@
     },
     "releases": {
       "type": "array",
-      "description": "List of TRUD release records and the datasets built from each, ordered newest date first. Aggregated from TRUD publication archives and ods dataset builds; append-only list where existing dates cannot be removed or reordered.",
+      "description": "The source's releases and the datasets built from each, ordered newest source version first. Append-only: a release is never removed or reordered.",
       "items": {
         "type": "object",
         "required": [
-          "trud_release_date",
-          "trud_release_sha256",
-          "trud_release_filesize_bytes",
+          "source",
           "datasets"
         ],
         "additionalProperties": false,
         "properties": {
-          "trud_release_date": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "description": "The publication date of the TRUD release archive in YYYY-MM-DD format. Extracted from NHS England TRUD release metadata; immutable release date key that never changes once recorded."
-          },
-          "trud_release_sha256": {
-            "type": "string",
-            "pattern": "^[0-9A-F]{64}$",
-            "description": "Upper-case 64-character hexadecimal SHA-256 hash of the original TRUD source archive ZIP file published by NHS England. Computed from the downloaded source archive and verified against TRUD's signed release manifest; immutable hash that never changes once recorded. Merge refuses contradiction.",
-            "$comment": "trud_release_file is not stored because zip filenames are arbitrary and mutable; archives are identified strictly by hash. The SHA-1 hash signed by NHS in their release manifest is also not stored as SHA-256 is our primary integrity guarantee."
-          },
-          "trud_release_filesize_bytes": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Size in bytes of the original TRUD source archive ZIP file, greater than zero. Measured from the downloaded TRUD ZIP archive; immutable size that never changes once recorded. Merge refuses contradiction."
+          "source": {
+            "type": "object",
+            "description": "What the source published for this release, in the source's own word: the same facts, with the same names, as the Parquet files' embedded sources[0].",
+            "required": [
+              "version",
+              "hash",
+              "bytes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "description": "The source release's version: for TRUD, its release date, YYYY-MM-DD. Identifies the release row; immutable once recorded."
+              },
+              "hash": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "description": "SHA-256 of the source archive as published, 'sha256:' followed by 64 lower-case hex characters, the form every hash in the Data Package vocabulary uses. Immutable once recorded. Merge refuses contradiction.",
+                "$comment": "The archive's filename is not stored because it is arbitrary and mutable; archives are identified strictly by hash. The SHA-1 NHS signs in its release checksum file is also not stored: SHA-256 is our primary integrity guarantee."
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Size in bytes of the source archive, greater than zero. Immutable once recorded. Merge refuses contradiction."
+              },
+              "issues": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                },
+                "description": "Optional IDs of known errors in this source release, each described, with how ods resolves it, at docs/source-issues/<id>.md in the ods repository. IDs only, never URLs. May appear on a row later; never removed."
+              }
+            }
           },
           "datasets": {
             "type": "array",
-            "description": "List of verified datasets built from this TRUD source release, ordered oldest dataset version first. Built and published by ods make release; append-only list that only grows as new versions are built and published. Existing versions can never be removed.",
+            "description": "The datasets built from this source release, ordered oldest dataset version first. May be empty. Append-only: a dataset is never removed.",
             "items": {
               "type": "object",
               "required": [
-                "dataset_version",
+                "version",
                 "manifest_digest",
-                "dataset_filesize_bytes",
+                "bytes",
                 "tool_version",
                 "tool_git_sha"
               ],
               "additionalProperties": false,
               "properties": {
-                "dataset_version": {
+                "version": {
                   "type": "string",
-                  "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
-                  "description": "Semantic version string (SemVer) of the dataset build, e.g. 0.1.0. Set from the ods tool version at build time; immutable version key that never changes once recorded."
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}_(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+                  "description": "The dataset's version, <source version>_<dataset version>, e.g. 2026-09-25_0.1.0: the version the Parquet files' embedded object, the view, the manifest's org.opencontainers.image.version and the OCI tag all give. The part after the _ is the dataset version (SemVer), which says which schema the files have. Identifies the dataset row; immutable once recorded."
                 },
                 "manifest_digest": {
                   "type": "string",
                   "pattern": "^sha256:[0-9a-f]{64}$",
                   "description": "Content-addressed OCI manifest digest formatted as 'sha256:' followed by 64 lower-case hex characters. Computed from the dataset manifest generated and published by ods make release; immutable digest that never changes once recorded. Merge refuses contradiction."
                 },
-                "dataset_filesize_bytes": {
+                "bytes": {
                   "type": "integer",
                   "minimum": 1,
                   "description": "Sum of the layer sizes in this dataset's OCI manifest, in bytes — what `ods pull` downloads and installs. Measured from the published manifest at build time; immutable size that never changes once recorded. Merge refuses contradiction."
@@ -114,13 +161,13 @@
                   "pattern": "^[0-9a-f]{40}$",
                   "description": "Lower-case 40-character hexadecimal Git commit SHA of the ods tool that built this dataset: the commit its tag v<tool_version> points at. Written by ods make release from its own build; immutable once recorded. Merge refuses contradiction."
                 },
-                "dataset_doi": {
+                "doi": {
                   "type": "string",
-                  "description": "Optional Digital Object Identifier (DOI) assigned to this dataset release on Zenodo. Assigned after archival publishing; optional field that may appear later and never contradicts once set."
+                  "description": "Optional Digital Object Identifier (DOI) assigned to this dataset on Zenodo. Assigned after archival publishing; optional field that may appear later and never contradicts once set."
                 },
                 "withdrawn": {
                   "type": "string",
-                  "description": "Optional advisory explanation if this dataset version was withdrawn due to corruption or data defect. Set by maintainers if a defect is identified; optional field that may appear later and never contradicts."
+                  "description": "Optional advisory explanation if this dataset was withdrawn due to corruption or data defect. Set by maintainers if a defect is identified; optional field that may appear later and never contradicts."
                 }
               }
             }

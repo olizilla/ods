@@ -152,7 +152,7 @@ fn test_tightened_workspace_discovery_rules() {
     // 3. start is a release dir: discovery ascends to enclosing workspace root with _releases.json
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-ods::provenance::write_pull_record(
+ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -165,7 +165,7 @@ ods::provenance::write_pull_record(
     assert_eq!(
         ods::workspace::find_workspace_root_from(&rel_dir, None).unwrap(),
         Some(ws.clone()),
-        "release dir with a pull record must resolve to enclosing workspace root"
+        "release dir with a TRUD archive package must resolve to enclosing workspace root"
     );
 
     let ws_obj = ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap();
@@ -440,7 +440,7 @@ fn test_workspace_discovered_by_release_dir_without_releases_json() {
     let ws = tmp.path().join("ws_without_marker");
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(&rel_dir).unwrap();
-ods::provenance::write_pull_record(
+ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",

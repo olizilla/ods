@@ -8,13 +8,13 @@
 //! pins them.
 //!
 //! The bundle's date, its tag and the `fyi.ods.trud-release-date` annotation are TRUD's release
-//! date from the pull record, `trud/datapackage.json`, not the date in the zip's filename, which
+//! date from the TRUD archive package, `trud/datapackage.json`, not the date in the zip's filename, which
 //! NHS stamps differently for some releases.
 //!
 //! The `fyi.ods.trud-release-sha256` annotation is a convenience copy of the zip layer's digest,
-//! in upper case, in the same form as the release index's `trud_release_sha256`, so a release
-//! links to its source bundle by one value. It adds no trust: the layer's own digest is the same
-//! hash.
+//! in upper case as TRUD writes it: the release index's `source.hash` is the same hash, as
+//! `sha256:` and lower case. It adds no trust: the layer's own digest is the same hash. Pushed
+//! bundles keep it; its name and form are frozen with the packing rules.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -26,7 +26,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::provenance::{compute_file_sha256, PullRecord, RecordLoad};
+use crate::provenance::{compute_file_sha256, TrudArchivePackage, RecordLoad};
 
 pub const ARTIFACT_TYPE_SOURCE: &str = "application/vnd.fyi.ods.source.v1";
 pub const MEDIA_TYPE_EMPTY: &str = "application/vnd.oci.empty.v1+json";
@@ -239,7 +239,7 @@ pub fn gather(release_dir: &Path) -> Result<SourceBundle, Refusal> {
 
     let zip_name = file_name(&found.zip);
 
-    // Until the pull record is read, a refusal is labelled with the release directory's name.
+    // Until the TRUD archive package is read, a refusal is labelled with the release directory's name.
     // The zip's filename isn't a source of the date: NHS's stamp and TRUD's release date differ
     // for some releases (2022-05-30's zip is stamped 20220527).
     let mut release = dir_name.clone();
@@ -267,10 +267,10 @@ pub fn gather(release_dir: &Path) -> Result<SourceBundle, Refusal> {
         ));
     }
 
-    // 3. The pull record records this zip's SHA-256 and size
+    // 3. The TRUD archive package records this zip's SHA-256 and size
     const RECORD: &str = "trud/datapackage.json";
-    let record_path = crate::provenance::pull_record_path(release_dir);
-    let record = match PullRecord::load_from_file(&record_path) {
+    let record_path = crate::provenance::trud_archive_package_path(release_dir);
+    let record = match TrudArchivePackage::load_from_file(&record_path) {
         RecordLoad::Read(r, _) => *r,
         _ => {
             return Err(Refusal::new(
@@ -280,7 +280,7 @@ pub fn gather(release_dir: &Path) -> Result<SourceBundle, Refusal> {
             ))
         }
     };
-    // From here on the release is TRUD's date, which the pull record records.
+    // From here on the release is TRUD's date, which the TRUD archive package records.
     let date = record.version.clone();
     if date.is_empty() {
         return Err(Refusal::new(

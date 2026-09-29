@@ -1,8 +1,8 @@
 # Data Package descriptors
 
 `ods` writes two [Data Package][datapackage] descriptors: a release's `datapackage.json`, which
-describes its Parquet files, and `trud/datapackage.json`, which records the TRUD release they
-were built from.
+describes its Parquet files, and the TRUD archive package, `trud/datapackage.json`, which
+describes the TRUD release they were built from.
 
 ## `datapackage.json`
 
@@ -16,11 +16,12 @@ $ ods make datapackage -o - | jq 'del(.resources[].schema)'
 ```json
 {
   "$schema": "https://ods.fyi/schema/ods-datapackage.v1.json",
-  "id": "pkg:oci/ods-data@sha256%3Aace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c?repository_url=ods.fyi%2Fods-data",
+  "purl": "pkg:oci/ods-data@sha256%3Aace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c?repository_url=ods.fyi%2Fods-data",
   "name": "ods-data",
   "version": "2026-09-25_0.1.0",
   "title": "ods: NHS Organisation Data as verifiable Parquet files",
   "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
+  "homepage": "https://ods.fyi",
   "licenses": [
     {
       "name": "OGL-UK-3.0",
@@ -35,6 +36,7 @@ $ ods make datapackage -o - | jq 'del(.resources[].schema)'
   ],
   "sources": [
     {
+      "purl": "pkg:oci/nhs-ods-xml?repository_url=ghcr.io%2Folizilla%2Fnhs-ods-xml&tag=2026-09-25",
       "title": "NHS Organisation Data Service XML Data",
       "version": "2026-09-25",
       "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
@@ -63,19 +65,25 @@ $ ods make datapackage -o - | jq 'del(.resources[].schema)'
 | Field | Where it comes from |
 | :--- | :--- |
 | `$schema` | the profile, below |
-| `id` | the release index row's `dataset_doi`, when the row names this exact manifest and has one; otherwise the release's [package URL][purl], from the manifest the files rebuild ([oci.md](./oci.md)). The view isn't part of any digest, so it may name one |
+| `purl` | the release's [package URL][purl], from the manifest the files rebuild ([oci.md](./oci.md)): the same on every route, whether the release was built or pulled. The view isn't part of any digest, so it may name one. The view has no `id`; the DOI, when there is one, is in the release index (`datasets[].doi`) and in `ods cite` |
 | `name`, `version`, `licenses`, `contributors` | the object the Parquet files carry |
 | `title`, `description` | `ods`: the dataset's title and description |
-| `sources` | the object the Parquet files carry, plus `_cache`: our own copy of the TRUD zip, in the `nhs-ods-xml` image on ghcr.io, addressed by the zip's SHA-256 |
+| `homepage` | `ods`: https://ods.fyi |
+| `sources` | the object the Parquet files carry, plus `purl` and `_cache`, below |
+| `sources[0].purl` | `ods`: our OCI packaging of the TRUD archive, the `nhs-ods-xml` bundle for this source version, by its tag. The tag is published once and never moved, and the `hash` beside it is the digest of that bundle's zip layer. The repository is private: the purl names the packaging, it isn't a link anyone can fetch |
+| `sources[0].path` | TRUD's landing page, from the object the Parquet files carry: as Data Package's Source `path` is used, a link to the source |
+| `sources[0].hash`, `.bytes` | the object the Parquet files carry: the zip's SHA-256 and size |
+| `sources[0]._cache` | `ods`: our own copy of the TRUD zip, in the `nhs-ods-xml` image on ghcr.io, addressed by the zip's SHA-256 |
 | `resources[]` `name`, `type`, `path`, `format`, `mediatype`, `schema` | `ods`'s compiled schemas: the same tables, columns and types as [parquet.md](./parquet.md) and the committed `data/datapackage.json` |
 | `resources[]` `bytes`, `hash` | the files on disk |
 
 Files without provenance (a `--force` build, or files an older `ods` built) get a view of
 `$schema`, `resources` and a `description` saying their source and terms are unknown.
 
-## `trud/datapackage.json`: the upstream metadata
+## `trud/datapackage.json`: the TRUD archive package
 
-`ods trud pull` describes the source archive in `releases/<date>/trud/datapackage.json`.
+`ods trud pull` describes TRUD's archive, the zip with NHS's checksum, signature and key, as one
+Data Package: the TRUD archive package, `releases/<date>/trud/datapackage.json`.
 
 ```json
 {
@@ -97,7 +105,7 @@ Files without provenance (a `--force` build, or files an older `ods` built) get 
 
 | Field | Source |
 | :--- | :--- |
-| `name` | `ods`: `nhs-ods-xml`, the source's name. It's how `ods make` tells a pull record from a release's view |
+| `name` | `ods`: `nhs-ods-xml`, the source's name. It's how `ods make` tells a TRUD archive package from a release's view |
 | `version` | NHS TRUD release date |
 | `title`, `homepage` | NHS TRUD |
 | `licenses`, `contributors` | NHS England's terms, as TRUD publishes them |
@@ -116,9 +124,10 @@ Both descriptors name [`https://ods.fyi/schema/ods-datapackage.v1.json`][profile
   `datapackage.org/profiles/2.0/datapackage.json` rather than `$ref`-ed over the network. A
   published profile never changes, so a validator needs no network to check against it. It has
   one addition, the List Field, below.
-- **A small mixin** with what `ods` adds: `licenses[].attribution`, and on a Source, `hash`
-  (`sha256:` then lower-case hex), `bytes` (an integer) and `_cache` (a list of URLs). Nothing in
-  it is specific to one dataset or one source.
+- **A small mixin** with what `ods` adds: `purl`, on the package and on a Source, a package URL
+  (a string starting `pkg:` and a type, so a link fails); `licenses[].attribution`; and on a
+  Source, `hash` (`sha256:` then lower-case hex), `bytes` (an integer) and `_cache` (a list of
+  URLs). Nothing in it is specific to one dataset or one source.
 
 The v2 profile already allows extra properties on a licence or a Source; the mixin is there so a
 mistake like `"bytes": "big"` fails, where the published profile alone would let it through.
@@ -181,55 +190,6 @@ As measured on 2026-09-28, with frictionless-ts 1.0.3 and frictionless-py 5.19.1
   in its Parquet reader, not in the release. It needs `pandas` installed alongside the `parquet`
   extra ([#1773][fl-1773]), and loads each file whole ([#1203][fl-1203]).
 
-## CycloneDX
-
-Supply-chain tools that read [CycloneDX][cyclonedx] rather than Data Package can have it from the
-view, with `jq`:
-
-```console
-$ jq -f view-to-cyclonedx.jq releases/2026-09-25/datapackage.json > bom.json
-```
-
-where `view-to-cyclonedx.jq` is:
-
-```jq
-# CycloneDX 1.6 from a release's datapackage.json view.
-{
-  bomFormat: "CycloneDX",
-  specVersion: "1.6",
-  version: 1,
-  metadata: {
-    component: ({
-      type: "data",
-      name: .name,
-      version: .version,
-      description: .title,
-      licenses: [.licenses[] | {license: {name: .name, url: .path}}],
-      copyright: .licenses[0].attribution,
-      pedigree: {
-        ancestors: [.sources[] | {
-          type: "data",
-          name: .title,
-          version: .version,
-          hashes: [{alg: "SHA-256", content: (.hash | sub("^sha256:"; ""))}],
-          externalReferences: ([{type: "distribution", url: .path}]
-            + [(._cache // [])[] | {type: "distribution", url: .}])
-        }]
-      }
-    } + (if (.id // "" | startswith("pkg:")) then {purl: .id} else {} end))
-  },
-  components: [.resources[] | {
-    type: "data",
-    name: .path,
-    hashes: [{alg: "SHA-256", content: (.hash | sub("^sha256:"; ""))}]
-  }]
-}
-```
-
-The dataset sits under `metadata.component`: CycloneDX 1.6 has no top-level `component`. The
-licence is `license.name`, not `license.id`, because `OGL-UK-3.0` isn't in SPDX's list and `id` is
-checked against it. The program needs a view with provenance: one without has no `licenses` to
-read.
 
 [datapackage]: https://datapackage.org/
 [profile]: https://ods.fyi/schema/ods-datapackage.v1.json

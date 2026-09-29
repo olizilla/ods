@@ -21,7 +21,7 @@ pub fn validate_releases_json(dir: &Path) -> bool {
     let Ok(bytes) = fs::read(&path) else {
         return false;
     };
-    if let Ok(idx) = serde_json::from_slice::<crate::index::OdsReleaseIndex>(&bytes) {
+    if let Ok(idx) = crate::index::OdsReleaseIndex::from_slice(&bytes) {
         return idx.validate().is_ok();
     }
     false
@@ -75,11 +75,11 @@ pub fn relative_to_cwd(path: &Path) -> PathBuf {
 }
 
 /// Whether `dir` holds a readable, factual record of its release: Parquet files carrying
-/// provenance (built or pulled), or a readable pull record, `trud/datapackage.json` (pulled
+/// provenance (built or pulled), or a readable TRUD archive package, `trud/datapackage.json` (pulled
 /// from TRUD, not yet built).
 fn has_release_record(dir: &Path) -> bool {
     matches!(crate::provenance::read_release(dir), Ok(crate::provenance::ReleaseRecord::Provenanced(_)))
-        || crate::provenance::PullRecord::load_from_file(&crate::provenance::pull_record_path(dir)).ok().is_some()
+        || crate::provenance::TrudArchivePackage::load_from_file(&crate::provenance::trud_archive_package_path(dir)).ok().is_some()
 }
 
 /// The release date `dir`'s Parquet files name, when they carry provenance. For labels and
@@ -92,16 +92,16 @@ pub fn embedded_release_date(dir: &Path) -> Option<String> {
     }
 }
 
-/// The release date `dir`'s pull record names, for a release pulled from TRUD.
-fn pull_record_date(dir: &Path) -> Option<String> {
-    crate::provenance::PullRecord::load_from_file(&crate::provenance::pull_record_path(dir))
+/// The release date `dir`'s TRUD archive package names, for a release pulled from TRUD.
+fn trud_archive_package_date(dir: &Path) -> Option<String> {
+    crate::provenance::TrudArchivePackage::load_from_file(&crate::provenance::trud_archive_package_path(dir))
         .ok()
         .map(|r| r.version)
 }
 
 /// Checks whether `dir/releases/` contains at least one date-shaped directory
 /// (`\d{4}-\d{2}-\d{2}`) holding a readable release record (see `has_release_record`): a stored
-/// release's Parquet files carrying provenance, or a pull record.
+/// release's Parquet files carrying provenance, or a TRUD archive package.
 ///
 /// Bounded traversal: `releases/` is only opened if it exists.
 /// Stops at the first valid release found without enumerating the rest.
@@ -131,6 +131,8 @@ pub fn has_readable_release(dir: &Path) -> bool {
 /// Checks the `_releases.json` marker in `dir`:
 /// - Returns Ok(false) if file does not exist or fails validation (allowing candidate to qualify on releases).
 /// - Returns Ok(true) if file exists, validates structurally, and does not contradict baked index.
+/// - Returns Ok(true) for an index in the old format: it still marks a workspace, and a command
+///   that reads it as its index refuses it, naming `ods pull`, which replaces it.
 /// - Returns Err with SecurityError if file exists and contradicts baked index.
 pub fn check_releases_json(dir: &Path) -> Result<bool> {
     if let Ok(baked) = crate::index::OdsReleaseIndex::baked() {
@@ -148,7 +150,10 @@ pub fn check_releases_json_with_baked(dir: &Path, baked: &crate::index::OdsRelea
     let Ok(bytes) = fs::read(&path) else {
         return Ok(false);
     };
-    let idx: crate::index::OdsReleaseIndex = match serde_json::from_slice(&bytes) {
+    if crate::index::is_old_format(&bytes) {
+        return Ok(true);
+    }
+    let idx = match crate::index::OdsReleaseIndex::from_slice(&bytes) {
         Ok(i) => i,
         Err(_) => return Ok(false),
     };
@@ -573,8 +578,8 @@ pub fn check_and_emit_staleness_nudge(release_dir: &Path, is_human_format: bool)
 /// Detects if a directory is a release directory.
 /// Returns Some("YYYY-MM-DD") if dir is a release directory, or None otherwise.
 pub fn detect_release_from_dir(dir: &Path) -> Option<String> {
-    // 1. The date its Parquet files carry, or its pull record's:
-    if let Some(d) = embedded_release_date(dir).or_else(|| pull_record_date(dir)) {
+    // 1. The date its Parquet files carry, or its TRUD archive package's:
+    if let Some(d) = embedded_release_date(dir).or_else(|| trud_archive_package_date(dir)) {
         return Some(d);
     }
     // 2. If parent directory is named "releases" and folder name matches YYYY-MM-DD:
@@ -691,7 +696,7 @@ pub fn check_release_provenance(parquet_dir: &Path) -> Result<()> {
 ///    `! Run from releases/{cwd_date}. Change source with: ods use {cwd_date}`
 pub fn format_source_header(release_dir: &Path, file_name: &str, color: bool) -> Vec<String> {
     let release_date = embedded_release_date(release_dir)
-        .or_else(|| pull_record_date(release_dir))
+        .or_else(|| trud_archive_package_date(release_dir))
         .or_else(|| {
             find_workspace_root_from(release_dir, None)
                 .ok()
@@ -963,7 +968,7 @@ pub fn verify_release_dir(
         Err(e) => return VerificationOutcome::Corrupted(format!("✖ Can't rebuild the manifest for {}: {:#}", relative_to_cwd(release_dir).display(), e)),
     };
 
-    let release_entry = index.releases.iter().find(|r| r.trud_release_date == date);
+    let release_entry = index.release(&date);
     let release_row = match release_entry {
         Some(r) => r,
         None => {
@@ -976,11 +981,11 @@ pub fn verify_release_dir(
     };
 
     let this_archive_sha256 = facts.source_sha256_upper();
-    if !this_archive_sha256.eq_ignore_ascii_case(&release_row.trud_release_sha256) {
+    if release_row.source.hash != facts.source.hash {
         let published_digest = release_row
             .datasets
             .iter()
-            .find(|d| d.dataset_version == version)
+            .find(|d| d.version == facts.version())
             .map(|d| d.manifest_digest.clone());
 
         return VerificationOutcome::DifferentArchive {
@@ -988,12 +993,12 @@ pub fn verify_release_dir(
             version,
             digest: reconstructed_digest,
             this_archive_sha256,
-            published_archive_sha256: release_row.trud_release_sha256.clone(),
+            published_archive_sha256: release_row.source.sha256_hex().to_uppercase(),
             published_digest,
         };
     }
 
-    let dataset_entry = release_row.datasets.iter().find(|d| d.dataset_version == version);
+    let dataset_entry = release_row.datasets.iter().find(|d| d.version == facts.version());
     match dataset_entry {
         Some(entry) => {
             if entry.manifest_digest == reconstructed_digest {
@@ -1012,7 +1017,7 @@ pub fn verify_release_dir(
             }
         }
         None => {
-            let published_versions = release_row.datasets.iter().map(|d| d.dataset_version.clone()).collect();
+            let published_versions = release_row.datasets.iter().map(|d| d.dataset_version().to_string()).collect();
             VerificationOutcome::VersionUnpublished {
                 date,
                 version,
@@ -1083,7 +1088,7 @@ mod tests {
         // The object `ods make` embeds for a release of `date`, from an archive with `sha`, at
         // dataset `version`.
         let embedded = |date: &str, sha: &str, version: &str| {
-            crate::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 38064419, &[])
+            crate::provenance::TrudArchivePackage::for_trud_release(date, "archive.zip", sha, 38064419, &[])
                 .unwrap()
                 .embedded(version)
                 .unwrap()
@@ -1097,23 +1102,25 @@ mod tests {
         let published_digest = manifest.digest().unwrap();
 
         let index = crate::index::OdsReleaseIndex {
-            schema: crate::index::RELEASES_SCHEMA_V1_URL.to_string(),
-            trud_signing_key_fingerprints: vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()],
             mirrors: vec![],
             releases: vec![crate::index::Release {
-                trud_release_date: "2026-08-28".to_string(),
-                trud_release_sha256: published_sha.to_string(),
-                trud_release_filesize_bytes: 38064419,
+                source: crate::index::SourceRelease {
+                    version: "2026-08-28".to_string(),
+                    hash: crate::provenance::prefixed_sha256(published_sha),
+                    bytes: 38064419,
+                    issues: vec![],
+                },
                 datasets: vec![crate::index::Dataset {
-                    dataset_version: "0.1.0".to_string(),
+                    version: "2026-08-28_0.1.0".to_string(),
                     manifest_digest: published_digest.clone(),
-                    dataset_filesize_bytes: 1000,
+                    bytes: 1000,
                     tool_version: "0.2.0".to_string(),
                     tool_git_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
-                    dataset_doi: None,
+                    doi: None,
                     withdrawn: None,
                 }],
             }],
+            ..crate::index::OdsReleaseIndex::default()
         };
 
         // Each case: a directory name, and the files to write into it as (file, embedded

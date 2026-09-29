@@ -98,23 +98,42 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let is_published = matches!(outcome, crate::workspace::VerificationOutcome::VerifiedPublished { .. });
 
     // 4. Check for withdrawal in index
-    let mut dataset_doi: Option<String> = None;
+    let mut published_doi: Option<String> = None;
     let mut withdrawal_reason: Option<String> = None;
-    let d_ref = &trud_date;
-    let dataset = index
-        .releases
-        .iter()
-        .find(|r| r.trud_release_date == *d_ref)
-        .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == dataset_version));
+    let dataset = index.dataset(facts.version()).map(|(_, d)| d);
 
     if let Some(entry) = dataset {
         if let Some(ref reason) = entry.withdrawn {
             withdrawal_reason = Some(reason.clone());
         }
         if is_published {
-            dataset_doi = entry.dataset_doi.clone();
+            published_doi = entry.doi.clone();
         }
     }
+
+    // Known issues with the source release these files were built from: the index row's, when
+    // it records the same archive.
+    let source_issue_urls: Vec<(String, String)> = index
+        .release(&trud_date)
+        .filter(|r| r.source.hash == facts.source.hash)
+        .map(|r| {
+            r.source
+                .issues
+                .iter()
+                .map(|id| (id.clone(), crate::index::source_issue_url(id)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let source_note = if source_issue_urls.is_empty() {
+        format!("Release {}, SHA-256 {}.", trud_date, archive_sha256)
+    } else {
+        format!(
+            "Release {}, SHA-256 {}. Known source issues: {}.",
+            trud_date,
+            archive_sha256,
+            source_issue_urls.iter().map(|(_, url)| url.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    };
 
     // The tool that built a published dataset is on its index row; a release the index doesn't
     // know is cited against the ods running now.
@@ -140,7 +159,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
     let data_key = format!("ods-data/{}_{}", d_tag, dataset_version);
     let tool_key = format!("ods/v{}", tool_version);
 
-    let data_url = if let Some(ref doi) = dataset_doi {
+    let data_url = if let Some(ref doi) = published_doi {
         if doi.starts_with("http") {
             doi.clone()
         } else {
@@ -164,11 +183,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             writeln!(writer, "  month = {{{}}},", d_month)?;
             writeln!(writer, "  howpublished = {{NHS TRUD}},")?;
             writeln!(writer, "  url = {{https://isd.digital.nhs.uk/trud}},")?;
-            writeln!(
-                writer,
-                "  note = {{Release {}, SHA-256 {}.}}",
-                d_tag, archive_sha256
-            )?;
+            writeln!(writer, "  note = {{{}}}", source_note)?;
             writeln!(writer, "}}\n")?;
 
             // 2. Data release
@@ -185,7 +200,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             if is_published {
                 writeln!(writer, "  howpublished = {{ods.fyi}},")?;
                 writeln!(writer, "  url = {{{}}},", data_url)?;
-                if let Some(ref doi) = dataset_doi {
+                if let Some(ref doi) = published_doi {
                     writeln!(writer, "  doi = {{{}}},", doi)?;
                 }
             }
@@ -216,7 +231,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                 "issued": { "date-parts": [[d_y, d_m, d_d]] },
                 "publisher": "NHS TRUD",
                 "URL": "https://isd.digital.nhs.uk/trud",
-                "note": format!("Release {}, SHA-256 {}.", d_tag, archive_sha256)
+                "note": source_note
             });
 
             let mut data_map = serde_json::Map::new();
@@ -234,7 +249,7 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
             if is_published {
                 data_map.insert("publisher".to_string(), json!("ods.fyi"));
                 data_map.insert("URL".to_string(), json!(data_url));
-                if let Some(ref doi) = dataset_doi {
+                if let Some(ref doi) = published_doi {
                     data_map.insert("DOI".to_string(), json!(doi));
                 }
             }
@@ -413,6 +428,14 @@ pub fn run_with_writer_and_fetcher<F: crate::commands::pull::OciBlobFetcher>(
                     )?;
                 }
                 _ => {}
+            }
+
+            if !source_issue_urls.is_empty() {
+                writeln!(writer)?;
+                writeln!(writer, "Known source issues")?;
+                for (id, url) in &source_issue_urls {
+                    writeln!(writer, "  {}\n    {}", id, url)?;
+                }
             }
         }
     }

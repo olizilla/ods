@@ -22,15 +22,44 @@ const TITLE: &str = "ods: NHS Organisation Data as verifiable Parquet files";
 pub const SUMMARY: &str = "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files.";
 const DESCRIPTION: &str = "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.";
 
+/// Where people go to read about the dataset: the view's `homepage`.
+pub const HOMEPAGE: &str = "https://ods.fyi";
+
 /// A view of files that carry no provenance says only what it can: which files they are.
 const NO_PROVENANCE_DESCRIPTION: &str = "Parquet files that carry no provenance: built from an archive ods couldn't match to a TRUD release, or by an older ods. Their source and terms are unknown.";
 
-/// The source's title in the schema contract: the pull record's `title` for the TRUD release.
+/// The source's title in the schema contract: the TRUD archive package's `title` for the TRUD release.
 const TRUD_SOURCE_TITLE: &str = crate::provenance::SOURCE_TITLE;
 
-/// The base of a hash-stable URL for our own copy of the source zip: the `nhs-ods-xml` archive
-/// image's blobs, keyed by the layer digest, which is the zip's own SHA-256 (`src/oci/source.rs`).
-const NHS_ODS_XML_CACHE_BASE: &str = "https://ghcr.io/v2/olizilla/nhs-ods-xml/blobs/sha256:";
+/// Where our own packaging of the TRUD archive lives: the `nhs-ods-xml` repository on ghcr.io
+/// (`src/oci/source.rs`). The repository is private, so it names the packaging and isn't a link
+/// anyone can fetch. The last path segment is `SOURCE_NAME`.
+const SOURCE_REGISTRY: &str = "ghcr.io";
+const SOURCE_REPOSITORY: &str = "olizilla/nhs-ods-xml";
+
+/// A hash-stable URL for our own copy of the source zip: the archive image's blob keyed by the
+/// layer digest, which is the zip's own SHA-256.
+fn source_cache_url(sha256: &str) -> String {
+    format!(
+        "https://{}/v2/{}/blobs/sha256:{}",
+        SOURCE_REGISTRY,
+        SOURCE_REPOSITORY,
+        sha256.trim_start_matches("sha256:")
+    )
+}
+
+/// The package URL of the TRUD archive's OCI bundle for a source release, by tag: the bundle's
+/// digest needs NHS's checksum, signature and key, which a pulled release doesn't have, while
+/// the tag is always the source version. Qualifiers in purl's sorted order, `/` encoded.
+pub fn source_purl(source_version: &str) -> String {
+    format!(
+        "pkg:oci/{}?repository_url={}%2F{}&tag={}",
+        crate::provenance::SOURCE_NAME,
+        SOURCE_REGISTRY,
+        SOURCE_REPOSITORY.replace('/', "%2F"),
+        source_version
+    )
+}
 
 fn arrow_type_to_table_schema_type(dt: &DataType) -> &'static str {
     match dt {
@@ -161,7 +190,7 @@ fn resources_value() -> Vec<Value> {
 }
 
 /// The schema contract only: table names, columns and types, with no per-release facts (no
-/// `id`, no source provenance, no resource `bytes`/`hash`). This is what `data/datapackage.json`
+/// `purl`, no source provenance, no resource `bytes`/`hash`). This is what `data/datapackage.json`
 /// pins (`docs/tests.md` D2/T2) — it was never a real per-release descriptor, just the fixed
 /// shape every generated view shares, so it stays a plain function rather than becoming "a view
 /// of a fixture release".
@@ -171,6 +200,7 @@ pub fn generate_datapackage() -> Value {
         "name": NAME,
         "title": TITLE,
         "description": DESCRIPTION,
+        "homepage": HOMEPAGE,
         "version": DATASET_VERSION,
         "licenses": [crate::terms::license()],
         "contributors": crate::terms::contributors(),
@@ -183,39 +213,26 @@ pub fn generate_datapackage() -> Value {
 }
 
 /// The Data Package view of a release: the embedded object its files carry, plus `$schema`,
-/// `id`, `title` and `description`, the source's `_cache`, and one resource per file with its
-/// `bytes` and `hash` and its Table Schema from `ods`'s compiled schemas. Written beside the
-/// files by `ods make`, `ods pull` and `ods make datapackage`; never packed, and `ods` never
-/// reads a value from it. The same files and index give the same bytes.
+/// `purl`, `title`, `description` and `homepage`, each source's `purl` and `_cache`, and one
+/// resource per file with its `bytes` and `hash` and its Table Schema from `ods`'s compiled
+/// schemas. Written beside the files by `ods make`, `ods pull` and `ods make datapackage`; never
+/// packed, and `ods` never reads a value from it. The same files give the same bytes.
 ///
-/// `id` is the index row's `dataset_doi` when the row names this exact manifest and has one,
-/// else the release's `oci` purl from the rebuilt manifest: the view isn't part of any digest,
-/// so it may name it.
+/// `purl` is the release's `oci` purl from the manifest rebuilt from the files, on every route:
+/// the view isn't part of any digest, so it may name it. The view writes no `id` and no DOI; a
+/// DOI is a post-publish fact that lives in the release index.
 ///
 /// Files without provenance (no `datapackage` key) get `$schema`, a `description` saying their
 /// source and terms are unknown, and `resources`: the facts about the files, and nothing else.
-pub fn generate_view(
-    release_dir: &std::path::Path,
-    index: Option<&crate::index::OdsReleaseIndex>,
-) -> anyhow::Result<Value> {
+pub fn generate_view(release_dir: &std::path::Path) -> anyhow::Result<Value> {
     use crate::provenance::ReleaseRecord;
 
     type Files = Vec<(String, u64, String)>;
     let record = crate::provenance::read_release(release_dir)?;
-    let (embedded, id, files): (Option<crate::provenance::Embedded>, Option<String>, Files) = match record {
+    let (embedded, purl, files): (Option<crate::provenance::Embedded>, Option<String>, Files) = match record {
         ReleaseRecord::Provenanced(facts) => {
             let (manifest, _) = crate::oci::dataset::build(release_dir, &facts)?;
-            let digest = manifest.digest()?;
-            let doi = index.and_then(|index| {
-                index
-                    .releases
-                    .iter()
-                    .find(|r| r.trud_release_date == facts.release_date)
-                    .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == facts.dataset_version))
-                    .filter(|d| d.manifest_digest == digest)
-                    .and_then(|d| d.dataset_doi.clone())
-            });
-            let id = doi.unwrap_or_else(|| oci_purl(&digest));
+            let purl = oci_purl(&manifest.digest()?);
             let files = manifest
                 .layers
                 .iter()
@@ -224,7 +241,7 @@ pub fn generate_view(
                     Some((title.clone(), l.size, l.digest.clone()))
                 })
                 .collect();
-            (Some(facts.embedded.clone()), Some(id), files)
+            (Some(facts.embedded.clone()), Some(purl), files)
         }
         ReleaseRecord::NoProvenance => {
             let mut files = Vec::new();
@@ -244,8 +261,8 @@ pub fn generate_view(
 
     let mut obj = serde_json::Map::new();
     obj.insert("$schema".to_string(), json!(ODS_DATAPACKAGE_SCHEMA_URL));
-    if let Some(id) = id {
-        obj.insert("id".to_string(), json!(id));
+    if let Some(purl) = purl {
+        obj.insert("purl".to_string(), json!(purl));
     }
     match embedded {
         Some(embedded) => {
@@ -253,13 +270,23 @@ pub fn generate_view(
             obj.insert("version".to_string(), json!(embedded.version));
             obj.insert("title".to_string(), json!(TITLE));
             obj.insert("description".to_string(), json!(DESCRIPTION));
+            obj.insert("homepage".to_string(), json!(HOMEPAGE));
             obj.insert("licenses".to_string(), serde_json::to_value(&embedded.licenses)?);
             obj.insert("contributors".to_string(), serde_json::to_value(&embedded.contributors)?);
             let mut values = Vec::with_capacity(embedded.sources.len());
             for source in &embedded.sources {
-                let mut value = serde_json::to_value(source)?;
-                value["_cache"] = json!([format!("{}{}", NHS_ODS_XML_CACHE_BASE, source.hash.trim_start_matches("sha256:"))]);
-                values.push(value);
+                // `purl` leads the source's keys: the embedded object's own keys follow it.
+                let mut value = serde_json::Map::new();
+                value.insert("purl".to_string(), json!(source_purl(&source.version)));
+                let Value::Object(own) = serde_json::to_value(source)? else {
+                    anyhow::bail!("a source serialises as a JSON object");
+                };
+                value.extend(own);
+                value.insert(
+                    "_cache".to_string(),
+                    json!([source_cache_url(&source.hash)]),
+                );
+                values.push(Value::Object(value));
             }
             obj.insert("sources".to_string(), json!(values));
         }
@@ -284,20 +311,14 @@ pub fn generate_view(
 }
 
 /// The view as written to disk: pretty JSON with a trailing newline.
-pub fn view_json(
-    release_dir: &std::path::Path,
-    index: Option<&crate::index::OdsReleaseIndex>,
-) -> anyhow::Result<String> {
-    Ok(serde_json::to_string_pretty(&generate_view(release_dir, index)?)? + "\n")
+pub fn view_json(release_dir: &std::path::Path) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(&generate_view(release_dir)?)? + "\n")
 }
 
 /// Writes the view to `release_dir/datapackage.json`.
-pub fn write_view(
-    release_dir: &std::path::Path,
-    index: Option<&crate::index::OdsReleaseIndex>,
-) -> anyhow::Result<()> {
+pub fn write_view(release_dir: &std::path::Path) -> anyhow::Result<()> {
     let path = release_dir.join(DATAPACKAGE_FILENAME);
-    let json = view_json(release_dir, index)?;
+    let json = view_json(release_dir)?;
     std::fs::write(&path, json).map_err(|e| anyhow::anyhow!("writing {}: {}", path.display(), e))
 }
 
@@ -324,7 +345,27 @@ mod tests {
     fn test_generate_datapackage_has_no_per_release_facts() {
         let pkg = generate_datapackage();
         assert!(pkg.get("id").is_none());
+        assert!(pkg.get("purl").is_none());
+        assert!(pkg["sources"][0].get("purl").is_none());
         assert!(pkg["sources"][0].get("hash").is_none());
         assert!(pkg["resources"][0].get("bytes").is_none());
+    }
+
+    #[test]
+    fn test_source_purl_names_the_archive_bundle_by_tag() {
+        assert_eq!(
+            source_purl("2026-09-25"),
+            "pkg:oci/nhs-ods-xml?repository_url=ghcr.io%2Folizilla%2Fnhs-ods-xml&tag=2026-09-25"
+        );
+    }
+
+    #[test]
+    fn test_the_source_purl_and_cache_url_name_the_same_repository() {
+        assert!(SOURCE_REPOSITORY.ends_with(&format!("/{}", crate::provenance::SOURCE_NAME)));
+        assert_eq!(
+            source_cache_url("sha256:abc"),
+            "https://ghcr.io/v2/olizilla/nhs-ods-xml/blobs/sha256:abc"
+        );
+        assert!(source_purl("2026-09-25").contains("repository_url=ghcr.io%2Folizilla%2Fnhs-ods-xml&"));
     }
 }

@@ -910,13 +910,13 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
         }
     };
 
-    // 1. The files carry provenance; the pull record under trud/ is unreadable. Nothing that
+    // 1. The files carry provenance; the TRUD archive package under trud/ is unreadable. Nothing that
     // reads a release reads that record, so find says nothing about it.
     copy_release(Some(&ods::provenance::fixture_embedded("2026-08-28")));
     let trud_dir = rel_dir.join("trud");
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(
-        trud_dir.join(ods::provenance::PULL_RECORD_FILENAME),
+        trud_dir.join(ods::provenance::TRUD_ARCHIVE_PACKAGE_FILENAME),
         r#"{"name":"nhs-ods-xml","unrecognised_field":"some_value"}"#,
     )
     .unwrap();

@@ -7,7 +7,7 @@
 # directory `ods make oci --source` reads and `ods trud pull` fills.
 #
 #   1. NHS signed it, with a pinned key. The bundled key is only used to check the signature; the
-#      trust is `trud_signing_key_fingerprints` in this repository's data/releases.json, the pin
+#      trust is `source.signing_key_fingerprints` in this repository's data/releases.json, the pin
 #      reviewed in git. A key that verifies but isn't pinned fails. NHS_KEY_FINGERPRINTS
 #      (space-separated), if set, replaces the pin: for tests, never normal use.
 #   2. The signed file names this zip.
@@ -38,7 +38,7 @@ if [[ -n "${NHS_KEY_FINGERPRINTS:-}" ]]; then
   read -ra PINNED <<<"$NHS_KEY_FINGERPRINTS"
 else
   PIN_SOURCE="data/releases.json"
-  read -ra PINNED <<<"$(jq -r '.trud_signing_key_fingerprints | join(" ")' "$REPO_ROOT/data/releases.json")"
+  read -ra PINNED <<<"$(jq -r '.source.signing_key_fingerprints // [] | join(" ")' "$REPO_ROOT/data/releases.json")"
 fi
 [[ ${#PINNED[@]} -gt 0 ]] || { echo "✖ no pinned NHS signing keys in $PIN_SOURCE" >&2; exit 2; }
 for fp in "${PINNED[@]}"; do

@@ -176,20 +176,27 @@ smoke() {
   local ws="$tmp/ods_data"
   local index="$tmp/candidate_index.json"
   zip -j -q "$zip" tests/fixtures/mock_hscorgrefdata.xml && {
-    local zip_sha; zip_sha=$(shasum -a 256 "$zip" | cut -d' ' -f1 | tr '[:lower:]' '[:upper:]')
+    local zip_sha; zip_sha=$(shasum -a 256 "$zip" | cut -d' ' -f1)
     local zip_size; zip_size=$(wc -c < "$zip" | tr -d ' ')
     cat <<EOF > "$index"
 {
   "\$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "0000000000000000000000000000000000000000"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "0000000000000000000000000000000000000000"
+    ]
+  },
   "mirrors": [],
   "releases": [
     {
-      "trud_release_date": "2026-07-31",
-      "trud_release_sha256": "$zip_sha",
-      "trud_release_filesize_bytes": $zip_size,
+      "source": {
+        "version": "2026-07-31",
+        "hash": "sha256:$zip_sha",
+        "bytes": $zip_size
+      },
       "datasets": []
     }
   ]
@@ -228,16 +235,18 @@ reproduce() {
   # equal to what this ods generates, and runs in "rust tests", before this step.
   dataset_version=$(jq -r .version data/datapackage.json)
 
+  # A dataset row's version is <source version>_<dataset version>: the newest release with a
+  # dataset at this dataset version is the newest whose row's version ends in _<dataset version>.
   local date row_digest
   date=$(jq -r --arg v "$dataset_version" '
-    [.releases[] | select(.datasets[]? | .dataset_version == $v)] | sort_by(.trud_release_date) | last | .trud_release_date // empty
+    [.releases[] | select(.datasets[]? | .version | endswith("_" + $v))] | sort_by(.source.version) | last | .source.version // empty
   ' "$index" 2>/dev/null)
   if [ -z "$date" ]; then
     echo "RESULT:skip:no release published at dataset $dataset_version yet"
     return 0
   fi
-  row_digest=$(jq -r --arg v "$dataset_version" --arg d "$date" '
-    .releases[] | select(.trud_release_date == $d) | .datasets[] | select(.dataset_version == $v) | .manifest_digest
+  row_digest=$(jq -r --arg tagged "${date}_$dataset_version" '
+    .releases[].datasets[] | select(.version == $tagged) | .manifest_digest
   ' "$index")
 
   local work trud pull_err

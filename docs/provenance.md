@@ -81,7 +81,7 @@ $ ods use 2026-09-25
 | :--- | :--- |
 | The object in the Parquet files, and the two descriptors ([datapackage.md](./datapackage.md)) | [Data Package][datapackage] property names: `name`, `version`, `licenses`, `contributors`, `sources`, `resources`, plus `licenses[].attribution` and the Source's `hash`, `bytes` and `_cache` from ods's profile |
 | The OCI manifest ([oci.md](./oci.md)) | the image spec's own keys only: `org.opencontainers.image.title`, `.version`, `.description`, `.licenses`, `.created`, `.source` |
-| The release index ([release-index.md](./release-index.md)) | `trud_release_date`, `trud_release_sha256`, `trud_release_filesize_bytes`, `dataset_version` and the rest |
+| The release index ([release-index.md](./release-index.md)) | the same names for the same facts: `name`, `source` (`title`, `path`), and each release's `source` (`version`, `hash`, `bytes`) and datasets' `version` and `bytes`, plus the index's own `manifest_digest`, `tool_version`, `tool_git_sha`, `doi`, `withdrawn` and `source.issues` |
 
 The source's facts (its title, TRUD's release date, the zip's SHA-256 and size) are read from a
 Parquet file's footer, not from the manifest:
@@ -94,7 +94,7 @@ $ duckdb -noheader -list -c "SELECT decode(value)::JSON -> '$.sources[0]' FROM p
 `ods` verifies a release by rebuilding its OCI manifest from the files and comparing the digest
 with its release index row ([oci.md](./oci.md#the-manifest-is-a-function-of-the-files)).
 `ods make` and `ods pull` also write a readable view of the release, `datapackage.json`, and `ods
-trud pull` records the TRUD release it downloaded as `trud/datapackage.json`: both are described
+trud pull` records the TRUD release it downloaded as the TRUD archive package, `trud/datapackage.json`: both are described
 in [datapackage.md](./datapackage.md).
 
 Parquet files an older `ods` built carry no `datapackage` key, like a `--force` build's, and
@@ -147,8 +147,8 @@ When an archive can't be matched by SHA-256 to a row in the release index, or to
 
 Alongside each archive, TRUD serves a checksum file naming the zip and its SHA-1, NHS England's
 PGP signature of that file, and NHS's public key. `ods trud pull` downloads all three, and the
-pull record names each with its hash. `scripts/verify-trud-bundle.sh` checks them: the key's
-fingerprint is pinned in the release index (`trud_signing_key_fingerprints`), the signature is
+TRUD archive package names each with its hash. `scripts/verify-trud-bundle.sh` checks them: the key's
+fingerprint is pinned in the release index (`source.signing_key_fingerprints`), the signature is
 good, and the signed SHA-1 is the zip's. `build-dataset.yml` runs it before caching an archive and
 before building from one. `ods` doesn't check the signature itself yet.
 
@@ -156,14 +156,14 @@ before building from one. `ods` doesn't check the signature itself yet.
 to 2026-09-25, the signature is dated differently from the TRUD release, from a day early
 (2026-06-26 was signed on 2026-06-25) to more than five months late (2018-09-28 was signed on
 2019-03-08). So a release's date always comes from TRUD: from its API or listing, or from a record
-written once from TRUD's word, like an index row, a pull record, or an archive image's tag and
+written once from TRUD's word, like an index row, a TRUD archive package, or an archive image's tag and
 `fyi.ods.trud-release-date` annotation in `nhs-ods-xml`.
 
 ## How a release is checked
 
 - **`ods trud pull`** checks the zip against the SHA-256 TRUD's API gives, and writes that hash,
-  TRUD's word, into the pull record. [trud.md](./trud.md) has the flow.
-- **`ods make`** checks the zip against the pull record, the release index row or TRUD's API before
+  TRUD's word, into the TRUD archive package. [trud.md](./trud.md) has the flow.
+- **`ods make`** checks the zip against the TRUD archive package, the release index row or TRUD's API before
   it builds, and embeds what they say in every Parquet file.
 - **`ods pull`** names a file only once its SHA-256 matches the manifest the index names, then
   rebuilds the manifest from the files and refuses a release whose digest differs.

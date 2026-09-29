@@ -7,7 +7,7 @@
 //! what a release is reads it from the files (`read_release`), so a copied file, or a directory
 //! holding only the Parquet files, says the same thing a workspace release does.
 //!
-//! `ods trud pull` records the TRUD release it downloaded as `trud/datapackage.json` (`PullRecord`):
+//! `ods trud pull` records the TRUD release it downloaded as `trud/datapackage.json` (`TrudArchivePackage`):
 //! the upstream zip can't carry our metadata, so the release is described beside it. `ods make`
 //! reads it and derives the embedded object's `sources[0]` from it.
 
@@ -22,14 +22,14 @@ use std::path::{Path, PathBuf};
 /// The Parquet key-value metadata key the embedded object lives under.
 pub const DATAPACKAGE_KEY: &str = "datapackage";
 
-/// The pull record's file name, under a release's `trud/`.
-pub const PULL_RECORD_FILENAME: &str = "datapackage.json";
+/// The TRUD archive package's file name, under a release's `trud/`.
+pub const TRUD_ARCHIVE_PACKAGE_FILENAME: &str = "datapackage.json";
 
-/// The pull record names the TRUD release as this Data Package `name`. `ods make` checks it to
+/// The TRUD archive package names the TRUD release as this Data Package `name`. `ods make` checks it to
 /// tell a source directory's record from a release's `datapackage.json` view.
 pub const SOURCE_NAME: &str = "nhs-ods-xml";
 
-/// The TRUD release's own title, as the pull record states it.
+/// The TRUD release's own title, as the TRUD archive package states it.
 pub const SOURCE_TITLE: &str = "NHS Organisation Data Service XML Data";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,7 +88,7 @@ impl Embedded {
     }
 }
 
-/// One file of the TRUD release, as the pull record lists it.
+/// One file of the TRUD release, as the TRUD archive package lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordResource {
     pub name: String,
@@ -101,7 +101,7 @@ pub struct RecordResource {
 /// `trud/datapackage.json`: the TRUD release `ods trud pull` downloaded, as a Data Package. The
 /// archive's hash and size are TRUD's word; the other files' are hashed from disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PullRecord {
+pub struct TrudArchivePackage {
     #[serde(rename = "$schema")]
     pub schema: String,
     pub name: String,
@@ -118,7 +118,7 @@ pub fn prefixed_sha256(hex: &str) -> String {
     format!("sha256:{}", hex.trim_start_matches("sha256:").to_lowercase())
 }
 
-impl PullRecord {
+impl TrudArchivePackage {
     /// The record for a TRUD release: the archive from TRUD's word, then each of NHS's other
     /// files (`(name, mediatype, path)`) hashed from disk.
     pub fn for_trud_release(
@@ -162,7 +162,7 @@ impl PullRecord {
         self.resources.iter().find(|r| r.name == "archive")
     }
 
-    /// Upper-case hex of the archive's SHA-256, the form the release index uses.
+    /// Upper-case hex of the archive's SHA-256, as TRUD writes it.
     pub fn archive_sha256_upper(&self) -> Option<String> {
         self.archive().map(|a| a.hash.trim_start_matches("sha256:").to_uppercase())
     }
@@ -179,18 +179,18 @@ impl PullRecord {
     /// What `ods make` needs before it builds: a release date, and the archive's hash and size.
     pub fn validate_baseline(&self) -> Result<()> {
         if self.version.is_empty() {
-            anyhow::bail!("{} records no version (the TRUD release date)", PULL_RECORD_FILENAME);
+            anyhow::bail!("{} records no version (the TRUD release date)", TRUD_ARCHIVE_PACKAGE_FILENAME);
         }
         let Some(archive) = self.archive() else {
-            anyhow::bail!("{} lists no archive resource", PULL_RECORD_FILENAME);
+            anyhow::bail!("{} lists no archive resource", TRUD_ARCHIVE_PACKAGE_FILENAME);
         };
         if !is_prefixed_sha256(&archive.hash) {
-            anyhow::bail!("{} records the archive's hash as '{}', not sha256:<hex>", PULL_RECORD_FILENAME, archive.hash);
+            anyhow::bail!("{} records the archive's hash as '{}', not sha256:<hex>", TRUD_ARCHIVE_PACKAGE_FILENAME, archive.hash);
         }
         // A file name beside the record, as `ods trud pull` writes it: never a path that leaves `trud/`.
         let mut components = Path::new(&archive.path).components();
         if !matches!((components.next(), components.next()), (Some(std::path::Component::Normal(_)), None)) {
-            anyhow::bail!("{} names the archive as '{}', not a file name beside it", PULL_RECORD_FILENAME, archive.path);
+            anyhow::bail!("{} names the archive as '{}', not a file name beside it", TRUD_ARCHIVE_PACKAGE_FILENAME, archive.path);
         }
         Ok(())
     }
@@ -198,7 +198,7 @@ impl PullRecord {
     /// The archive this record describes: the file its `archive` resource names, beside the
     /// record. Refuses, with the repair, when it isn't there.
     pub fn archive_path(&self, record_path: &Path) -> Result<PathBuf> {
-        let archive = self.archive().context("the pull record lists no archive resource")?;
+        let archive = self.archive().context("the TRUD archive package lists no archive resource")?;
         let dir = record_path.parent().unwrap_or(Path::new("."));
         let path = dir.join(&archive.path);
         if !path.is_file() {
@@ -237,19 +237,19 @@ impl PullRecord {
     /// Writes `release_dir/trud/datapackage.json`, and removes the `trud/_provenance.json` an
     /// older `ods trud pull` wrote there, which this record replaces.
     pub fn write_to_dir(&self, release_dir: &Path) -> Result<()> {
-        let path = pull_record_path(release_dir);
+        let path = trud_archive_package_path(release_dir);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         std::fs::write(&path, self.to_json_string()?).with_context(|| format!("writing {}", path.display()))?;
-        let legacy = pull_record_dir(release_dir).join(LEGACY_PROVENANCE_FILENAME);
+        let legacy = trud_archive_package_dir(release_dir).join(LEGACY_PROVENANCE_FILENAME);
         if legacy.is_file() {
             let _ = std::fs::remove_file(legacy);
         }
         Ok(())
     }
 
-    /// Reads a pull record from `path`.
+    /// Reads a TRUD archive package from `path`.
     pub fn load_from_file(path: &Path) -> RecordLoad {
         if !path.exists() {
             return RecordLoad::Absent;
@@ -265,7 +265,7 @@ impl PullRecord {
             return unreadable();
         };
         // A `datapackage.json` that doesn't name the TRUD release is some other Data Package —
-        // a release's view — and not a pull record.
+        // a release's view — and not a TRUD archive package.
         if value.get("name").and_then(|n| n.as_str()) != Some(SOURCE_NAME) {
             return RecordLoad::NotARecord;
         }
@@ -277,7 +277,7 @@ impl PullRecord {
         }
     }
 
-    /// Finds the pull record from `dir` or one of up to 4 ancestors: at each level
+    /// Finds the TRUD archive package from `dir` or one of up to 4 ancestors: at each level
     /// `<level>/trud/datapackage.json`, then `<level>/datapackage.json` (an explicit `-i <dir>`
     /// holding the zip and the record directly). A `datapackage.json` that names anything but
     /// the TRUD release is a release's view, not a record, and is passed over.
@@ -285,7 +285,7 @@ impl PullRecord {
         let mut curr = if dir.is_file() { dir.parent().map(|p| p.to_path_buf()) } else { Some(dir.to_path_buf()) };
         for _ in 0..4 {
             let Some(ref path) = curr else { break };
-            for candidate in [pull_record_path(path), path.join(PULL_RECORD_FILENAME)] {
+            for candidate in [trud_archive_package_path(path), path.join(TRUD_ARCHIVE_PACKAGE_FILENAME)] {
                 match Self::load_from_file(&candidate) {
                     RecordLoad::Absent | RecordLoad::NotARecord => {}
                     found => return found,
@@ -306,19 +306,19 @@ fn is_prefixed_sha256(s: &str) -> bool {
 /// Nothing reads it; a repair removes it.
 pub const LEGACY_PROVENANCE_FILENAME: &str = "_provenance.json";
 
-/// The directory the pull record lives in: beside the archive it describes.
-pub fn pull_record_dir(release_dir: &Path) -> PathBuf {
+/// The directory the TRUD archive package lives in: beside the archive it describes.
+pub fn trud_archive_package_dir(release_dir: &Path) -> PathBuf {
     release_dir.join("trud")
 }
 
-/// Where `ods trud pull` writes its pull record.
-pub fn pull_record_path(release_dir: &Path) -> PathBuf {
-    pull_record_dir(release_dir).join(PULL_RECORD_FILENAME)
+/// Where `ods trud pull` writes its TRUD archive package.
+pub fn trud_archive_package_path(release_dir: &Path) -> PathBuf {
+    trud_archive_package_dir(release_dir).join(TRUD_ARCHIVE_PACKAGE_FILENAME)
 }
 
 #[derive(Debug, Clone)]
 pub enum RecordLoad {
-    Read(Box<PullRecord>, PathBuf),
+    Read(Box<TrudArchivePackage>, PathBuf),
     Unreadable { path: PathBuf, date: String },
     /// A `datapackage.json` that is some other Data Package (a release's view).
     NotARecord,
@@ -326,14 +326,14 @@ pub enum RecordLoad {
 }
 
 impl RecordLoad {
-    pub fn ok(self) -> Option<PullRecord> {
+    pub fn ok(self) -> Option<TrudArchivePackage> {
         match self {
             Self::Read(record, _) => Some(*record),
             _ => None,
         }
     }
 
-    pub fn error_building_with_path(self) -> Result<Option<(PullRecord, PathBuf)>> {
+    pub fn error_building_with_path(self) -> Result<Option<(TrudArchivePackage, PathBuf)>> {
         match self {
             Self::Read(record, path) => Ok(Some((*record, path))),
             Self::Unreadable { path, date } => anyhow::bail!("{}", format_unreadable_record_error(&path, &date)),
@@ -364,7 +364,7 @@ fn date_for_unreadable_record(path: &Path) -> String {
 
 pub fn format_unreadable_record_error(path: &Path, date: &str) -> String {
     format!(
-        "✖ {} isn't a pull record this ods can read\n  Expected $schema {} and name {}\n  Write it again with `ods trud pull {}`, then run `ods make`.",
+        "✖ {} isn't a TRUD archive package this ods can read\n  Expected $schema {} and name {}\n  Write it again with `ods trud pull {}`, then run `ods make`.",
         format_provenance_display_path(path),
         crate::datapackage::ODS_DATAPACKAGE_SCHEMA_URL,
         SOURCE_NAME,
@@ -394,7 +394,8 @@ impl ReleaseFacts {
         &self.embedded.version
     }
 
-    /// The source archive's SHA-256 as upper-case hex, the form the release index uses.
+    /// The source archive's SHA-256 as upper-case hex, as TRUD writes it. The release index
+    /// holds the same hash as `source.hash`: `sha256:` and lower case.
     pub fn source_sha256_upper(&self) -> String {
         self.source.hash.trim_start_matches("sha256:").to_uppercase()
     }
@@ -749,17 +750,17 @@ pub fn format_provenance_display_path(prov_path: &Path) -> String {
     prov_path.display().to_string()
 }
 
-/// Writes the pull record for a TRUD release into `release_dir/trud/`: the archive from TRUD's
+/// Writes the TRUD archive package for a TRUD release into `release_dir/trud/`: the archive from TRUD's
 /// word, plus NHS's other files already on disk (`(name, mediatype, path)`).
-pub fn write_pull_record(
+pub fn write_trud_archive_package(
     release_dir: &Path,
     date: &str,
     archive_file_name: &str,
     archive_sha256: &str,
     archive_bytes: u64,
     other_files: &[(&str, &str, PathBuf)],
-) -> Result<PullRecord> {
-    let record = PullRecord::for_trud_release(date, archive_file_name, archive_sha256, archive_bytes, other_files)?;
+) -> Result<TrudArchivePackage> {
+    let record = TrudArchivePackage::for_trud_release(date, archive_file_name, archive_sha256, archive_bytes, other_files)?;
     record.write_to_dir(release_dir)?;
     Ok(record)
 }
@@ -769,7 +770,7 @@ pub fn write_pull_record(
 /// trud pull`. For tests.
 #[doc(hidden)]
 pub fn fixture_embedded_for(date: &str, archive_sha256: &str, archive_bytes: u64) -> Embedded {
-    PullRecord::for_trud_release(
+    TrudArchivePackage::for_trud_release(
         date,
         &format!("hscorgrefdataxml_data_7.0.0_{}000001.zip", date.replace('-', "")),
         archive_sha256,
@@ -790,8 +791,8 @@ pub fn fixture_embedded(date: &str) -> Embedded {
 mod tests {
     use super::*;
 
-    fn record() -> PullRecord {
-        PullRecord::for_trud_release(
+    fn record() -> TrudArchivePackage {
+        TrudArchivePackage::for_trud_release(
             "2026-09-25",
             "hscorgrefdataxml_data_8.0.0_20260925000001.zip",
             "CA0FEE7512F593ADA1FA9B95BF1372B41911167DA463A98FECF33ADFD86697E5",
@@ -825,13 +826,13 @@ mod tests {
     }
 
     #[test]
-    fn test_pull_record_loader_passes_over_a_releases_view() {
+    fn test_trud_archive_package_loader_passes_over_a_releases_view() {
         let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join(PULL_RECORD_FILENAME), r#"{"name":"ods-data"}"#).unwrap();
-        assert!(matches!(PullRecord::load_from_dir(tmp.path()), RecordLoad::Absent));
+        std::fs::write(tmp.path().join(TRUD_ARCHIVE_PACKAGE_FILENAME), r#"{"name":"ods-data"}"#).unwrap();
+        assert!(matches!(TrudArchivePackage::load_from_dir(tmp.path()), RecordLoad::Absent));
 
         record().write_to_dir(tmp.path()).unwrap();
-        let loaded = PullRecord::load_from_dir(tmp.path()).ok().expect("the record under trud/ is read");
+        let loaded = TrudArchivePackage::load_from_dir(tmp.path()).ok().expect("the record under trud/ is read");
         assert_eq!(loaded, record());
     }
 

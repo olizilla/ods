@@ -500,9 +500,9 @@ fn snapshot_trud_list() {
     check_snapshot("trud-list.txt", &actual_cases, &case_names);
 }
 
-/// `ods trud list --all --format json` is a machine format (O2): each item carries TRUD's
-/// `sha256` (Task 1 of ci-builds-datasets.md), so a run's own listing can be turned into a
-/// release-index row without a second call.
+/// `ods trud list --all --format json` is a machine format (O2): each item carries the release's
+/// `source` as a release index row names it, TRUD's hash included, so a run's own listing can be
+/// turned into a release-index row without a second call.
 #[test]
 fn trud_list_json_carries_sha256() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -526,13 +526,15 @@ fn trud_list_json_carries_sha256() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let items: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     let first = &items[0];
-    assert_eq!(first["date"], "2026-07-31");
-    assert_eq!(first["sha256"], "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933");
-    assert_eq!(first["size_bytes"], 37983173);
+    assert_eq!(first["source"]["version"], "2026-07-31");
+    assert_eq!(first["source"]["hash"], "sha256:8151248ddc290f3affdabae22d88e0bbd118947d948ab7bdd37e74088cfba933");
+    assert_eq!(first["source"]["bytes"], 37983173);
     assert_eq!(first["status"], "remote");
-    // Field order: date, sha256, size_bytes, status
     let keys: Vec<&str> = first.as_object().unwrap().keys().map(|s| s.as_str()).collect();
-    assert_eq!(keys, vec!["date", "sha256", "size_bytes", "status"]);
+    assert_eq!(keys, vec!["source", "status"]);
+    // In a release index row's order: version, hash, bytes
+    let (v, h, b) = (stdout.find("\"version\"").unwrap(), stdout.find("\"hash\"").unwrap(), stdout.find("\"bytes\"").unwrap());
+    assert!(v < h && h < b, "{stdout}");
 }
 
 fn create_padded_zip(date_str: &str, target_size: usize) -> Vec<u8> {
@@ -793,8 +795,8 @@ fn snapshot_pull() {
         ),
     ]);
     index.mirrors = vec![ods::index::MirrorEntry { url: mirror_url }];
-    index.releases[0].datasets[0].dataset_filesize_bytes = total2;
-    index.releases[1].datasets[0].dataset_filesize_bytes = total1;
+    index.releases[0].datasets[0].bytes = total2;
+    index.releases[1].datasets[0].bytes = total1;
 
     let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
     fs::write(tmp.path().join("rehearsal.json"), &index_bytes).unwrap();
@@ -832,6 +834,20 @@ fn snapshot_pull() {
     };
     actual_cases.push(run_case_full(&all_case, None, Some(fresh_tmp.path()), &[]));
     case_names.push(all_case.cmd_str);
+
+    // R12: a release whose source has known issues names each under its block
+    let issues_tmp = tempfile::TempDir::new().expect("create tempdir");
+    let mut issues_index = index.clone();
+    issues_index.releases[0].source.issues = vec!["t1201-recorded-twice".to_string(), "fef03-code-reused".to_string()];
+    fs::write(issues_tmp.path().join("issues.json"), serde_json::to_vec_pretty(&issues_index).unwrap()).unwrap();
+    let issues_case = TestCase {
+        cmd_str: "COLUMNS=100 ods pull 2026-07-31 --index issues.json",
+        columns: Some(100),
+        args: vec!["pull", "2026-07-31", "--index", "issues.json"],
+        use_input: false,
+    };
+    actual_cases.push(run_case_full(&issues_case, None, Some(issues_tmp.path()), &[]));
+    case_names.push(issues_case.cmd_str);
 
     let _ = stop_server.send(());
     check_snapshot("pull.txt", &actual_cases, &case_names);
@@ -966,6 +982,20 @@ fn snapshot_cite() {
 
     let (_tmp_f, dir_f) = setup_cite_case_workspace("F");
     actual_cases.push(run_case_full(&cases[8], Some(&dir_f), Some(_tmp_f.path()), &[]));
+
+    // R12: the same release, its source with known issues, in each format that carries a note
+    let (_tmp_i, dir_i) = setup_test_release_for_cite(None);
+    common::add_source_issues(_tmp_i.path(), &["t1201-recorded-twice", "fef03-code-reused"]);
+    let mut case_names = case_names;
+    for (name, args) in [
+        ("ods cite (source with known issues)", vec!["cite"]),
+        ("ods cite -f bibtex (source with known issues)", vec!["cite", "-f", "bibtex"]),
+        ("ods cite -f csljson (source with known issues)", vec!["cite", "-f", "csljson"]),
+    ] {
+        let case = TestCase { cmd_str: name, columns: None, args, use_input: true };
+        actual_cases.push(run_case(&case, Some(&dir_i)));
+        case_names.push(name);
+    }
 
     check_snapshot("cite.txt", &actual_cases, &case_names);
 }

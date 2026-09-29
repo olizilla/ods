@@ -154,7 +154,7 @@ fn test_real_trud_parquet_hash_stability() {
     let releases_json_path = PathBuf::from("data/releases.json");
     let index = if releases_json_path.exists() {
         let content = std::fs::read_to_string(&releases_json_path).unwrap();
-        serde_json::from_str::<ods::index::OdsReleaseIndex>(&content).ok()
+        ods::index::OdsReleaseIndex::from_slice(content.as_bytes()).ok()
     } else {
         ods::index::OdsReleaseIndex::baked().ok()
     };
@@ -164,11 +164,7 @@ fn test_real_trud_parquet_hash_stability() {
     println!("Built manifest digest: {}", built_digest);
 
     if let Some(ref idx) = index {
-        let published_dataset = idx
-            .releases
-            .iter()
-            .find(|r| r.trud_release_date == date)
-            .and_then(|r| r.datasets.iter().find(|d| d.dataset_version == version));
+        let published_dataset = idx.dataset(facts.version()).map(|(_, d)| d);
 
         if let Some(published) = published_dataset {
             if built_digest != published.manifest_digest {
@@ -248,7 +244,7 @@ fn test_relabel_dataset_version_changes_parquet_bytes_not_data() {
     use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let embedded = |version: &str| {
-        ods::provenance::PullRecord::for_trud_release(
+        ods::provenance::TrudArchivePackage::for_trud_release(
             "2026-07-31",
             "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
             "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
@@ -385,7 +381,7 @@ enum Route {
 
 // D1: a dataset's identity is the archive and the dataset version, not how the builder checked
 // the archive. One zip, confirmed once by the release index and once by the TRUD API, must
-// give the same pull record, the same embedded object and the same manifest digest.
+// give the same TRUD archive package, the same embedded object and the same manifest digest.
 #[test]
 fn test_same_zip_gives_same_provenance_and_manifest_however_it_was_checked() {
     let tmp = TempDir::new().unwrap();
@@ -400,8 +396,8 @@ fn test_same_zip_gives_same_provenance_and_manifest_however_it_was_checked() {
     let dir_index = pull_and_make(&zip, &via_index.join("ods_data"), Route::ReleaseIndex);
     let dir_api = pull_and_make(&zip, &via_api.join("ods_data"), Route::TrudApi);
 
-    let prov_index = std::fs::read_to_string(ods::provenance::pull_record_path(&dir_index)).unwrap();
-    let prov_api = std::fs::read_to_string(ods::provenance::pull_record_path(&dir_api)).unwrap();
+    let prov_index = std::fs::read_to_string(ods::provenance::trud_archive_package_path(&dir_index)).unwrap();
+    let prov_api = std::fs::read_to_string(ods::provenance::trud_archive_package_path(&dir_api)).unwrap();
     assert_eq!(
         prov_index, prov_api,
         "the pull-time record depends on how the zip was checked:\n--- index ---\n{}\n--- TRUD API ---\n{}",

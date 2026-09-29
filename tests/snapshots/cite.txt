@@ -265,3 +265,137 @@ Data availability
   Its files name that release but aren't its files: an ods that doesn't reproduce
   dataset 0.1.0 built them, or they've changed since. Cite the published release: ods pull 2026-08-28
 --- exit 1
+
+$ ods cite (source with known issues)
+* Source: releases/2026-08-31 (1.0.1)
+
+How to Cite
+  The source:
+    NHS England. (2026). NHS Organisation Data Service XML Data, release 2026-08-31
+    [Data set]. NHS TRUD. https://isd.digital.nhs.uk/trud
+    Contains information from NHS England, licensed under the current version of the
+    Open Government Licence.
+
+  The data:
+    Evans, O. (2026). ods: NHS Organisation Data as verifiable Parquet files,
+    release 2026-08-31 (Version 1.0.1) [Data set]. ods.fyi. https://ods.fyi
+
+  The tool:
+    Evans, O. (2026). ods (Version 0.4.3) [Computer software].
+    https://github.com/olizilla/ods
+
+Data availability
+  ods-data/2026-08-31_1.0.1 is available from https://ods.fyi. This OCI manifest
+  digest identifies its exact files:
+    sha256:c0f3d1e71820883457ff0d50c6675b4d4094ac88ff39b6b379ff7734ba4791ee
+
+  ods/v0.4.3 built it from nhs-ods-xml/2026-08-31, the TRUD archive with SHA-256:
+    665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2
+  Rebuild and verify with `ods trud pull 2026-08-31 && ods make`.
+
+Known source issues
+  t1201-recorded-twice
+    https://github.com/olizilla/ods/blob/main/docs/source-issues/t1201-recorded-twice.md
+  fef03-code-reused
+    https://github.com/olizilla/ods/blob/main/docs/source-issues/fef03-code-reused.md
+
+$ ods cite -f bibtex (source with known issues)
+@misc{nhs-ods-xml/2026-08-31,
+  author = {NHS England},
+  title = {NHS Organisation Data Service XML Data, release 2026-08-31},
+  year = {2026},
+  month = {08},
+  howpublished = {NHS TRUD},
+  url = {https://isd.digital.nhs.uk/trud},
+  note = {Release 2026-08-31, SHA-256 665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2. Known source issues: https://github.com/olizilla/ods/blob/main/docs/source-issues/t1201-recorded-twice.md, https://github.com/olizilla/ods/blob/main/docs/source-issues/fef03-code-reused.md.}
+}
+
+@misc{ods-data/2026-08-31_1.0.1,
+  author = {Evans, Oli},
+  title = {ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31},
+  year = {2026},
+  month = {08},
+  version = {1.0.1},
+  howpublished = {ods.fyi},
+  url = {https://ods.fyi},
+  note = {Manifest: sha256:c0f3d1e71820883457ff0d50c6675b4d4094ac88ff39b6b379ff7734ba4791ee. Contains information from NHS England, licensed under the current version of the Open Government Licence.}
+}
+
+@misc{ods/v0.4.3,
+  author = {Evans, Oli},
+  title = {ods},
+  year = {2026},
+  version = {0.4.3},
+  howpublished = {Computer software},
+  url = {https://github.com/olizilla/ods}
+}
+
+$ ods cite -f csljson (source with known issues)
+[
+  {
+    "type": "dataset",
+    "id": "nhs-ods-xml/2026-08-31",
+    "title": "NHS Organisation Data Service XML Data, release 2026-08-31",
+    "author": [
+      {
+        "literal": "NHS England"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          8,
+          31
+        ]
+      ]
+    },
+    "publisher": "NHS TRUD",
+    "URL": "https://isd.digital.nhs.uk/trud",
+    "note": "Release 2026-08-31, SHA-256 665E766F3203F1F582FEDD7055A04C67E6B26A46E209664648132961EE13DCD2. Known source issues: https://github.com/olizilla/ods/blob/main/docs/source-issues/t1201-recorded-twice.md, https://github.com/olizilla/ods/blob/main/docs/source-issues/fef03-code-reused.md."
+  },
+  {
+    "type": "dataset",
+    "id": "ods-data/2026-08-31_1.0.1",
+    "title": "ods: NHS Organisation Data as verifiable Parquet files, release 2026-08-31",
+    "author": [
+      {
+        "family": "Evans",
+        "given": "Oli"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          8,
+          31
+        ]
+      ]
+    },
+    "publisher": "ods.fyi",
+    "URL": "https://ods.fyi",
+    "version": "1.0.1",
+    "note": "Manifest: sha256:c0f3d1e71820883457ff0d50c6675b4d4094ac88ff39b6b379ff7734ba4791ee. Contains information from NHS England, licensed under the current version of the Open Government Licence."
+  },
+  {
+    "type": "software",
+    "id": "ods/v0.4.3",
+    "title": "ods",
+    "author": [
+      {
+        "family": "Evans",
+        "given": "Oli"
+      }
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2026
+        ]
+      ]
+    },
+    "URL": "https://github.com/olizilla/ods",
+    "version": "0.4.3"
+  }
+]

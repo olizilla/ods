@@ -134,7 +134,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
     let archive_path: PathBuf;
     let output_path: PathBuf;
-    // The object every table carries: from the pull record, or from the index row or TRUD's
+    // The object every table carries: from the TRUD archive package, or from the index row or TRUD's
     // API for a bare zip. A `--force` build carries none: it can't back a name, a licence or a
     // source for an archive nobody could match.
     let embedded: Option<crate::provenance::Embedded>;
@@ -144,7 +144,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     let mut external_provenance_to_report: Option<PathBuf> = None;
 
     if input_path.is_dir() {
-        let (record, record_path) = match crate::provenance::PullRecord::load_from_dir(&input_path)
+        let (record, record_path) = match crate::provenance::TrudArchivePackage::load_from_dir(&input_path)
             .error_building_with_path()?
         {
             Some(found) => found,
@@ -167,13 +167,13 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
                     anyhow::bail!(
                         "✖ {} holds trud/_provenance.json, the record an older ods wrote, and no trud/{}\n  Write it from TRUD's listing, then build: ods trud pull {} --force && ods make",
                         crate::workspace::relative_to_cwd(release_dir).display(),
-                        crate::provenance::PULL_RECORD_FILENAME,
+                        crate::provenance::TRUD_ARCHIVE_PACKAGE_FILENAME,
                         date.as_deref().unwrap_or("<date>")
                     );
                 }
                 anyhow::bail!(
                     "Missing trud/{} in input directory '{}'. Did you run 'ods trud pull' first?",
-                    crate::provenance::PULL_RECORD_FILENAME,
+                    crate::provenance::TRUD_ARCHIVE_PACKAGE_FILENAME,
                     input_path.display()
                 );
             }
@@ -181,7 +181,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
         if let Err(e) = record.validate_baseline() {
             anyhow::bail!(
-                "Invalid pull record {} in input '{}': {}. Did you run 'ods trud pull' first?",
+                "Invalid TRUD archive package {} in input '{}': {}. Did you run 'ods trud pull' first?",
                 record_path.display(),
                 input_path.display(),
                 e
@@ -231,7 +231,7 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
 
         // The release directory's own `trud/datapackage.json` is the expected one and goes
         // unmentioned; a record carried in from somewhere else is named.
-        if !same_file(&record_path, &crate::provenance::pull_record_path(&output_path)) {
+        if !same_file(&record_path, &crate::provenance::trud_archive_package_path(&output_path)) {
             external_provenance_to_report = Some(record_path);
         }
 
@@ -298,11 +298,11 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             let release_date = matched.release_date.clone();
             // No `ods trud pull` wrote a record for a bare zip, so the facts it would hold come
             // from the index row or TRUD's API, in the same shape.
-            let record = crate::provenance::PullRecord::for_trud_release(
+            let record = crate::provenance::TrudArchivePackage::for_trud_release(
                 &release_date,
                 &file_name,
-                &matched.trud_release_sha256,
-                matched.trud_release_filesize_bytes,
+                &matched.sha256,
+                matched.bytes,
                 &[],
             )?;
             embedded = Some(record.embedded(crate::datapackage::DATASET_VERSION)?);

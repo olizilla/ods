@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_annotations_are_the_embedded_objects_facts() {
-        let record = crate::provenance::PullRecord::for_trud_release(
+        let record = crate::provenance::TrudArchivePackage::for_trud_release(
             "2026-09-25",
             "hscorgrefdataxml_data_8.0.0_20260925000001.zip",
             "CA0FEE7512F593ADA1FA9B95BF1372B41911167DA463A98FECF33ADFD86697E5",

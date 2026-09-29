@@ -50,8 +50,8 @@ fn setup_synthetic_release_dir() -> (TempDir, PathBuf) {
     ods::commands::parquet::write_stub_parquet(&rel_dir.join("roles.parquet"), Some(&embedded), "dummy roles parquet content").unwrap();
     fs::write(rel_dir.join("NOTES.md"), b"# Release Notes\nTest release.").unwrap();
 
-    // The pull record lives beside the archive it describes, not the release root.
-    ods::provenance::write_pull_record(
+    // The TRUD archive package lives beside the archive it describes, not the release root.
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -78,8 +78,8 @@ fn test_make_oci_generates_valid_layout_and_relative_symlinks() -> Result<()> {
 
     run(test_args(rel_dir.clone(), false))?;
 
-    // Verify the pull record stays where it was written (trud/), and nothing is added at the root
-    assert!(ods::provenance::pull_record_path(&rel_dir).exists());
+    // Verify the TRUD archive package stays where it was written (trud/), and nothing is added at the root
+    assert!(ods::provenance::trud_archive_package_path(&rel_dir).exists());
     assert!(!rel_dir.join("datapackage.json").exists(), "ods make oci writes only oci/");
     assert!(!rel_dir.join("_release.json").exists(), "ods make oci must not write _release.json");
     assert!(!rel_dir.join("SHA256SUMS").exists(), "ods make oci must not write SHA256SUMS");
@@ -198,8 +198,8 @@ fn test_determinism_two_different_working_directories_produce_identical_manifest
     run(test_args(rel_dir_a.clone(), false))?;
     run(test_args(rel_dir_b.clone(), false))?;
 
-    let prov_a = fs::read_to_string(ods::provenance::pull_record_path(&rel_dir_a))?;
-    let prov_b = fs::read_to_string(ods::provenance::pull_record_path(&rel_dir_b))?;
+    let prov_a = fs::read_to_string(ods::provenance::trud_archive_package_path(&rel_dir_a))?;
+    let prov_b = fs::read_to_string(ods::provenance::trud_archive_package_path(&rel_dir_b))?;
     assert_eq!(prov_a, prov_b, "trud/datapackage.json must be byte-identical regardless of working directory");
 
     let tmp_a_path = tmp_a.path().to_str().unwrap();

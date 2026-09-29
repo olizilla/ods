@@ -28,3 +28,12 @@ $ COLUMNS=100 ods pull --all --index rehearsal.json
 
   pulled        2 releases · 0 cached · 5MB  in <duration>
   linked        current → releases/2026-07-31
+
+$ COLUMNS=100 ods pull 2026-07-31 --index issues.json
+--- stderr
+  2026-07-31    ████████████████████   3MB   4 files  from localhost  in <duration>
+  dataset       ods-data/2026-07-31_0.1.0
+  verified      sha256 from issues.json
+  linked        current → releases/2026-07-31
+* known source issue: t1201-recorded-twice  https://github.com/olizilla/ods/blob/main/docs/source-issues/t1201-recorded-twice.md
+* known source issue: fef03-code-reused  https://github.com/olizilla/ods/blob/main/docs/source-issues/fef03-code-reused.md

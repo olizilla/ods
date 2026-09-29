@@ -21,7 +21,7 @@ fn sample_view() -> serde_json::Value {
             f,
         );
     }
-    ods::datapackage::generate_view(tmp.path(), None).unwrap()
+    ods::datapackage::generate_view(tmp.path()).unwrap()
 }
 
 #[test]
@@ -49,13 +49,40 @@ fn test_datapackage_schema_rejects_wrong_bytes_type() -> Result<()> {
     Ok(())
 }
 
+/// Our profile defines `purl`, on the package and on a Source: a package URL, not a link.
 #[test]
-fn test_pull_record_matches_the_same_schema() -> Result<()> {
+fn test_datapackage_schema_defines_purl_on_the_package_and_a_source() -> Result<()> {
+    let validator = validator();
+    let pkg = sample_view();
+    assert!(pkg["purl"].as_str().unwrap().starts_with("pkg:oci/ods-data@sha256%3A"));
+    assert!(pkg["sources"][0]["purl"].as_str().unwrap().starts_with("pkg:oci/nhs-ods-xml?"));
+    assert_eq!(validator.iter_errors(&pkg).count(), 0, "the view's own purls are valid");
+
+    for (place, wrong) in [
+        ("package", serde_json::json!(5)),
+        ("package", serde_json::json!("https://ods.fyi/ods-data")),
+        ("source", serde_json::json!(5)),
+        ("source", serde_json::json!("https://ghcr.io/v2/olizilla/nhs-ods-xml")),
+    ] {
+        let mut bad = pkg.clone();
+        match place {
+            "package" => bad["purl"] = wrong.clone(),
+            _ => bad["sources"][0]["purl"] = wrong.clone(),
+        }
+        let errors: Vec<String> = validator.iter_errors(&bad).map(|e| e.to_string()).collect();
+        println!("{place} purl {wrong}: {} errors: {:?}", errors.len(), errors);
+        assert!(!errors.is_empty(), "{place} purl {wrong} must be rejected");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_trud_archive_package_matches_the_same_schema() -> Result<()> {
     let validator = validator();
     let tmp = tempfile::tempdir().unwrap();
     let release = common::create_source_release(tmp.path(), "2026-09-25");
     let record: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(ods::provenance::pull_record_path(&release))?)?;
+        serde_json::from_str(&std::fs::read_to_string(ods::provenance::trud_archive_package_path(&release))?)?;
     assert_eq!(record["resources"].as_array().map(|r| r.len()), Some(4), "archive, checksum, signature, key");
     let errors: Vec<_> = validator.iter_errors(&record).collect();
     println!("trud/datapackage.json validated against worker/schema/ods-datapackage.v1.json: {} errors", errors.len());
@@ -72,7 +99,7 @@ fn test_view_without_provenance_names_only_the_files_and_validates() -> Result<(
     for f in ["orgs", "roles", "relationships", "successions"] {
         ods::commands::parquet::write_stub_parquet(&tmp.path().join(format!("{f}.parquet")), None, f)?;
     }
-    let view = ods::datapackage::generate_view(tmp.path(), None)?;
+    let view = ods::datapackage::generate_view(tmp.path())?;
     let keys: Vec<&str> = view.as_object().unwrap().keys().map(|k| k.as_str()).collect();
     assert_eq!(keys, ["$schema", "description", "resources"], "{view}");
     assert_eq!(view["resources"].as_array().map(|r| r.len()), Some(4));

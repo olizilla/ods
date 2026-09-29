@@ -21,6 +21,13 @@ function walkDir(base: string, current: string = base): string[] {
   return results;
 }
 
+// The source every release index here lists releases of: the header data/releases.json has.
+const indexSource = {
+  title: 'NHS Organisation Data Service XML Data',
+  path: 'https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases',
+  signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+};
+
 describe('End-to-End Worker & OCI Registry via Miniflare', () => {
   let mf: Miniflare;
   let serverUrl: string;
@@ -78,7 +85,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       fs.copyFileSync(xmlFixture, xmlCopy);
       execSync(`zip -j -q -X "${zipPath}" "${xmlCopy}"`);
       const zipBytes = fs.readFileSync(zipPath);
-      const zipSha256 = crypto.createHash('sha256').update(zipBytes).digest('hex').toUpperCase();
+      const zipHash = `sha256:${crypto.createHash('sha256').update(zipBytes).digest('hex')}`;
 
       // The index that vouches for the zip, so `ods make` embeds its provenance
       const buildIndexPath = path.join(tmpDir, 'build-index.json');
@@ -86,11 +93,10 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
         buildIndexPath,
         JSON.stringify({
           $schema: 'https://ods.fyi/schema/releases.v1.json',
-          trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+          name: 'ods-data',
+          source: indexSource,
           mirrors: [],
-          releases: [
-            { trud_release_date: '2026-07-31', trud_release_sha256: zipSha256, trud_release_filesize_bytes: zipBytes.length, datasets: [] },
-          ],
+          releases: [{ source: { version: '2026-07-31', hash: zipHash, bytes: zipBytes.length }, datasets: [] }],
         }),
       );
       execFileSync(odsBin, ['make', '--input', zipPath, '--output', fixtureDir, '--index', buildIndexPath], { stdio: 'pipe' });
@@ -137,18 +143,17 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
       // 3. The release index row for this dataset, as `ods make release` writes it
       const releasesJson = {
         $schema: 'https://ods.fyi/schema/releases.v1.json',
-        trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+        name: 'ods-data',
+        source: indexSource,
         mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
         releases: [
           {
-            trud_release_date: '2026-07-31',
-            trud_release_sha256: zipSha256,
-            trud_release_filesize_bytes: zipBytes.length,
+            source: { version: '2026-07-31', hash: zipHash, bytes: zipBytes.length },
             datasets: [
               {
-                dataset_version: '0.1.0',
+                version: '2026-07-31_0.1.0',
                 manifest_digest: `sha256:${manifestDigest}`,
-                dataset_filesize_bytes: datasetFilesize,
+                bytes: datasetFilesize,
                 tool_version: '0.1.0',
                 tool_git_sha: '0123456789abcdef0123456789abcdef01234567',
               },
@@ -259,16 +264,19 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
     // Frontier release newer than baked index
     const frontierIndex = {
       $schema: 'https://ods.fyi/schema/releases.v1.json',
-      trud_signing_key_fingerprints: ['71ED5964BAE53E83556320A42BE59DADEE84BEB0'],
+      name: 'ods-data',
+      source: indexSource,
       mirrors: [{ url: `${serverUrl}/v2/ods-data` }],
       releases: [
         {
-          trud_release_date: '2027-01-31',
-          trud_release_sha256: '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF',
-          trud_release_filesize_bytes: 38000000,
+          source: {
+            version: '2027-01-31',
+            hash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            bytes: 38000000,
+          },
           datasets: [
             {
-              dataset_version: '2.0.0',
+              version: '2027-01-31_2.0.0',
               manifest_digest: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
             },
           ],
@@ -281,7 +289,7 @@ describe('End-to-End Worker & OCI Registry via Miniflare', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache');
     const indexData = (await res.json()) as typeof frontierIndex;
-    expect(indexData.releases[0].trud_release_date).toBe('2027-01-31');
+    expect(indexData.releases[0].source.version).toBe('2027-01-31');
   });
 
   it('Acceptance 21: <name> stays opaque for multi-segment names', async () => {

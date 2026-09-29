@@ -1286,6 +1286,32 @@ pub fn create_nested_trud_zip(outer_path: &Path, entries: &[(&str, &[u8])]) {
     outer_zip.finish().unwrap();
 }
 
+/// A release index in the old format: the same `$schema`, TRUD-named fields. `ods` refuses it.
+#[allow(dead_code)]
+pub const OLD_FORMAT_INDEX: &[u8] = br#"{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "trud_signing_key_fingerprints": ["71ED5964BAE53E83556320A42BE59DADEE84BEB0"],
+  "mirrors": [{ "url": "https://ods.fyi/v2/ods-data" }],
+  "releases": [
+    {
+      "trud_release_date": "2026-09-25",
+      "trud_release_sha256": "CA0FEE7512F593ADA1FA9B95BF1372B41911167DA463A98FECF33ADFD86697E5",
+      "trud_release_filesize_bytes": 38138574,
+      "datasets": []
+    }
+  ]
+}"#;
+
+/// The index built into ods with no release rows: a repository whose index has recorded nothing
+/// yet, so a test's rows are the only ones, whatever `data/releases.json` holds.
+#[allow(dead_code)]
+pub fn empty_index() -> ods::index::OdsReleaseIndex {
+    ods::index::OdsReleaseIndex {
+        releases: Vec::new(),
+        ..ods::index::OdsReleaseIndex::baked().unwrap()
+    }
+}
+
 /// The ods that built every dataset row `make_v1_index` writes, unless a test sets its own.
 #[allow(dead_code)]
 pub const FIXTURE_TOOL_VERSION: &str = "0.1.0";
@@ -1299,51 +1325,48 @@ pub type ReleaseEntryFixture<'a> = (&'a str, &'a str, u64, &'a [DatasetFixture<'
 pub fn make_v1_index(
     releases: &[ReleaseEntryFixture],
 ) -> ods::index::OdsReleaseIndex {
+    // Fixtures name a release's hash as TRUD writes it (upper-case hex) and a dataset by its
+    // dataset version alone (`1.0.1`); the index holds `sha256:` + lower case, and
+    // `<date>_<dataset version>`.
     let rel_objs: Vec<ods::index::Release> = releases
         .iter()
         .map(|(date, sha256, size, datasets)| {
             let ds_objs: Vec<ods::index::Dataset> = datasets
                 .iter()
                 .map(|(ver, dig)| ods::index::Dataset {
-                    dataset_version: ver.to_string(),
+                    version: format!("{date}_{ver}"),
                     manifest_digest: dig.to_string(),
                     // A fixture size, same for every dataset this builds. A caller that cares
-                    // about the number sets `.dataset_filesize_bytes` on the built index after.
-                    dataset_filesize_bytes: 29_700_000,
+                    // about the number sets `.bytes` on the built index after.
+                    bytes: 29_700_000,
                     tool_version: FIXTURE_TOOL_VERSION.to_string(),
                     tool_git_sha: FIXTURE_TOOL_GIT_SHA.to_string(),
-                    dataset_doi: None,
+                    doi: None,
                     withdrawn: None,
                 })
                 .collect();
             ods::index::Release {
-                trud_release_date: date.to_string(),
-                trud_release_sha256: sha256.to_string(),
-                trud_release_filesize_bytes: *size,
+                source: ods::index::SourceRelease {
+                    version: date.to_string(),
+                    hash: ods::provenance::prefixed_sha256(sha256),
+                    bytes: *size,
+                    issues: Vec::new(),
+                },
                 datasets: ds_objs,
             }
         })
         .collect();
 
     ods::index::OdsReleaseIndex {
-        schema: ods::index::RELEASES_SCHEMA_V1_URL.to_string(),
-        trud_signing_key_fingerprints: vec![
-            "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
-        ],
-        mirrors: vec![
-            ods::index::MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            ods::index::MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
+        source: ods::index::IndexSource {
+            signing_key_fingerprints: Some(vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()]),
+            ..ods::index::OdsReleaseIndex::default().source
+        },
         releases: rel_objs,
+        ..ods::index::OdsReleaseIndex::default()
     }
 }
 
-/// Write a fixture releases.json for a zip file, matching the zip's sha256 and size.
-#[allow(dead_code)]
 pub fn write_index_for_zip(dir: &Path, date: &str, zip_path: &Path) -> PathBuf {
     let sha256 = ods::provenance::compute_file_sha256(zip_path).unwrap();
     let file_size = std::fs::metadata(zip_path).unwrap().len();
@@ -1446,7 +1469,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
     let tool_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let _ = git_cmd(tmp.path()).args(["tag", "--no-sign", &tool_tag]).output();
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -1458,7 +1481,7 @@ pub fn setup_synthetic_repo_and_release() -> (TempDir, PathBuf) {
 
     // Create data/releases.json in repo
     std::fs::create_dir_all(tmp.path().join("data")).unwrap();
-    let init_index = ods::index::OdsReleaseIndex::baked().unwrap();
+    let init_index = empty_index();
     std::fs::write(
         tmp.path().join("data").join("releases.json"),
         init_index.to_json_pretty().unwrap(),
@@ -1497,7 +1520,7 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
 
     // The file carries the release's provenance at dataset "1.0.1", not this build's own
     // `DATASET_VERSION`, as a release a later ods published would.
-    let embedded = ods::provenance::PullRecord::for_trud_release(
+    let embedded = ods::provenance::TrudArchivePackage::for_trud_release(
         "2026-08-31",
         "hscorgrefdataxml_data_7.0.0_20260831000001.zip",
         &zip_sha256,
@@ -1533,6 +1556,15 @@ pub fn setup_test_release_for_cite(withdrawn_reason: Option<&str>) -> (TempDir, 
     std::fs::create_dir_all(&future_rel).unwrap();
 
     (tmp, rel_dir)
+}
+
+/// Records known source issues on the first release row of the workspace cache at `workspace`,
+/// as a maintainer adds them to `data/releases.json` by hand.
+#[allow(dead_code)]
+pub fn add_source_issues(workspace: &Path, issues: &[&str]) {
+    let mut index = ods::index::OdsReleaseIndex::load_from_workspace(workspace).unwrap().unwrap();
+    index.releases[0].source.issues = issues.iter().map(|i| i.to_string()).collect();
+    ods::index::OdsReleaseIndex::save_to_workspace_bytes(index.to_json_pretty().unwrap().as_bytes(), workspace).unwrap();
 }
 
 /// A release directory holding NHS's four files for `date`, in the shape `ods trud pull` leaves
@@ -1572,7 +1604,7 @@ pub fn create_source_release_stamped(workspace: &Path, date: &str, stamp: &str) 
     let key = trud_dir.join("trud-public-key-2013-04-01.pgp");
     std::fs::write(&key, b"NHS's public key bytes").unwrap();
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &release_dir,
         date,
         &zip_name,
@@ -1613,7 +1645,7 @@ pub fn setup_cite_case_workspace(case_variant: &str) -> (TempDir, PathBuf) {
 
     // The object each case's files carry; `no_prov` is a `--force` build's.
     let embedded_at = |sha: &str, version: &str| {
-        ods::provenance::PullRecord::for_trud_release("2026-08-28", "archive.zip", sha, 38064419, &[])
+        ods::provenance::TrudArchivePackage::for_trud_release("2026-08-28", "archive.zip", sha, 38064419, &[])
             .unwrap()
             .embedded(version)
             .unwrap()
@@ -1677,7 +1709,7 @@ pub fn fixture_parquet_bytes(date: &str, sha: &str, version: &str, content: &str
 /// Writes `fixture_parquet_bytes`' file to `path`.
 #[allow(dead_code)]
 pub fn write_fixture_parquet(path: &Path, date: &str, sha: &str, version: &str, content: &str) {
-    let embedded = ods::provenance::PullRecord::for_trud_release(date, "archive.zip", sha, 37_983_173, &[])
+    let embedded = ods::provenance::TrudArchivePackage::for_trud_release(date, "archive.zip", sha, 37_983_173, &[])
         .unwrap()
         .embedded(version)
         .unwrap();

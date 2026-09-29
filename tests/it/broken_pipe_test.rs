@@ -13,7 +13,7 @@
 use crate::common;
 
 use chrono::NaiveDate;
-use ods::index::{Dataset, MirrorEntry, OdsReleaseIndex, Release, RELEASES_SCHEMA_V1_URL};
+use ods::index::{Dataset, OdsReleaseIndex, Release, SourceRelease};
 use std::io::Read;
 use std::process::Stdio;
 
@@ -25,36 +25,31 @@ fn make_large_index(count: usize) -> OdsReleaseIndex {
     let mut releases: Vec<Release> = (0..count)
         .map(|i| {
             let date = base + chrono::Duration::days(i as i64);
+            let version = date.format("%Y-%m-%d").to_string();
             Release {
-                trud_release_date: date.format("%Y-%m-%d").to_string(),
-                trud_release_sha256: "A".repeat(64),
-                trud_release_filesize_bytes: 1,
                 datasets: vec![Dataset {
-                    dataset_version: "1.0.1".to_string(),
+                    version: format!("{version}_1.0.1"),
                     manifest_digest: format!("sha256:{}", "b".repeat(64)),
-                    dataset_filesize_bytes: 1,
+                    bytes: 1,
                     tool_version: "0.1.0".to_string(),
                     tool_git_sha: "0".repeat(40),
-                    dataset_doi: None,
+                    doi: None,
                     withdrawn: None,
                 }],
+                source: SourceRelease {
+                    version,
+                    hash: format!("sha256:{}", "a".repeat(64)),
+                    bytes: 1,
+                    issues: Vec::new(),
+                },
             }
         })
         .collect();
     releases.reverse(); // index.validate() requires newest first
 
     OdsReleaseIndex {
-        schema: RELEASES_SCHEMA_V1_URL.to_string(),
-        trud_signing_key_fingerprints: vec!["71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string()],
-        mirrors: vec![
-            MirrorEntry {
-                url: "https://ods.fyi/v2/ods-data".to_string(),
-            },
-            MirrorEntry {
-                url: "https://ghcr.io/v2/olizilla/ods-data".to_string(),
-            },
-        ],
         releases,
+        ..OdsReleaseIndex::default()
     }
 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Sets up a synthetic release directory: `orgs.parquet` carrying the release's provenance, the
-/// pull record under `trud/`, and `NOTES.md` and `datapackage.json` alongside, to prove the
+/// TRUD archive package under `trud/`, and `NOTES.md` and `datapackage.json` alongside, to prove the
 /// manifest is made of the top-level `*.parquet` files alone.
 fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
@@ -35,7 +35,7 @@ fn setup_golden_release_dir() -> (TempDir, PathBuf) {
     ods::commands::parquet::write_stub_parquet(&rel_dir.join("orgs.parquet"), Some(&embedded), "orgs").unwrap();
     fs::write(rel_dir.join("datapackage.json"), b"{\"name\": \"test\", \"version\": \"1.0.1\"}").unwrap();
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",

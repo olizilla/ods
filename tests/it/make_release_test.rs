@@ -43,10 +43,11 @@ fn test_make_release_success_appends_to_releases_json() -> Result<()> {
 
     let expected_ver = ods::datapackage::DATASET_VERSION;
     assert_eq!(index.releases.len(), 1);
-    assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
+    assert_eq!(index.releases[0].source.version, "2026-07-31");
     assert_eq!(index.releases[0].datasets.len(), 1);
-    assert_eq!(index.releases[0].datasets[0].dataset_version, expected_ver);
-    assert_eq!(index.releases[0].datasets[0].dataset_doi, Some("10.5281/zenodo.12345".to_string()));
+    assert_eq!(index.releases[0].datasets[0].version, format!("2026-07-31_{expected_ver}"));
+    assert_eq!(index.releases[0].datasets[0].dataset_version(), expected_ver);
+    assert_eq!(index.releases[0].datasets[0].doi, Some("10.5281/zenodo.12345".to_string()));
     assert!(index.releases[0].datasets[0].manifest_digest.starts_with("sha256:"));
     assert_eq!(index.releases[0].datasets[0].tool_version, build.tool_version);
     assert_eq!(Some(index.releases[0].datasets[0].tool_git_sha.clone()), build.git_sha);
@@ -143,18 +144,21 @@ fn test_make_release_fails_on_duplicate_row_with_differing_manifest_digest() -> 
     let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(&rel_dir)?;
     let fixture_digest = manifest.digest()?;
 
-    let mut index = ods::index::OdsReleaseIndex::baked().unwrap();
+    let mut index = common::empty_index();
     index.releases.push(ods::index::Release {
-        trud_release_date: "2026-07-31".to_string(),
-        trud_release_sha256: zip_sha,
-        trud_release_filesize_bytes: 37983173,
+        source: ods::index::SourceRelease {
+            version: "2026-07-31".to_string(),
+            hash: ods::provenance::prefixed_sha256(&zip_sha),
+            bytes: 37983173,
+            issues: vec![],
+        },
         datasets: vec![ods::index::Dataset {
-            dataset_version: ver.to_string(),
+            version: format!("2026-07-31_{ver}"),
             manifest_digest: "sha256:0f2a000000000000000000000000000000000000000000000000000000000000".to_string(),
-            dataset_filesize_bytes: 29_700_000,
+            bytes: 29_700_000,
             tool_version: common::FIXTURE_TOOL_VERSION.to_string(),
             tool_git_sha: common::FIXTURE_TOOL_GIT_SHA.to_string(),
-            dataset_doi: None,
+            doi: None,
             withdrawn: None,
         }],
     });
@@ -453,9 +457,9 @@ fn test_make_release_records_only_the_release_it_records() -> Result<()> {
 
     assert_eq!(index.releases.len(), 1, "the index gains exactly the release being recorded");
     let row = &index.releases[0];
-    assert_eq!(row.trud_release_date, "2026-07-31");
-    assert_eq!(row.trud_release_sha256, prov.source_sha256_upper());
-    assert_eq!(row.trud_release_filesize_bytes, prov.source.bytes);
+    assert_eq!(row.source.version, "2026-07-31");
+    assert_eq!(row.source.hash, prov.source.hash);
+    assert_eq!(row.source.bytes, prov.source.bytes);
     println!("{}", serde_json::to_string(row)?);
     assert_eq!(row.datasets.len(), 1);
 
@@ -467,11 +471,14 @@ fn test_make_release_leaves_another_recorded_date_byte_for_byte() -> Result<()> 
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
+    let mut initial_index = common::empty_index();
     initial_index.releases.push(ods::index::Release {
-        trud_release_date: "2026-06-26".to_string(),
-        trud_release_sha256: "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233".to_string(),
-        trud_release_filesize_bytes: 37957865,
+        source: ods::index::SourceRelease {
+            version: "2026-06-26".to_string(),
+            hash: "sha256:712fe6c3810dc9c5bc6868f4f4038b0d8d8b92cc3efd260a318811debfe04233".to_string(),
+            bytes: 37957865,
+            issues: vec![],
+        },
         datasets: vec![],
     });
     fs::write(&index_file, initial_index.to_json_pretty()?)?;
@@ -485,9 +492,9 @@ fn test_make_release_leaves_another_recorded_date_byte_for_byte() -> Result<()> 
 
     let content = fs::read_to_string(&index_file)?;
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
-    let rel_26 = index.releases.iter().find(|r| r.trud_release_date == "2026-06-26").unwrap();
-    assert_eq!(rel_26.trud_release_sha256, "712FE6C3810DC9C5BC6868F4F4038B0D8D8B92CC3EFD260A318811DEBFE04233");
-    assert_eq!(rel_26.trud_release_filesize_bytes, 37957865);
+    let rel_26 = index.releases.iter().find(|r| r.source.version == "2026-06-26").unwrap();
+    assert_eq!(rel_26.source.hash, "sha256:712fe6c3810dc9c5bc6868f4f4038b0d8d8b92cc3efd260a318811debfe04233");
+    assert_eq!(rel_26.source.bytes, 37957865);
     assert!(rel_26.datasets.is_empty());
 
     Ok(())
@@ -498,11 +505,14 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     let index_file = tmp.path().join("data").join("releases.json");
-    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
+    let mut initial_index = common::empty_index();
     initial_index.releases.push(ods::index::Release {
-        trud_release_date: "2026-07-31".to_string(),
-        trud_release_sha256: "9999999999999999999999999999999999999999999999999999999999999999".to_string(),
-        trud_release_filesize_bytes: 37983173,
+        source: ods::index::SourceRelease {
+            version: "2026-07-31".to_string(),
+            hash: "sha256:9999999999999999999999999999999999999999999999999999999999999999".to_string(),
+            bytes: 37983173,
+            issues: vec![],
+        },
         datasets: vec![],
     });
     fs::write(&index_file, initial_index.to_json_pretty()?)?;
@@ -515,7 +525,7 @@ fn test_make_release_provenance_hash_differs_from_release_row_refuses() -> Resul
         &fixture_build_identity(tmp.path()),
     )?;
 
-    assert!(failures.iter().any(|f| f.contains("The release row's trud_release_sha256") && f.contains("does not match the Parquet files' source hash")));
+    assert!(failures.iter().any(|f| f.contains("The release row's source.hash") && f.contains("does not match the Parquet files' source hash")));
 
     Ok(())
 }
@@ -527,18 +537,21 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     let index_file = tmp.path().join("data").join("releases.json");
     let zip_sha = facts(&rel_dir).source_sha256_upper();
 
-    let mut initial_index = ods::index::OdsReleaseIndex::baked().unwrap();
+    let mut initial_index = common::empty_index();
     initial_index.releases.push(ods::index::Release {
-        trud_release_date: "2026-07-31".to_string(),
-        trud_release_sha256: zip_sha,
-        trud_release_filesize_bytes: 37983173,
+        source: ods::index::SourceRelease {
+            version: "2026-07-31".to_string(),
+            hash: ods::provenance::prefixed_sha256(&zip_sha),
+            bytes: 37983173,
+            issues: vec![],
+        },
         datasets: vec![ods::index::Dataset {
-            dataset_version: "0.0.1".to_string(),
+            version: "2026-07-31_0.0.1".to_string(),
             manifest_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string(),
-            dataset_filesize_bytes: 29_700_000,
+            bytes: 29_700_000,
             tool_version: common::FIXTURE_TOOL_VERSION.to_string(),
             tool_git_sha: common::FIXTURE_TOOL_GIT_SHA.to_string(),
-            dataset_doi: None,
+            doi: None,
             withdrawn: None,
         }],
     });
@@ -555,10 +568,10 @@ fn test_make_release_second_dataset_version_on_same_date_added_beside_first() ->
     let index: ods::index::OdsReleaseIndex = serde_json::from_str(&content)?;
 
     assert_eq!(index.releases.len(), 1);
-    assert_eq!(index.releases[0].trud_release_date, "2026-07-31");
+    assert_eq!(index.releases[0].source.version, "2026-07-31");
     assert_eq!(index.releases[0].datasets.len(), 2);
-    assert_eq!(index.releases[0].datasets[0].dataset_version, "0.0.1");
-    assert_eq!(index.releases[0].datasets[1].dataset_version, ods::datapackage::DATASET_VERSION);
+    assert_eq!(index.releases[0].datasets[0].version, "2026-07-31_0.0.1");
+    assert_eq!(index.releases[0].datasets[1].dataset_version(), ods::datapackage::DATASET_VERSION);
 
     Ok(())
 }
@@ -675,13 +688,13 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
     // Assert it validates and writes valid, non-empty fingerprints
     index.validate()?;
     assert!(
-        !index.trud_signing_key_fingerprints.is_empty(),
+        index.source.signing_key_fingerprints.as_ref().is_some_and(|f| !f.is_empty()),
         "Fingerprints must not be empty"
     );
     let baked = ods::index::OdsReleaseIndex::baked()?;
     assert_eq!(
-        index.trud_signing_key_fingerprints,
-        baked.trud_signing_key_fingerprints,
+        index.source.signing_key_fingerprints,
+        baked.source.signing_key_fingerprints,
         "Fingerprints must match baked release index"
     );
 

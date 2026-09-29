@@ -176,8 +176,13 @@ When publishing a monthly dataset cut, or rebuilding the back catalogue after a 
    $ op run --env-file=.r2.env -- rclone copyto data/releases.json r2:ods-fyi/releases.json
    ```
 
-If an earlier release for a date had errors, mark its row `withdrawn` by editing
+If an earlier release for a date had errors, mark its dataset row `withdrawn` by editing
 `data/releases.json` directly — no command writes that field yet.
+
+If a source release itself has a known error, write its page, `docs/source-issues/<id>.md`, list
+it in `docs/source-issues/README.md`, and add the ID to the release row's `source.issues` in
+`data/releases.json` by hand. A release with no dataset yet gets a row with an empty `datasets`
+list, its `source` from TRUD's word (the release's TRUD archive package, `trud/datapackage.json`). An ID, once added, stays.
 
 Why it works this way is in [docs/release-index.md](./docs/release-index.md#how-a-dataset-gets-into-the-index): the
 two runners, where each fact lives, the tag rules and the credentials split.
@@ -259,7 +264,7 @@ Per the OGL licence:
 - [docs/queries.md] — worked queries, single-release and across an archive
 - [docs/provenance.md] — what each release says about where it came from, and whose word it is
 - [docs/oci.md] — the OCI images: what's in a manifest, the tags, and fetching with stock tools
-- [docs/datapackage.md] — `datapackage.json`, the pull record, and our Data Package profile
+- [docs/datapackage.md] — `datapackage.json`, the TRUD archive package, and our Data Package profile
 
 [docs/parquet.md]: ./docs/parquet.md
 [docs/queries.md]: ./docs/queries.md

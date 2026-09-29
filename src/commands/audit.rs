@@ -341,9 +341,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     // ------------------------------------------------------------------------
     // SECTION 1: File integrity
     // ------------------------------------------------------------------------
-    let pull_record = crate::provenance::PullRecord::load_from_dir(&input_path).error_building_with_path()?;
+    let archive_package = crate::provenance::TrudArchivePackage::load_from_dir(&input_path).error_building_with_path()?;
     let (input_sha256, input_date, input_size) =
-        if let Some((record, _)) = &pull_record {
+        if let Some((record, _)) = &archive_package {
             (
                 record.archive_sha256_upper(),
                 Some(record.version.clone()),
@@ -365,9 +365,9 @@ fn audit_release(args: &Args, quiet_sub_output: bool) -> Result<Vec<String>> {
     let workspace_size = Some(workspace_facts.source.bytes);
 
     // The release's XML files, the pair `ods make` builds from: when a release zip holds more
-    // than one full or archive file, TRUD's release date chooses, from the pull record or else
+    // than one full or archive file, TRUD's release date chooses, from the TRUD archive package or else
     // the release the Parquet files say they are.
-    let trud_date = pull_record
+    let trud_date = archive_package
         .as_ref()
         .map(|(record, _)| record.version.clone())
         .unwrap_or_else(|| workspace_facts.release_date.clone());

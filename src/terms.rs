@@ -15,7 +15,7 @@ pub const LICENSE_TITLE: &str = "Open Government Licence v3.0";
 pub const LICENSE_URL: &str = "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/";
 
 /// NHS TRUD's landing page for this data category (item 341, ODS XML): the front door to
-/// relocate the source from, not a hash-stable URL. The pull record states it as the TRUD
+/// relocate the source from, not a hash-stable URL. The TRUD archive package states it as the TRUD
 /// release's `homepage`, and the embedded object's source `path` is derived from that.
 pub const LANDING_PAGE: &str =
     "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases";

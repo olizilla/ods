@@ -189,21 +189,7 @@ this way: "Everything with an operational close date that falls before the most 
 
 ### A code published twice
 
-Very rarely a code is a complete record twice, not a record and a stub. Three of the 96 TRUD releases from 2018-06-29 to 2026-08-28 show it, in two different ways:
-
-- **One organisation, re-recorded for a role change.** `T1201`, NHS LOGISTICS AUTHORITY, is in the archive of the 2023-03-31 and 2023-04-28 releases twice, with the same name, address and telephone: 2000-04-01 to 2003-03-31 holding `RO169`, then 2003-04-01 to 2004-09-30 holding `RO189`. A succession links `T1201` to itself.
-- **A code reused for a different organisation.** `FEF03` in the 2025-05-30 release is BARKING, HAVERING & BRENTWOOD DISTRICT LAUNDRY COMMON SERVICE AGENCY in the archive (closed 1993-03-31) and MCGILLS DONCASTER, a pharmacy opened 2025-04-23, in the full file. Nothing in either file references `FEF03`.
-
-NHS England has since resolved both the same way. In the 2026-08-28 release `T1201` appears once, for the later period, and `FEF03` once, as MCGILLS DONCASTER: the laundry record has gone from the archive.
-
-`ods` applies the same rule when it builds an earlier release. The full file's record wins over the archive's, and within one file the record whose operational period starts later wins. The dropped record is named on stderr at build time:
-
-```text
-! FEF03 has a complete record in both files: kept the full file's, dropped the archive's (1991-04-01 to 1993-03-31)
-! T1201 has two complete records in HSCOrgRefData_Archive_20230328.xml: kept 2003-04-01 to 2004-09-30, dropped 2000-04-01 to 2003-03-31
-```
-
-Two complete records in one file with no operational start on either, or with the same start, fail the build: the source hasn't said which is later, and `ods` doesn't guess. Two stubs for one code fail too.
+Very rarely a code is a complete record twice, not a record and a stub. Three of the 96 TRUD releases from 2018-06-29 to 2026-08-28 show it, in two different ways, each a known source issue with its own page: [`t1201-recorded-twice`](./source-issues/t1201-recorded-twice.md) (one organisation, re-recorded for a role change) and [`fef03-code-reused`](./source-issues/fef03-code-reused.md) (a code reused for a different organisation). `ods` keeps one complete record per code, the full file's over the archive's and then the later operational start, and names the record it drops on stderr; the pages have the rule and the evidence.
 
 ### A zip holding two full files
 
@@ -213,7 +199,7 @@ Each inner zip normally holds one XML file. One of the 98 TRUD releases from 201
 ! 2019-05-31: fullfile.zip holds 2 full files; built from HSCOrgRefData_Full_20190528.xml (2019-05-28), skipped HSCOrgRefData_Full_20190513.xml (2019-05-13)
 ```
 
-When more than one pair shares a date, `ods` takes the one published nearest TRUD's release date. A `--force` build has no TRUD date to go by, so there it refuses rather than guess, and so does a zip with no full file and archive file of the same date: the `✖` block names each file and its `PublicationDate`. An XML file loose in the release zip, outside both inner zips (2018-12-14 has one), isn't read.
+When more than one pair shares a date, `ods` takes the one published nearest TRUD's release date. A `--force` build has no TRUD date to go by, so there it refuses rather than guess, and so does a zip with no full file and archive file of the same date: the `✖` block names each file and its `PublicationDate`. An XML file loose in the release zip, outside both inner zips (2018-12-14 has one), isn't read. Both releases' cases are known source issues: [`two-full-files-2019-05`](./source-issues/two-full-files-2019-05.md) and [`loose-archive-xml-2018-12`](./source-issues/loose-archive-xml-2018-12.md).
 
 ## Status: active, and open
 

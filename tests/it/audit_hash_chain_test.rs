@@ -96,7 +96,7 @@ fn setup_valid_workspace_impl() -> (TempDir, std::path::PathBuf, std::path::Path
 
     let zip_sha256 = ods::provenance::compute_file_sha256(&outer_zip_path).unwrap();
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -215,9 +215,9 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
-    // Mutate the archive's hash in the pull record, trud/datapackage.json
-    let prov_path = ods::provenance::pull_record_path(&active_dir);
-    let mut prov: ods::provenance::PullRecord = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
+    // Mutate the archive's hash in the TRUD archive package, trud/datapackage.json
+    let prov_path = ods::provenance::trud_archive_package_path(&active_dir);
+    let mut prov: ods::provenance::TrudArchivePackage = serde_json::from_str(&fs::read_to_string(&prov_path)?)?;
     prov.resources[0].hash = format!("sha256:{}", "0".repeat(64));
     fs::write(&prov_path, prov.to_json_string()?)?;
 
@@ -454,7 +454,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -497,10 +497,10 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 fn test_audit_all_skips_unmade_releases() -> Result<()> {
     let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
 
-    // Create a second release that has trud/ and its pull record but NO derived parquet files
+    // Create a second release that has trud/ and its TRUD archive package but NO derived parquet files
     let unmade_dir = workspace_root.join("releases").join("2020-01-01");
     fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &unmade_dir,
         "2020-01-01",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -530,11 +530,11 @@ fn test_audit_all_fails_when_all_releases_skipped() -> Result<()> {
     let workspace_root = tmp.path().join("ods_data");
     ods::workspace::ensure_workspace_root(&workspace_root).unwrap();
 
-    // Create 2 releases that both have trud/ and a pull record but NO derived parquet files
+    // Create 2 releases that both have trud/ and a TRUD archive package but NO derived parquet files
     for date in &["2020-01-01", "2020-02-01"] {
         let unmade_dir = workspace_root.join("releases").join(date);
         fs::create_dir_all(unmade_dir.join("trud")).unwrap();
-        ods::provenance::write_pull_record(
+        ods::provenance::write_trud_archive_package(
             &unmade_dir,
             date,
             "hscorgrefdataxml_data_7.0.0_20260731000001.zip",
@@ -612,7 +612,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
 
     common::create_nested_trud_zip(&outer_zip_path, &[("fullfile.zip", &inner_zip_bytes)]);
 
-    ods::provenance::write_pull_record(
+    ods::provenance::write_trud_archive_package(
         &rel_dir,
         "2026-07-31",
         "hscorgrefdataxml_data_7.0.0_20260731000001.zip",

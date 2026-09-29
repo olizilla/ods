@@ -132,8 +132,8 @@ fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
     assert!(ws_index_file.exists());
     let ws_index = ods::index::OdsReleaseIndex::load_from_workspace(&workspace)?.unwrap();
     assert_eq!(ws_index.releases.len(), 1);
-    assert_eq!(ws_index.releases[0].trud_release_date, "2026-07-31");
-    assert_eq!(ws_index.releases[0].datasets[0].dataset_version, "1.0.1");
+    assert_eq!(ws_index.releases[0].source.version, "2026-07-31");
+    assert_eq!(ws_index.releases[0].datasets[0].dataset_version(), "1.0.1");
 
     Ok(())
 }

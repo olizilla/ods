@@ -1,8 +1,13 @@
 {
   "$schema": "https://ods.fyi/schema/releases.v1.json",
-  "trud_signing_key_fingerprints": [
-    "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
-  ],
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+    ]
+  },
   "mirrors": [
     {
       "url": "https://ods.fyi/v2/ods-data"
@@ -11,5 +16,61 @@
       "url": "https://ghcr.io/v2/olizilla/ods-data"
     }
   ],
-  "releases": []
+  "releases": [
+    {
+      "source": {
+        "version": "2025-05-30",
+        "hash": "sha256:b54caf77e699781b5294b209747f8658a3cdf0a4ee3ca917df2373344b7c1bcc",
+        "bytes": 36377546,
+        "issues": [
+          "fef03-code-reused"
+        ]
+      },
+      "datasets": []
+    },
+    {
+      "source": {
+        "version": "2023-04-28",
+        "hash": "sha256:1f94a6792076abc55bfddf425a70a0caf19b790b6eaf645ca3152300eb3c6cc3",
+        "bytes": 32291038,
+        "issues": [
+          "t1201-recorded-twice"
+        ]
+      },
+      "datasets": []
+    },
+    {
+      "source": {
+        "version": "2023-03-31",
+        "hash": "sha256:4ab1b44ad94b60a49e3c27ba9963e95f66b52b7e20a0410de57cba6a436bcb34",
+        "bytes": 32250558,
+        "issues": [
+          "t1201-recorded-twice"
+        ]
+      },
+      "datasets": []
+    },
+    {
+      "source": {
+        "version": "2019-05-31",
+        "hash": "sha256:b08383e789388b96fe91bed363913916e8e3639c2c59e3001798e9d761607f43",
+        "bytes": 39422486,
+        "issues": [
+          "two-full-files-2019-05"
+        ]
+      },
+      "datasets": []
+    },
+    {
+      "source": {
+        "version": "2018-12-14",
+        "hash": "sha256:83dc0394e4ed493a65aff3df666f0fbb48aa683da0137b5bf145623270ab48e1",
+        "bytes": 25458439,
+        "issues": [
+          "loose-archive-xml-2018-12"
+        ]
+      },
+      "datasets": []
+    }
+  ]
 }

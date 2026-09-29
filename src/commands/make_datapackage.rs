@@ -29,8 +29,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
-    let index = index_for_view(&release_dir, None)?;
-    let json = crate::datapackage::view_json(&release_dir, Some(&index))?;
+    let json = crate::datapackage::view_json(&release_dir)?;
 
     match args.output.as_deref() {
         Some(p) if p == Path::new("-") => {
@@ -50,19 +49,4 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The release index a view's DOI comes from: `index_arg` (`--index`), else the cached or
-/// built-in index of the workspace holding `release_dir` or the working directory, the way
-/// `ods cite` finds it. A DOI is a post-publish, index-only fact: the view may use it, since it
-/// isn't part of any digest. Never fetched.
-pub fn index_for_view(release_dir: &Path, index_arg: Option<&str>) -> Result<crate::index::OdsReleaseIndex> {
-    let cwd = std::env::current_dir()?;
-    let root = match crate::workspace::find_workspace_root_from(release_dir, None)? {
-        Some(ws) => ws,
-        None => crate::workspace::find_workspace_root_from(&cwd, None)?.unwrap_or(cwd),
-    };
-    let (index, _) =
-        crate::commands::pull::resolve_index(&root, index_arg, false, false, &crate::commands::pull::HttpOciFetcher)?;
-    Ok(index)
 }

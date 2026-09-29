@@ -47,20 +47,21 @@ pub struct Args {
 }
 
 /// `--format json`'s only stdout line for a dataset: the minimum CI and scripts need to record a
-/// build without re-deriving it from the OCI layout on disk.
+/// build without re-deriving it from the OCI layout on disk. `version` is the dataset's,
+/// `<source version>_<dataset version>`, as the release index and the Parquet metadata name it.
 #[derive(Serialize)]
 struct DigestReport {
     manifest_digest: String,
-    trud_release_date: String,
-    dataset_version: String,
+    source_version: String,
+    version: String,
 }
 
-/// `--format json`'s only stdout line for `--source` (an archive image): no `dataset_version`,
+/// `--format json`'s only stdout line for `--source` (an archive image): no dataset `version`,
 /// since an archive image isn't a dataset and has none.
 #[derive(Serialize)]
 struct SourceDigestReport {
     manifest_digest: String,
-    trud_release_date: String,
+    source_version: String,
 }
 
 /// Builds a release directory's OCI manifest from its Parquet files alone: the layers are the
@@ -160,7 +161,7 @@ fn run_source(args: Args) -> Result<()> {
             if args.format == OutputFormat::Json {
                 let report = SourceDigestReport {
                     manifest_digest: bundle.manifest_digest.clone(),
-                    trud_release_date: bundle.date.clone(),
+                    source_version: bundle.date.clone(),
                 };
                 println!("{}", serde_json::to_string(&report)?);
             }
@@ -322,8 +323,8 @@ pub fn run(args: Args) -> Result<()> {
     if args.format == OutputFormat::Json {
         let report = DigestReport {
             manifest_digest: manifest_digest.clone(),
-            trud_release_date: date.clone(),
-            dataset_version: version.clone(),
+            source_version: date.clone(),
+            version: format!("{}_{}", date, version),
         };
         println!("{}", serde_json::to_string(&report)?);
     }
