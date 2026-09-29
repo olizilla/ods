@@ -308,6 +308,20 @@ The 2026-09-25 release was published on 2026-09-21. The full file and archive fi
 from always share one date; 2019-05-31 holds a second, older full file, and
 [nhs.md](./nhs.md#a-zip-holding-two-full-files) says which is read.
 
+## Status: active, and open
+
+NHS England derives `status` from dates, [publishing the rule](https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Status_620600210.html) this way:
+
+> where Status is included the component remains Active until all Date elements of any Type (legal or operational) associated with that component also have their End elements populated with an End Date
+
+and, on [Organisation Data](https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/Organisation-Data_571324868.html):
+
+> A code can remain operationally open for a period of time following legal closure to enable system migration/shut down. ODS aim to limit the period in which a code remains operationally open after legal closure to less than 6 months, but there are exceptions.
+
+So `active` means "not yet closed in every sense", not "real today": a legally dissolved organisation stays `active` while its suppliers migrate off it, for as long as that takes. On 2026-08-28 that covers **4,908 rows** whose legal end has already passed the release date — and only **544 of them (11%)** are inside NHS's own six-month migration window. The rest are older: **3,434 sites** are more than two years past their legal end and still `active`.
+
+`ods` reports NHS's `status` exactly as published — in `orgs.parquet`, in `--all`'s Status column, and in `ods info`, which never filters. For its own default output, `ods find` and `ods role` filter on **open**: active, and not past its legal end as of the release's publication date (`status = 'active' AND (legal_end IS NULL OR legal_end > publication_date)`, compared to the date NHS published the *release*, never to today's — a dated release answers the same question forever). `--all` drops the filter and shows everything, `--sql` prints the clause verbatim, and the footer says how many rows a search held back and how to see them.
+
 ## Point-in-time queries
 
 `orgs.parquet` holds every organisation as of its `publication_date`, with its status then.

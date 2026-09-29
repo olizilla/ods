@@ -2,6 +2,19 @@
 
 This document details the internal structure, quirks, quality edge-cases, and parser gotchas of the official NHS Organisation Data Service (ODS) XML data distributions downloaded from TRUD (Technology Reference data Update Distribution).
 
+## The archive product
+
+A TRUD release holds two XML files, in two zips: `fullfile.zip` is what NHS England keeps in its live product, and `archive.zip` is what it has moved out. NHS England
+[documents the rule](https://www.odsdatasearchandexport.nhs.uk/referenceDataCatalogue/ODS-Archived-or-Deleted-Records_592550682.html)
+this way: "Everything with an operational close date that falls before the most recently defined cut-off is published in the archive product, instead of live data", currently "on or before 31 March 2017".
+
+- **The cut-off moves.** In April 2023 it went from 2012-03-31 to 2017-03-31, taking about 34,000 organisations from the full file to the archive in one release. A series built from the full file alone shows them vanishing in a month when they closed years earlier. The cut-off will move again.
+- **`refOnly` stubs.** A record that live data still references stays in the full file as a skeleton, `<Organisation refOnly="true">`, with its relationships and other content omitted. The archive does the same for live organisations that archived ones reference. In the 2026-08-28 release the full file holds 10,249 stubs and the archive 11,740, and every stub has its complete record in the other file.
+- **The two files in one zip.** On 2026-08-28 the full file holds 306,201 organisations (660 MB of XML) and the archive 86,705 (174 MB), each declaring its own `<RecordCount>` and matching it exactly. Together that is 392,906 records, 21,989 of them stubs, so 370,917 organisations.
+- **Deletion is separate, and rare.** Being archived doesn't mean being deleted, and archiving isn't how organisations leave the register: between the May and August 2026 releases 165 codes disappeared from the full file and none appeared in the archive.
+
+`ods` reads both files and merges them: where a code is in both, the complete record wins and the stub is dropped, and a code with two stubs fails the build. So the dataset doesn't inherit the split, and `orgs.parquet` needs no column saying which file a row came from. [parquet.md](./parquet.md) describes the result.
+
 ## Distribution and archive packaging
 
 The NHS ODS data is published monthly on TRUD as a single root `.zip` archive (e.g., `hscorgrefdataxml_data_5.0.0_YYYYMMDD000001.zip`).
@@ -110,5 +123,3 @@ Out of ~371,000 total entities in `orgs.parquet`, over 200,000 (e.g., local clin
 
 ### Reporting sub-ICB locations vs statutory ICB boards
 In TRUD XML, primary care practices are linked via `RE4` to Sub-ICB Locations (`RO319` / former CCG reporting codes — 213 distinct codes) rather than directly to the 42 Statutory Integrated Care Board bodies (`RO318`). Grouping raw `RE4` target codes yields 213 sub-reporting codes (e.g., `NHS NORTH CENTRAL LONDON ICB - 93C`). Finding the Statutory ICBs requires traversing relationships in `relationships.parquet`.
-
-For a complete breakdown of the organisational hierarchies across England, Scotland, Wales, Northern Ireland, and Crown Dependencies, see [docs/nhs.md](./nhs.md).
