@@ -1586,3 +1586,34 @@ fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()
 }
 
 
+
+/// A registry serves an OCI manifest only to a client that accepts one (ghcr.io answers 404
+/// MANIFEST_UNKNOWN to the default `Accept: */*`), so manifest requests say so. Blob requests keep
+/// the default.
+#[test]
+fn test_manifest_requests_accept_oci_manifests_and_blob_requests_keep_the_default() -> Result<()> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            requests.push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+        }
+        requests
+    });
+
+    ods::commands::pull::download_bytes_with_auth(&format!("{}/v2/ods-data/manifests/sha256:abc", base), None)?;
+    ods::commands::pull::download_bytes_with_auth(&format!("{}/v2/ods-data/blobs/sha256:abc", base), None)?;
+    let requests = server.join().unwrap();
+
+    assert!(requests[0].contains("accept: application/vnd.oci.image.manifest.v1+json\r\n"), "{}", requests[0]);
+    assert!(requests[1].contains("accept: */*\r\n"), "{}", requests[1]);
+    Ok(())
+}

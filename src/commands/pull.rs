@@ -264,6 +264,11 @@ pub fn download_bytes_with_auth_and_progress(
 
     loop {
         let mut req = agent.get(&current_url).set("User-Agent", "ods-cli");
+        // A registry serves an OCI manifest only to a client that says it accepts one: ghcr.io
+        // answers 404 MANIFEST_UNKNOWN to ureq's default `Accept: */*`. Blob requests keep it.
+        if current_url.contains("/manifests/") {
+            req = req.set("Accept", crate::oci::MEDIA_TYPE_MANIFEST);
+        }
         if let Some(ref tok) = current_token {
             req = req.set("Authorization", &format!("Bearer {}", tok));
         }
