@@ -7,7 +7,7 @@ pub const DATAPACKAGE_FILENAME: &str = "datapackage.json";
 /// `ods make` embeds it in every Parquet file, inside `version` (`<source release>_<dataset
 /// version>`), so bumping it changes every Parquet file and every manifest digest built
 /// afterwards.
-pub const DATASET_VERSION: &str = "0.1.0";
+pub const DATASET_VERSION: &str = "0.2.0";
 
 /// Our Data Package v2 extension profile: extends the published profile with
 /// `licenses[].attribution` and the Source properties `hash`, `bytes` and `_cache`.

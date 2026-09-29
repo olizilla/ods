@@ -4,7 +4,7 @@
   "title": "ods: NHS Organisation Data as verifiable Parquet files",
   "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
   "homepage": "https://ods.fyi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "licenses": [
     {
       "name": "OGL-UK-3.0",
