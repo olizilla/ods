@@ -312,3 +312,96 @@ fn test_release_dir_refuses_a_record_naming_a_missing_zip_with_the_repair() {
     );
     assert!(!tmp.path().join("out").join("orgs.parquet").exists());
 }
+
+// ---------------------------------------------------------------------------
+// `ods make -i <release dir>` writes into that release
+// ---------------------------------------------------------------------------
+
+/// A workspace holding two pulled, unbuilt releases with the pin on the older one.
+fn workspace_with_two_pulled_releases(tmp: &TempDir) -> std::path::PathBuf {
+    let ws_root = tmp.path().join("ods_data");
+    for (date, stamp) in [("2026-08-28", "20260828"), ("2026-09-25", "20260925")] {
+        let rel_dir = ws_root.join("releases").join(date);
+        let trud_dir = rel_dir.join("trud");
+        fs::create_dir_all(&trud_dir).unwrap();
+        let name = format!("hscorgrefdataxml_data_8.0.0_{stamp}000001.zip");
+        let zip_path = create_mock_zip(&trud_dir, &name);
+        let sha = ods::provenance::compute_file_sha256(&zip_path).unwrap();
+        ods::provenance::write_trud_archive_package(&rel_dir, date, &name, &sha, fs::metadata(&zip_path).unwrap().len(), &[]).unwrap();
+    }
+    let ws = ods::workspace::Workspace::open_or_create(Some(&ws_root)).unwrap();
+    ws.set_active("2026-08-28").unwrap();
+    ws_root
+}
+
+#[test]
+fn test_make_with_a_release_dir_builds_into_that_release_not_the_pinned_one() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = workspace_with_two_pulled_releases(&tmp);
+    let newer = ws_root.join("releases").join("2026-09-25");
+    let pinned = ws_root.join("releases").join("2026-08-28");
+
+    let output = ods_binary().current_dir(tmp.path()).arg("make").arg("-i").arg(&newer).output().expect("execute ods make");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "ods make -i <release dir> must build, got:\n{stderr}");
+
+    assert!(newer.join("orgs.parquet").is_file(), "the named release is built, got:\n{stderr}");
+    assert!(!pinned.join("orgs.parquet").exists(), "the pinned release is left alone");
+    assert!(!pinned.join("datapackage.json").exists(), "nothing is written into the pinned release");
+    let stray: Vec<_> = fs::read_dir(&pinned).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    assert_eq!(stray, ["trud"], "the pinned release still holds only trud/");
+}
+
+#[test]
+fn test_make_with_a_release_trud_dir_builds_into_the_release_holding_it() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = workspace_with_two_pulled_releases(&tmp);
+    let newer = ws_root.join("releases").join("2026-09-25");
+    let pinned = ws_root.join("releases").join("2026-08-28");
+
+    let output = ods_binary().current_dir(tmp.path()).arg("make").arg("-i").arg(newer.join("trud")).output().expect("execute ods make");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "ods make -i <release>/trud must build, got:\n{stderr}");
+
+    assert!(newer.join("orgs.parquet").is_file(), "the release holding trud/ is built, got:\n{stderr}");
+    assert!(!newer.join("trud").join("orgs.parquet").exists(), "nothing lands inside trud/");
+    assert!(!pinned.join("orgs.parquet").exists(), "the pinned release is left alone");
+}
+
+#[test]
+fn test_make_with_a_relative_trud_dir_builds_into_the_release_holding_it() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = workspace_with_two_pulled_releases(&tmp);
+    let newer = ws_root.join("releases").join("2026-09-25");
+
+    // From inside trud/, `-i .` names it with no parent component to strip.
+    let output = ods_binary().current_dir(newer.join("trud")).arg("make").arg("-i").arg(".").output().expect("execute ods make");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "ods make -i . from trud/ must build, got:\n{stderr}");
+    assert!(newer.join("orgs.parquet").is_file(), "the release holding trud/ is built, got:\n{stderr}");
+    assert!(!newer.join("trud").join("orgs.parquet").exists(), "nothing lands inside trud/");
+}
+
+#[test]
+fn test_make_output_flag_still_wins_over_the_release_dir() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = workspace_with_two_pulled_releases(&tmp);
+    let newer = ws_root.join("releases").join("2026-09-25");
+    let out = tmp.path().join("out");
+
+    let output = ods_binary().current_dir(tmp.path()).arg("make").arg("-i").arg(&newer).arg("-o").arg(&out).output().expect("execute ods make");
+    assert!(output.status.success(), "got:\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(out.join("orgs.parquet").is_file(), "-o names where the files go");
+    assert!(!newer.join("orgs.parquet").exists(), "the release dir isn't written when -o is given");
+}
+
+#[test]
+fn test_make_with_no_input_still_builds_the_active_release() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = workspace_with_two_pulled_releases(&tmp);
+
+    let output = ods_binary().current_dir(&ws_root).arg("make").output().expect("execute ods make");
+    assert!(output.status.success(), "got:\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(ws_root.join("releases/2026-08-28/orgs.parquet").is_file(), "the pinned release is built");
+    assert!(!ws_root.join("releases/2026-09-25/orgs.parquet").exists(), "the other release is left alone");
+}

@@ -31,8 +31,8 @@ Commands:
   help         Print this message or the help of the given subcommand(s)
 
 Options:
-  -i, --input <INPUT>    TRUD XML file or ZIP archive input path [default: active release in workspace]
-  -o, --output <OUTPUT>  Output release directory path [default: active release in workspace]
+  -i, --input <INPUT>    TRUD ZIP archive or release directory [default: active release in workspace]
+  -o, --output <OUTPUT>  Output release directory path [default: the -i release, else the active one]
   -q, --quiet            Show errors and the settled report only
       --no-progress      Disable interactive live progress animations
   -v, --verbose          Show how many stubs the merge set aside

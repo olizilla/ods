@@ -20,11 +20,11 @@ const BATCH_SIZE: usize = 50_000;
 
 #[derive(Parser, Debug, Clone, Default)]
 pub struct Args {
-    /// TRUD XML file or ZIP archive input path [default: the active release]
+    /// TRUD ZIP archive or release directory [default: active release in workspace]
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Output Parquet directory path [default: the active release]
+    /// Output release directory path [default: the -i release, else the active one]
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 
@@ -113,10 +113,24 @@ pub fn run_before_process_exit(args: Args) -> Result<PathBuf> {
     build(args, true)
 }
 
+/// The release directory a directory input belongs to: the input itself, or the directory
+/// holding it when the input is a release's `trud/`.
+fn release_dir_of_input(input: &Path) -> PathBuf {
+    let absolute = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+    if absolute.file_name().and_then(|n| n.to_str()) != Some("trud") {
+        return input.to_path_buf();
+    }
+    match input.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() && input.file_name().is_some() => parent.to_path_buf(),
+        _ => absolute.parent().map(Path::to_path_buf).unwrap_or(absolute),
+    }
+}
+
 fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
     let (quiet, no_progress, verbose) = (args.quiet, args.no_progress, args.verbose);
     // Warnings wait for the report: a `!` line above a repainting block would be painted over.
     let mut held_warnings: Vec<String> = Vec::new();
+    let explicit_input = args.input.is_some();
     let (input_path, inferred_date) = match args.input {
         Some(p) => (p, None),
         None => {
@@ -220,9 +234,13 @@ fn build(args: Args, abandon_memory: bool) -> Result<PathBuf> {
             );
         }
 
-        output_path = match args.output {
-            Some(p) => p,
-            None => {
+        // Without `-o` the Parquet files go into the release being built: the active one when
+        // `ods make` is given no `-i`, otherwise the release directory named (or the one holding
+        // the `trud/` named). A pinned release elsewhere in the workspace isn't touched.
+        output_path = match (args.output, explicit_input) {
+            (Some(p), _) => p,
+            (None, true) => release_dir_of_input(&input_path),
+            (None, false) => {
                 let ws = crate::workspace::Workspace::open(None)?;
                 let (_, active_dir) = ws.active_release()?;
                 active_dir

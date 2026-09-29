@@ -10,6 +10,15 @@ pub struct ReleaseInfo {
     pub path: PathBuf,
     pub is_active: bool,
     pub has_parquet: bool,
+    /// The release directory holds `trud/`: TRUD's archive, pulled.
+    pub has_trud: bool,
+}
+
+impl ReleaseInfo {
+    /// Pulled from TRUD and not built: `trud/` and no Parquet files.
+    pub fn is_pulled_not_built(&self) -> bool {
+        self.has_trud && !self.has_parquet
+    }
 }
 
 /// Validates whether a directory contains a valid `_releases.json` file.
@@ -857,11 +866,13 @@ fn list_releases(workspace_root: &Path) -> Result<Vec<ReleaseInfo>> {
             if let Some(date) = path.file_name().and_then(|n| n.to_str()) {
                 let is_active = active_date.as_deref() == Some(date);
                 let has_parquet = path.join("orgs.parquet").exists() || path.join("parquet").join("orgs.parquet").exists();
+                let has_trud = path.join("trud").is_dir();
                 releases.push(ReleaseInfo {
                     date: date.to_string(),
                     path,
                     is_active,
                     has_parquet,
+                    has_trud,
                 });
             }
         }

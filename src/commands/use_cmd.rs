@@ -108,6 +108,13 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
                 release_date
             )?;
         }
+        crate::workspace::VerificationOutcome::NoFiles if release_dir.join("trud").is_dir() => {
+            writeln!(
+                err_writer,
+                "! releases/{} isn't built yet: it holds TRUD's archive and no Parquet files\n  Build it: ods make",
+                release_date
+            )?;
+        }
         crate::workspace::VerificationOutcome::NoFiles => {
             writeln!(
                 err_writer,
@@ -124,22 +131,34 @@ pub fn run_with_writer<W: std::io::Write>(args: Args, mut err_writer: W) -> Resu
 
 /// Resolves the `ods use` argument to a release date, before anything else runs.
 ///
-/// `latest` pins the newest local release: the latest-dated directory under `releases/`
-/// whose name is a `YYYY-MM-DD` date and which holds `orgs.parquet`. A `YYYY-MM-DD` date is
-/// returned as-is (its not-found handling happens later). Anything else is refused.
+/// `latest` pins the newest built local release: the latest-dated directory under `releases/`
+/// whose name is a `YYYY-MM-DD` date and which holds `orgs.parquet`. With none built, the refusal
+/// lists the ones pulled from TRUD and not built, and how to build the newest. A `YYYY-MM-DD` date
+/// is returned as-is (its not-found handling happens later). Anything else is refused.
 fn resolve_release_date(ws: &Workspace, workspace_root: &std::path::Path, arg: &str) -> Result<String> {
     if arg == "latest" {
-        let releases = ws.releases()?;
-        return releases
+        let releases: Vec<_> = ws
+            .releases()?
             .into_iter()
-            .find(|r| chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d").is_ok() && r.has_parquet)
-            .map(|r| r.date)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "✖ No releases in {}\n  Run: ods pull",
-                    workspace_root.display()
-                )
-            });
+            .filter(|r| chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d").is_ok())
+            .collect();
+        if let Some(built) = releases.iter().find(|r| r.has_parquet) {
+            return Ok(built.date.clone());
+        }
+        let pulled: Vec<_> = releases.iter().filter(|r| r.is_pulled_not_built()).collect();
+        let Some(newest) = pulled.first() else {
+            bail!("✖ No releases in {}\n  Run: ods pull", workspace_root.display());
+        };
+        let mut workspace = crate::workspace::relative_to_cwd(workspace_root);
+        if workspace.as_os_str().is_empty() {
+            workspace = std::path::PathBuf::from(".");
+        }
+        bail!(
+            "✖ No built releases in {}\n  Pulled from TRUD, not built yet: {}\n  Build the newest: ods make -i {}",
+            workspace.display(),
+            pulled.iter().map(|r| r.date.as_str()).collect::<Vec<_>>().join(", "),
+            crate::workspace::relative_to_cwd(&newest.path).display()
+        );
     }
 
     if chrono::NaiveDate::parse_from_str(arg, "%Y-%m-%d").is_ok() {

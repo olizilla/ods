@@ -348,3 +348,89 @@ fn test_use_refuses_files_that_disagree_and_leaves_current_unchanged() {
     let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
     assert_eq!(ws.active_release().unwrap().0, "2026-06-26", "a refused release must not move the pin");
 }
+
+// ---------------------------------------------------------------------------
+// Releases pulled from TRUD and not built
+// ---------------------------------------------------------------------------
+
+/// Writes `releases/<date>/trud/` holding a mock archive and its TRUD archive package: pulled, not built.
+fn pull_release(workspace: &std::path::Path, date: &str) {
+    let rel_dir = workspace.join("releases").join(date);
+    let trud_dir = rel_dir.join("trud");
+    fs::create_dir_all(&trud_dir).unwrap();
+    let name = format!("hscorgrefdataxml_data_8.0.0_{}000001.zip", date.replace('-', ""));
+    let zip = common::create_mock_trud_zip(&trud_dir, &name);
+    let sha = ods::provenance::compute_file_sha256(&zip).unwrap();
+    ods::provenance::write_trud_archive_package(&rel_dir, date, &name, &sha, fs::metadata(&zip).unwrap().len(), &[]).unwrap();
+}
+
+#[test]
+fn test_use_latest_in_empty_workspace_says_to_pull() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+
+    let output = ods_cmd().current_dir(tmp.path()).args(["use", "latest"]).output().expect("run ods use latest");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The path is the workspace as `ods` opened it (macOS's /var is /private/var).
+    let shown = format!("✖ No releases in {}\n  Run: ods pull\n", fs::canonicalize(tmp.path()).unwrap().join("ods_data").display());
+    assert_eq!(stderr, shown);
+}
+
+#[test]
+fn test_use_latest_with_only_pulled_releases_lists_them_and_says_how_to_build_the_newest() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+    pull_release(&workspace, "2026-08-28");
+    pull_release(&workspace, "2026-09-25");
+    // A pinned older release, as `ods trud pull 2026-08-28` leaves it.
+    ods::workspace::Workspace::open(Some(&workspace)).unwrap().set_active("2026-08-28").unwrap();
+
+    let output = ods_cmd().current_dir(tmp.path()).args(["use", "latest"]).output().expect("run ods use latest");
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "✖ No built releases in ods_data\n  Pulled from TRUD, not built yet: 2026-09-25, 2026-08-28\n  Build the newest: ods make -i ods_data/releases/2026-09-25\n"
+    );
+    let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
+    assert_eq!(ws.active_release().unwrap().0, "2026-08-28", "the pin doesn't move");
+}
+
+#[test]
+fn test_use_latest_prefers_a_built_release_over_newer_pulled_ones() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+    pull_release(&workspace, "2026-09-25");
+    let built = workspace.join("releases").join("2026-08-28");
+    fs::create_dir_all(&built).unwrap();
+    common::write_fixture_parquet(&built.join("orgs.parquet"), "2026-08-28", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy content");
+
+    let output = ods_cmd().current_dir(tmp.path()).args(["use", "latest"]).output().expect("run ods use latest");
+
+    assert!(output.status.success(), "got: {:?}", output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("✓ Active release set to 2026-08-28"));
+}
+
+#[test]
+fn test_use_date_on_a_pulled_release_pins_it_and_says_to_run_make() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    ods::workspace::ensure_workspace_marker(&workspace).unwrap();
+    pull_release(&workspace, "2026-08-28");
+    pull_release(&workspace, "2026-09-25");
+
+    let output = ods_cmd().current_dir(tmp.path()).args(["use", "2026-09-25"]).output().expect("run ods use");
+
+    assert!(output.status.success(), "got: {:?}", output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "✓ Active release set to 2026-09-25\n  current → releases/2026-09-25\n! releases/2026-09-25 isn't built yet: it holds TRUD's archive and no Parquet files\n  Build it: ods make\n"
+    );
+    let ws = ods::workspace::Workspace::open(Some(&workspace)).unwrap();
+    assert_eq!(ws.active_release().unwrap().0, "2026-09-25");
+}

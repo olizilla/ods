@@ -194,7 +194,12 @@ Generates target projections (Parquet tables) from raw TRUD XML data.
 ```bash
 ods make                  # Generate target projections (Parquet tables)
 ods make parquet          # Generate Parquet tables from TRUD XML
+ods make -i ods_data/releases/2026-09-25   # Build that release, into that release
 ```
+
+`ods make` builds the active release. Given a release directory (or its `trud/`) with `-i`, it
+builds that one and writes the Parquet files beside its `trud/`, whichever release is active; `-o`
+names somewhere else.
 
 ## Contributing
 

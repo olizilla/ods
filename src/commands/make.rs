@@ -7,11 +7,11 @@ pub struct MakeArgs {
     #[command(subcommand)]
     pub command: Option<MakeCommand>,
 
-    /// TRUD XML file or ZIP archive input path [default: active release in workspace]
+    /// TRUD ZIP archive or release directory [default: active release in workspace]
     #[arg(long, short)]
     pub input: Option<PathBuf>,
 
-    /// Output release directory path [default: active release in workspace]
+    /// Output release directory path [default: the -i release, else the active one]
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 
