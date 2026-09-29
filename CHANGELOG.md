@@ -2,6 +2,13 @@
 
 All notable changes to the `ods` tool will be documented in this file.
 
+## [0.2.3] - 2026-09-29
+
+Builds dataset 0.2.0.
+
+### Changed
+- The zip dependency uses only the features ods needs (deflate), so it builds without cmake.
+
 ## [0.2.2] - 2026-09-29
 
 Builds dataset 0.2.0.

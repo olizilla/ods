@@ -1,7 +1,7 @@
 [package]
 name = "ods"
 # The tool version. The one place it is set. Bumping it needs a '## [x.y.z]' entry in CHANGELOG.md.
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Fetch, query, cite and reproduce NHS ODS data as verifiable Parquet"
 license = "MIT"
