@@ -274,6 +274,23 @@ pub fn download_bytes_with_auth_and_progress(
         }
 
         match req.call() {
+            // ureq returns a 3xx as Ok when it isn't following redirects itself (this agent has
+            // redirects(0)). ghcr.io answers every blob with a 307 to its storage host.
+            Ok(resp) | Err(ureq::Error::Status(_, resp)) if (300..400).contains(&resp.status()) => {
+                if redirect_count >= 10 {
+                    bail!("Too many redirects for {}", url);
+                }
+                redirect_count += 1;
+                let location = resp.header("location")
+                    .ok_or_else(|| anyhow::anyhow!("Redirect missing Location header"))?;
+
+                let orig_host = current_url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+                let new_host = location.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+                if orig_host != new_host {
+                    current_token = None;
+                }
+                current_url = location.to_string();
+            }
             Ok(resp) => {
                 let mut bytes = Vec::new();
                 let mut reader = resp.into_reader();
@@ -302,21 +319,6 @@ pub fn download_bytes_with_auth_and_progress(
                     }
                 }
                 bail!("401 Unauthorized for URL: {}", current_url);
-            }
-            Err(ureq::Error::Status(301..=308, resp)) => {
-                if redirect_count >= 10 {
-                    bail!("Too many redirects for {}", url);
-                }
-                redirect_count += 1;
-                let location = resp.header("location")
-                    .ok_or_else(|| anyhow::anyhow!("Redirect missing Location header"))?;
-
-                let orig_host = current_url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
-                let new_host = location.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
-                if orig_host != new_host {
-                    current_token = None;
-                }
-                current_url = location.to_string();
             }
             Err(e) => return Err(e.into()),
         }

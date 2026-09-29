@@ -1617,3 +1617,34 @@ fn test_manifest_requests_accept_oci_manifests_and_blob_requests_keep_the_defaul
     assert!(requests[1].contains("accept: */*\r\n"), "{}", requests[1]);
     Ok(())
 }
+
+/// ghcr.io answers a blob request with a 307 and an empty body, pointing at its storage host.
+/// The download follows it and returns the storage host's bytes, not the redirect's empty body.
+#[test]
+fn test_a_blob_redirect_is_followed_to_the_bytes() -> Result<()> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    let storage = format!("{}/storage/abc", base);
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response = if request.starts_with("GET /v2/ods-data/blobs/") {
+                format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", storage)
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbytes".to_string()
+            };
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+
+    let bytes = ods::commands::pull::download_bytes_with_auth(&format!("{}/v2/ods-data/blobs/sha256:abc", base), None)?;
+    server.join().unwrap();
+    assert_eq!(bytes, b"bytes");
+    Ok(())
+}
