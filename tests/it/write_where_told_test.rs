@@ -9,10 +9,6 @@ use crate::common;
 
 use common::{create_mock_trud_zip_with_index, ods_binary};
 use std::fs;
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::sync::mpsc;
-use std::thread;
 use tempfile::TempDir;
 
 fn empty_dir_listing(dir: &std::path::Path) -> Vec<String> {
@@ -22,34 +18,8 @@ fn empty_dir_listing(dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// A one-shot local HTTP server serving `response_body` for every request, so a
-/// test can exercise the "successful fetch" branch of `resolve_index`
-/// without reaching the real network. Stop it by sending on the returned channel.
-fn run_mock_http_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let port = listener.local_addr().unwrap().port();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        loop {
-            if rx.try_recv().is_ok() {
-                break;
-            }
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
-                    response_body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(&response_body);
-                let _ = stream.flush();
-            }
-            thread::sleep(std::time::Duration::from_millis(10));
-        }
-    });
-    (format!("http://127.0.0.1:{}/releases.json", port), tx)
+fn run_mock_http_server(response_body: Vec<u8>) -> (String, std::sync::mpsc::Sender<()>) {
+    common::serve_json(response_body, "/releases.json")
 }
 
 // ---------------------------------------------------------------------------

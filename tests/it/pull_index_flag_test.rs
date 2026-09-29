@@ -25,30 +25,7 @@ fn sample_release_index() -> OdsReleaseIndex {
 }
 
 fn run_mock_http_server(response_body: Vec<u8>) -> (String, mpsc::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let port = listener.local_addr().unwrap().port();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        loop {
-            if rx.try_recv().is_ok() {
-                break;
-            }
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
-                    response_body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(&response_body);
-                let _ = stream.flush();
-            }
-            thread::sleep(std::time::Duration::from_millis(10));
-        }
-    });
-    (format!("http://127.0.0.1:{}/myindex.json", port), tx)
+    common::serve_json(response_body, "/myindex.json")
 }
 
 fn extract_http_path(buf: &[u8]) -> Option<String> {

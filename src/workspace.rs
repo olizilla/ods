@@ -101,6 +101,15 @@ pub fn embedded_release_date(dir: &Path) -> Option<String> {
     }
 }
 
+/// The dataset version `dir`'s Parquet files carry, when they carry provenance. Read from the
+/// files alone: it is there whether or not the release verifies against an index.
+pub fn embedded_dataset_version(dir: &Path) -> Option<String> {
+    match crate::provenance::read_release(dir) {
+        Ok(crate::provenance::ReleaseRecord::Provenanced(facts)) => Some(facts.dataset_version),
+        _ => None,
+    }
+}
+
 /// The release date `dir`'s TRUD archive package names, for a release pulled from TRUD.
 fn trud_archive_package_date(dir: &Path) -> Option<String> {
     crate::provenance::TrudArchivePackage::load_from_file(&crate::provenance::trud_archive_package_path(dir))
@@ -333,61 +342,70 @@ impl Workspace {
     }
 }
 
-/// Resolves the root workspace directory from a specific starting path:
+/// Whether `dir` is a workspace root: it holds a valid `_releases.json`, or a readable release.
+/// A readable release without the marker is noted on stderr, once per process.
+fn is_workspace_root(dir: &Path) -> Result<bool> {
+    if check_releases_json(dir)? {
+        return Ok(true);
+    }
+    if has_readable_release(dir) {
+        emit_cache_notice_if_needed(dir);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Whether `rel`, a path relative to a workspace root, is one the workspace defines:
+/// `releases`, `releases/<date>`, `releases/<date>/trud`, `releases/<date>/trud/oci` and anything
+/// below it, or `current` (the active release's pointer) with the same paths below it.
+fn is_workspace_defined_path(rel: &Path) -> bool {
+    let Some(parts) = rel.components().map(|c| c.as_os_str().to_str()).collect::<Option<Vec<&str>>>() else {
+        return false;
+    };
+    // What a release directory holds that a command may be run from: its `trud/`, and TRUD's OCI layout in it
+    fn in_release(rest: &[&str]) -> bool {
+        matches!(rest, [] | ["trud"] | ["trud", "oci", ..])
+    }
+    match parts.as_slice() {
+        ["releases"] => true,
+        ["releases", date, rest @ ..] => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() && in_release(rest),
+        ["current", rest @ ..] => in_release(rest),
+        _ => false,
+    }
+}
+
+/// Resolves the root workspace directory from a specific starting path. It walks up only while
+/// the path is recognisably inside a workspace:
 /// 1. Explicit wins. A path from --workspace / -i / -o is the root. No further checks.
-/// 2. Walk up. For each ancestor a, starting at start and ascending:
-///    a/_releases.json validates -> root = a.
-///    a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
-///    Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
+/// 2. `start` is a workspace root, or `start/ods_data` is: that is the root.
+/// 3. `start` is inside a workspace root at a path the workspace defines (`releases/`,
+///    `releases/<date>/`, `releases/<date>/trud/`, `releases/<date>/trud/oci/…`, `current`):
+///    the root the path is relative to.
+/// 4. Anything else: no workspace. A `.git` directory, `$HOME` and the directories between
+///    are not consulted, so a directory made inside a project that has an `ods_data`
+///    doesn't reach it.
 ///
 /// Returns None if no workspace root was found.
 pub fn find_workspace_root_from(start: &Path, explicit: Option<&Path>) -> Result<Option<PathBuf>> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
-    find_workspace_root_from_with_home(start, explicit, home.as_deref())
-}
-
-/// Inner resolver function allowing custom home boundary for unit testing.
-pub fn find_workspace_root_from_with_home(
-    start: &Path,
-    explicit: Option<&Path>,
-    home: Option<&Path>,
-) -> Result<Option<PathBuf>> {
-    // 1. Explicit wins. No further checks.
     if let Some(path) = explicit {
         return Ok(Some(path.to_path_buf()));
     }
 
-    // 2. Walk up. For each ancestor a, starting at start and ascending:
-    // a/_releases.json validates -> root = a.
-    // a/<DEFAULT_WORKSPACE_DIR>/_releases.json validates -> root = a/<DEFAULT_WORKSPACE_DIR>.
-    // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
-    let mut current = Some(start);
-    while let Some(a) = current {
-        if check_releases_json(a)? {
-            return Ok(Some(a.to_path_buf()));
-        }
-        if has_readable_release(a) {
-            emit_cache_notice_if_needed(a);
-            return Ok(Some(a.to_path_buf()));
-        }
+    if is_workspace_root(start)? {
+        return Ok(Some(start.to_path_buf()));
+    }
+    let default_ws = start.join(DEFAULT_WORKSPACE_DIR);
+    if is_workspace_root(&default_ws)? {
+        return Ok(Some(default_ws));
+    }
 
-        let default_ws = a.join(DEFAULT_WORKSPACE_DIR);
-        if check_releases_json(&default_ws)? {
-            return Ok(Some(default_ws));
+    for root in start.ancestors().skip(1) {
+        let Ok(rel) = start.strip_prefix(root) else {
+            continue;
+        };
+        if is_workspace_defined_path(rel) && is_workspace_root(root)? {
+            return Ok(Some(root.to_path_buf()));
         }
-        if has_readable_release(&default_ws) {
-            emit_cache_notice_if_needed(&default_ws);
-            return Ok(Some(default_ws));
-        }
-
-        // Stop before ascending past: the first a that contains a .git entry, $HOME, or the filesystem root.
-        if a.join(".git").exists() || home.is_some_and(|h| a == h) {
-            break;
-        }
-
-        current = a.parent();
     }
 
     Ok(None)

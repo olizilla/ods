@@ -182,8 +182,20 @@ fn normalise_durations(text: &str) -> String {
     result
 }
 
+/// What snapshots show in place of the running tool's version, so a tool bump doesn't break them.
+const TOOL_VERSION_PLACEHOLDER: &str = "<tool-version>";
+
+/// Replaces the running tool's version where a citation names the tool: `ods (Version x.y.z)`.
+/// A dataset's version, or another tool's, that happens to match is left alone.
+fn normalise_tool_version(text: &str) -> String {
+    text.replace(
+        &format!("ods (Version {})", env!("CARGO_PKG_VERSION")),
+        &format!("ods (Version {})", TOOL_VERSION_PLACEHOLDER),
+    )
+}
+
 fn normalise_snapshot(text: &str) -> String {
-    normalise_durations(text)
+    normalise_tool_version(&normalise_durations(text))
 }
 
 fn parse_cases(content: &str) -> Vec<String> {

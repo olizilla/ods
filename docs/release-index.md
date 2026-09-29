@@ -6,6 +6,8 @@ It's baked into every `ods` binary at compile time (`data/releases.json`), serve
 
 ## Example
 
+`data/releases.json`, trimmed to its two newest releases (the real index lists more):
+
 ```json
 {
   "$schema": "https://ods.fyi/schema/releases.v1.json",
@@ -30,11 +32,11 @@ It's baked into every `ods` binary at compile time (`data/releases.json`), serve
       },
       "datasets": [
         {
-          "version": "2026-09-25_0.1.0",
-          "manifest_digest": "sha256:ba543ac4856f62d186c8fbeae1579d46e9196b2fd5268c5b96788db3964821a8",
-          "bytes": 34326790,
-          "tool_version": "0.2.0",
-          "tool_git_sha": "0123456789abcdef0123456789abcdef01234567"
+          "version": "2026-09-25_0.2.0",
+          "manifest_digest": "sha256:0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0",
+          "bytes": 29604347,
+          "tool_version": "0.2.2",
+          "tool_git_sha": "ce15c5f2c87eb7535cf33020e8b5ecfb53421a68"
         }
       ]
     },
@@ -78,15 +80,15 @@ One fact has one name wherever it appears: the index, the Parquet files' embedde
 | its archive's size | `releases[].source.bytes` | `sources[0].bytes` | |
 | the dataset | `datasets[].version` | `version` | `org.opencontainers.image.version`, the tag |
 
-Hashes are `sha256:` and lower-case hex everywhere. A dataset's `version` is `<source version>_<dataset version>`, e.g. `2026-09-25_0.1.0`: the part after the `_` is the dataset version, the SemVer that says which schema the files have ([parquet.md](./parquet.md)). A dataset row's `bytes` is the sum of its manifest's layer sizes, what `ods pull` downloads. `manifest_digest`, `tool_version` and `tool_git_sha` (the `ods` that built it), and the optional `doi` and `withdrawn`, are the index's own. Nothing in the shape is particular to TRUD, so the same index serves every dataset family.
+Hashes are `sha256:` and lower-case hex everywhere. A dataset's `version` is `<source version>_<dataset version>`, e.g. `2026-09-25_0.2.0`: the part after the `_` is the dataset version, the SemVer that says which schema the files have ([parquet.md](./parquet.md)). A dataset row's `bytes` is the sum of its manifest's layer sizes, what `ods pull` downloads. `manifest_digest`, `tool_version` and `tool_git_sha` (the `ods` that built it), and the optional `doi` and `withdrawn`, are the index's own. Nothing in the shape is particular to TRUD, so the same index serves every dataset family.
 
 ## How a dataset gets into the index
 
 **CI is the hash oracle.** `.github/workflows/build-dataset.yml` builds each date twice, on
-`macos-latest` and `ubuntu-latest`, from the same NHS archive cached in
+`macos-15` and `ubuntu-24.04`, from the same NHS archive cached in
 `ghcr.io/olizilla/nhs-ods-xml`. Only a date whose two manifest digests agree is pushed, re-pulled
 from ghcr.io and checked, and attested. The run ends with a candidate `releases.json`. The
-maintainer tries it with `ods pull --index`, mirrors it to ods.fyi, and commits it as
+maintainer mirrors it to ods.fyi, tries it with `ods pull --index`, and commits it as
 `data/releases.json`. That commit is what blesses a dataset. The steps are in
 [CONTRIBUTING.md](../CONTRIBUTING.md#dataset-releases).
 

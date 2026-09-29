@@ -16,9 +16,9 @@ $ ods make datapackage -o - | jq 'del(.resources[].schema)'
 ```json
 {
   "$schema": "https://ods.fyi/schema/ods-datapackage.v1.json",
-  "purl": "pkg:oci/ods-data@sha256%3Aace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c?repository_url=ods.fyi%2Fods-data",
+  "purl": "pkg:oci/ods-data@sha256%3A0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0?repository_url=ods.fyi%2Fods-data",
   "name": "ods-data",
-  "version": "2026-09-25_0.1.0",
+  "version": "2026-09-25_0.2.0",
   "title": "ods: NHS Organisation Data as verifiable Parquet files",
   "description": "All the organisations and sites in the NHS Organisation Data Service, as queryable & verifiable Parquet files. Deterministic projections of NHS England's ODS XML release on NHS TRUD, published by ods.fyi.",
   "homepage": "https://ods.fyi",
@@ -55,7 +55,7 @@ $ ods make datapackage -o - | jq 'del(.resources[].schema)'
       "format": "parquet",
       "mediatype": "application/vnd.apache.parquet",
       "bytes": 16393148,
-      "hash": "sha256:fe972999b2fcfe7497967e0c3f38c4a450aab08cfa5de79654d0bf3c1429b4b6"
+      "hash": "sha256:2cd9c8924ab419845c5f1426997af8eabeac9c9579d6e09cbf13380d21826651"
     },
     "… roles, relationships, successions …"
   ]

@@ -41,7 +41,7 @@ jobs:
   # The worker e2e and the smoke test both need ./target/debug/ods
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

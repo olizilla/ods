@@ -325,6 +325,19 @@ pub fn download_bytes_with_auth_and_progress(
     }
 }
 
+/// The line `ods pull` prints as it replaces a local release that isn't the one it is pulling.
+/// A release whose files carry a different dataset version, one an older `ods` built, is said to
+/// be that; anything else says only what was found, and that the files don't verify: no more is
+/// known.
+fn replacing_note(date: &str, held_version: Option<&str>, pulling_version: &str, otherwise: &str) -> String {
+    match held_version {
+        Some(held) if held != pulling_version => {
+            format!("* releases/{date} holds dataset {held}; replacing it with the published {pulling_version}")
+        }
+        _ => format!("* existing releases/{date} {otherwise}"),
+    }
+}
+
 pub fn run(args: Args) -> Result<()> {
     let fetcher = HttpOciFetcher;
     // Find a workspace without creating one: `--list` only reads, and
@@ -895,20 +908,24 @@ fn pull_single_release<F: OciBlobFetcher, W: Write>(
                     }
                     return Ok(());
                 } else {
-                    writeln!(
-                        ctx.writer,
-                        "* existing releases/{} digest mismatch; re-fetching from registry...",
-                        release.source.version
-                    )?;
+                    let note = replacing_note(
+                        &release.source.version,
+                        crate::workspace::embedded_dataset_version(&rel_dir).as_deref(),
+                        dataset.dataset_version(),
+                        "digest mismatch; re-fetching from registry...",
+                    );
+                    writeln!(ctx.writer, "{note}")?;
                     let _ = fs::remove_dir_all(&rel_dir);
                 }
             }
             _ => {
-                writeln!(
-                    ctx.writer,
-                    "* existing releases/{} corrupted or invalid; re-fetching from registry...",
-                    release.source.version
-                )?;
+                let note = replacing_note(
+                    &release.source.version,
+                    crate::workspace::embedded_dataset_version(&rel_dir).as_deref(),
+                    dataset.dataset_version(),
+                    "doesn't verify; re-fetching from registry...",
+                );
+                writeln!(ctx.writer, "{note}")?;
                 let _ = fs::remove_dir_all(&rel_dir);
             }
         }

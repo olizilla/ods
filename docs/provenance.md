@@ -4,8 +4,8 @@ Every Parquet file `ods` writes where it came from in it's metadata.
 A loose `orgs.parquet` is still citable and DuckDB can read it without `ods`:
 
 ```console
-$ duckdb -c "SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WHERE decode(key) = 'datapackage'"
-{"name":"ods-data","version":"2026-09-25_0.1.0","licenses":[{"name":"OGL-UK-3.0","path":"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/","title":"Open Government Licence v3.0","attribution":"Contains information from NHS England, licensed under the current version of the Open Government Licence."}],"contributors":[{"title":"NHS England","roles":["rightsHolder"]},{"title":"NHS TRUD","roles":["distributor"]}],"sources":[{"title":"NHS Organisation Data Service XML Data","version":"2026-09-25","path":"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases","hash":"sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5","bytes":38138574}]}
+$ duckdb -noheader -list -c "SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WHERE decode(key) = 'datapackage'"
+{"name":"ods-data","version":"2026-09-25_0.2.0","licenses":[{"name":"OGL-UK-3.0","path":"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/","title":"Open Government Licence v3.0","attribution":"Contains information from NHS England, licensed under the current version of the Open Government Licence."}],"contributors":[{"title":"NHS England","roles":["rightsHolder"]},{"title":"NHS TRUD","roles":["distributor"]}],"sources":[{"title":"NHS Organisation Data Service XML Data","version":"2026-09-25","path":"https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases","hash":"sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5","bytes":38138574}]}
 ```
 
 Everything `ods` says about a release comes from there. The file hashes in the [OCI
@@ -19,7 +19,7 @@ vocabulary, with its keys in this order. All four files carry the same object:
 ```json
 {
   "name": "ods-data",
-  "version": "2026-09-25_0.1.0",
+  "version": "2026-09-25_0.2.0",
   "licenses": [
     {
       "name": "OGL-UK-3.0",
@@ -63,15 +63,15 @@ Nothing about which `ods` built a release, or how the zip was checked, is in it 
 The `ods` that built a published dataset is on its [release index](./release-index.md) row
 (`tool_version`, `tool_git_sha`) and in the CI attestation for its manifest digest.
 
-Files that don't carry the provenance are flagged by `ods` commands.
+Files that don't carry the same provenance are flagged by `ods` commands. Here `orgs.parquet`'s footer was edited to say `0.2.1`, as if it came from another build:
 
 ```console
 $ ods use 2026-09-25
 ✖ The Parquet files in ods_data/releases/2026-09-25 don't carry the same provenance
-  orgs.parquet           2026-09-25_0.1.1  (datapackage sha256:e6ee2e0ea7fd…)
-  relationships.parquet  2026-09-25_0.1.0  (datapackage sha256:eb593d7b8e21…)
-  roles.parquet          2026-09-25_0.1.0  (datapackage sha256:eb593d7b8e21…)
-  successions.parquet    2026-09-25_0.1.0  (datapackage sha256:eb593d7b8e21…)
+  orgs.parquet           2026-09-25_0.2.1  (datapackage sha256:6b811daf9c43…)
+  relationships.parquet  2026-09-25_0.2.0  (datapackage sha256:06a0630a20c6…)
+  roles.parquet          2026-09-25_0.2.0  (datapackage sha256:06a0630a20c6…)
+  successions.parquet    2026-09-25_0.2.0  (datapackage sha256:06a0630a20c6…)
   A release's files all come from one build. Pull it again with `ods pull --force`, or rebuild it with `ods make`.
 ```
 

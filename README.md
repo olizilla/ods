@@ -62,13 +62,13 @@ Datasets are published as a content-addressed [OCI Images](https://opencontainer
 
 ```console
 $ ods pull
-  2026-08-28    ████████████████████  28MB   6 files  from ods.fyi  in 4.1s
-  dataset       ods-data/2026-08-28_0.1.0
+  2026-09-25    ████████████████████  28MB   4 files  from ods.fyi  in 6.0s
+  dataset       ods-data/2026-09-25_0.2.0
   verified      sha256 from releases.json
-  linked        current → releases/2026-08-28
+  linked        current → releases/2026-09-25
 
 $ ods find --gp --in SW9
-* Source: releases/2026-08-28/orgs.parquet
+* Source: releases/2026-09-25/orgs.parquet
 * --gp: RO76, RO227, RO315 — GP Practice, Scottish GP Practice, Northern Ireland GP Practice
 ┌──────────┬──────────────────────────────┬──────────┬────────────────┬───────┬──────────┐
 │ ODS Code ┆ Name                         ┆ Postcode ┆ Roles          ┆ Class ┆ Matched  │

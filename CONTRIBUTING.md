@@ -134,45 +134,144 @@ first. Tests run offline.
 
 ## Release process
 
-We separate **tool releases** from **dataset releases**:
+We separate **tool releases** from **dataset releases**. A dataset release builds from a tool
+release's tag, so the tool comes first. You need `gh`, `oras`, `jq`, `duckdb` and, to publish to
+ods.fyi, `op` (1Password) and `rclone`.
 
 ### Tool releases (`scripts/release-tool.sh`)
+
 When shipping a new version of the `ods` binary:
-- Bump `version` in `Cargo.toml`, with a matching entry in `CHANGELOG.md`.
-- Run `scripts/release-tool.sh`. It refuses on a dirty tree, a branch other than `main`, a
-  missing changelog entry, or a failing `cargo test`.
-- Run `scripts/release-tool.sh --publish` to tag `v<version>`, push the tag, and create the
-  GitHub release from that changelog entry. It doesn't build or attach binaries — there's no
-  workflow for that yet.
+
+1. If the schema cut changes, bump the dataset version: `scripts/bump-version.sh dataset <x.y.z>`.
+   It rewrites `DATASET_VERSION`, `data/datapackage.json` and the worker's expected keys.
+2. Bump the tool: `scripts/bump-version.sh tool <x.y.z>`. A dataset bump needs a tool bump at least
+   as large (patch, minor or major to match), so bump it even when the tool has no other change.
+   `scripts/bump-version.sh` with no arguments prints both versions.
+3. Add the `CHANGELOG.md` entry, newest first, as `## [<x.y.z>] - <date>`. Its first line names the
+   dataset version the tool builds, e.g. `Builds dataset 0.2.0.`
+4. Commit and push to `main`.
+5. `scripts/release-tool.sh` is a dry run. It refuses on a dirty tree, a branch other than `main`,
+   an existing tag, a missing changelog entry or a failing `cargo test`, and prints the release notes.
+6. `scripts/release-tool.sh --publish` tags `v<version>`, pushes the tag and creates the GitHub
+   release from that changelog entry. It doesn't build or attach binaries: there's no workflow for
+   that yet.
+
+A tag can never move: a repository ruleset forbids it. A fix to a released tool is a new patch
+version, not a re-tag.
 
 ### Dataset releases
-When publishing a monthly dataset cut, or rebuilding the back catalogue after a schema change:
 
-1. Rehearse, then release. `repository` defaults to `ods-data-rehearsal`: dispatch there first
-   to try the whole run, from any ref (`main` included, so a CI fix can be tried before it's
-   tagged); its `ods make release --rehearsal` skips only the check that the tag points at the
-   commit. Then dispatch from the tool tag `v<version>` with `ods-data` to publish for real: a
-   release refuses to run from anywhere else. Set `dates` to `latest` for a new TRUD release, to
-   one or more `YYYY-MM-DD` dates, or to `all` to rebuild the back catalogue.
+When publishing a monthly dataset cut, or rebuilding the back catalogue after a schema change.
+
+**Before a package's first run.** A run never creates a dataset package on ghcr.io, so it has to
+exist first. Once for each of `ods-data-rehearsal` and `ods-data`:
+
+1. Create it by hand with a placeholder push:
+   `oras push ghcr.io/olizilla/<repository>:init README.md`
+2. On the package's page, under *Manage Actions access*, add `olizilla/ods` with the Write role.
+3. Under *Package settings*, make it Public.
+4. Wait until a stranger can read it. `scripts/ci-check-package-public.sh <repository>` checks
+   that one can, and the workflow runs it first, so a package that isn't readable fails the run
+   before it builds anything.
+
+**The steps**
+
+1. Rehearse, then release. `repository` defaults to `ods-data-rehearsal`: dispatch there first to
+   try the whole run, from any ref (`main` included, so a CI fix can be tried before it's tagged):
+   ```console
+   $ gh workflow run build-dataset.yml --ref main -f dates=<date> -f repository=ods-data-rehearsal
+   ```
+   Its `ods make release --rehearsal` skips only the check that the tag points at the commit. Then
+   dispatch from the tool tag `v<version>` with `ods-data` to publish for real: a release refuses
+   to run from anywhere else.
+   ```console
+   $ gh workflow run build-dataset.yml --ref v<version> -f dates=<date> -f repository=ods-data
+   ```
+   Set `dates` to `latest` for a new TRUD release, to one or more space-separated `YYYY-MM-DD`
+   dates, or to `all` to rebuild the back catalogue.
 2. The workflow fetches any archive not yet cached in `ghcr.io/olizilla/nhs-ods-xml` from TRUD,
-   checks NHS's signature, and caches it there. It then builds each date on `macos-latest` and
-   `ubuntu-latest`, and refuses to go on if their manifest digests disagree. The Ubuntu build
+   checks NHS's signature, and caches it there. It then builds each date on `macos-15` and
+   `ubuntu-24.04`, and refuses to go on if their manifest digests disagree. The Ubuntu build
    pushes the dataset to `ghcr.io`, pulls it back to re-verify it, and attests it. The run ends
    with a `candidate` artifact: `candidate.json`, which is `data/releases.json` with this run's
    rows added.
-3. Download the `candidate` artifact and try it before publishing anything to `ods.fyi`:
+3. Download it, from the repo root, using the run's id (the number in the run's URL):
    ```console
-   $ ods pull --index candidate.json
+   $ gh run download <run-id> -n candidate
+   ```
+   It lands as `candidate.json`, which `.gitignore` covers.
+4. Copy the dataset's blobs and manifests to `ods.fyi`'s R2 bucket. `<dataset version>` is the
+   dataset's, e.g. `0.2.0`, not the tool's. The first command is a dry run: it pulls the image
+   from ghcr.io into a scratch directory, checks its manifest digest against `candidate.json`'s row
+   and prints the bucket keys in upload order. The second uploads them, then fetches every key
+   back from ods.fyi and checks each digest.
+   ```console
+   $ scripts/mirror-to-ods-fyi.sh <date> <dataset version> --index candidate.json
+   $ scripts/mirror-to-ods-fyi.sh <date> <dataset version> --index candidate.json --publish
+   ```
+   The blobs are named by their digests, so publishing them announces nothing: only
+   `releases.json` does that, and this script never uploads it.
+5. Try it before blessing it. From an empty directory *outside the repo*, pull with the candidate as
+   the index. Its mirrors list ods.fyi first, so this reads what you just uploaded:
+   ```console
+   $ cd "$(mktemp -d)"          # in fish: cd (mktemp -d)
+   $ ods pull --index <path to repo>/candidate.json
    $ ods find sedbergh
+   $ ods cite
    ```
-4. Copy each date's blobs to `ods.fyi`'s R2 bucket:
+6. Bless it. Copy `candidate.json` over `data/releases.json`, commit that one file by name, push,
+   then upload it. Git holds the canonical copy, so it goes first.
    ```console
-   $ scripts/mirror-to-ods-fyi.sh <date> <version> --index candidate.json --publish
-   ```
-5. Commit `candidate.json` as the new `data/releases.json`, then bless it:
-   ```console
+   $ cp candidate.json data/releases.json
+   $ git commit data/releases.json -m "data: release <date>_<dataset version>"
+   $ git push
    $ op run --env-file=.r2.env -- rclone copyto data/releases.json r2:ods-fyi/releases.json
    ```
+7. Check it as a stranger would, from the repo root and then from an empty directory outside it:
+   ```console
+   $ curl -s https://ods.fyi/releases.json | cmp - data/releases.json
+   $ duckdb -c "SELECT count(*) FROM 'https://ods.fyi/orgs.parquet'"
+   $ cd "$(mktemp -d)"          # in fish: cd (mktemp -d)
+   $ ods pull
+   $ ods find sedbergh
+   $ ods cite
+   $ gh attestation verify oci://ghcr.io/olizilla/ods-data@<manifest digest> \
+       -R olizilla/ods --signer-workflow olizilla/ods/.github/workflows/build-dataset.yml
+   ```
+   The manifest digest is on the release's row in `data/releases.json`.
+8. Update the site, which shows the release's figures and terminal captures.
+   ```console
+   $ scripts/site-figures.sh ods_data/releases/<date>
+   ```
+   writes `site/src/data/release.json` from the release's Parquet files in your workspace
+   (`ods pull` puts them there). Re-capture `site/src/data/terminal/cite.txt` from `ods cite`,
+   keeping its `❯ ods cite` first line and its trailing `...`, and the two `find-gp-*.txt`
+   captures from the commands on their `❯` lines. Commit, then deploy the worker, whose `deploy` script
+   builds the site first:
+   ```console
+   $ cd worker && npm run deploy
+   ```
+
+**Credentials for R2.** `.r2.env` in the repo root (git-ignored, like every `*.env`) defines
+rclone's `r2` remote as environment variables. The secret is a 1Password reference that `op run`
+resolves, so no secret is on disk:
+
+```
+RCLONE_CONFIG_R2_TYPE=s3
+RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+RCLONE_CONFIG_R2_ENDPOINT=https://<account id>.r2.cloudflarestorage.com
+RCLONE_CONFIG_R2_REGION=auto
+RCLONE_CONFIG_R2_ACCESS_KEY_ID=<access key id>
+RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="op://<vault>/<item>/<field>"
+RCLONE_CONFIG_R2_ACL=private
+RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
+```
+
+Check it lists the bucket:
+
+```console
+$ op run --env-file=.r2.env -- rclone lsf r2:ods-fyi --max-depth 1
+```
 
 If an earlier release for a date had errors, mark its dataset row `withdrawn` by editing
 `data/releases.json` directly — no command writes that field yet.

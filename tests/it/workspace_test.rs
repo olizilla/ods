@@ -3,7 +3,7 @@ use crate::common;
 use common::create_mock_trud_zip;
 use ods::commands::{parquet, find, diff};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[test]
@@ -177,17 +177,17 @@ ods::provenance::write_trud_archive_package(
         "current pointer must resolve to enclosing workspace root"
     );
 
-    // 4. Walk up
-    // 4a. Ancestor directly validates
+    // 4. No walking up from anywhere else. A directory below a workspace root that the
+    // workspace doesn't define is not inside it.
     let deep_child = ws.join("subdir").join("nested").join("deep");
     fs::create_dir_all(&deep_child).unwrap();
     assert_eq!(
         ods::workspace::find_workspace_root_from(&deep_child, None).unwrap(),
-        Some(ws.clone()),
-        "deep child must walk up to find ancestor with valid _releases.json"
+        None,
+        "a directory the workspace doesn't define must not walk up to the workspace"
     );
 
-    // 4b. Ancestor contains default workspace (ods_data/_releases.json)
+    // 4b. An ancestor's ods_data is not reached from below the ancestor
     let repo_dir = tmp.path().join("my-repo");
     let repo_ods_data = repo_dir.join("ods_data");
     fs::create_dir_all(&repo_ods_data).unwrap();
@@ -196,39 +196,200 @@ ods::provenance::write_trud_archive_package(
     fs::create_dir_all(&repo_child).unwrap();
 
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&repo_child, None).unwrap(),
+        ods::workspace::find_workspace_root_from(&repo_dir, None).unwrap(),
         Some(repo_ods_data.clone()),
-        "child in repo must find repo/ods_data"
+        "the directory holding ods_data finds it"
     );
-
-    // 4c. Stop boundary: .git entry prevents ascending past repo
-    let outer_dir = tmp.path().join("outer_with_ws");
-    fs::create_dir_all(&outer_dir).unwrap();
-    fs::write(outer_dir.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
-
-    let inner_repo = outer_dir.join("inner_git_repo");
-    let inner_child = inner_repo.join("sub").join("dir");
-    fs::create_dir_all(&inner_child).unwrap();
-    fs::create_dir_all(inner_repo.join(".git")).unwrap();
-
-    // inner_repo has .git but NO workspace inside it. Discovery starting inside inner_child
-    // must stop at inner_repo (.git boundary) and must NOT discover outer_dir
     assert_eq!(
-        ods::workspace::find_workspace_root_from(&inner_child, None).unwrap(),
+        ods::workspace::find_workspace_root_from(&repo_child, None).unwrap(),
         None,
-        ".git boundary must stop upward traversal before ascending past git root"
+        "a child of the directory holding ods_data must not reach it"
     );
-
-    // 4d. Stop boundary: $HOME prevents ascending past home
-    let fake_home = outer_dir.join("fake_home");
-    let home_child = fake_home.join("workspace").join("project");
-    fs::create_dir_all(&home_child).unwrap();
-
+    let repo_tmp = repo_dir.join("tmp");
+    fs::create_dir_all(&repo_tmp).unwrap();
     assert_eq!(
-        ods::workspace::find_workspace_root_from_with_home(&home_child, None, Some(&fake_home)).unwrap(),
+        ods::workspace::find_workspace_root_from(&repo_tmp, None).unwrap(),
         None,
-        "$HOME boundary must stop upward traversal before ascending past home"
+        "a directory made inside the project must not reach the project's ods_data"
     );
+}
+
+/// A workspace `root/ods_data` holding release `2026-07-31` (with a TRUD archive package), and
+/// `root/tmp` beside it.
+fn workspace_with_a_release_and_a_sibling() -> (TempDir, PathBuf, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ws = root.join("ods_data");
+    fs::create_dir_all(root.join("tmp")).unwrap();
+    let rel_dir = ws.join("releases").join("2026-07-31");
+    fs::create_dir_all(rel_dir.join("trud").join("oci").join("blobs").join("sha256")).unwrap();
+    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    (tmp, root, ws)
+}
+
+#[test]
+fn test_discovery_from_the_directory_holding_ods_data() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    assert_eq!(ods::workspace::find_workspace_root_from(&root, None).unwrap(), Some(ws.clone()));
+    assert_eq!(
+        ods::workspace::find_workspace_root_from(&ws, None).unwrap(),
+        Some(ws),
+        "a workspace root is its own root"
+    );
+}
+
+#[test]
+fn test_discovery_from_the_paths_a_workspace_defines() {
+    let (_tmp, _root, ws) = workspace_with_a_release_and_a_sibling();
+    let release = ws.join("releases").join("2026-07-31");
+    for dir in [
+        ws.join("releases"),
+        release.clone(),
+        release.join("trud"),
+        release.join("trud").join("oci"),
+        release.join("trud").join("oci").join("blobs").join("sha256"),
+    ] {
+        assert_eq!(
+            ods::workspace::find_workspace_root_from(&dir, None).unwrap(),
+            Some(ws.clone()),
+            "{} is inside the workspace at a path it defines",
+            dir.display()
+        );
+    }
+}
+
+#[test]
+fn test_discovery_from_anywhere_else_finds_no_workspace() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    let release = ws.join("releases").join("2026-07-31");
+    let not_defined = release.join("scratch");
+    let not_a_date = ws.join("releases").join("candidate");
+    let beside_oci = release.join("trud").join("other");
+    for dir in [root.join("tmp"), not_defined.clone(), not_a_date.clone(), beside_oci.clone()] {
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            ods::workspace::find_workspace_root_from(&dir, None).unwrap(),
+            None,
+            "{} is not at a path the workspace defines",
+            dir.display()
+        );
+    }
+}
+
+fn run_ods_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    common::ods_cmd().current_dir(dir).args(args).output().expect("run ods")
+}
+
+#[test]
+fn test_find_from_a_directory_beside_ods_data_refuses() {
+    let (_tmp, root, _ws) = workspace_with_a_release_and_a_sibling();
+    let output = run_ods_in(&root.join("tmp"), &["find", "--code", "RJY12"]);
+    assert!(!output.status.success(), "find outside a workspace refuses");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no ods workspace found"), "stderr: {}", stderr);
+}
+
+#[test]
+fn test_pull_list_from_a_directory_beside_ods_data_leaves_it_alone() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    let index = common::make_v1_index(&[(
+        "2026-08-28",
+        "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933",
+        37_000_000,
+        &[("1.0.0", "sha256:0f2a000000000000000000000000000000000000000000000000000000000000")],
+    )]);
+    let served = serde_json::to_vec_pretty(&index).unwrap();
+    let (url, stop_server) = common::serve_json(served.clone(), "/releases.json");
+    let pull_list = |dir: &Path| {
+        common::ods_cmd().current_dir(dir).env("ODS_RELEASE_INDEX_URL", &url).args(["pull", "--list"]).output().expect("run ods pull --list")
+    };
+
+    let output = pull_list(&root.join("tmp"));
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        fs::read(ws.join("_releases.json")).unwrap(),
+        ods::index::BAKED_RELEASES_JSON_BYTES,
+        "listing from beside the workspace doesn't refresh its cached index"
+    );
+    assert!(!root.join("tmp").join("ods_data").exists(), "listing writes nothing");
+
+    let output = pull_list(&root);
+    let _ = stop_server.send(());
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(fs::read(ws.join("_releases.json")).unwrap(), served, "listing from the directory holding ods_data refreshes its cache");
+}
+
+/// `ods trud pull --local-archive` installs a release, so it creates a workspace when it finds none.
+fn trud_pull_local_archive_in(dir: &Path) -> std::process::Output {
+    let src = TempDir::new().unwrap();
+    let (zip_path, index_path) =
+        common::create_mock_trud_zip_with_index(src.path(), "hscorgrefdataxml_data_7.0.0_20260731000001.zip", "2026-07-31");
+    common::ods_cmd()
+        .current_dir(dir)
+        .args(["trud", "pull", "--local-archive"])
+        .arg(&zip_path)
+        .arg("--index")
+        .arg(&index_path)
+        .output()
+        .expect("run ods trud pull")
+}
+
+#[test]
+fn test_pull_from_a_directory_beside_ods_data_creates_its_own() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    let before: Vec<String> = { let mut v = names_in(&ws); v.sort(); v };
+
+    let output = trud_pull_local_archive_in(&root.join("tmp"));
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        root.join("tmp").join("ods_data").join("releases").join("2026-07-31").is_dir(),
+        "the pull installs into ./ods_data of the directory it ran in"
+    );
+    let mut after = names_in(&ws);
+    after.sort();
+    assert_eq!(before, after, "the neighbouring workspace is left as it was");
+}
+
+#[test]
+fn test_pull_from_the_directory_holding_ods_data_uses_it() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    let output = trud_pull_local_archive_in(&root);
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(ws.join("releases").join("2026-07-31").join("trud").is_dir());
+    assert!(ws.join("current").exists(), "the pulled release is pinned current in root/ods_data");
+    assert!(!root.join("ods_data").join("ods_data").exists());
+}
+
+#[test]
+fn test_pull_from_inside_a_release_uses_the_workspace() {
+    let (_tmp, root, ws) = workspace_with_a_release_and_a_sibling();
+    let trud_dir = ws.join("releases").join("2026-07-31").join("trud");
+    let output = trud_pull_local_archive_in(&trud_dir);
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(ws.join("current").exists(), "root/ods_data is used from releases/<date>/trud");
+    assert!(!trud_dir.join("ods_data").exists(), "no ods_data is made inside the release");
+    assert!(!root.join("tmp").join("ods_data").exists());
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in walk(dir) {
+        names.push(entry.strip_prefix(dir).unwrap().to_string_lossy().to_string());
+    }
+    names
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        let p = entry.path();
+        out.push(p.clone());
+        if p.is_dir() && !p.is_symlink() {
+            out.extend(walk(&p));
+        }
+    }
+    out
 }
 
 #[test]

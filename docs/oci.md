@@ -20,7 +20,7 @@ why), and never served to users.
 
 ## A dataset's manifest
 
-The 2026-09-25 manifest, as `ods make oci` writes it and two independent builds reproduce:
+The 2026-09-25 manifest, as `ods make oci` writes it and two independent builds reproduce. It is the published one: `curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' https://ods.fyi/v2/ods-data/manifests/2026-09-25_0.2.0` returns these bytes, whose SHA-256 is the digest below.
 
 ```json
 {
@@ -35,7 +35,7 @@ The 2026-09-25 manifest, as `ods make oci` writes it and two independent builds 
   "layers": [
     {
       "mediaType": "application/vnd.apache.parquet",
-      "digest": "sha256:fe972999b2fcfe7497967e0c3f38c4a450aab08cfa5de79654d0bf3c1429b4b6",
+      "digest": "sha256:2cd9c8924ab419845c5f1426997af8eabeac9c9579d6e09cbf13380d21826651",
       "size": 16393148,
       "annotations": { "org.opencontainers.image.title": "orgs.parquet" }
     },
@@ -47,7 +47,7 @@ The 2026-09-25 manifest, as `ods make oci` writes it and two independent builds 
     "org.opencontainers.image.licenses": "OGL-UK-3.0",
     "org.opencontainers.image.source": "https://github.com/olizilla/ods",
     "org.opencontainers.image.title": "ods-data",
-    "org.opencontainers.image.version": "2026-09-25_0.1.0"
+    "org.opencontainers.image.version": "2026-09-25_0.2.0"
   }
 }
 ```
@@ -97,7 +97,7 @@ with the one its release index row names. `ods use`, `ods pull`, `ods cite`, `od
 $ ods use 2026-09-25
 * Release 2026-09-25 already active
   current → releases/2026-09-25
-* reconstructed manifest sha256:ace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c verified (unpublished local release)
+✓ reconstructed manifest sha256:0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0 matches the index for 2026-09-25 (0.2.0)
 ```
 
 `ods make oci` writes an OCI image layout when you want one, to publish or to hand to another
@@ -107,8 +107,8 @@ tool:
 $ ods make oci -i releases/2026-09-25
 * 4 layers, 28.2 MB
 ✓ oci/ written
-  manifest sha256:ace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c
-✓ tags 2026-09-25, 2026-09-25_0.1.0
+  manifest sha256:0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0
+✓ tags 2026-09-25, 2026-09-25_0.2.0
 ```
 
 ## Identity
@@ -120,7 +120,7 @@ As a [package URL][purl], which is how the `datapackage.json` view names the rel
 ([datapackage.md](./datapackage.md)):
 
 ```text
-pkg:oci/ods-data@sha256%3Aace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c?repository_url=ods.fyi%2Fods-data
+pkg:oci/ods-data@sha256%3A0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0?repository_url=ods.fyi%2Fods-data
 ```
 
 ## Tags
@@ -151,40 +151,41 @@ The release index lists the dataset mirrors in order ([release-index.md](./relea
 
 ## Fetching with stock tools
 
-You don't need `ods` to fetch a release. Nothing is published yet, so these are the commands for
-when it is, against the 2026-09-25 dataset:
+You don't need `ods` to fetch a release. These work against the published 2026-09-25 dataset:
 
 ```shell
 # the four Parquet files, into a directory
-oras pull ods.fyi/ods-data:2026-09-25_0.1.0 -o 2026-09-25
+oras pull ods.fyi/ods-data:2026-09-25_0.2.0 -o 2026-09-25
 
-# the whole image, as an OCI layout
-oras copy ods.fyi/ods-data:2026-09-25_0.1.0 --to-oci-layout ods-data:2026-09-25_0.1.0
+# the whole image, as an OCI layout, from ghcr.io: ods.fyi doesn't serve the image's empty
+# config blob, so `oras copy` from there stops at "not found"
+oras copy ghcr.io/olizilla/ods-data:2026-09-25_0.2.0 --to-oci-layout ods-data:2026-09-25_0.2.0
 
 # just the manifest
-oras manifest fetch ods.fyi/ods-data:2026-09-25_0.1.0
+oras manifest fetch ods.fyi/ods-data:2026-09-25_0.2.0
 
 # the manifest with curl
 curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  https://ods.fyi/v2/ods-data/manifests/2026-09-25_0.1.0
+  https://ods.fyi/v2/ods-data/manifests/2026-09-25_0.2.0
 
 # from ghcr.io, which wants a token even for a public image: an anonymous one will do
 token=$(curl -s 'https://ghcr.io/token?scope=repository:olizilla/ods-data:pull' | jq -r .token)
 curl -H "Authorization: Bearer $token" \
   -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  https://ghcr.io/v2/olizilla/ods-data/manifests/2026-09-25_0.1.0
+  https://ghcr.io/v2/olizilla/ods-data/manifests/2026-09-25_0.2.0
 ```
 
 The same works on a layout `ods make oci` wrote, which is how these were checked:
 
 ```console
-$ oras pull --oci-layout releases/2026-09-25/oci:2026-09-25_0.1.0 -o oras-out
-Downloaded  d592dd31632b successions.parquet
-Downloaded  9472535a9b52 relationships.parquet
-Downloaded  fe972999b2fc orgs.parquet
-Downloaded  ace1c6babc5b application/vnd.oci.image.manifest.v1+json
-Pulled [oci-layout] releases/2026-09-25/oci:2026-09-25_0.1.0
-Digest: sha256:ace1c6babc5b4abb1faaa11fa7a63ca8c1615a1169d7fa21ec8ee256b6d0e74c
+$ oras pull --oci-layout releases/2026-09-25/oci:2026-09-25_0.2.0 -o oras-out
+Downloaded  38dc432886c2 roles.parquet
+Downloaded  3650dc5a2cd7 successions.parquet
+Downloaded  29a8eb9b2dcf relationships.parquet
+Downloaded  2cd9c8924ab4 orgs.parquet
+Downloaded  0a43d0867494 application/vnd.oci.image.manifest.v1+json
+Pulled [oci-layout] releases/2026-09-25/oci:2026-09-25_0.2.0
+Digest: sha256:0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0
 ```
 
 A directory holding just the four Parquet files is a release `ods` reads: the files carry their
@@ -193,14 +194,13 @@ own provenance, so nothing else needs to come with them.
 ```console
 $ ods find --code RJZ -i oras-out
 * Source: releases/2026-09-25/orgs.parquet
-┌──────────┬────────────────────────────────────────┬──────────┬───────────────────────┬───────┐
-│ ODS Code ┆ Name                                   ┆ Postcode ┆ Roles                 ┆ Class │
-╞══════════╪════════════════════════════════════════╪══════════╪═══════════════════════╪═══════╡
-│ RJZ      ┆ KING'S COLLEGE HOSPITAL NHS FOUNDATION ┆ SE5 9RS  ┆ NHS Trust, Hospice +1 ┆ org   │
-│          ┆ TRUST                                  ┆          ┆                       ┆       │
-├──────────┴────────────────────────────────────────┴──────────┴───────────────────────┴───────┤
-│ 1 open                                                           Use --all to include closed │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────┬──────────────────────────────────────────────┬──────────┬───────────────────────┬───────┐
+│ ODS Code ┆ Name                                         ┆ Postcode ┆ Roles                 ┆ Class │
+╞══════════╪══════════════════════════════════════════════╪══════════╪═══════════════════════╪═══════╡
+│ RJZ      ┆ KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST ┆ SE5 9RS  ┆ NHS Trust, Hospice +1 ┆ org   │
+├──────────┴──────────────────────────────────────────────┴──────────┴───────────────────────┴───────┤
+│ 1 open                                                                 Use --all to include closed │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Attestations

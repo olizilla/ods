@@ -29,6 +29,22 @@ ods_data/
 
 A release fetched with `ods pull` holds the four Parquet files and `datapackage.json`.
 
+## How `ods` finds the workspace
+
+A command that isn't told where the workspace is looks where you are standing:
+
+- The current directory is a workspace root, or holds `ods_data/`: that is the workspace.
+- The current directory is inside a workspace at a path it defines: `releases/`, `releases/<date>/`,
+  `releases/<date>/trud/`, `releases/<date>/trud/oci/` and below, or `current`. The workspace root
+  above it is used, so you can run `ods` from a release directory.
+- Anywhere else there is no workspace, even when a parent directory has an `ods_data/`. Commands that
+  read say so and name `ods pull`; `ods pull` and `ods trud pull` create `./ods_data` in the
+  directory you ran them from.
+
+`ods` doesn't search parent directories for a workspace: a scratch directory made inside a project
+gets its own `ods_data/` when you pull there, rather than filling the project's. Name a workspace from
+anywhere with `--workspace <dir>` (where a command has it) or `-i <release dir>`.
+
 ## Provenance lives in the Parquet files
 
 Every Parquet file carries the release's provenance in one key-value metadata key,

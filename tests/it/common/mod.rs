@@ -28,6 +28,54 @@ impl std::ops::DerefMut for OdsCommand {
     }
 }
 
+/// A local HTTP server that answers every request with `response_body` as JSON, so a test can
+/// give `ODS_RELEASE_INDEX_URL` or `--index` a URL without reaching the network. Returns the
+/// URL, `http://127.0.0.1:<port><url_path>`, and a channel: send on it to stop the server.
+///
+/// The response is written only once the request has been read up to the blank line that ends
+/// its headers. On macOS an accepted socket inherits its listener's non-blocking mode, so a
+/// server that reads once and answers can answer before the request has arrived, then close on
+/// the unread request: the client sees a reset instead of the response, and `ods` falls back to
+/// the index it already has. That made a test that read the served rows fail one run in a
+/// thousand, under load.
+#[allow(dead_code)]
+pub fn serve_json(response_body: Vec<u8>, url_path: &str) -> (String, std::sync::mpsc::Sender<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&response_body);
+                let _ = stream.flush();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    (format!("http://127.0.0.1:{}{}", port, url_path), tx)
+}
+
+
 #[allow(dead_code)]
 pub fn ods_cmd() -> OdsCommand {
     let cwd = TempDir::new().expect("create temp dir for ods_cmd cwd");

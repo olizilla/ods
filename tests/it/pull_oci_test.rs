@@ -321,6 +321,89 @@ fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
     Ok(())
 }
 
+const ARCHIVE_SHA: &str = "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933";
+
+/// A registry that publishes dataset `1.0.1` of release 2026-07-31, and that release's bytes.
+fn registry_publishing_1_0_1(scratch: &Path) -> Result<(TestOciFetcher, Vec<u8>)> {
+    let prov_bytes = serde_json::to_vec_pretty(&serde_json::json!({ "written_by": "an older ods, and never a layer" }))?;
+    let prov_sha = format!("sha256:{:x}", sha2::Sha256::digest(&prov_bytes));
+    let orgs_bytes = common::fixture_parquet_bytes("2026-07-31", ARCHIVE_SHA, "1.0.1", "the published orgs");
+    let orgs_sha = format!("sha256:{:x}", sha2::Sha256::digest(&orgs_bytes));
+    let dp_bytes = serde_json::to_vec_pretty(&serde_json::json!({ "name": "ods", "version": "1.0.1", "resources": [] }))?;
+    let dp_sha = format!("sha256:{:x}", sha2::Sha256::digest(&dp_bytes));
+
+    let fixture_dir = scratch.join("published");
+    fs::create_dir_all(&fixture_dir)?;
+    fs::write(fixture_dir.join("orgs.parquet"), &orgs_bytes)?;
+    fs::write(fixture_dir.join("_provenance.json"), &prov_bytes)?;
+    fs::write(fixture_dir.join(ods::datapackage::DATAPACKAGE_FILENAME), &dp_bytes)?;
+    let (manifest, manifest_bytes) = ods::commands::make_oci::build_manifest_from_dir(&fixture_dir)?;
+    let manifest_digest = manifest.digest()?;
+
+    let remote_index = make_v1_index(&[("2026-07-31", ARCHIVE_SHA, 37983173, &[("1.0.1", &manifest_digest)])]);
+    let mut responses = BTreeMap::new();
+    responses.insert(format!("manifests/{}", manifest_digest), manifest_bytes);
+    responses.insert(format!("blobs/{}", prov_sha), prov_bytes);
+    responses.insert(format!("blobs/{}", orgs_sha), orgs_bytes.clone());
+    responses.insert(format!("blobs/{}", dp_sha), dp_bytes);
+    Ok((TestOciFetcher { remote_index: Some(remote_index), responses, ..Default::default() }, orgs_bytes))
+}
+
+/// Pulls release 2026-07-31 into `workspace`, and returns what the pull said on its writer.
+fn pull_2026_07_31(workspace: &Path, fetcher: &TestOciFetcher) -> Result<String> {
+    let mut said = Vec::new();
+    run_with_fetcher_and_writer(
+        Args { release_date: Some("2026-07-31".to_string()), ..Default::default() },
+        workspace,
+        fetcher,
+        &mut said,
+    )?;
+    Ok(String::from_utf8(said)?)
+}
+
+#[test]
+fn test_pull_says_a_local_release_of_another_dataset_version_is_being_replaced() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    let (fetcher, published_orgs) = registry_publishing_1_0_1(tmp.path())?;
+
+    // What an older `ods` built: the same release, dataset 1.0.0
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir)?;
+    fs::write(rel_dir.join("orgs.parquet"), common::fixture_parquet_bytes("2026-07-31", ARCHIVE_SHA, "1.0.0", "the older orgs"))?;
+
+    let said = pull_2026_07_31(&workspace, &fetcher)?;
+
+    assert!(
+        said.contains("* releases/2026-07-31 holds dataset 1.0.0; replacing it with the published 1.0.1\n"),
+        "an older dataset version is named as such, got:\n{said}"
+    );
+    assert!(!said.contains("corrupted"), "an older release isn't called corrupted, got:\n{said}");
+    assert_eq!(fs::read(rel_dir.join("orgs.parquet"))?, published_orgs, "the published release replaces it");
+    Ok(())
+}
+
+#[test]
+fn test_pull_says_a_local_release_that_does_not_verify_does_not_verify() -> Result<()> {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("ods_data");
+    let (fetcher, published_orgs) = registry_publishing_1_0_1(tmp.path())?;
+
+    let rel_dir = workspace.join("releases").join("2026-07-31");
+    fs::create_dir_all(&rel_dir)?;
+    fs::write(rel_dir.join("orgs.parquet"), b"not a parquet file")?;
+
+    let said = pull_2026_07_31(&workspace, &fetcher)?;
+
+    assert!(
+        said.contains("* existing releases/2026-07-31 doesn't verify; re-fetching from registry...\n"),
+        "files that can't be read say only that they don't verify, got:\n{said}"
+    );
+    assert!(!said.contains("corrupted") && !said.contains("holds dataset"), "no more is claimed than was checked, got:\n{said}");
+    assert_eq!(fs::read(rel_dir.join("orgs.parquet"))?, published_orgs);
+    Ok(())
+}
+
 #[test]
 fn test_pull_oci_remote_index_selected_without_merge_contradiction_error() {
     let tmp = TempDir::new().unwrap();

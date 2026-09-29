@@ -1,17 +1,50 @@
 #!/usr/bin/env bash
+# scripts/site-figures.sh [<YYYY-MM-DD> | <release-dir>]
+#
 # Reads a release with duckdb and ods, and writes site/src/data/release.json — every figure
 # the ods.fyi home page shows. Prints the SQL it ran beside each value, so the page's numbers
 # show their working the way `ods find --sql` does.
 set -euo pipefail
 
-if [ $# -ne 1 ]; then
-  echo "usage: scripts/site-figures.sh <release-dir>" >&2
-  exit 1
-fi
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELEASE_DIR="$(cd "$1" && pwd)"
+WORKSPACE="$REPO_ROOT/ods_data"
 OUT="$REPO_ROOT/site/src/data/release.json"
+
+die() { echo "✖ $*" >&2; exit 1; }
+
+# The releases the workspace holds, by date, on one line
+releases_held() {
+  local dir found=""
+  for dir in "$WORKSPACE"/releases/*/; do
+    [ -d "$dir" ] && found="$found $(basename "$dir")"
+  done
+  echo "${found# }"
+}
+
+# Which release to read: none means the workspace's active release (`current`), YYYY-MM-DD means
+# that release in the workspace, anything else is the path to a release directory.
+if [ $# -gt 1 ]; then
+  die "usage: scripts/site-figures.sh [<YYYY-MM-DD> | <release-dir>]"
+fi
+accepts="It takes:
+    (no argument)  the active release, $WORKSPACE/current
+    YYYY-MM-DD     a release in $WORKSPACE/releases/
+    <path>         a release directory
+  Workspace looked in: $WORKSPACE"
+
+if [ $# -eq 0 ]; then
+  [ -d "$WORKSPACE/current" ] || die "no active release: $WORKSPACE/current isn't a directory.
+  $accepts"
+  RELEASE_DIR="$(cd "$WORKSPACE/current" && pwd -P)"
+elif [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  [ -d "$WORKSPACE/releases/$1" ] || die "no release $1 in $WORKSPACE/releases/ (found: $(releases_held))
+  $accepts"
+  RELEASE_DIR="$(cd "$WORKSPACE/releases/$1" && pwd -P)"
+else
+  [ -d "$1" ] || die "'$1' is neither a release date nor a directory.
+  $accepts"
+  RELEASE_DIR="$(cd "$1" && pwd -P)"
+fi
 
 ORGS="$RELEASE_DIR/orgs.parquet"
 ROLES="$RELEASE_DIR/roles.parquet"
@@ -19,8 +52,7 @@ RELATIONSHIPS="$RELEASE_DIR/relationships.parquet"
 SUCCESSIONS="$RELEASE_DIR/successions.parquet"
 for f in "$ORGS" "$ROLES" "$RELATIONSHIPS" "$SUCCESSIONS"; do
   if [ ! -f "$f" ]; then
-    echo "missing $f" >&2
-    exit 1
+    die "missing $f: $RELEASE_DIR isn't a built release"
   fi
 done
 
@@ -30,8 +62,7 @@ PROVENANCE_SQL="SELECT decode(value) FROM parquet_kv_metadata('orgs.parquet') WH
 echo "$PROVENANCE_SQL"
 PROVENANCE="$(duckdb -noheader -list -c "SELECT decode(value) FROM parquet_kv_metadata('$ORGS') WHERE decode(key) = 'datapackage'")"
 if [ -z "$PROVENANCE" ]; then
-  echo "$ORGS carries no provenance: build it from a pulled TRUD release" >&2
-  exit 1
+  die "$ORGS carries no provenance: build it from a pulled TRUD release"
 fi
 
 RELEASE_DATE="$(jq -r '.sources[0].version' <<<"$PROVENANCE")"

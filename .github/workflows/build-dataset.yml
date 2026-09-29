@@ -3,8 +3,8 @@ name: Build dataset
 # Builds and verifies and attsets our dataset releases.
 #
 # - archive: Be kind to NHS bandwidth. Cache archives we fetch in ghcr.io/olizilla/nhs-ods-xml
-# - witness (macos): Ensure `ods make` gives reproducible outout across different architectures.
-# - primary (ubuntu): Builds the release. Checks output hash matches the one created by witness.
+# - witness (macos-15): Ensure `ods make` gives reproducible outout across different architectures.
+# - primary (ubuntu-24.04): Builds the release. Checks output hash matches the one created by witness.
 #   Pushes the parquet image to ghcr.io/olizilla/ods-data
 # - candidate: propose and update to releases.json. PR it to announce the new release.
 
@@ -38,7 +38,7 @@ defaults:
 jobs:
   archive:
     name: Ensure every date's archive image exists
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     permissions:
@@ -66,6 +66,13 @@ jobs:
             exit 1
           fi
 
+      # Before anything is built: the dataset package must exist and be readable by a stranger,
+      # or the run's last step (ods pull, anonymous) fails after ten minutes of building.
+      - name: Check the dataset package is public
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+        run: scripts/ci-check-package-public.sh "$REPOSITORY"
+
       - &install_rust_toolchain
         name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: |
@@ -85,11 +92,11 @@ jobs:
           ods --version
 
       - &install_oras
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
 
       - &login_to_ghcr
         name: Log in to ghcr.io
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -177,9 +184,9 @@ jobs:
           echo "matrix=$(jq -s -c '.' plan.jsonl)" >>"$GITHUB_OUTPUT"
 
   witness:
-    name: Witness every date (macos-latest)
+    name: Witness every date (macos-15)
     needs: archive
-    runs-on: macos-latest
+    runs-on: macos-15
     permissions:
       contents: read
       packages: read
@@ -233,9 +240,9 @@ jobs:
           echo "digests=$digests" >>"$GITHUB_OUTPUT"
 
   primary:
-    name: Primary ${{ matrix.date }} (ubuntu-latest)
+    name: Primary ${{ matrix.date }} (ubuntu-24.04)
     needs: [archive, witness]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include: ${{ fromJSON(needs.archive.outputs.matrix) }}
@@ -269,12 +276,12 @@ jobs:
         run: |
           primary_digest="$(cat digest.txt)"
           if [[ "$primary_digest" != "$WITNESS_DIGEST" ]]; then
-            echo "✖ $DATE  ubuntu-latest and macos-latest disagree" >&2
-            echo "  ubuntu-latest (primary)  $primary_digest" >&2
-            echo "  macos-latest (witness)   $WITNESS_DIGEST" >&2
+            echo "✖ $DATE  ubuntu-24.04 and macos-15 disagree" >&2
+            echo "  ubuntu-24.04 (primary)  $primary_digest" >&2
+            echo "  macos-15 (witness)      $WITNESS_DIGEST" >&2
             exit 1
           fi
-          echo "✓ $DATE  ubuntu-latest and macos-latest agree: $primary_digest"
+          echo "✓ $DATE  ubuntu-24.04 and macos-15 agree: $primary_digest"
 
       - name: Push
         id: push
@@ -325,7 +332,7 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-${{ matrix.date }}
           path: candidate-${{ matrix.date }}.json
@@ -334,11 +341,11 @@ jobs:
   candidate:
     name: Merge the candidate index
     needs: [archive, primary]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: candidate-*
           path: rows
@@ -375,7 +382,7 @@ jobs:
             echo "| $date | \`$digest\` |" >>"$GITHUB_STEP_SUMMARY"
           done
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate
           path: ${{ runner.temp }}/candidate.json

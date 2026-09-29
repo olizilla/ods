@@ -43,46 +43,32 @@ describe('Derived Headers & Caching Policies', () => {
     await env.BUCKET.put('releases.json', new TextEncoder().encode('{"releases":[]}'));
   });
 
+  // What a key's headers must be follows from its shape, so a dataset bump, which regenerates
+  // expected-keys.json with new digests and a new version, changes no expectation here.
   // A release's only real blobs are its Parquet layers and the manifest itself: the files
   // carry their own provenance, and `datapackage.json` is never packed.
-  const EXPECTED_CONTRACT: Record<string, { contentType: string; cacheControl: string }> = {
-    'v2/ods-data/blobs/sha256/79ac6fbed4cd89c89131b15d2de2ec70bb0b93c1d670eced8815968f80a5e939': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/808218098d6e10d5f78a833ee83721947f6dce919b89fbfbbd0e54f796f311e4': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/blobs/sha256/e29eb919a8e47ea4365eaaa6a780020a48ea06e96bc32013ffc2ce25c3a4876d': {
-      contentType: 'application/octet-stream',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/manifests/2026-07-31': {
-      contentType: 'application/vnd.oci.image.manifest.v1+json',
-      cacheControl: 'no-cache',
-    },
-    'v2/ods-data/manifests/2026-07-31_0.2.0': {
-      contentType: 'application/vnd.oci.image.manifest.v1+json',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    'v2/ods-data/manifests/latest': {
-      contentType: 'application/vnd.oci.image.manifest.v1+json',
-      cacheControl: 'no-cache',
-    },
-  };
+  const OCI_MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
+  const IMMUTABLE = 'public, max-age=31536000, immutable';
+  const CONTRACT_SHAPES: { shape: RegExp; contentType: string; cacheControl: string }[] = [
+    // a blob, by digest
+    { shape: /^v2\/[^/]+\/blobs\/sha256\/[0-9a-f]{64}$/, contentType: 'application/octet-stream', cacheControl: IMMUTABLE },
+    // a versioned manifest tag: <date>_<semver>
+    { shape: /^v2\/[^/]+\/manifests\/\d{4}-\d{2}-\d{2}_\d+\.\d+\.\d+$/, contentType: OCI_MANIFEST_TYPE, cacheControl: IMMUTABLE },
+    // a moving tag: <date> or latest
+    { shape: /^v2\/[^/]+\/manifests\/(\d{4}-\d{2}-\d{2}|latest)$/, contentType: OCI_MANIFEST_TYPE, cacheControl: 'no-cache' },
+  ];
 
   it('derives correct content-type and cache-control for every key shape in expected-keys.json against static contract', () => {
-    // 1. Assert all keys in expectedKeys exist in contract
-    expect(expectedKeys.slice().sort()).toEqual(Object.keys(EXPECTED_CONTRACT).sort());
-
+    expect(expectedKeys.length).toBeGreaterThan(0);
     for (const key of expectedKeys) {
-      const path = `/${key}`;
-      const headers = deriveHeaders(path, 'etag123');
-      const expected = EXPECTED_CONTRACT[key];
+      // Every key in expected-keys.json has a shape the contract knows.
+      const matches = CONTRACT_SHAPES.filter((c) => c.shape.test(key));
+      expect(matches.length, `no contract shape for ${key}`).toBe(1);
+      const expected = matches[0];
 
-      expect(headers.get('content-type')).toBe(expected.contentType);
-      expect(headers.get('cache-control')).toBe(expected.cacheControl);
+      const headers = deriveHeaders(`/${key}`, 'etag123');
+      expect(headers.get('content-type'), key).toBe(expected.contentType);
+      expect(headers.get('cache-control'), key).toBe(expected.cacheControl);
     }
   });
 
