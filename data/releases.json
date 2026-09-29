@@ -19,6 +19,22 @@
   "releases": [
     {
       "source": {
+        "version": "2026-09-25",
+        "hash": "sha256:ca0fee7512f593ada1fa9b95bf1372b41911167da463a98fecf33adfd86697e5",
+        "bytes": 38138574
+      },
+      "datasets": [
+        {
+          "version": "2026-09-25_0.2.0",
+          "manifest_digest": "sha256:0a43d08674948d678b2412b1303dd5bd27c3dcc52803f30f894d9a24edacaff0",
+          "bytes": 29604347,
+          "tool_version": "0.2.2",
+          "tool_git_sha": "ce15c5f2c87eb7535cf33020e8b5ecfb53421a68"
+        }
+      ]
+    },
+    {
+      "source": {
         "version": "2025-05-30",
         "hash": "sha256:b54caf77e699781b5294b209747f8658a3cdf0a4ee3ca917df2373344b7c1bcc",
         "bytes": 36377546,
