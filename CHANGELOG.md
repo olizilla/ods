@@ -2,6 +2,17 @@
 
 All notable changes to the `ods` tool will be documented in this file.
 
+## [0.2.1] - 2026-09-29
+
+Builds dataset 0.2.0.
+
+### Fixed
+- `ods pull` works with ghcr.io: it asks for OCI manifests and follows blob redirects.
+- CI: the macOS witness logs in with oras and runs bash 5
+
+### Added
+- CI rehearsals run from any ref; `ods make release --rehearsal` skips only the tag check.
+
 ## [0.2.0] - 2026-09-29
 
 Builds dataset 0.2.0.
