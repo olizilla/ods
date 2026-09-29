@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import worker, { pathToKey, clearManifestCache, sha256Hex } from '../../src/index';
 import { env } from 'cloudflare:test';
+// The page is built from these figures, so it names this release's date.
+import siteRelease from '../../../site/src/data/release.json';
 
 describe('Router & Path-to-Key Mapping', () => {
   it('maps /releases.json to releases.json', () => {
@@ -77,7 +79,7 @@ describe('Router & Path-to-Key Mapping', () => {
     expect(res.headers.get('cache-control')).toBe('public, max-age=300');
     const text = await res.text();
     expect(text).toContain('ods.fyi');
-    expect(text).toContain('2026-08-28');
+    expect(text).toContain(siteRelease.release.date);
   });
 
   it('serves GET / as ROOT_TEXT when Accept is */*', async () => {
