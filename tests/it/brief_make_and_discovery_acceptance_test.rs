@@ -129,7 +129,7 @@ fn test_make_into_new_release_does_not_move_active_current_pointer() {
         .output()
         .expect("make A");
 
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-05-29").unwrap();
 
     // Verify current is pinned to 2026-05-29

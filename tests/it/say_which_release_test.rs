@@ -133,6 +133,7 @@ fn test_role_reports_release_in_header_source_line() {
 
 #[test]
 fn test_cite_reports_release_in_header_source_line_on_stdout() {
+    common::use_baked_fixture();
     let (_tmp, ws_root) = setup_two_release_workspace();
 
     let output = ods_binary()
@@ -196,6 +197,7 @@ fn test_running_from_inside_older_release_reads_current_and_resolves_workspace()
 
 #[test]
 fn test_task3_disagreement_lines_appear_only_when_in_different_release_dir() {
+    common::use_baked_fixture();
     let (_tmp, ws_root) = setup_two_release_workspace();
     let older_rel_dir = ws_root.join("releases").join("2026-06-26");
 

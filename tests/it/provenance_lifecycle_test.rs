@@ -90,6 +90,7 @@ fn cite_fixture(dir: &std::path::Path) {
 
 #[test]
 fn test_cite_output_formats_and_attribution() -> Result<()> {
+    common::use_baked_fixture();
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
     cite_fixture(output_dir);
@@ -118,6 +119,7 @@ fn test_cite_output_formats_and_attribution() -> Result<()> {
 
 #[test]
 fn test_cite_unverified_release_delivers_citation_and_warns() -> Result<()> {
+    common::use_baked_fixture();
     let temp_dir = TempDir::new()?;
     let output_dir = temp_dir.path();
     cite_fixture(output_dir);

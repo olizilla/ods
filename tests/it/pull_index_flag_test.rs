@@ -322,7 +322,7 @@ fn test_index_flag_env_var_and_flag_precedence() {
     let tmp = TempDir::new().unwrap();
 
     // 1. When only ODS_RELEASE_INDEX_URL points to a missing file/URL,
-    // it falls back quietly to the baked index and exits 0, listing what the baked index lists.
+    // it falls back quietly to the baked index (the fixture's, which is empty) and exits 0.
     let output_env_only = ods_binary()
         .current_dir(tmp.path())
         .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9999/does-not-exist.json")
@@ -336,28 +336,11 @@ fn test_index_flag_env_var_and_flag_precedence() {
         "ODS_RELEASE_INDEX_URL fallback must exit 0"
     );
     let stdout_env_only = String::from_utf8_lossy(&output_env_only.stdout);
-    let baked = ods::index::OdsReleaseIndex::baked().unwrap();
-    let baked_dates: Vec<&str> = baked
-        .releases
-        .iter()
-        .filter(|r| !r.datasets.is_empty())
-        .map(|r| r.source.version.as_str())
-        .collect();
-    if baked_dates.is_empty() {
-        assert!(
-            stdout_env_only.contains("(No dataset releases available in index)"),
-            "Quiet fallback to the empty baked index, got: {}",
-            stdout_env_only
-        );
-    }
-    for date in &baked_dates {
-        assert!(
-            stdout_env_only.contains(date),
-            "Quiet fallback to the baked index lists {}, got: {}",
-            date,
-            stdout_env_only
-        );
-    }
+    assert!(
+        stdout_env_only.contains("(No dataset releases available in index)"),
+        "Quiet fallback to the fixture's empty baked index without error, got: {}",
+        stdout_env_only
+    );
 
     // 2. When both ODS_RELEASE_INDEX_URL and --index are set, --index wins: the pull
     // completes from the file's own mirror, and the block's `verified` row names the

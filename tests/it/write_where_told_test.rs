@@ -30,7 +30,7 @@ fn run_mock_http_server(response_body: Vec<u8>) -> (String, std::sync::mpsc::Sen
 fn pull_list_in_empty_directory_writes_nothing() {
     let idx_dir = TempDir::new().unwrap();
     let idx_file = idx_dir.path().join("releases.json");
-    fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(&idx_file, common::baked_fixture_bytes()).unwrap();
 
     let cwd = TempDir::new().unwrap();
     let output = ods_binary()
@@ -94,7 +94,7 @@ fn pull_list_in_existing_workspace_still_marks_local_and_active() {
 fn pull_date_with_index_flag_in_empty_directory_still_creates_workspace() {
     let idx_dir = TempDir::new().unwrap();
     let idx_file = idx_dir.path().join("releases.json");
-    fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(&idx_file, common::baked_fixture_bytes()).unwrap();
 
     let cwd = TempDir::new().unwrap();
     let output = ods_binary()

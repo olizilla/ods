@@ -156,7 +156,7 @@ fn test_real_trud_parquet_hash_stability() {
         let content = std::fs::read_to_string(&releases_json_path).unwrap();
         ods::index::OdsReleaseIndex::from_slice(content.as_bytes()).ok()
     } else {
-        ods::index::OdsReleaseIndex::baked().ok()
+        ods::index::OdsReleaseIndex::from_slice(ods::index::BAKED_RELEASES_JSON_BYTES).ok()
     };
 
     let (manifest, _) = ods::commands::make_oci::build_manifest_from_dir(tmp1.path()).unwrap();

@@ -50,7 +50,7 @@ fn test_cli_version_output_formatting() {
 fn test_cli_pull_list_output_formatting() {
     let tmp = TempDir::new().unwrap();
     let idx_file = tmp.path().join("releases.json");
-    fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(&idx_file, common::baked_fixture_bytes()).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -103,7 +103,7 @@ fn test_cli_cite_output_formatting() {
     common::write_fixture_parquet(&rel_dir.join("orgs.parquet"), "2026-07-31", "8151248DDC290F3AFFDABAE22D88E0BBD118947D948AB7BDD37E74088CFBA933", "1.0.1", "dummy");
 
     ods::workspace::Workspace::open_or_create(Some(&ws)).unwrap().set_active("2026-07-31").unwrap();
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -261,7 +261,7 @@ fn test_cli_find_unpinned_workspace_message() {
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
 
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -297,7 +297,7 @@ fn test_cli_cite_unpinned_workspace_message() {
     fs::create_dir_all(&trud_dir).unwrap();
     fs::write(trud_dir.join("hscorgrefdataxml_data_7.0.0_20260731000001.zip"), b"dummy").unwrap();
 
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -331,7 +331,7 @@ fn test_cli_unpinned_workspace_multiple_releases_names_newest() {
     fs::create_dir_all(ws.join("releases").join("2026-05-29").join("trud")).unwrap();
     fs::create_dir_all(ws.join("releases").join("2026-07-31").join("trud")).unwrap();
 
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     let output = ods_binary()
         .current_dir(tmp.path())
@@ -871,7 +871,7 @@ fn test_staleness_nudge_emitted_on_table_and_suppressed_on_json() {
 fn test_error_without_cross_sigil_is_prefixed_with_cross_and_has_no_error_prefix() {
     let tmp = tempfile::tempdir().unwrap();
     let idx_file = tmp.path().join("releases.json");
-    std::fs::write(&idx_file, ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    std::fs::write(&idx_file, common::baked_fixture_bytes()).unwrap();
     let output = ods_binary()
         .current_dir(tmp.path())
         .args(["pull", "--index", idx_file.to_str().unwrap(), "1999-01-01"])
@@ -898,7 +898,7 @@ fn test_unreadable_provenance_reading_commands_warn_and_continue() {
     let ws = tmp.path().join("ods_data");
     let rel_dir = ws.join("releases").join("2026-08-28");
     fs::create_dir_all(&rel_dir).unwrap();
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     let copy_release = |embedded: Option<&ods::provenance::Embedded>| {
         let (_find_tmp, find_dir) = common::setup_find_test_workspace_embedded(embedded);

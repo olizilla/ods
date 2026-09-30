@@ -9,6 +9,39 @@ use ods::commands::parquet::{
 };
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+/// The built-in index every test runs against: `data/releases.json`'s header and no releases,
+/// which is what `ods` had built in when these tests were written. Publishing a release adds a
+/// row to `data/releases.json`, and no test's outcome may change with it, so tests read this
+/// fixture instead of the compiled index: `ods_cmd` hands its path to every `ods` it spawns as
+/// `ODS_TEST_BAKED_INDEX`, and `use_baked_fixture` does the same for the test process itself.
+/// The tests whose subject is the compiled file (`release_index_test`'s `test_baked_index_*`) read
+/// `BAKED_RELEASES_JSON_BYTES` directly.
+pub const BAKED_FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/baked-releases.json");
+
+/// The fixture baked index's bytes, as `ensure_workspace_marker` writes them into a workspace.
+#[allow(dead_code)]
+pub fn baked_fixture_bytes() -> Vec<u8> {
+    std::fs::read(BAKED_FIXTURE_PATH).expect("read tests/fixtures/baked-releases.json")
+}
+
+/// The fixture baked index, parsed: what `OdsReleaseIndex::baked()` returns in a test.
+#[allow(dead_code)]
+pub fn baked_fixture() -> ods::index::OdsReleaseIndex {
+    let index = ods::index::OdsReleaseIndex::from_slice(&baked_fixture_bytes()).expect("parse the fixture baked index");
+    index.validate().expect("validate the fixture baked index");
+    index
+}
+
+/// Points this test process's own `ODS_TEST_BAKED_INDEX` at the fixture, so the library functions
+/// a test calls in-process (`Workspace::open`, `resolve_index`, `run_with_fetcher`, ...) read the
+/// fixture as their baked index, as every `ods` that `ods_cmd` spawns does. Runs once per process;
+/// `ods_cmd` calls it, and so must any in-process test that doesn't go through `ods_cmd`.
+#[allow(dead_code)]
+pub fn use_baked_fixture() {
+    static SET: std::sync::Once = std::sync::Once::new();
+    SET.call_once(|| std::env::set_var("ODS_TEST_BAKED_INDEX", BAKED_FIXTURE_PATH));
+}
+
 pub struct OdsCommand {
     cmd: std::process::Command,
     _cwd: TempDir,
@@ -78,6 +111,7 @@ pub fn serve_json(response_body: Vec<u8>, url_path: &str) -> (String, std::sync:
 
 #[allow(dead_code)]
 pub fn ods_cmd() -> OdsCommand {
+    use_baked_fixture();
     let cwd = TempDir::new().expect("create temp dir for ods_cmd cwd");
     let home = TempDir::new().expect("create temp dir for ods_cmd home");
 
@@ -89,6 +123,7 @@ pub fn ods_cmd() -> OdsCommand {
     cmd.env_remove("ODS_TRUD_API_URL");
     cmd.env_remove("ODS_RELEASE_INDEX_URL");
     cmd.env_remove("ODS_CACHE_DIR");
+    cmd.env("ODS_TEST_BAKED_INDEX", BAKED_FIXTURE_PATH);
     cmd.env_remove("NO_COLOR");
     cmd.env_remove("PAGER");
     cmd.env("COLUMNS", "200");
@@ -1360,7 +1395,7 @@ pub const OLD_FORMAT_INDEX: &[u8] = br#"{
 pub fn empty_index() -> ods::index::OdsReleaseIndex {
     ods::index::OdsReleaseIndex {
         releases: Vec::new(),
-        ..ods::index::OdsReleaseIndex::baked().unwrap()
+        ..baked_fixture()
     }
 }
 

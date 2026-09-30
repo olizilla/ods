@@ -492,7 +492,7 @@ pub fn ensure_workspace_marker(workspace_root: &Path) -> Result<()> {
         .with_context(|| format!("creating directory at {}", workspace_root.display()))?;
     let marker_path = workspace_root.join(crate::index::RELEASES_JSON_FILENAME);
     if !marker_path.exists() || !validate_releases_json(workspace_root) {
-        fs::write(&marker_path, crate::index::BAKED_RELEASES_JSON_BYTES)
+        fs::write(&marker_path, crate::index::baked_index_bytes()?)
             .with_context(|| format!("writing workspace index cache to {}", marker_path.display()))?;
     }
     Ok(())

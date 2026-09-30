@@ -168,6 +168,7 @@ fn create_inner_zip(filename: &str, content: &str) -> Vec<u8> {
 
 #[test]
 fn test_audit_passes_on_a_release_whose_provenance_matches_the_archive() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
 
     let args = ods::commands::audit::Args {
@@ -186,6 +187,7 @@ fn test_audit_passes_on_a_release_whose_provenance_matches_the_archive() -> Resu
 
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -212,6 +214,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_parquet_file() -> Result<()
 
 #[test]
 fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -240,6 +243,7 @@ fn test_audit_runs_full_suite_and_fails_on_corrupted_provenance_archive_hash() -
 
 #[test]
 fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -279,6 +283,7 @@ fn test_audit_fails_on_unaccounted_file_in_release_directory() -> Result<()> {
 
 #[test]
 fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -313,6 +318,7 @@ fn test_audit_fails_on_successions_count_mismatch() -> Result<()> {
 
 #[test]
 fn test_audit_fails_on_orphan_successions() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -356,6 +362,7 @@ fn test_audit_fails_on_orphan_successions() -> Result<()> {
 
 #[test]
 fn test_audit_fails_on_corrupted_transitive_closure() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, zip_path) = setup_valid_workspace_with_provenance();
     let (_, active_dir) = ods::workspace::Workspace::open(Some(&workspace_root))?.active_release()?;
 
@@ -495,6 +502,7 @@ fn test_audit_fails_on_source_invariant_violation() -> Result<()> {
 
 #[test]
 fn test_audit_all_skips_unmade_releases() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, _zip_path) = setup_valid_workspace_with_provenance();
 
     // Create a second release that has trud/ and its TRUD archive package but NO derived parquet files
@@ -653,6 +661,7 @@ fn test_audit_fails_on_dangling_relationship_target_invariant() -> Result<()> {
 
 #[test]
 fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, outer_zip_path) = setup_valid_workspace_with_provenance();
     let rel_dir = workspace_root.join("releases").join("2026-07-31");
     let orgs_file = rel_dir.join("orgs.parquet");
@@ -713,6 +722,7 @@ fn test_audit_fails_on_inactive_row_in_orgs_parquet() -> Result<()> {
 
 #[test]
 fn test_audit_fails_on_mismatched_role_codes_and_names() -> Result<()> {
+    common::use_baked_fixture();
     let (_tmp, workspace_root, outer_zip_path) = setup_valid_workspace_with_provenance();
     let rel_dir = workspace_root.join("releases").join("2026-07-31");
     let orgs_file = rel_dir.join("orgs.parquet");

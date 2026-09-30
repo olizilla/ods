@@ -59,6 +59,7 @@ impl OciBlobFetcher for TestOciFetcher {
 
 #[test]
 fn test_pull_oci_release_success_with_layer_verification() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -177,6 +178,7 @@ fn test_pull_oci_refuses_when_manifest_digest_mismatches() {
 
 #[test]
 fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -254,6 +256,7 @@ fn test_pull_oci_mirror_fallback_on_first_mirror_failure() -> Result<()> {
 
 #[test]
 fn test_pull_oci_self_healing_on_corrupted_local_file() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -363,6 +366,7 @@ fn pull_2026_07_31(workspace: &Path, fetcher: &TestOciFetcher) -> Result<String>
 
 #[test]
 fn test_pull_says_a_local_release_of_another_dataset_version_is_being_replaced() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
     let (fetcher, published_orgs) = registry_publishing_1_0_1(tmp.path())?;
@@ -385,6 +389,7 @@ fn test_pull_says_a_local_release_of_another_dataset_version_is_being_replaced()
 
 #[test]
 fn test_pull_says_a_local_release_that_does_not_verify_does_not_verify() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
     let (fetcher, published_orgs) = registry_publishing_1_0_1(tmp.path())?;
@@ -518,6 +523,7 @@ fn test_failed_pull_removes_scratch_staging_directory() -> Result<()> {
 
 #[test]
 fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -594,6 +600,7 @@ fn test_successful_pull_leaves_no_scratch_staging_directory() -> Result<()> {
 
 #[test]
 fn test_pull_named_withdrawn_release_delivers_and_exits_1() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -807,6 +814,7 @@ fn make_standard_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result
 
 #[test]
 fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -913,6 +921,7 @@ fn test_pull_multi_mirror_combines_verified_layers_from_different_mirrors() -> R
 
 #[test]
 fn test_pull_bad_layer_installs_as_bad_sha_and_leaves_current_untouched() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -1173,6 +1182,7 @@ fn test_pull_force_over_verified_release_with_bad_layer_keeps_verified_copy() ->
 
 #[test]
 fn test_pull_recovers_from_partial_install_when_upstream_fixed() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -1252,6 +1262,7 @@ fn test_pull_recovers_from_partial_install_when_upstream_fixed() -> Result<()> {
 
 #[test]
 fn test_pull_withdrawn_release_with_bad_layer_prints_both_and_exits_1() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 
@@ -1566,6 +1577,7 @@ fn make_unique_4_file_fixture(tmp: &Path, date: &str, version: &str) -> Result<S
 
 #[test]
 fn test_pull_all_continues_past_an_incomplete_release_and_exits_1() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("ods_data");
 

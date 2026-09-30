@@ -7,6 +7,30 @@ pub const RELEASES_JSON: &str = include_str!("../data/releases.json");
 pub const BAKED_RELEASES_JSON_BYTES: &[u8] = include_bytes!("../data/releases.json");
 pub const RELEASES_JSON_FILENAME: &str = "_releases.json";
 
+/// A debug build reads its built-in index from the file this variable names, when it is set, so a
+/// test's results don't depend on which releases `data/releases.json` holds. A release build has no
+/// code that reads it.
+#[cfg(debug_assertions)]
+pub const BAKED_INDEX_OVERRIDE_VAR: &str = "ODS_TEST_BAKED_INDEX";
+
+/// The bytes of the built-in index: `data/releases.json` as compiled in, or, in a debug build with
+/// `ODS_TEST_BAKED_INDEX` set, the bytes of the file it names (an error naming the variable when
+/// that file cannot be read). The bytes are not validated here; `OdsReleaseIndex::baked` does that.
+pub fn baked_index_bytes() -> Result<std::borrow::Cow<'static, [u8]>> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os(BAKED_INDEX_OVERRIDE_VAR) {
+        return Ok(std::borrow::Cow::Owned(read_baked_override(&path)?));
+    }
+    Ok(std::borrow::Cow::Borrowed(BAKED_RELEASES_JSON_BYTES))
+}
+
+#[cfg(debug_assertions)]
+fn read_baked_override(path: &std::ffi::OsStr) -> Result<Vec<u8>> {
+    let path = std::path::Path::new(path);
+    std::fs::read(path)
+        .with_context(|| format!("{BAKED_INDEX_OVERRIDE_VAR} names {}, which cannot be read", path.display()))
+}
+
 /// Where each known source issue's page lives: `<base><id>.md`. The index holds only the IDs, so
 /// no location is frozen into it.
 pub const SOURCE_ISSUES_BASE_URL: &str = "https://github.com/olizilla/ods/blob/main/docs/source-issues/";
@@ -284,11 +308,32 @@ impl OdsReleaseIndex {
         Ok(())
     }
 
-    /// Loads and validates the checked-in baked release index.
+    /// Loads and validates the built-in ("baked") release index: `data/releases.json` as compiled
+    /// in. A debug build reads the file named by `ODS_TEST_BAKED_INDEX` instead when that is set
+    /// (see `baked_index_bytes`).
     pub fn baked() -> Result<Self> {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os(BAKED_INDEX_OVERRIDE_VAR) {
+            return Self::baked_from_override(&path);
+        }
         let index = Self::from_slice(BAKED_RELEASES_JSON_BYTES)
             .context("Failed to parse baked data/releases.json")?;
         index.validate()?;
+        Ok(index)
+    }
+
+    /// Loads and validates the index in the file `BAKED_INDEX_OVERRIDE_VAR` names. Every failure
+    /// names the variable: a set but unusable file is never a silent fallback to the compiled index.
+    #[cfg(debug_assertions)]
+    fn baked_from_override(path: &std::ffi::OsStr) -> Result<Self> {
+        let bytes = read_baked_override(path)?;
+        let path = std::path::Path::new(path);
+        let index = Self::from_slice(&bytes).with_context(|| {
+            format!("{BAKED_INDEX_OVERRIDE_VAR} names {}, which is not a release index", path.display())
+        })?;
+        index.validate().with_context(|| {
+            format!("{BAKED_INDEX_OVERRIDE_VAR} names {}, which is an invalid release index", path.display())
+        })?;
         Ok(index)
     }
 
@@ -1073,6 +1118,36 @@ mod tests {
         assert!(is_old_format(old_row_only));
         assert!(!is_old_format(BAKED_RELEASES_JSON_BYTES));
         assert!(!is_old_format(b"not json"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_baked_reads_the_file_the_override_variable_names() {
+        // Calls the helpers `baked()` and `baked_index_bytes()` hand the variable's value to, so the
+        // process environment, which other lib tests read through `baked()`, stays untouched. The
+        // integration tests cover the environment branch of `baked()` itself.
+        let fixture = std::ffi::OsString::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/baked-releases.json"));
+        let bytes = read_baked_override(&fixture).unwrap();
+        assert_eq!(bytes, std::fs::read(&fixture).unwrap());
+        let baked = OdsReleaseIndex::baked_from_override(&fixture).unwrap();
+        assert_eq!(baked, OdsReleaseIndex::from_slice(&bytes).unwrap());
+        assert!(baked.releases.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_an_unusable_override_file_is_an_error_naming_the_variable() {
+        let dir = std::env::temp_dir().join(format!("ods-baked-override-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("missing.json");
+        let invalid = dir.join("invalid.json");
+        std::fs::write(&invalid, b"not json").unwrap();
+
+        for path in [&missing, &invalid] {
+            let err = OdsReleaseIndex::baked_from_override(path.as_os_str()).unwrap_err();
+            assert!(format!("{err:#}").contains(BAKED_INDEX_OVERRIDE_VAR), "{err:#}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

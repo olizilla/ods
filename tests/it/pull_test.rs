@@ -70,6 +70,7 @@ fn create_mock_oci_dataset(tmp_dir: &std::path::Path) -> (OdsReleaseIndex, BTree
 
 #[test]
 fn test_pull_latest_release_downloads_verifies_and_links() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new()?;
     let (index, responses) = create_mock_oci_dataset(tmp.path());
     let fetcher = MockOciFetcher {
@@ -100,6 +101,7 @@ fn test_pull_latest_release_downloads_verifies_and_links() -> Result<()> {
 
 #[test]
 fn test_pull_idempotent_cache_hit() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new()?;
     let (index, responses) = create_mock_oci_dataset(tmp.path());
     let fetcher = MockOciFetcher {

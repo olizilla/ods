@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ods.fyi/schema/releases.v1.json",
+  "name": "ods-data",
+  "source": {
+    "title": "NHS Organisation Data Service XML Data",
+    "path": "https://isd.digital.nhs.uk/trud/users/guest/filters/0/categories/5/items/341/releases",
+    "signing_key_fingerprints": [
+      "71ED5964BAE53E83556320A42BE59DADEE84BEB0"
+    ]
+  },
+  "mirrors": [
+    {
+      "url": "https://ods.fyi/v2/ods-data"
+    },
+    {
+      "url": "https://ghcr.io/v2/olizilla/ods-data"
+    }
+  ],
+  "releases": []
+}

@@ -686,6 +686,7 @@ fn test_make_release_republish_by_another_ods_keeps_the_first_row() -> Result<()
 
 #[test]
 fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()> {
+    common::use_baked_fixture();
     let (tmp, rel_dir) = setup_synthetic_repo_and_release();
 
     // Remove data/releases.json entirely from the tool_repo
@@ -730,7 +731,7 @@ fn test_make_release_succeeds_when_tool_repo_has_no_releases_json() -> Result<()
         index.source.signing_key_fingerprints.as_ref().is_some_and(|f| !f.is_empty()),
         "Fingerprints must not be empty"
     );
-    let baked = ods::index::OdsReleaseIndex::baked()?;
+    let baked = common::baked_fixture();
     assert_eq!(
         index.source.signing_key_fingerprints,
         baked.source.signing_key_fingerprints,

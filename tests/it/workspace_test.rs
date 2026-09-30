@@ -141,7 +141,7 @@ fn test_tightened_workspace_discovery_rules() {
     // 2. start is root when start/_releases.json validates
     let ws = tmp.path().join("my-ws");
     fs::create_dir_all(&ws).unwrap();
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
 
     assert_eq!(
         ods::workspace::find_workspace_root_from(&ws, None).unwrap(),
@@ -191,7 +191,7 @@ ods::provenance::write_trud_archive_package(
     let repo_dir = tmp.path().join("my-repo");
     let repo_ods_data = repo_dir.join("ods_data");
     fs::create_dir_all(&repo_ods_data).unwrap();
-    fs::write(repo_ods_data.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(repo_ods_data.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
     let repo_child = repo_dir.join("src").join("commands");
     fs::create_dir_all(&repo_child).unwrap();
 
@@ -223,7 +223,7 @@ fn workspace_with_a_release_and_a_sibling() -> (TempDir, PathBuf, PathBuf) {
     fs::create_dir_all(root.join("tmp")).unwrap();
     let rel_dir = ws.join("releases").join("2026-07-31");
     fs::create_dir_all(rel_dir.join("trud").join("oci").join("blobs").join("sha256")).unwrap();
-    fs::write(ws.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(ws.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
     (tmp, root, ws)
 }
 
@@ -308,7 +308,7 @@ fn test_pull_list_from_a_directory_beside_ods_data_leaves_it_alone() {
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         fs::read(ws.join("_releases.json")).unwrap(),
-        ods::index::BAKED_RELEASES_JSON_BYTES,
+        common::baked_fixture_bytes(),
         "listing from beside the workspace doesn't refresh its cached index"
     );
     assert!(!root.join("tmp").join("ods_data").exists(), "listing writes nothing");
@@ -550,7 +550,7 @@ fn test_validate_releases_json_shapes() {
     // 6. Valid OdsReleaseIndex -> true
     let dir_valid = tmp.path().join("valid");
     fs::create_dir_all(&dir_valid).unwrap();
-    fs::write(dir_valid.join("_releases.json"), ods::index::BAKED_RELEASES_JSON_BYTES).unwrap();
+    fs::write(dir_valid.join("_releases.json"), common::baked_fixture_bytes()).unwrap();
     assert!(ods::workspace::validate_releases_json(&dir_valid));
 }
 
@@ -751,6 +751,7 @@ fn test_workspace_with_contradicting_releases_json_halts_with_security_error() {
 
 #[test]
 fn test_pull_repairs_malformed_releases_json() {
+    common::use_baked_fixture();
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
     let ws = root.join("ods_data");
@@ -777,7 +778,7 @@ fn test_pull_repairs_malformed_releases_json() {
     ods::workspace::ensure_workspace_marker(&ws).unwrap();
 
     let repaired_bytes = fs::read(ws.join("_releases.json")).unwrap();
-    assert_eq!(repaired_bytes, ods::index::BAKED_RELEASES_JSON_BYTES);
+    assert_eq!(repaired_bytes, common::baked_fixture_bytes());
 
     // Subsequent ods find prints no warning notice
     let output = common::ods_cmd()
@@ -833,6 +834,7 @@ fn test_workspace_discovery_bounded_does_not_find_unnamed_subdirectories() {
 
 #[test]
 fn test_ensure_workspace_root_is_idempotent() {
+    common::use_baked_fixture();
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("idempotent_ws");
     fs::create_dir_all(&ws).unwrap();
@@ -843,7 +845,7 @@ fn test_ensure_workspace_root_is_idempotent() {
     let readme_1 = fs::read_to_string(ws.join("README.md")).unwrap();
     let gitignore_1 = fs::read_to_string(ws.join(".gitignore")).unwrap();
 
-    assert_eq!(marker_1, ods::index::BAKED_RELEASES_JSON_BYTES);
+    assert_eq!(marker_1, common::baked_fixture_bytes());
 
     // Call second time
     ods::workspace::ensure_workspace_root(&ws).unwrap();

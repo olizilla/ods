@@ -6,7 +6,9 @@ use ods::index::OdsReleaseIndex;
 
 #[test]
 fn test_baked_index_parses_and_validates() -> Result<()> {
-    let index = OdsReleaseIndex::baked()?;
+    // The compiled data/releases.json itself: `baked()` reads the fixture in a test process.
+    let index = OdsReleaseIndex::from_slice(ods::index::BAKED_RELEASES_JSON_BYTES)?;
+    index.validate()?;
     assert_eq!(index.schema, ods::index::RELEASES_SCHEMA_V1_URL);
     assert_eq!(index.name, "ods-data");
     assert_eq!(index.source.title, "NHS Organisation Data Service XML Data");
@@ -401,11 +403,11 @@ fn test_mirror_urls_and_host() {
 #[test]
 fn test_workspace_release_index_save_and_load() -> Result<()> {
     let tmp = tempfile::TempDir::new()?;
-    let baked = OdsReleaseIndex::baked()?;
+    let baked = common::baked_fixture();
 
     assert!(ods::index::OdsReleaseIndex::load_from_workspace(tmp.path())?.is_none());
     ods::index::OdsReleaseIndex::save_to_workspace_bytes(
-        ods::index::BAKED_RELEASES_JSON_BYTES,
+        &common::baked_fixture_bytes(),
         tmp.path(),
     )?;
 
@@ -652,12 +654,13 @@ fn test_an_old_format_workspace_cache_is_refused_and_ods_pull_replaces_it() -> R
         .arg("pull")
         .output()?;
     println!("{}", String::from_utf8_lossy(&pull.stderr));
-    assert_eq!(std::fs::read(&cache_path)?, ods::index::BAKED_RELEASES_JSON_BYTES, "ods pull replaces the old cache");
+    assert_eq!(std::fs::read(&cache_path)?, common::baked_fixture_bytes(), "ods pull replaces the old cache");
     Ok(())
 }
 
 #[test]
 fn test_precedence_baked_is_fallback() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("ods_data");
     std::fs::create_dir_all(&workspace)?;
@@ -676,7 +679,7 @@ fn test_precedence_baked_is_fallback() -> Result<()> {
         IndexOrigin::BuiltIn => {}
         _ => panic!("Expected IndexOrigin::BuiltIn, got {:?}", origin),
     }
-    let baked = OdsReleaseIndex::baked()?;
+    let baked = common::baked_fixture();
     assert_eq!(index.releases.len(), baked.releases.len());
     Ok(())
 }
@@ -711,6 +714,7 @@ fn test_invalid_index_flag_fails_and_names_file() -> Result<()> {
 
 #[test]
 fn test_invalid_workspace_cache_warns_and_falls_back_to_baked() -> Result<()> {
+    common::use_baked_fixture();
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("ods_data");
     std::fs::create_dir_all(&workspace)?;
@@ -732,7 +736,7 @@ fn test_invalid_workspace_cache_warns_and_falls_back_to_baked() -> Result<()> {
         IndexOrigin::BuiltIn => {}
         _ => panic!("Expected fallback to IndexOrigin::BuiltIn, got {:?}", origin),
     }
-    let baked = OdsReleaseIndex::baked()?;
+    let baked = common::baked_fixture();
     assert_eq!(index.releases.len(), baked.releases.len());
     Ok(())
 }
@@ -921,8 +925,8 @@ fn test_schema_rejects_an_old_format_index() -> Result<()> {
 
 #[test]
 fn test_merge_fingerprints_takes_candidate_when_non_empty() -> Result<()> {
-    let base = OdsReleaseIndex::baked()?;
-    let mut candidate = OdsReleaseIndex::baked()?;
+    let base = common::baked_fixture();
+    let mut candidate = common::baked_fixture();
     candidate.source.signing_key_fingerprints = Some(vec![
         "71ED5964BAE53E83556320A42BE59DADEE84BEB0".to_string(),
         "0123456789ABCDEF0123456789ABCDEF01234567".to_string(),
@@ -942,12 +946,29 @@ fn test_merge_fingerprints_takes_candidate_when_non_empty() -> Result<()> {
 
 // A release the built-in index records only for its known source issue is refused as having no
 // dataset yet, naming the issue and how to build it; a date with no row is refused as unknown.
+// The built-in index is this test's own: the fixture's header and one row, for 2019-05-31.
 #[test]
 fn test_pull_of_a_release_with_no_dataset_says_so() -> Result<()> {
+    let mut baked = common::baked_fixture();
+    baked.releases.push(ods::index::Release {
+        source: ods::index::SourceRelease {
+            version: "2019-05-31".to_string(),
+            hash: format!("sha256:{}", "2".repeat(64)),
+            bytes: 39422486,
+            issues: vec!["two-full-files-2019-05".to_string()],
+        },
+        datasets: Vec::new(),
+    });
+    baked.validate()?;
+    let baked_dir = TempDir::new()?;
+    let baked_file = baked_dir.path().join("baked.json");
+    std::fs::write(&baked_file, baked.to_json_pretty()?)?;
+
     let pull = |date: &str| -> Result<std::process::Output> {
         let tmp = TempDir::new()?;
         Ok(common::ods_cmd()
             .current_dir(tmp.path())
+            .env("ODS_TEST_BAKED_INDEX", &baked_file)
             .env("ODS_RELEASE_INDEX_URL", "http://127.0.0.1:9/unreachable.json")
             .args(["pull", date])
             .output()?)
