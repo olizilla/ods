@@ -93,7 +93,7 @@ command -v rclone >/dev/null 2>&1 || { echo "✖ rclone is needed and isn't inst
 
 echo "* uploading releases.json…"
 op run --env-file=.r2.env -- rclone copyto "$INDEX" r2:ods-fyi/releases.json
-echo "* pointing latest at $tagged…"
+echo "* pointing latest at ${tagged}…"
 op run --env-file=.r2.env -- rclone copyto "$manifest" "r2:ods-fyi/v2/$name/manifests/latest"
 
 echo "* checking both from https://ods.fyi/…"
