@@ -210,7 +210,9 @@ exist first. Once for each of `ods-data-rehearsal` and `ods-data`:
    $ scripts/mirror-to-ods-fyi.sh <date> <dataset version> --index candidate.json --publish
    ```
    The blobs are named by their digests, so publishing them announces nothing: only
-   `releases.json` does that, and this script never uploads it.
+   `releases.json` does that, and this script never uploads it. It never moves the `latest` tag
+   either, which is what `https://ods.fyi/orgs.parquet` serves: that moves with `releases.json`,
+   in the next step but one.
 5. Try it before blessing it. From an empty directory *outside the repo*, pull with the candidate as
    the index. Its mirrors list ods.fyi first, so this reads what you just uploaded:
    ```console
@@ -219,13 +221,18 @@ exist first. Once for each of `ods-data-rehearsal` and `ods-data`:
    $ ods find sedbergh
    $ ods cite
    ```
-6. Bless it. Copy `candidate.json` over `data/releases.json`, commit that one file by name, push,
-   then upload it. Git holds the canonical copy, so it goes first.
+6. Bless it. Copy `candidate.json` over `data/releases.json`, commit that one file by name and
+   push: git holds the canonical copy, so it goes first. Then `scripts/bless-release.sh` uploads
+   it as ods.fyi's `releases.json` and points the `latest` tag at the newest release in it, in
+   that order, so `https://ods.fyi/orgs.parquet` is never ahead of the index. It refuses an
+   uncommitted index, or a newest release that isn't mirrored yet. Without `--publish` it's a
+   dry run.
    ```console
    $ cp candidate.json data/releases.json
    $ git commit data/releases.json -m "data: release <date>_<dataset version>"
    $ git push
-   $ op run --env-file=.r2.env -- rclone copyto data/releases.json r2:ods-fyi/releases.json
+   $ scripts/bless-release.sh
+   $ scripts/bless-release.sh --publish
    ```
 7. Check it as a stranger would, from the repo root and then from an empty directory outside it:
    ```console

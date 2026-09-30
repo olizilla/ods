@@ -11,15 +11,17 @@
 #      or just print it;
 #   3. lay the layout out as bucket keys — the one place this repo lays out bucket keys:
 #        v2/<repository>/blobs/sha256/<hex>
-#        v2/<repository>/manifests/{<date>_<version>, <date>, latest}
+#        v2/<repository>/manifests/{<date>_<version>, <date>}
+#      Never `latest`: that tag is what https://ods.fyi/orgs.parquet serves, and it moves with
+#      releases.json, in scripts/bless-release.sh, so the two can't disagree.
 #   4. with --publish, upload with `op run --env-file=.r2.env -- rclone copy`: blobs first, then
 #      manifests, then re-verify every key from https://ods.fyi/v2/<repository>/…: each blob's
 #      own SHA-256 against its name, and each manifest tag's bytes against the manifest digest. A
 #      digest is only a promise until it's been fetched back.
 #
 # A dry run by default: it always prints the keys, in upload order, and only uploads (and
-# re-verifies) with --publish. It never uploads releases.json — that stays a deliberate, separate
-# step, and this script ends by printing the command that does it.
+# re-verifies) with --publish. It never uploads releases.json or moves `latest` — blessing stays a
+# deliberate, separate step, and this script ends by naming the script that does it.
 #
 set -euo pipefail
 
@@ -109,7 +111,7 @@ while read -r hex; do
   echo "v2/$REPOSITORY/blobs/sha256/$hex"
 done <"$WORK/blob-keys.txt" >"$WORK/upload-order.txt"
 
-for ref in "$TAGGED" "$DATE" latest; do
+for ref in "$TAGGED" "$DATE"; do
   cp "$manifest_path" "$BUCKET/v2/$REPOSITORY/manifests/$ref"
   echo "v2/$REPOSITORY/manifests/$ref" >>"$WORK/upload-order.txt"
 done
@@ -151,5 +153,5 @@ else
   echo "  SHA-256 against its name, and each manifest tag's bytes against $digest"
 fi
 
-echo "* releases.json is never uploaded here. To bless this release, run:"
-echo "  op run --env-file=.r2.env -- rclone copyto data/releases.json r2:ods-fyi/releases.json"
+echo "* releases.json and the latest tag are never touched here. To bless this release, commit"
+echo "  the index as data/releases.json, then run: scripts/bless-release.sh --publish"
