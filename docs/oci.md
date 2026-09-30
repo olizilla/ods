@@ -157,9 +157,8 @@ You don't need `ods` to fetch a release. These work against the published 2026-0
 # the four Parquet files, into a directory
 oras pull ods.fyi/ods-data:2026-09-25_0.2.0 -o 2026-09-25
 
-# the whole image, as an OCI layout, from ghcr.io: ods.fyi doesn't serve the image's empty
-# config blob, so `oras copy` from there stops at "not found"
-oras copy ghcr.io/olizilla/ods-data:2026-09-25_0.2.0 --to-oci-layout ods-data:2026-09-25_0.2.0
+# the whole image, as an OCI layout
+oras copy ods.fyi/ods-data:2026-09-25_0.2.0 --to-oci-layout ods-data:2026-09-25_0.2.0
 
 # just the manifest
 oras manifest fetch ods.fyi/ods-data:2026-09-25_0.2.0

@@ -45,8 +45,9 @@ describe('Derived Headers & Caching Policies', () => {
 
   // What a key's headers must be follows from its shape, so a dataset bump, which regenerates
   // expected-keys.json with new digests and a new version, changes no expectation here.
-  // A release's only real blobs are its Parquet layers and the manifest itself: the files
-  // carry their own provenance, and `datapackage.json` is never packed.
+  // A release's blobs are its Parquet layers, the manifest itself and the empty config the
+  // manifest names (`{}`): the files carry their own provenance, and `datapackage.json` is
+  // never packed.
   const OCI_MANIFEST_TYPE = 'application/vnd.oci.image.manifest.v1+json';
   const IMMUTABLE = 'public, max-age=31536000, immutable';
   const CONTRACT_SHAPES: { shape: RegExp; contentType: string; cacheControl: string }[] = [

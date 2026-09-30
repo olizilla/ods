@@ -103,7 +103,9 @@ mkdir -p "$BUCKET/v2/$REPOSITORY/blobs/sha256" "$BUCKET/v2/$REPOSITORY/manifests
 
 : >"$WORK/blob-keys.txt"
 echo "$manifest_hex" >>"$WORK/blob-keys.txt"
-jq -r '.layers[].digest' "$manifest_path" | sed 's/^sha256://' >>"$WORK/blob-keys.txt"
+# Every blob the manifest names: its config (the empty descriptor, `{}`) and its layers. A
+# client that copies a whole image (oras copy, crane, skopeo) fetches the config too.
+jq -r '.config.digest, .layers[].digest' "$manifest_path" | sed 's/^sha256://' >>"$WORK/blob-keys.txt"
 
 while read -r hex; do
   [[ -f "$LAYOUT/blobs/sha256/$hex" ]] || { echo "✖ $LAYOUT is missing blob $hex" >&2; exit 1; }
